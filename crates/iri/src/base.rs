@@ -406,7 +406,7 @@ pub enum BaseOrigin {
     /// this 1-based source position.
     Directive {
         /// 1-based line of the directive.
-        line: u32,
+        line: u64,
         /// 1-based column of the directive.
         column: u32,
     },

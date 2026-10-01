@@ -348,7 +348,7 @@ impl RdfMetadataValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RdfSegmentRecord {
     /// The zero-based segment index within the source file.
-    pub index: usize,
+    pub index: u64,
     /// The segment-head id (hex), when the segment declared one.
     pub head: Option<String>,
     /// The segment's declared profile, when any.
@@ -356,9 +356,9 @@ pub struct RdfSegmentRecord {
     /// Whether the segment claimed a streamable layout.
     pub claimed_streamable: bool,
     /// How many frames the streamable layout claim covers.
-    pub covered: usize,
+    pub covered: u64,
     /// The streamable layout's tail length.
-    pub tail: usize,
+    pub tail: u64,
 }
 
 /// Where a blob's payload bytes can be fetched from.
@@ -390,7 +390,7 @@ pub struct RdfBlobRecord {
     /// The payload's declared representation/encoding.
     pub representation: Option<String>,
     /// The declared decoded payload length in bytes, when known.
-    pub decoded_len: Option<usize>,
+    pub decoded_len: Option<u64>,
     /// Declared blob metadata, preserved as structured values.
     pub metadata: BTreeMap<String, RdfMetadataValue>,
     /// Content-addressed origin for streaming the payload on demand. `None` when

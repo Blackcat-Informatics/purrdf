@@ -99,8 +99,8 @@ use std::collections::BTreeMap;
 
 use purrdf_hash::frame::frame_le;
 
+use crate::TermLookupError;
 use crate::dataset_view::{DatasetView, GraphMatch};
-use crate::ir::composite::owned_value;
 
 use super::bits::{
     BitVec, DeltaListRef, IntVector, IntVectorRef, PackBitsError, RankSelectRef, bits_for,
@@ -144,17 +144,17 @@ fn resolve_unified<D: DatasetView>(
     dict: &PackDict,
     cache: &mut FastMap<D::Id, PackTermId>,
     id: D::Id,
-) -> PackTermId {
+) -> Result<PackTermId, TermLookupError<D::ReadError>> {
     if let Some(&u) = cache.get(&id) {
-        return u;
+        return Ok(u);
     }
-    let value = owned_value(view, id);
+    let value = view.term_value(id)?;
     let u = dict.id_by_value(&value).expect(
         "PackDict::encode covers every role a quad component can play (incl. the \
          graph-name amendment), so every quad's s/p/o/g term resolves here",
     );
     cache.insert(id, u);
-    u
+    Ok(u)
 }
 
 /// Encode ONE partition's already-collected `(s_uni, p_uni, o_uni)` triples into
@@ -322,38 +322,55 @@ impl Triples {
     /// from `view` (a quad component has no unified id) — a caller-side
     /// contract violation, not a data-dependent error.
     #[must_use]
-    pub fn encode<D: DatasetView>(dict: &PackDict, view: &D) -> Self {
-        let mut cache: FastMap<D::Id, PackTermId> = FastMap::default();
+    pub fn encode<D: DatasetView<ReadError = std::convert::Infallible>>(
+        dict: &PackDict,
+        view: &D,
+    ) -> Self {
+        Self::try_encode(dict, view).expect("a validated resident view resolves its own terms")
+    }
 
-        let mut default_triples: Vec<(u64, u64, u64)> = Vec::new();
-        let mut named: BTreeMap<PackTermId, Vec<(u64, u64, u64)>> = BTreeMap::new();
+    /// Encode a read session without publishing a partial source.
+    ///
+    /// # Errors
+    /// Returns the source's typed read refusal or an invalid source term.
+    pub fn try_encode<D: DatasetView>(
+        dict: &PackDict,
+        view: &D,
+    ) -> Result<Self, TermLookupError<D::ReadError>> {
+        view.checked_read(|view| {
+            let mut cache: FastMap<D::Id, PackTermId> = FastMap::default();
 
-        for q in view.quads() {
-            let s_uni = resolve_unified(view, dict, &mut cache, q.s);
-            let p_uni = resolve_unified(view, dict, &mut cache, q.p);
-            let o_uni = resolve_unified(view, dict, &mut cache, q.o);
-            match q.g {
-                None => default_triples.push((s_uni, p_uni, o_uni)),
-                Some(g) => {
-                    let g_uni = resolve_unified(view, dict, &mut cache, g);
-                    named.entry(g_uni).or_default().push((s_uni, p_uni, o_uni));
+            let mut default_triples: Vec<(u64, u64, u64)> = Vec::new();
+            let mut named: BTreeMap<PackTermId, Vec<(u64, u64, u64)>> = BTreeMap::new();
+
+            for q in view.quads() {
+                let s_uni = resolve_unified(view, dict, &mut cache, q.s)?;
+                let p_uni = resolve_unified(view, dict, &mut cache, q.p)?;
+                let o_uni = resolve_unified(view, dict, &mut cache, q.o)?;
+                match q.g {
+                    None => default_triples.push((s_uni, p_uni, o_uni)),
+                    Some(g) => {
+                        let g_uni = resolve_unified(view, dict, &mut cache, g)?;
+                        named.entry(g_uni).or_default().push((s_uni, p_uni, o_uni));
+                    }
                 }
             }
-        }
 
-        let mut out = Vec::new();
-        out.push(TRIPLES_FORMAT_VERSION);
-        out.extend_from_slice(&(1 + named.len() as u64).to_le_bytes());
+            let mut out = Vec::new();
+            out.push(TRIPLES_FORMAT_VERSION);
+            out.extend_from_slice(&(1 + named.len() as u64).to_le_bytes());
 
-        let default_bytes = encode_partition(None, &default_triples);
-        frame_le(&mut out, &default_bytes);
+            let default_bytes = encode_partition(None, &default_triples);
+            frame_le(&mut out, &default_bytes);
 
-        for (&g_uni, triples) in &named {
-            let bytes = encode_partition(Some(g_uni), triples);
-            frame_le(&mut out, &bytes);
-        }
+            for (&g_uni, triples) in &named {
+                let bytes = encode_partition(Some(g_uni), triples);
+                frame_le(&mut out, &bytes);
+            }
 
-        Self { bytes: out }
+            Ok(Self { bytes: out })
+        })
+        .map_err(TermLookupError::Read)?
     }
 
     /// The serialized byte buffer [`TriplesRef::from_bytes`] reads.

@@ -113,6 +113,7 @@ fn page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it() {
     let paged = PagedDataset::from_provider(provider).expect("seal page");
     let g_id = paged
         .term_id_by_value(&TermValue::iri("http://example.org/g"))
+        .expect("fixture reverse lookup succeeds")
         .expect("g interned at seal");
 
     let refused = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
@@ -159,6 +160,7 @@ fn byte_budget_below_the_owning_page_charge_refuses_and_exact_equality_admits() 
     let paged = PagedDataset::from_provider(provider).expect("seal page");
     let g_id = paged
         .term_id_by_value(&TermValue::iri("http://example.org/g"))
+        .expect("fixture reverse lookup succeeds")
         .expect("g interned at seal");
 
     let refused = paged.query_view(PagedQueryLimits::new(u64::MAX, CHARGE - 1));
@@ -198,7 +200,7 @@ struct FailAfterSealProvider {
 
 impl PageProvider for FailAfterSealProvider {
     /// A single-page provider: exactly one page id is ever valid to request.
-    fn page_count(&self) -> usize {
+    fn page_count(&self) -> u64 {
         1
     }
 
@@ -294,7 +296,7 @@ struct MutableGenerationProvider {
 }
 
 impl PageProvider for MutableGenerationProvider {
-    fn page_count(&self) -> usize {
+    fn page_count(&self) -> u64 {
         1
     }
 
@@ -377,7 +379,7 @@ struct ChangingMetadataProvider {
 }
 
 impl PageProvider for ChangingMetadataProvider {
-    fn page_count(&self) -> usize {
+    fn page_count(&self) -> u64 {
         1
     }
 
@@ -460,6 +462,7 @@ fn every_read_path_shares_one_operation_cache_and_evidence() {
     assert_eq!(view.annotation_quads().count(), 1);
     let reifier = view
         .term_id_by_value(&TermValue::iri("http://example.org/r"))
+        .expect("fixture reverse lookup succeeds")
         .expect("reifier global id");
     assert_eq!(view.annotations_of_with_graph(reifier).count(), 1);
 
@@ -478,6 +481,7 @@ fn every_read_path_shares_one_operation_cache_and_evidence() {
     assert_eq!(repeat.annotation_quads().count(), 1);
     let repeat_reifier = repeat
         .term_id_by_value(&TermValue::iri("http://example.org/r"))
+        .expect("fixture reverse lookup succeeds")
         .expect("reifier global id");
     assert_eq!(repeat.annotations_of_with_graph(repeat_reifier).count(), 1);
     assert_eq!(
@@ -509,7 +513,7 @@ struct SucceedsThenFaultsSecondPageProvider {
 impl PageProvider for SucceedsThenFaultsSecondPageProvider {
     /// Exactly two pages: page 0 always materializes, page 1 only once (the
     /// seal pass) — see [`materialize`](Self::materialize).
-    fn page_count(&self) -> usize {
+    fn page_count(&self) -> u64 {
         2
     }
 
@@ -758,6 +762,7 @@ fn annotation_quads_in_graph_named_consumes_only_the_owning_page() {
 
     let g0 = paged
         .term_id_by_value(&TermValue::iri("http://example.org/g0"))
+        .expect("fixture reverse lookup succeeds")
         .expect("g0 interned at seal");
 
     let named_view = paged.query_view(PagedQueryLimits::UNBOUNDED);

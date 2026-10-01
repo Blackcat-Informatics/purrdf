@@ -2579,6 +2579,30 @@ constants = []
 fingerprints = []
 names = ['^record_(allocation|deallocation)$', '^(live|peak)_bytes$']
 
+[[job.variant]]
+symbol = "purrdf_core::ir::segmented::session::SegmentedReadLimits::live_bytes"
+file = "crates/rdf-core/src/ir/segmented/session.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_core::ir::segmented::session::SegmentedReadLimits::live_bytes"
+reason = "This is the caller-selected operational residency ceiling, not an observed allocator counter; the portable read session must refuse before admission exceeds it."
+
+[[job.variant]]
+symbol = "purrdf_core::ir::segmented::session::SegmentedEvidence::live_bytes"
+file = "crates/rdf-core/src/ir/segmented/session.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_core::ir::segmented::session::SegmentedEvidence::live_bytes"
+reason = "This is conservatively reserved session capacity at an evidence checkpoint, including decoded caches, pins, scratch and exact requests; the counting allocator independently measures actual allocations in the integration proof."
+
+[[job.variant]]
+symbol = "purrdf_core::ir::segmented::session::SegmentedEvidence::peak_bytes"
+file = "crates/rdf-core/src/ir/segmented/session.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_core::ir::segmented::session::SegmentedEvidence::peak_bytes"
+reason = "This is the peak of conservative pre-allocation admissions, not an allocator measurement; the independently instrumented read/export test verifies actual peak is below this reserved-capacity evidence."
+
 [[job]]
 id = "reifier-rows"
 summary = "The flat rdf:reifies and annotation rows of a dataset's statement layer, graph-scoped, built once"
@@ -2658,3 +2682,14 @@ enforced = true
 constants = []
 fingerprints = ["rule:wasm-import-reflect-get"]
 names = []
+
+
+[[distinct]]
+members = [
+    "purrdf_core::ir::pack::side::SideTables::encode",
+    "purrdf_core::ir::pack::triples::Triples::encode",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::ir::pack::side::SideTables::encode"
+reason = "Resident conveniences for two separate persisted grammars: statement-layer side tables and ordinary quad permutations. Each forwards to its own single fallible encoder; their shared Result::expect shape does not duplicate either encoding job."

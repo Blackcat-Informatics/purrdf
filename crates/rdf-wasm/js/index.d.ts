@@ -759,14 +759,14 @@ export class Dataset implements Iterable<Quad> {
    * This dataset's identity: unique within the wasm instance, fixed for its lifetime,
    * never reused.
    */
-  readonly id: number;
+  readonly id: bigint;
   /**
    * How many mutations this dataset's content has seen. Advances on every `add`/`delete`
    * that changed the effective set and on every applied UPDATE; reading, querying and
    * serializing never move it. An asynchronous UPDATE captures it when it starts and
    * refuses to commit if it has moved since.
    */
-  readonly generation: number;
+  readonly generation: bigint;
   /**
    * An independent dataset holding this one's current content, with an identity of its
    * own at generation zero. Later changes to either leave the other as it is.

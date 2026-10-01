@@ -86,7 +86,7 @@ impl Manifest {
     }
 
     fn named(&self, iri: &str) -> Option<TermId> {
-        self.ds.term_id_by_value(&TermValue::iri(iri))
+        self.ds.as_ref().term_id_by_value(&TermValue::iri(iri))
     }
 
     fn objects(&self, s: TermId, p: &str) -> Vec<TermId> {

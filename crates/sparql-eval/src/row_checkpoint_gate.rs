@@ -108,7 +108,13 @@ fn run(
         .iter()
         .map(|row| {
             row.iter()
-                .map(|cell| cell.map(|term| ctx.scratch.value_of(ctx.dataset, term)))
+                .map(|cell| {
+                    cell.map(|term| {
+                        ctx.scratch
+                            .try_value_of(ctx.dataset, term)
+                            .expect("resident fixture read succeeds")
+                    })
+                })
                 .collect()
         })
         .collect();

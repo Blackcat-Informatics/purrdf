@@ -388,8 +388,20 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
             continue;
         }
         let retained = FoldRow {
-            first: first.map(|term| ctx.scratch.value_of(ctx.dataset, term)),
-            second: second.map(|term| ctx.scratch.value_of(ctx.dataset, term)),
+            first: first
+                .map(|term| {
+                    ctx.scratch
+                        .try_value_of(ctx.dataset, term)
+                        .map_err(EvalError::source_read)
+                })
+                .transpose()?,
+            second: second
+                .map(|term| {
+                    ctx.scratch
+                        .try_value_of(ctx.dataset, term)
+                        .map_err(EvalError::source_read)
+                })
+                .transpose()?,
         };
         // `value_of` mints nothing (it clones an already-interned value back out),
         // so the arena's automatic per-node charge never sees this buffer; the
@@ -409,7 +421,13 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         // first occurrence, so that row's own key is the one the element sorts by.
         for key_link in keys.iter_mut() {
             let key = key_link.term(row, schema, ctx)?;
-            let key = key.map(|term| ctx.scratch.value_of(ctx.dataset, term));
+            let key = key
+                .map(|term| {
+                    ctx.scratch
+                        .try_value_of(ctx.dataset, term)
+                        .map_err(EvalError::source_read)
+                })
+                .transpose()?;
             if let Err(tripped) = ctx.charge_amount(
                 purrdf_core::ResourceDimension::ScratchBytes,
                 key.as_ref().map_or(0, crate::scratch::value_bytes),
@@ -445,7 +463,14 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
     // `and_then`, not `map`: an aggregate whose result the interner refuses is
     // an aggregate with no value, which is the same unbound answer this function
     // already returns for an empty group. See `ScratchInterner::intern_checked`.
-    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
+    Ok(value
+        .map(|v| {
+            ctx.scratch
+                .try_intern_checked(ctx.dataset, v)
+                .map_err(EvalError::source_read)
+        })
+        .transpose()?
+        .flatten())
 }
 
 /// The scratch-byte cost of one retained [`FoldRow`], through the same

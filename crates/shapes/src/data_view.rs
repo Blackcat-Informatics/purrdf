@@ -4,6 +4,7 @@
 //! Shared native carriers for SHACL, with compact validation-local term handles.
 
 use purrdf_core::TermBox;
+use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -18,7 +19,9 @@ use purrdf_core::SmallVec;
 
 /// Native term lookup used by SHACL traversal, without an owned RDF row boundary.
 /// Implementations preserve one validation-local `TermId` namespace.
-pub trait ShaclRead: DatasetView<Id = TermId> + Sync {
+pub trait ShaclRead: DatasetView<Id = TermId, ReadError = Infallible> + Sync {
+    /// Borrow a term from this resident carrier without creating an owned pin.
+    fn resolve_term(&self, id: TermId) -> TermRef<'_>;
     /// Look up an IRI by borrowed spelling.
     fn term_id_by_iri(&self, iri: &str) -> Option<TermId>;
     /// Look up a scope-qualified blank node.
@@ -36,6 +39,9 @@ pub trait ShaclRead: DatasetView<Id = TermId> + Sync {
 }
 
 impl ShaclRead for RdfDataset {
+    fn resolve_term(&self, id: TermId) -> TermRef<'_> {
+        self.resolve(id)
+    }
     fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
         self.term_id_by_iri(iri)
     }
@@ -57,6 +63,9 @@ impl ShaclRead for RdfDataset {
 }
 
 impl<T: ShaclRead + Send> ShaclRead for Arc<T> {
+    fn resolve_term(&self, id: TermId) -> TermRef<'_> {
+        self.as_ref().resolve_term(id)
+    }
     fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
         self.as_ref().term_id_by_iri(iri)
     }
@@ -130,7 +139,11 @@ fn local_handle(index: usize) -> TermId {
     TermId::from_index(u32::try_from(index).expect("admitted mapping fits"))
 }
 
-impl<D: DatasetView> Dense<D> {
+impl<D> Dense<D>
+where
+    for<'a> D: DatasetView<ReadError = Infallible, TermGuard<'a> = TermRef<'a, <D as DatasetView>::Id>>
+        + 'static,
+{
     /// The retention charge of a `count`-term adapter, refused past `limits`.
     fn admit(count: usize, limits: ViewLimits) -> Result<usize, String> {
         let auxiliary_bytes = count
@@ -150,7 +163,10 @@ impl<D: DatasetView> Dense<D> {
         ids: impl FnOnce(&D) -> Box<[D::Id]>,
         limits: ViewLimits,
     ) -> Result<Self, String> {
-        let auxiliary_bytes = Self::admit(source.term_count(), limits)?;
+        let auxiliary_bytes = Self::admit(
+            usize::try_from(source.term_count()).map_err(|_| "SHACL term mapping size overflow")?,
+            limits,
+        )?;
         let ids = ids(&source);
         let local_ids = ids
             .iter()
@@ -175,7 +191,10 @@ impl<D: DatasetView> Dense<D> {
         lift: fn(usize) -> D::Id,
         limits: ViewLimits,
     ) -> Result<Self, String> {
-        let auxiliary_bytes = Self::admit(source.term_count(), limits)?;
+        let auxiliary_bytes = Self::admit(
+            usize::try_from(source.term_count()).map_err(|_| "SHACL term mapping size overflow")?,
+            limits,
+        )?;
         let added_local = added
             .iter()
             .copied()
@@ -249,7 +268,7 @@ impl<D: DatasetView> Dense<D> {
         }
     }
     fn resolve(&self, id: TermId) -> TermRef<'_> {
-        match self.source.resolve(self.source_id(id)) {
+        match self.source.resolve(self.source_id(id)).unwrap() {
             TermRef::Iri(iri) => TermRef::Iri(iri),
             TermRef::Blank { label, scope } => TermRef::Blank { label, scope },
             TermRef::Literal {
@@ -346,7 +365,7 @@ impl ShaclDatasetView {
         projected: bool,
         limits: ViewLimits,
     ) -> Result<Self, String> {
-        let base = source.base().term_count();
+        let base = source.base().as_ref().term_count();
         let added = source.added_term_ids().collect();
         let dense = Dense::layered(
             source,
@@ -768,13 +787,17 @@ fn overlay_probe<D: DatasetView>(
 /// chained and flattened pattern scans, occupied that one frame together,
 /// although a call only ever builds one of them.
 #[inline(never)]
-fn dense_overlay_probe<D: DatasetView>(
+fn dense_overlay_probe<D>(
     dense: &Dense<D>,
     s: Option<TermId>,
     p: Option<TermId>,
     o: Option<TermId>,
     g: GraphMatch,
-) -> Box<dyn Iterator<Item = QuadIds> + '_> {
+) -> Box<dyn Iterator<Item = QuadIds> + '_>
+where
+    for<'a> D: DatasetView<ReadError = Infallible, TermGuard<'a> = TermRef<'a, <D as DatasetView>::Id>>
+        + 'static,
+{
     boxed(
         overlay_probe(
             dense.source.as_ref(),
@@ -813,16 +836,17 @@ impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for Either<A, B> 
 
 impl DatasetView for ShaclDatasetView {
     type Id = TermId;
+    type ReadError = Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = QuadProbePlan;
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.quads_for_pattern(None, None, None, GraphMatch::Any)
     }
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        match &self.source {
-            Source::Native(source) => source.resolve(id),
-            Source::Composite(dense) => dense.resolve(id),
-            Source::Delta(dense) => dense.resolve(id),
-        }
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok(self.resolve_term(id))
     }
     fn quads_for_pattern(
         &self,
@@ -834,12 +858,20 @@ impl DatasetView for ShaclDatasetView {
         let plan = self.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
         self.quads_for_pattern_with_plan(&plan, s, p, o, g)
     }
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        match &self.source {
-            Source::Native(source) => source.term_id_by_value(value),
-            Source::Composite(dense) => dense.source.term_id_by_value(value).map(|id| dense.id(id)),
-            Source::Delta(dense) => dense.source.term_id_by_value(value).map(|id| dense.id(id)),
-        }
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok(match &self.source {
+            Source::Native(source) => source.as_ref().term_id_by_value(value),
+            Source::Composite(dense) => dense
+                .source
+                .term_id_by_value(value)
+                .unwrap()
+                .map(|id| dense.id(id)),
+            Source::Delta(dense) => dense
+                .source
+                .term_id_by_value(value)
+                .unwrap()
+                .map(|id| dense.id(id)),
+        })
     }
     fn capabilities(&self) -> RdfStoreCapabilities {
         match &self.source {
@@ -864,12 +896,14 @@ impl DatasetView for ShaclDatasetView {
     ) -> impl Iterator<Item = QuadIds> + '_ {
         Self::quads_for_pattern_with_plan(self, plan, s, p, o, g)
     }
-    fn len_hint(&self) -> Option<usize> {
+    fn len_hint(&self) -> Option<u64> {
         if self.projected || self.statements_projected {
             return None;
         }
         match &self.source {
-            Source::Native(source) => Some(source.quad_count()),
+            Source::Native(source) => {
+                Some(u64::try_from(source.quad_count()).expect("resident row count fits u64"))
+            }
             Source::Composite(dense) => dense.source.len_hint(),
             Source::Delta(dense) => dense.source.len_hint(),
         }
@@ -880,9 +914,10 @@ impl DatasetView for ShaclDatasetView {
         p: Option<TermId>,
         o: Option<TermId>,
         g: GraphMatch,
-    ) -> usize {
+    ) -> u64 {
         if self.projected || self.statements_projected {
-            return self.quads_for_pattern(s, p, o, g).count();
+            return u64::try_from(self.quads_for_pattern(s, p, o, g).count())
+                .expect("resident row count fits u64");
         }
         match &self.source {
             Source::Native(source) => source.cardinality_estimate(s, p, o, g),
@@ -908,11 +943,13 @@ impl DatasetView for ShaclDatasetView {
         };
         source ^ (u64::from(self.projected) << 62) ^ (u64::from(self.statements_projected) << 63)
     }
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         match &self.source {
             Source::Native(source) => source.term_count(),
-            Source::Composite(dense) => dense.len(),
-            Source::Delta(dense) => dense.len(),
+            Source::Composite(dense) => {
+                u64::try_from(dense.len()).expect("resident mapping fits u64")
+            }
+            Source::Delta(dense) => u64::try_from(dense.len()).expect("resident mapping fits u64"),
         }
     }
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -952,10 +989,17 @@ impl DatasetView for ShaclDatasetView {
 }
 
 impl ShaclRead for ShaclDatasetView {
+    fn resolve_term(&self, id: TermId) -> TermRef<'_> {
+        match &self.source {
+            Source::Native(source) => source.as_ref().resolve(id),
+            Source::Composite(dense) => dense.resolve(id),
+            Source::Delta(dense) => dense.resolve(id),
+        }
+    }
     fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
         match &self.source {
             Source::Native(source) => source.term_id_by_iri(iri),
-            _ => self.term_id_by_value(&TermValue::iri(iri)),
+            _ => self.term_id_by_value(&TermValue::iri(iri)).unwrap(),
         }
     }
     fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {
@@ -966,6 +1010,7 @@ impl ShaclRead for ShaclDatasetView {
             label: label.to_owned(),
             scope,
         })
+        .unwrap()
     }
     fn term_id_by_literal(
         &self,
@@ -983,6 +1028,7 @@ impl ShaclRead for ShaclDatasetView {
             language: language.map(str::to_owned),
             direction,
         })
+        .unwrap()
     }
     fn term_id_by_triple(&self, s: TermId, p: TermId, o: TermId) -> Option<TermId> {
         if let Source::Native(source) = &self.source {
@@ -993,5 +1039,6 @@ impl ShaclRead for ShaclDatasetView {
             p: TermBox::new(crate::term::term_id_to_native(self, p).to_term_value()),
             o: TermBox::new(crate::term::term_id_to_native(self, o).to_term_value()),
         })
+        .unwrap()
     }
 }

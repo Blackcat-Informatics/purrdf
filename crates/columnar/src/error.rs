@@ -9,6 +9,11 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ColumnarError {
+    /// The source read session failed; this is not malformed RDF or an absent row.
+    SourceRead {
+        /// The operational source failure's diagnostic detail.
+        detail: String,
+    },
     /// Input ended before a required byte range was available.
     Truncated {
         /// Structure being decoded.
@@ -71,6 +76,7 @@ impl ColumnarError {
 impl fmt::Display for ColumnarError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SourceRead { detail } => write!(f, "columnar source read failed: {detail}"),
             Self::Truncated {
                 context,
                 needed,

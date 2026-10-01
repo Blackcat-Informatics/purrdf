@@ -453,8 +453,12 @@ const asyncApplied: AsyncUpdateOutcome = await engine.updateGovernedAsync(
 );
 const appliedEvidence: AsyncEvidence = asyncApplied.evidence.async;
 const datasetAsync: Promise<string> = matched.queryAsync("ASK { ?s ?p ?o }", { resolveService });
-const datasetId: number = matched.id;
-const datasetGeneration: number = matched.generation;
+const datasetId: bigint = matched.id;
+const datasetGeneration: bigint = matched.generation;
+// @ts-expect-error dataset identity is exact bigint, not a binary64 number
+const legacyDatasetId: number = matched.id;
+// @ts-expect-error mutation generations are exact bigint
+const legacyDatasetGeneration: number = matched.generation;
 // @ts-expect-error an asynchronous twin is cancelled through `signal`, never a token
 engine.queryAsync(matched, "ASK { ?s ?p ?o }", { cancel });
 // @ts-expect-error governor keys are accepted only by the governed asynchronous twins

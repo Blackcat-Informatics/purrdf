@@ -185,38 +185,33 @@ const RECOGNIZED_TYPES: &[&str] = &[
 /// A predicate OUTSIDE the reserved namespaces is an ordinary property assertion: it is ABox
 /// data the chase seeds from and matches, it states no axiom, and admitting it is what keeps
 /// a caller's own vocabulary readable rather than turning every property into a boundary.
-fn every_statement_is_recognized<D: DatasetView>(ds: &D) -> bool {
+fn every_statement_is_recognized<D: DatasetView>(ds: &D) -> Result<bool, EntailError> {
     for quad in ds.quads() {
         if quad.g.is_some() {
-            return false;
+            return Ok(false);
         }
-        let TermValue::Iri(predicate) = ds
-            .term_value(quad.p)
-            .expect("an id the view minted resolves to a value")
-        else {
+        let TermValue::Iri(predicate) = ds.term_value(quad.p)? else {
             // A blank node or literal in predicate position is generalized RDF, which no
             // OWL 2 axiom is written in.
-            return false;
+            return Ok(false);
         };
         if !is_reserved(&predicate) {
             continue;
         }
         if !RECOGNIZED_PREDICATES.contains(&predicate.as_str()) {
-            return false;
+            return Ok(false);
         }
         if predicate == RDF_TYPE {
-            let object = ds
-                .term_value(quad.o)
-                .expect("an id the view minted resolves to a value");
+            let object = ds.term_value(quad.o)?;
             let TermValue::Iri(class) = &object else {
-                return false;
+                return Ok(false);
             };
             if is_reserved(class) && !RECOGNIZED_TYPES.contains(&class.as_str()) {
-                return false;
+                return Ok(false);
             }
         }
     }
-    true
+    Ok(true)
 }
 
 /// Whether `term` is a NAMED class, property or individual of the caller's own vocabulary —
@@ -289,98 +284,100 @@ pub fn materialize_combined_until<D: DatasetView>(
     query_bgp: &[QTriple],
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<Option<CombinedMaterialization>, EntailError> {
-    let Some(clauses) = lower_horn_tbox(ds) else {
-        return Ok(None);
-    };
-    if !certify(&clauses).is_certified() {
-        return Ok(None);
-    }
-
-    // The whole-vocabulary augmentation of the NAMED part is unchanged: it is already
-    // proven exact for the distinguished-only decomposition, so it is reused rather than
-    // reimplemented. Its own report (regime, boundaries, budget) is reused as the combined
-    // report too, because the chase step below is a STRICT EXTENSION within a fragment this
-    // function already certified terminating — it adds facts, it never revokes the
-    // named-part guarantee the reused report already states.
-    let (named_dataset, report) = materialize_dl_reported_until(ds, query_bgp, stop)?;
-
-    if clauses.is_empty() {
-        // No existential axiom at all: there is nothing for the chase to add.
-        return Ok(Some(CombinedMaterialization {
-            dataset: named_dataset,
-            report,
-            surrogates: BTreeSet::new(),
-        }));
-    }
-
-    // Seed the restricted chase from the dataset's own default-graph facts, recording the
-    // surface -> value dictionary this run needs to read a NAMED term back afterward (a
-    // witness surface is looked up nowhere in it — see `resolve_surface`).
-    let mut by_surface: BTreeMap<String, TermValue> = BTreeMap::new();
-    let mut edb = RelationStore::new();
-    for quad in ds.quads() {
-        if quad.g.is_some() {
-            continue;
+    ds.checked_read(|ds| {
+        let Some(clauses) = lower_horn_tbox(ds)? else {
+            return Ok(None);
+        };
+        if !certify(&clauses).is_certified() {
+            return Ok(None);
         }
-        let (s, p, o) = (
-            ds.term_value(quad.s)?,
-            ds.term_value(quad.p)?,
-            ds.term_value(quad.o)?,
-        );
-        let (ss, ps, os) = (surface_of(&s), surface_of(&p), surface_of(&o));
-        by_surface.entry(ss.clone()).or_insert(s);
-        by_surface.entry(ps.clone()).or_insert(p);
-        by_surface.entry(os.clone()).or_insert(o);
-        let _ = edb.insert(&ss, &ps, &os, RelationStore::DEFAULT_GRAPH);
-    }
 
-    let outcome = chase_until(&clauses, edb, stop.map(|stop| &**stop as &dyn StopSignal)).map_err(
-        |error| match error {
-            ChaseError::Stopped { .. } => EntailError::Stopped,
-            other => EntailError::Chase(other),
-        },
-    )?;
-    let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
+        // The whole-vocabulary augmentation of the NAMED part is unchanged: it is already
+        // proven exact for the distinguished-only decomposition, so it is reused rather than
+        // reimplemented. Its own report (regime, boundaries, budget) is reused as the combined
+        // report too, because the chase step below is a STRICT EXTENSION within a fragment this
+        // function already certified terminating — it adds facts, it never revokes the
+        // named-part guarantee the reused report already states.
+        let (named_dataset, report) = materialize_dl_reported_until(ds, query_bgp, stop)?;
 
-    let mut b = RdfDatasetBuilder::new();
-    b.push_dataset(&named_dataset);
-    let mut surrogates: BTreeSet<String> = BTreeSet::new();
-    let mut witness_terms: BTreeMap<String, TermValue> = BTreeMap::new();
-
-    for derivation in outcome.derivations() {
-        let fact = derivation.fact();
-        // A fact that touches no witness is already covered by `materialize_dl_reported`'s
-        // own (complete, tableau-backed) realization/classification injections over the
-        // named part — restating it here would be redundant, not wrong, but the whole point
-        // of this pass is the witness-bearing facts the named augmentation cannot state.
-        let touches_witness = [&fact.subject, &fact.predicate, &fact.object]
-            .into_iter()
-            .any(|s| witnesses.contains(s.as_str()));
-        if !touches_witness {
-            continue;
+        if clauses.is_empty() {
+            // No existential axiom at all: there is nothing for the chase to add.
+            return Ok(Some(CombinedMaterialization {
+                dataset: named_dataset,
+                report,
+                surrogates: BTreeSet::new(),
+            }));
         }
-        let s = resolve_surface(&fact.subject, &witnesses, &by_surface, &mut witness_terms);
-        let p = resolve_surface(&fact.predicate, &witnesses, &by_surface, &mut witness_terms);
-        let o = resolve_surface(&fact.object, &witnesses, &by_surface, &mut witness_terms);
-        for surface in [&fact.subject, &fact.object] {
-            if witnesses.contains(surface.as_str()) {
-                surrogates.insert(witness_label(surface));
+
+        // Seed the restricted chase from the dataset's own default-graph facts, recording the
+        // surface -> value dictionary this run needs to read a NAMED term back afterward (a
+        // witness surface is looked up nowhere in it — see `resolve_surface`).
+        let mut by_surface: BTreeMap<String, TermValue> = BTreeMap::new();
+        let mut edb = RelationStore::new();
+        for quad in ds.quads() {
+            if quad.g.is_some() {
+                continue;
             }
+            let (s, p, o) = (
+                ds.term_value(quad.s)?,
+                ds.term_value(quad.p)?,
+                ds.term_value(quad.o)?,
+            );
+            let (ss, ps, os) = (surface_of(&s), surface_of(&p), surface_of(&o));
+            by_surface.entry(ss.clone()).or_insert(s);
+            by_surface.entry(ps.clone()).or_insert(p);
+            by_surface.entry(os.clone()).or_insert(o);
+            let _ = edb.insert(&ss, &ps, &os, RelationStore::DEFAULT_GRAPH);
         }
-        let s_id = intern_into(&mut b, &s);
-        let p_id = intern_into(&mut b, &p);
-        let o_id = intern_into(&mut b, &o);
-        b.push_quad(s_id, p_id, o_id, None);
-    }
 
-    let dataset = b
-        .freeze()
-        .map_err(|error| EntailError::Build(format!("freeze combined dataset: {error}")))?;
-    Ok(Some(CombinedMaterialization {
-        dataset,
-        report,
-        surrogates,
-    }))
+        let outcome = chase_until(&clauses, edb, stop.map(|stop| &**stop as &dyn StopSignal))
+            .map_err(|error| match error {
+                ChaseError::Stopped { .. } => EntailError::Stopped,
+                other => EntailError::Chase(other),
+            })?;
+        let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
+
+        let mut b = RdfDatasetBuilder::new();
+        b.push_dataset(&named_dataset);
+        let mut surrogates: BTreeSet<String> = BTreeSet::new();
+        let mut witness_terms: BTreeMap<String, TermValue> = BTreeMap::new();
+
+        for derivation in outcome.derivations() {
+            let fact = derivation.fact();
+            // A fact that touches no witness is already covered by `materialize_dl_reported`'s
+            // own (complete, tableau-backed) realization/classification injections over the
+            // named part — restating it here would be redundant, not wrong, but the whole point
+            // of this pass is the witness-bearing facts the named augmentation cannot state.
+            let touches_witness = [&fact.subject, &fact.predicate, &fact.object]
+                .into_iter()
+                .any(|s| witnesses.contains(s.as_str()));
+            if !touches_witness {
+                continue;
+            }
+            let s = resolve_surface(&fact.subject, &witnesses, &by_surface, &mut witness_terms);
+            let p = resolve_surface(&fact.predicate, &witnesses, &by_surface, &mut witness_terms);
+            let o = resolve_surface(&fact.object, &witnesses, &by_surface, &mut witness_terms);
+            for surface in [&fact.subject, &fact.object] {
+                if witnesses.contains(surface.as_str()) {
+                    surrogates.insert(witness_label(surface));
+                }
+            }
+            let s_id = intern_into(&mut b, &s);
+            let p_id = intern_into(&mut b, &p);
+            let o_id = intern_into(&mut b, &o);
+            b.push_quad(s_id, p_id, o_id, None);
+        }
+
+        let dataset = b
+            .freeze()
+            .map_err(|error| EntailError::Build(format!("freeze combined dataset: {error}")))?;
+        Ok(Some(CombinedMaterialization {
+            dataset,
+            report,
+            surrogates,
+        }))
+    })
+    .map_err(EntailError::source_read)?
 }
 
 /// The blank-node label a chase witness surface becomes.
@@ -446,9 +443,9 @@ fn resolve_surface(
 ///
 /// See the module docs for why this module refuses a PARTIAL lowering rather than skipping
 /// the one axiom it cannot read.
-fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
-    if !every_statement_is_recognized(ds) {
-        return None;
+fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Result<Option<Vec<DlClause>>, EntailError> {
+    if !every_statement_is_recognized(ds)? {
+        return Ok(None);
     }
 
     // subject surface -> (subject value, predicate iri -> objects), default graph only.
@@ -458,18 +455,11 @@ fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
         if quad.g.is_some() {
             continue;
         }
-        let subject = ds
-            .term_value(quad.s)
-            .expect("an id the view minted resolves to a value");
-        let TermValue::Iri(predicate) = ds
-            .term_value(quad.p)
-            .expect("an id the view minted resolves to a value")
-        else {
+        let subject = ds.term_value(quad.s)?;
+        let TermValue::Iri(predicate) = ds.term_value(quad.p)? else {
             continue;
         };
-        let object = ds
-            .term_value(quad.o)
-            .expect("an id the view minted resolves to a value");
+        let object = ds.term_value(quad.o)?;
         let entry = index
             .entry(surface_of(&subject))
             .or_insert_with(|| (subject, BTreeMap::new()));
@@ -484,7 +474,7 @@ fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
             // subject is outside it. It is only a problem if it ACTUALLY carries a
             // subclass axiom — otherwise it is just data this pass ignores.
             if predicates.contains_key(RDFS_SUBCLASSOF) {
-                return None;
+                return Ok(None);
             }
             continue;
         };
@@ -495,7 +485,7 @@ fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
         // built-in class's extension is fixed by the semantics rather than by the data, so a
         // Datalog rule over it would be a rule about a symbol this module does not implement.
         if !is_user_named_term(subject_value) {
-            return None;
+            return Ok(None);
         }
         for object in objects {
             match object {
@@ -515,13 +505,15 @@ fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
                 }
                 TermValue::Blank { .. } => {
                     let restriction_surface = surface_of(object);
-                    let (_, restriction_predicates) = index.get(&restriction_surface)?;
+                    let Some((_, restriction_predicates)) = index.get(&restriction_surface) else {
+                        return Ok(None);
+                    };
                     let recognized_predicates = [RDF_TYPE, OWL_ONPROPERTY, OWL_SOMEVALUESFROM];
                     if restriction_predicates
                         .keys()
                         .any(|p| !recognized_predicates.contains(&p.as_str()))
                     {
-                        return None;
+                        return Ok(None);
                     }
                     let is_restriction =
                         restriction_predicates.get(RDF_TYPE).is_some_and(|types| {
@@ -536,21 +528,21 @@ fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
                         .get(OWL_SOMEVALUESFROM)
                         .and_then(|v| v.first());
                     let (Some(property), Some(filler)) = (property, filler) else {
-                        return None;
+                        return Ok(None);
                     };
                     // Both slots must name a term of the caller's own vocabulary: a built-in
                     // role (`owl:topObjectProperty` and its siblings) or a built-in class has
                     // a fixed extension the existential rule below would misstate.
                     if !is_user_named_term(property) || !is_user_named_term(filler) {
-                        return None;
+                        return Ok(None);
                     }
                     let (TermValue::Iri(property_iri), TermValue::Iri(filler_iri)) =
                         (property, filler)
                     else {
-                        return None;
+                        return Ok(None);
                     };
                     if !is_restriction {
-                        return None;
+                        return Ok(None);
                     }
                     fresh += 1;
                     let witness = format!("y{fresh}");
@@ -578,12 +570,12 @@ fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
                 // A RESERVED IRI superclass (a built-in class), a literal, or a triple term:
                 // none is a class of the caller's vocabulary, so none is in the fragment.
                 TermValue::Iri(_) | TermValue::Literal { .. } | TermValue::Triple { .. } => {
-                    return None;
+                    return Ok(None);
                 }
             }
         }
     }
-    Some(clauses)
+    Ok(Some(clauses))
 }
 
 #[cfg(test)]
@@ -639,7 +631,9 @@ mod tests {
 
     #[test]
     fn a_some_values_from_axiom_lowers_to_one_existential_clause() {
-        let clauses = lower_horn_tbox(&some_values_from_ontology()).expect("recognized shape");
+        let clauses = lower_horn_tbox(&some_values_from_ontology())
+            .expect("source read")
+            .expect("recognized shape");
         assert_eq!(clauses.len(), 1);
         assert!(certify(&clauses).is_certified());
     }
@@ -701,7 +695,7 @@ mod tests {
         b.push_quad(a, equiv, big_b, None);
         let ds = b.freeze().expect("freeze");
 
-        assert!(lower_horn_tbox(&ds).is_none());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_none());
         assert!(
             materialize_combined(&ds, &[])
                 .expect("no chase error")
@@ -731,7 +725,9 @@ mod tests {
         b.push_quad(a, subclass_of, restriction, None);
         let ds = b.freeze().expect("freeze");
 
-        let clauses = lower_horn_tbox(&ds).expect("syntactically recognized");
+        let clauses = lower_horn_tbox(&ds)
+            .expect("source read")
+            .expect("syntactically recognized");
         assert!(!certify(&clauses).is_certified());
         assert!(
             materialize_combined(&ds, &[])
@@ -784,7 +780,7 @@ mod tests {
     #[test]
     fn a_sub_property_axiom_disqualifies_the_ontology() {
         let ds = one_statement(&format!("{NS}r"), RDFS_SUBPROPERTYOF, &format!("{NS}q"));
-        assert!(lower_horn_tbox(&ds).is_none());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_none());
         assert!(
             materialize_combined(&ds, &[])
                 .expect("no chase error")
@@ -823,7 +819,7 @@ mod tests {
         ] {
             let ds = one_statement(&ex("r"), predicate, &ex("q"));
             assert!(
-                lower_horn_tbox(&ds).is_none(),
+                lower_horn_tbox(&ds).expect("source read").is_none(),
                 "{predicate} must disqualify the ontology"
             );
             assert!(
@@ -850,7 +846,7 @@ mod tests {
         ] {
             let ds = one_statement(&ex("r"), RDF_TYPE_IRI, class);
             assert!(
-                lower_horn_tbox(&ds).is_none(),
+                lower_horn_tbox(&ds).expect("source read").is_none(),
                 "a {class} typing must disqualify the ontology"
             );
         }
@@ -861,9 +857,9 @@ mod tests {
     fn an_unknown_reserved_term_disqualifies() {
         let invented = "http://www.w3.org/2002/07/owl#purrdfNoSuchTerm";
         let ds = one_statement(&format!("{NS}r"), invented, &format!("{NS}q"));
-        assert!(lower_horn_tbox(&ds).is_none());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_none());
         let ds = one_statement(&format!("{NS}r"), RDF_TYPE_IRI, invented);
-        assert!(lower_horn_tbox(&ds).is_none());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_none());
     }
 
     /// The whitelist does NOT turn a caller's own vocabulary into a boundary: an ordinary
@@ -872,7 +868,7 @@ mod tests {
     #[test]
     fn ordinary_data_and_annotations_stay_in_the_fragment() {
         let ds = one_statement(&format!("{NS}a"), &format!("{NS}p"), &format!("{NS}b"));
-        assert!(lower_horn_tbox(&ds).is_some());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_some());
 
         let mut b = RdfDatasetBuilder::new();
         let ty = b.intern_iri(RDF_TYPE_IRI);
@@ -888,11 +884,15 @@ mod tests {
         b.push_quad(little_a, ty, a, None);
         let ds = b.freeze().expect("freeze");
         assert!(
-            lower_horn_tbox(&ds).is_some(),
+            lower_horn_tbox(&ds).expect("source read").is_some(),
             "a declaration and an annotation state no axiom, so they must not disqualify"
         );
 
-        assert!(lower_horn_tbox(&some_values_from_ontology()).is_some());
+        assert!(
+            lower_horn_tbox(&some_values_from_ontology())
+                .expect("source read")
+                .is_some()
+        );
     }
 
     /// A BUILT-IN class on either side of `rdfs:subClassOf` disqualifies: `owl:Thing`'s and
@@ -901,9 +901,9 @@ mod tests {
     #[test]
     fn a_builtin_class_in_a_subclass_axiom_disqualifies() {
         let ds = one_statement(&format!("{NS}A"), RDFS_SUBCLASSOF_IRI, OWL_NOTHING);
-        assert!(lower_horn_tbox(&ds).is_none());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_none());
         let ds = one_statement(OWL_THING, RDFS_SUBCLASSOF_IRI, &format!("{NS}A"));
-        assert!(lower_horn_tbox(&ds).is_none());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_none());
     }
 
     /// A BUILT-IN role in the restriction's `owl:onProperty` slot disqualifies, for the same
@@ -928,7 +928,7 @@ mod tests {
         b.push_quad(restriction, some_values_from, big_b, None);
         b.push_quad(a, subclass_of, restriction, None);
         let ds = b.freeze().expect("freeze");
-        assert!(lower_horn_tbox(&ds).is_none());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_none());
     }
 
     /// A quad OUTSIDE the default graph disqualifies: the chase is seeded from the default
@@ -944,6 +944,6 @@ mod tests {
         let g = b.intern_iri(&format!("{NS}g"));
         b.push_quad(little_a, ty, a, Some(g));
         let ds = b.freeze().expect("freeze");
-        assert!(lower_horn_tbox(&ds).is_none());
+        assert!(lower_horn_tbox(&ds).expect("source read").is_none());
     }
 }

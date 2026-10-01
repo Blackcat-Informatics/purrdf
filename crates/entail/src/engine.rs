@@ -165,46 +165,49 @@ pub(crate) fn copy_into<D: DatasetView>(
     b: &mut RdfDatasetBuilder,
     ds: &D,
 ) -> Result<(), EntailError> {
-    for quad in ds.quads() {
-        let s = intern_into(b, &ds.term_value(quad.s)?);
-        let p = intern_into(b, &ds.term_value(quad.p)?);
-        let o = intern_into(b, &ds.term_value(quad.o)?);
-        let g = quad
-            .g
-            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
-            .transpose()?;
-        b.push_quad(s, p, o, g);
-    }
-    // Each reifier row projects as `(s = reifier, p = rdf:reifies, o = triple-term, g)`, so
-    // the reifier is the quad's subject and the reified triple term its object.
-    for quad in ds.reifier_quads() {
-        let reifier = intern_into(b, &ds.term_value(quad.s)?);
-        let triple = intern_into(b, &ds.term_value(quad.o)?);
-        let graph = quad
-            .g
-            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
-            .transpose()?;
-        b.push_reifier_in_graph(reifier, triple, graph);
-    }
-    // Each annotation row projects as `(s = reifier, p = predicate, o = object, g)`.
-    for quad in ds.annotation_quads() {
-        let reifier = intern_into(b, &ds.term_value(quad.s)?);
-        let predicate = intern_into(b, &ds.term_value(quad.p)?);
-        let object = intern_into(b, &ds.term_value(quad.o)?);
-        let graph = quad
-            .g
-            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
-            .transpose()?;
-        b.push_annotation_in_graph(reifier, predicate, object, graph);
-    }
-    // A named graph a dataset DECLARES but puts no quad in is part of its content, and a
-    // closure that dropped the declaration would answer a different question about which
-    // graphs exist.
-    for graph in ds.named_graphs() {
-        let graph = intern_into(b, &ds.term_value(graph)?);
-        b.declare_named_graph(graph);
-    }
-    Ok(())
+    ds.checked_read(|ds| {
+        for quad in ds.quads() {
+            let s = intern_into(b, &ds.term_value(quad.s)?);
+            let p = intern_into(b, &ds.term_value(quad.p)?);
+            let o = intern_into(b, &ds.term_value(quad.o)?);
+            let g = quad
+                .g
+                .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+                .transpose()?;
+            b.push_quad(s, p, o, g);
+        }
+        // Each reifier row projects as `(s = reifier, p = rdf:reifies, o = triple-term, g)`, so
+        // the reifier is the quad's subject and the reified triple term its object.
+        for quad in ds.reifier_quads() {
+            let reifier = intern_into(b, &ds.term_value(quad.s)?);
+            let triple = intern_into(b, &ds.term_value(quad.o)?);
+            let graph = quad
+                .g
+                .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+                .transpose()?;
+            b.push_reifier_in_graph(reifier, triple, graph);
+        }
+        // Each annotation row projects as `(s = reifier, p = predicate, o = object, g)`.
+        for quad in ds.annotation_quads() {
+            let reifier = intern_into(b, &ds.term_value(quad.s)?);
+            let predicate = intern_into(b, &ds.term_value(quad.p)?);
+            let object = intern_into(b, &ds.term_value(quad.o)?);
+            let graph = quad
+                .g
+                .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+                .transpose()?;
+            b.push_annotation_in_graph(reifier, predicate, object, graph);
+        }
+        // A named graph a dataset DECLARES but puts no quad in is part of its content, and a
+        // closure that dropped the declaration would answer a different question about which
+        // graphs exist.
+        for graph in ds.named_graphs() {
+            let graph = intern_into(b, &ds.term_value(graph)?);
+            b.declare_named_graph(graph);
+        }
+        Ok(())
+    })
+    .map_err(EntailError::source_read)?
 }
 
 /// Every term id `ds` holds, in EVERY position [`copy_into`] writes.
@@ -303,83 +306,86 @@ pub(crate) fn close<D: DatasetView>(
     options: &EvalOptions,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, RunStats), EntailError> {
-    let (program, attribution) = program_with_attribution(regime);
+    ds.checked_read(|ds| {
+        let (program, attribution) = program_with_attribution(regime);
 
-    // The named graphs, keyed by their canonical surface so the visit order is a function
-    // of the dataset's CONTENT rather than of the order its quads happened to intern in.
-    let mut named: BTreeMap<String, TermValue> = BTreeMap::new();
-    for quad in ds.quads() {
-        if let Some(graph) = quad.g {
-            let value = ds.term_value(graph)?;
-            named.entry(surface_of(&value)).or_insert(value);
+        // The named graphs, keyed by their canonical surface so the visit order is a function
+        // of the dataset's CONTENT rather than of the order its quads happened to intern in.
+        let mut named: BTreeMap<String, TermValue> = BTreeMap::new();
+        for quad in ds.quads() {
+            if let Some(graph) = quad.g {
+                let value = ds.term_value(graph)?;
+                named.entry(surface_of(&value)).or_insert(value);
+            }
         }
-    }
 
-    // ONE compilation per calculus per CALL. `close_graph` is invoked `1 + n` times for a
-    // dataset with `n` named graphs, over the same declared program every time, so
-    // compiling inside it made a run over a hundred named graphs plan the ~200-clause
-    // OWL-RL calculus a hundred and one times for a plan that is a pure function of the
-    // clauses. The cache is CALL-SCOPED and threaded by `&mut`: a longer-lived one would
-    // make an answer's cost — and, if a compile ever became fallible on state, an answer —
-    // depend on what some earlier evaluation happened to compile, which is exactly the
-    // hidden history `purrdf-datalog` refuses to keep. Capacity two, because one call
-    // presents exactly one program and the second slot is slack rather than a policy.
-    let mut plans = PlanCache::new(2);
-    let mut stats = RunStats::none(*options);
-    let run = GraphRunInput {
-        regime,
-        program: &program,
-        attribution: &attribution,
-        options,
-        stop,
-    };
-    let default_run = close_graph(ds, run, None, &mut plans)?;
-    stats.absorb(default_run.budget);
-    stats.drop_generalized(default_run.generalized_rdf_drops);
-    stats.drop_surrogate(default_run.surrogate_drops);
-    stats.certify(default_run.termination);
-    if let Some(witness) = default_run.clash {
-        return Err(refuse(ds, regime, &stats, witness));
-    }
-
-    let mut b = RdfDatasetBuilder::new();
-    copy_into(&mut b, ds)?;
-    // What the DEFAULT graph draws on its own. A named-graph run re-derives every one of
-    // these — the default graph is in its seed — and restating them inside the named graph
-    // would put a conclusion in a graph that did not produce it.
-    let mut default_conclusions: BTreeSet<(String, String, String)> = BTreeSet::new();
-    for conclusion in &default_run.conclusions {
-        default_conclusions.insert(conclusion.key());
-        stats.commit(conclusion.rule);
-        emit(&mut b, conclusion, None);
-    }
-    for graph in named.values() {
-        // A dataset is closed graph by graph, so the loop over the named graphs is a
-        // boundary of the CLOSURE just as a fixpoint round is — and it is the only one that
-        // sees the copying and emission between two evaluations. Polling here is what stops
-        // a hundred-graph dataset from having ninety-nine unpollable seams.
-        if stop.is_some_and(|stop| stop.stopped()) {
-            return Err(EntailError::Stopped);
-        }
-        let run = close_graph(ds, run, Some(graph), &mut plans)?;
-        stats.absorb(run.budget);
-        stats.drop_generalized(run.generalized_rdf_drops);
-        stats.drop_surrogate(run.surrogate_drops);
-        stats.certify(run.termination);
-        if let Some(witness) = run.clash {
+        // ONE compilation per calculus per CALL. `close_graph` is invoked `1 + n` times for a
+        // dataset with `n` named graphs, over the same declared program every time, so
+        // compiling inside it made a run over a hundred named graphs plan the ~200-clause
+        // OWL-RL calculus a hundred and one times for a plan that is a pure function of the
+        // clauses. The cache is CALL-SCOPED and threaded by `&mut`: a longer-lived one would
+        // make an answer's cost — and, if a compile ever became fallible on state, an answer —
+        // depend on what some earlier evaluation happened to compile, which is exactly the
+        // hidden history `purrdf-datalog` refuses to keep. Capacity two, because one call
+        // presents exactly one program and the second slot is slack rather than a policy.
+        let mut plans = PlanCache::new(2);
+        let mut stats = RunStats::none(*options);
+        let run = GraphRunInput {
+            regime,
+            program: &program,
+            attribution: &attribution,
+            options,
+            stop,
+        };
+        let default_run = close_graph(ds, run, None, &mut plans)?;
+        stats.absorb(default_run.budget);
+        stats.drop_generalized(default_run.generalized_rdf_drops);
+        stats.drop_surrogate(default_run.surrogate_drops);
+        stats.certify(default_run.termination);
+        if let Some(witness) = default_run.clash {
             return Err(refuse(ds, regime, &stats, witness));
         }
-        let g = intern_into(&mut b, graph);
-        for conclusion in &run.conclusions {
-            if default_conclusions.contains(&conclusion.key()) {
-                continue;
-            }
+
+        let mut b = RdfDatasetBuilder::new();
+        copy_into(&mut b, ds)?;
+        // What the DEFAULT graph draws on its own. A named-graph run re-derives every one of
+        // these — the default graph is in its seed — and restating them inside the named graph
+        // would put a conclusion in a graph that did not produce it.
+        let mut default_conclusions: BTreeSet<(String, String, String)> = BTreeSet::new();
+        for conclusion in &default_run.conclusions {
+            default_conclusions.insert(conclusion.key());
             stats.commit(conclusion.rule);
-            emit(&mut b, conclusion, Some(g));
+            emit(&mut b, conclusion, None);
         }
-    }
-    let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
-    Ok((dataset, stats))
+        for graph in named.values() {
+            // A dataset is closed graph by graph, so the loop over the named graphs is a
+            // boundary of the CLOSURE just as a fixpoint round is — and it is the only one that
+            // sees the copying and emission between two evaluations. Polling here is what stops
+            // a hundred-graph dataset from having ninety-nine unpollable seams.
+            if stop.is_some_and(|stop| stop.stopped()) {
+                return Err(EntailError::Stopped);
+            }
+            let run = close_graph(ds, run, Some(graph), &mut plans)?;
+            stats.absorb(run.budget);
+            stats.drop_generalized(run.generalized_rdf_drops);
+            stats.drop_surrogate(run.surrogate_drops);
+            stats.certify(run.termination);
+            if let Some(witness) = run.clash {
+                return Err(refuse(ds, regime, &stats, witness));
+            }
+            let g = intern_into(&mut b, graph);
+            for conclusion in &run.conclusions {
+                if default_conclusions.contains(&conclusion.key()) {
+                    continue;
+                }
+                stats.commit(conclusion.rule);
+                emit(&mut b, conclusion, Some(g));
+            }
+        }
+        let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+        Ok((dataset, stats))
+    })
+    .map_err(EntailError::source_read)?
 }
 
 /// The semi-naive evaluator's refusal, wrapped in this crate's vocabulary.
@@ -417,8 +423,10 @@ fn refuse<D: DatasetView>(
     stats: &RunStats,
     witness: InconsistencyWitness,
 ) -> EntailError {
-    let report = ReasoningReport::of_inconsistent_run(ds, regime, stats, witness.clone());
-    EntailError::Inconsistent(Box::new(InconsistentRun::new(witness, report)))
+    match ReasoningReport::of_inconsistent_run(ds, regime, stats, witness.clone()) {
+        Ok(report) => EntailError::Inconsistent(Box::new(InconsistentRun::new(witness, report))),
+        Err(error) => error,
+    }
 }
 
 /// What every graph's evaluation of one [`close`] call shares: the lane, its declared
@@ -648,102 +656,109 @@ pub(crate) fn seed<D: DatasetView>(
     program: &[DlClause],
     graph: Option<&TermValue>,
 ) -> Result<(RelationStore, Terms), EntailError> {
-    let mut terms = Terms::default();
-    terms.record_program(program);
-    terms.record_literals();
-    let mut edb = RelationStore::new();
-    // The axiomatic triples are PREMISES, not conclusions: `S RDFS entails E` is defined
-    // over the interpretations satisfying S *and* the axioms, and no rule of §9.2.1
-    // concludes one. Seeding them beside the graph's own quads is that definition,
-    // written down. See `crate::axioms` for the table and for which lanes assert it.
-    for &(subject, predicate, object) in axioms_for(regime) {
-        let subject = terms.record(&TermValue::iri(subject));
-        let predicate = terms.record(&TermValue::iri(predicate));
-        let object = terms.record(&TermValue::iri(object));
-        let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
-    }
-    let mut lists = ListIndex::default();
-    let mut literals = LiteralIndex::default();
-    let mut surrogates = SurrogateIndex::default();
-    for quad in ds.quads() {
-        // The seed is the union this run closes: the default graph always, plus the named
-        // graph when there is one. Every OTHER named graph is left out, which is what makes
-        // a cross-graph join impossible rather than merely unobserved.
-        let in_seed = match (quad.g, graph) {
-            (None, _) => true,
-            (Some(g), Some(target)) => ds.term_value(g)? == *target,
-            (Some(_), None) => false,
-        };
-        if !in_seed {
-            continue;
+    ds.checked_read(|ds| {
+        let mut terms = Terms::default();
+        terms.record_program(program);
+        terms.record_literals();
+        let mut edb = RelationStore::new();
+        // The axiomatic triples are PREMISES, not conclusions: `S RDFS entails E` is defined
+        // over the interpretations satisfying S *and* the axioms, and no rule of §9.2.1
+        // concludes one. Seeding them beside the graph's own quads is that definition,
+        // written down. See `crate::axioms` for the table and for which lanes assert it.
+        for &(subject, predicate, object) in axioms_for(regime) {
+            let subject = terms.record(&TermValue::iri(subject));
+            let predicate = terms.record(&TermValue::iri(predicate));
+            let object = terms.record(&TermValue::iri(object));
+            let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
         }
-        // Resolve each position's value ONCE and reuse it: `record` interns it, and the
-        // datatype/surrogate observers below read the very same value. Resolving again
-        // per observer would re-walk the view and re-allocate the term for every quad on
-        // the seeding hot path.
-        let s_val = ds.term_value(quad.s)?;
-        let p_val = ds.term_value(quad.p)?;
-        let o_val = ds.term_value(quad.o)?;
-        let subject = terms.record(&s_val);
-        let predicate = terms.record(&p_val);
-        let object = terms.record(&o_val);
+        let mut lists = ListIndex::default();
+        let mut literals = LiteralIndex::default();
+        let mut surrogates = SurrogateIndex::default();
+        for quad in ds.quads() {
+            // The seed is the union this run closes: the default graph always, plus the named
+            // graph when there is one. Every OTHER named graph is left out, which is what makes
+            // a cross-graph join impossible rather than merely unobserved.
+            let in_seed = match (quad.g, graph) {
+                (None, _) => true,
+                (Some(g), Some(target)) => ds.term_value(g)? == *target,
+                (Some(_), None) => false,
+            };
+            if !in_seed {
+                continue;
+            }
+            // Resolve each position's value ONCE and reuse it: `record` interns it, and the
+            // datatype/surrogate observers below read the very same value. Resolving again
+            // per observer would re-walk the view and re-allocate the term for every quad on
+            // the seeding hot path.
+            let s_val = ds.term_value(quad.s)?;
+            let p_val = ds.term_value(quad.p)?;
+            let o_val = ds.term_value(quad.o)?;
+            let subject = terms.record(&s_val);
+            let predicate = terms.record(&p_val);
+            let object = terms.record(&o_val);
+            if walks_collections(regime) {
+                lists.observe(&subject, &predicate, &object);
+            }
+            if decides_datatypes(regime) {
+                for (surface, value) in
+                    [(&subject, &s_val), (&predicate, &p_val), (&object, &o_val)]
+                {
+                    observe_literal(&mut literals, surface, value);
+                }
+            }
+            if mints_surrogates(regime) {
+                for (surface, value) in
+                    [(&subject, &s_val), (&predicate, &p_val), (&object, &o_val)]
+                {
+                    surrogates.observe(surface, value);
+                }
+            }
+            let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
+        }
+        // The RDF collections the OWL 2 axioms point at, walked ONCE into the internal
+        // relations the `LIST[…]` rules join against. A malformed or cyclic collection stops
+        // the run here rather than producing a closure over the well-formed prefix of it.
         if walks_collections(regime) {
-            lists.observe(&subject, &predicate, &object);
+            for fact in lists
+                .materialize()
+                .map_err(|error| EntailError::MalformedList(error.to_string()))?
+            {
+                let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
+            }
         }
+        // The XSD value spaces OWL 2 Profiles Table 8 quantifies over, decided ONCE over the
+        // literals this run's seed holds. See [`crate::datatypes`] for why an infinite premise
+        // is a boundary rather than a loop, and why an unmodelled datatype is not judged.
         if decides_datatypes(regime) {
-            for (surface, value) in [(&subject, &s_val), (&predicate, &p_val), (&object, &o_val)] {
-                observe_literal(&mut literals, surface, value);
+            // A datatype the pre-pass names is a TERM of the store, and `dt-type2` writes it
+            // into an `rdf:type` object, so the dictionary has to be able to read it back —
+            // including the datatype of an ILL-TYPED literal, which need not be one of the
+            // thirty-two the program's own constants already cover.
+            let datatypes: Vec<String> = literals.datatypes().map(str::to_owned).collect();
+            for datatype in datatypes {
+                let _ = terms.record(&TermValue::iri(datatype));
+            }
+            for fact in literals.materialize() {
+                let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
             }
         }
+
+        // What `rdfD1` and `rdfs14` OBSERVE — a datatyped literal, a triple term — decided
+        // once over the seed's own terms. The clause language has no term-kind test, so
+        // neither premise is expressible as a clause; see [`crate::surrogates`].
         if mints_surrogates(regime) {
-            for (surface, value) in [(&subject, &s_val), (&predicate, &p_val), (&object, &o_val)] {
-                surrogates.observe(surface, value);
+            let iris: Vec<String> = surrogates.iris().map(str::to_owned).collect();
+            for iri in iris {
+                let _ = terms.record(&TermValue::iri(iri));
+            }
+            for fact in surrogates.materialize() {
+                let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
             }
         }
-        let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
-    }
-    // The RDF collections the OWL 2 axioms point at, walked ONCE into the internal
-    // relations the `LIST[…]` rules join against. A malformed or cyclic collection stops
-    // the run here rather than producing a closure over the well-formed prefix of it.
-    if walks_collections(regime) {
-        for fact in lists
-            .materialize()
-            .map_err(|error| EntailError::MalformedList(error.to_string()))?
-        {
-            let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
-        }
-    }
-    // The XSD value spaces OWL 2 Profiles Table 8 quantifies over, decided ONCE over the
-    // literals this run's seed holds. See [`crate::datatypes`] for why an infinite premise
-    // is a boundary rather than a loop, and why an unmodelled datatype is not judged.
-    if decides_datatypes(regime) {
-        // A datatype the pre-pass names is a TERM of the store, and `dt-type2` writes it
-        // into an `rdf:type` object, so the dictionary has to be able to read it back —
-        // including the datatype of an ILL-TYPED literal, which need not be one of the
-        // thirty-two the program's own constants already cover.
-        let datatypes: Vec<String> = literals.datatypes().map(str::to_owned).collect();
-        for datatype in datatypes {
-            let _ = terms.record(&TermValue::iri(datatype));
-        }
-        for fact in literals.materialize() {
-            let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
-        }
-    }
 
-    // What `rdfD1` and `rdfs14` OBSERVE — a datatyped literal, a triple term — decided
-    // once over the seed's own terms. The clause language has no term-kind test, so
-    // neither premise is expressible as a clause; see [`crate::surrogates`].
-    if mints_surrogates(regime) {
-        let iris: Vec<String> = surrogates.iris().map(str::to_owned).collect();
-        for iri in iris {
-            let _ = terms.record(&TermValue::iri(iri));
-        }
-        for fact in surrogates.materialize() {
-            let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
-        }
-    }
-
-    Ok((edb, terms))
+        Ok((edb, terms))
+    })
+    .map_err(EntailError::source_read)?
 }
 
 /// Evaluate an EXISTENTIAL calculus with the restricted chase and read its answer.

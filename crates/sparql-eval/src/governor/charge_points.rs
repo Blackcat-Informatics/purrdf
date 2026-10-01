@@ -1898,7 +1898,11 @@ fn run_aggregate_answer(
     let seq = evaluated.rows();
     let answer = seq.schema.index_of(&Variable::new(var)).and_then(|col| {
         seq.rows.first().and_then(|row| row[col]).map(|term| {
-            match ctx.scratch.value_of(dataset, term) {
+            match ctx
+                .scratch
+                .try_value_of(dataset, term)
+                .expect("resident fixture read succeeds")
+            {
                 TermValue::Literal { lexical_form, .. } => lexical_form,
                 other => format!("{other:?}"),
             }

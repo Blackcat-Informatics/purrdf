@@ -489,8 +489,8 @@ fn multi_binding_fixture_with_annotation(
             .unwrap();
             let reifier_ordinal = pack.reifier_quads().position(|quad| {
                 if quad.g.is_some() != named { return false; }
-                let TermRef::Triple { o, .. } = pack.resolve(quad.o) else { panic!("reifier object must be a triple"); };
-                matches!(pack.resolve(o), TermRef::Iri(iri) if iri == format!("https://example.org/multiple/{}", iris[object]))
+                let TermRef::Triple { o, .. } = pack.resolve(quad.o).expect("resident pack resolution succeeds") else { panic!("reifier object must be a triple"); };
+                matches!(pack.resolve(o).expect("resident pack resolution succeeds"), TermRef::Iri(iri) if iri == format!("https://example.org/multiple/{}", iris[object]))
             }).map(|ordinal| ordinal as u64);
             let reifier = RdfReifierTarget {
                 graph: graph.id,

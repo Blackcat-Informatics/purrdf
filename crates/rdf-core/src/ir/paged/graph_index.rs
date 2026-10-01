@@ -306,9 +306,18 @@ mod tests {
         let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1, page2]));
         let paged = PagedDataset::from_provider(provider).expect("seal pages");
 
-        let ga = paged.term_id_by_value(&iri("gA")).expect("gA interned");
-        let gb = paged.term_id_by_value(&iri("gB")).expect("gB interned");
-        let gc = paged.term_id_by_value(&iri("gC")).expect("gC interned");
+        let ga = paged
+            .term_id_by_value(&iri("gA"))
+            .unwrap()
+            .expect("gA interned");
+        let gb = paged
+            .term_id_by_value(&iri("gB"))
+            .unwrap()
+            .expect("gB interned");
+        let gc = paged
+            .term_id_by_value(&iri("gC"))
+            .unwrap()
+            .expect("gC interned");
 
         let index = paged.graph_index();
         let mut expected_keys = [ga, gb, gc];
@@ -406,8 +415,14 @@ mod tests {
         // postings must name the NEW id, not the old one.
         let subset = paged.with_pages(&[PageId(1)]);
         assert_eq!(subset.page_count(), 1);
-        let ga = subset.term_id_by_value(&iri("gA")).expect("gA interned");
-        let gb = subset.term_id_by_value(&iri("gB")).expect("gB interned");
+        let ga = subset
+            .term_id_by_value(&iri("gA"))
+            .unwrap()
+            .expect("gA interned");
+        let gb = subset
+            .term_id_by_value(&iri("gB"))
+            .unwrap()
+            .expect("gB interned");
         assert_eq!(
             subset
                 .graph_index()

@@ -19,6 +19,7 @@
 # pasting the ACTUAL block it prints. Never hand-tune a single line.
 abi-version 0.8.0
 const char *purrdf_error_message(const PurrdfError *err)
+const char *purrdf_error_presentation_json(const PurrdfError *err)
 const char *purrdf_shapes_import_error_iri(const PurrdfError *err, size_t index)
 const char *purrdf_shapes_import_error_kind(const PurrdfError *err)
 const char *purrdf_shapes_product_error_dimension(const PurrdfError *err)

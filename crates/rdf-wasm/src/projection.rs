@@ -127,7 +127,7 @@ pub fn lift_projection(
     let outcome = lift_archive(archive, profile, &config)
         .map_err(|error| JsError::new(&error.to_string()))?;
     Ok(ProjectionLift {
-        dataset: Some(Dataset::from_frozen(outcome.dataset)),
+        dataset: Some(Dataset::from_frozen(outcome.dataset)?),
         loss_ledger_json: outcome.loss_ledger.render_json(),
     })
 }

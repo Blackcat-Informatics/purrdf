@@ -3,7 +3,7 @@
 
 //! Generic RDF-to-columnar projection.
 
-use purrdf_core::TermBox;
+use purrdf_core::{TermBox, TermGuard as _};
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{
@@ -13,7 +13,7 @@ use purrdf_core::{
 use crate::column::Int64Column;
 use crate::error::ColumnarError;
 use crate::files::ParquetFiles;
-use crate::parquet::{ColumnValues, Compression, TableData, write_table};
+use crate::parquet::{ColumnValues, Compression, TableData};
 use crate::schema::Table;
 
 type QuadRow = (i64, i64, i64, Option<i64>);
@@ -49,6 +49,34 @@ pub fn write<D: DatasetView>(
     blobs: &ContentStore,
     compression: Compression,
 ) -> Result<ColumnarWrite, ColumnarError> {
+    project(view, blobs)?.to_parquet(compression)
+}
+
+/// Project a resident RDF view into the authoritative five-table schema.
+///
+/// This is the same canonical projection the Parquet writer uses. Relational
+/// hosts insert these rows directly rather than assigning their own term ids.
+/// The eager projection retains all rows and is subject to the native v1 table
+/// bounds; it is not an external-memory construction API.
+///
+/// # Errors
+///
+/// Returns an error for malformed RDF structure, corrupt blob contents or a
+/// table exceeding the native v1 profile bounds.
+pub fn project<D: DatasetView>(
+    view: &D,
+    blobs: &ContentStore,
+) -> Result<crate::projection::ColumnarProjection, ColumnarError> {
+    view.checked_read(|view| project_read(view, blobs))
+        .map_err(|error| ColumnarError::SourceRead {
+            detail: error.to_string(),
+        })?
+}
+
+fn project_read<D: DatasetView>(
+    view: &D,
+    blobs: &ContentStore,
+) -> Result<crate::projection::ColumnarProjection, ColumnarError> {
     blobs
         .verify_all()
         .map_err(|error| ColumnarError::malformed("content store", error.to_string()))?;
@@ -65,18 +93,7 @@ pub fn write<D: DatasetView>(
         build_annotations_table(&source, &resolver, &dictionary)?,
         build_blobs_table(blobs)?,
     ];
-    let mut encoded = Vec::with_capacity(Table::ALL.len());
-    for table in &tables {
-        encoded.push(write_table(table, compression)?);
-    }
-    let files: [Vec<u8>; 5] = encoded.try_into().map_err(|_| {
-        ColumnarError::malformed("table set", "writer did not produce exactly five files")
-    })?;
-
-    Ok(ColumnarWrite {
-        files: ParquetFiles::from_array(files),
-        losses: LossLedger::default(),
-    })
+    Ok(crate::projection::ColumnarProjection::from_tables(tables))
 }
 
 #[derive(Debug)]
@@ -179,16 +196,15 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
     fn resolve(&mut self, id: D::Id) -> Result<TermValue, ColumnarError> {
         /// A term being resolved, the terms it depends on in resolution order, and
         /// the values they resolved to so far.
-        struct Frame<'v, I> {
+        struct Frame<I, G> {
             id: I,
-            term: TermRef<'v, I>,
+            guard: G,
             dependencies: ([I; 3], usize),
             resolved: Vec<TermValue>,
         }
+        type EnterResult<I, G> = Result<Result<TermValue, Frame<I, G>>, ColumnarError>;
         let view = self.view;
-        let enter = |this: &mut Self,
-                     id: D::Id|
-         -> Result<Result<TermValue, Frame<'a, D::Id>>, ColumnarError> {
+        let enter = |this: &mut Self, id: D::Id| -> EnterResult<D::Id, D::TermGuard<'a>> {
             if let Some(value) = this.values.get(&id) {
                 return Ok(Ok(value.clone()));
             }
@@ -198,15 +214,19 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
                     "cyclic triple-term reference",
                 ));
             }
-            let term = view.resolve(id);
-            let dependencies = match term {
+            let guard = view
+                .resolve(id)
+                .map_err(|error| ColumnarError::SourceRead {
+                    detail: error.to_string(),
+                })?;
+            let dependencies = match guard.term() {
                 TermRef::Literal { datatype, .. } => ([datatype, datatype, datatype], 1),
                 TermRef::Triple { s, p, o } => ([s, p, o], 3),
                 TermRef::Iri(_) | TermRef::Blank { .. } => ([id, id, id], 0),
             };
             Ok(Err(Frame {
                 id,
-                term,
+                guard,
                 dependencies,
                 resolved: Vec::new(),
             }))
@@ -226,10 +246,13 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
                 continue;
             }
             let Frame {
-                id, term, resolved, ..
+                id,
+                guard,
+                resolved,
+                ..
             } = frames.pop().expect("a term is being resolved");
             let mut resolved = resolved.into_iter();
-            let value = match term {
+            let value = match guard.term() {
                 TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
                 TermRef::Blank { label, scope } => TermValue::Blank {
                     label: label.to_owned(),
@@ -747,7 +770,9 @@ mod term_walk_tests {
     //! The source-term resolution against its recursive reference.
 
     use purrdf_core::backend::TermFactory as _;
-    use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermBox, TermRef, TermValue};
+    use purrdf_core::{
+        DatasetView, RdfDataset, RdfDatasetBuilder, TermBox, TermGuard as _, TermRef, TermValue,
+    };
 
     use super::{ColumnarError, Resolver};
 
@@ -764,7 +789,13 @@ mod term_walk_tests {
                 "cyclic triple-term reference",
             ));
         }
-        let value = match resolver.view.resolve(id) {
+        let view = resolver.view;
+        let guard = view
+            .resolve(id)
+            .map_err(|error| ColumnarError::SourceRead {
+                detail: error.to_string(),
+            })?;
+        let value = match guard.term() {
             TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
             TermRef::Blank { label, scope } => TermValue::Blank {
                 label: label.to_owned(),

@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The static, allocation-free **read view** over an RDF dataset. See [`docs/design/purrdf-backend-contract.md`](../../../docs/design/purrdf-backend-contract.md).
+//! The static, typed read view over an RDF dataset. See [`docs/design/purrdf-backend-contract.md`](../../../docs/design/purrdf-backend-contract.md).
 //!
-//! [`DatasetView`] is the id-based, borrowed read interface: it yields `Copy`
-//! [`QuadIds`] and borrowed [`QuadRef`]s (no per-quad allocation, no term-string clones), and offers
-//! [`DatasetView::quads_for_pattern`] keyed on dataset-local [`TermId`]s plus a
-//! [`GraphMatch`]. The default `quads_for_pattern` is a linear scan; backends with
-//! access-pattern indexes override it.
+//! [`DatasetView`] yields `Copy` [`QuadIds`] and typed term guards. Resident
+//! guards borrow [`TermRef`]s without allocating; operational guards retain an
+//! admitted decoded-block pin. Borrowed strings stay inside their guard lifetime.
+//! Pattern probes use the view's own [`ViewTermId`] namespace, with a
+//! [`GraphMatch`]. Backends override access-pattern probes with their indexes.
 //!
 //! This is the **static** trait layer (generic `impl DatasetView`, RPITIT — not
 //! object-safe). Per the backend contract (C1), backend selection is compile-time
@@ -24,6 +24,15 @@ use crate::collections::{
 use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
 use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, TermValue};
 
+/// Lock internal operational read state, preserving its invariants after a
+/// poison marker. Host callbacks never execute under these state locks; failed
+/// admissions retain conservative charges and the typed sticky source error.
+pub(crate) fn lock_read_state<T>(state: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 mod sealed {
     pub trait Sealed {}
 
@@ -32,25 +41,101 @@ mod sealed {
 
 /// Why [`DatasetView::term_value`] could not resolve an id to a value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TermLookupError {
+pub enum TermLookupError<ReadError = std::convert::Infallible> {
     /// The id does not name a well-formed term of the view it was handed to: a literal
     /// it resolves to has a datatype that is not an IRI, which no view mints for its
     /// own ids (C0.1), so the id belongs to another view (C0.8).
     ForeignId,
+    /// The backing read session could not admit or resolve the term.
+    Read(ReadError),
 }
 
-impl core::fmt::Display for TermLookupError {
+impl<E: core::fmt::Display> core::fmt::Display for TermLookupError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::ForeignId => f.write_str(
                 "the term id does not name a term of this view: a literal's datatype does not \
                  resolve to an IRI",
             ),
+            Self::Read(error) => error.fmt(f),
         }
     }
 }
 
-impl std::error::Error for TermLookupError {}
+impl<E: std::error::Error + 'static> std::error::Error for TermLookupError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ForeignId => None,
+            Self::Read(error) => Some(error),
+        }
+    }
+}
+
+/// A scoped pin on a resolved term. References returned by [`Self::term`] cannot
+/// outlive this guard. Resident views use [`TermRef`] directly, without allocation.
+pub trait TermGuard<Id: ViewTermId> {
+    /// Borrow the term while its backing storage remains pinned.
+    fn term(&self) -> TermRef<'_, Id>;
+}
+
+impl<Id: ViewTermId> TermGuard<Id> for TermRef<'_, Id> {
+    #[inline]
+    fn term(&self) -> TermRef<'_, Id> {
+        *self
+    }
+}
+
+/// A resolved row that owns its term pins, rather than borrowing temporary guards.
+#[derive(Debug)]
+pub struct ResolvedQuad<Guard> {
+    s: Guard,
+    p: Guard,
+    o: Guard,
+    g: Option<Guard>,
+}
+
+impl<Guard> ResolvedQuad<Guard> {
+    /// Borrow every row position for the lifetime of this row's pins.
+    pub fn as_ref<Id: ViewTermId>(&self) -> QuadRef<'_, Id>
+    where
+        Guard: TermGuard<Id>,
+    {
+        QuadRef {
+            s: self.s.term(),
+            p: self.p.term(),
+            o: self.o.term(),
+            g: self.g.as_ref().map(TermGuard::term),
+        }
+    }
+}
+
+/// A scoped retained-capacity admission. Allocate only after obtaining it, and
+/// release admitted allocations before dropping it. Resident reads use a zero-sized
+/// reservation, which monomorphized consumers eliminate completely.
+pub trait WorkspaceReservation {
+    /// The backing read session's typed operational refusal.
+    type Error;
+    /// Grow or shrink the admitted retained capacity before changing an allocation.
+    ///
+    /// # Errors
+    /// Refuses a requested growth before it can exceed the live session ceiling.
+    fn resize(&mut self, bytes: u64) -> Result<(), Self::Error>;
+}
+
+/// Zero-sized resident reservation; no heap owner, lock or accounting operation.
+#[derive(Debug)]
+pub struct NoopReservation<E>(core::marker::PhantomData<fn() -> E>);
+impl<E> Default for NoopReservation<E> {
+    fn default() -> Self {
+        Self(core::marker::PhantomData)
+    }
+}
+impl<E> WorkspaceReservation for NoopReservation<E> {
+    type Error = E;
+    fn resize(&mut self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+}
 
 /// The associated id type of a [`DatasetView`]. An id is meaningful only within the
 /// view that minted it (C0.8); these bounds are exactly what the evaluator's
@@ -193,20 +278,31 @@ impl GraphSelector {
     ///
     /// [`None`] where the selector names a graph the dataset has not interned:
     /// nothing is in a graph that is not there, so no quad can match and the
-    /// caller reads nothing. This cannot fail: an absent graph is a state of the
-    /// corpus, not a fault in the wiring.
-    #[must_use]
-    pub fn resolve<D: DatasetView + ?Sized>(&self, dataset: &D) -> Option<GraphMatch<D::Id>> {
-        Some(match self {
+    /// caller reads nothing. An absent graph is distinct from a backing-store
+    /// read failure, which is returned through the view's typed error.
+    ///
+    /// # Errors
+    /// Returns a typed reverse-lookup failure from the backing read session.
+    pub fn resolve<D: DatasetView + ?Sized>(
+        &self,
+        dataset: &D,
+    ) -> Result<Option<GraphMatch<D::Id>>, D::ReadError> {
+        Ok(Some(match self {
             Self::Any => GraphMatch::Any,
             Self::Default => GraphMatch::Default,
-            Self::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
-        })
+            Self::Named(name) => {
+                let Some(id) = dataset.term_id_by_value(name)? else {
+                    return Ok(None);
+                };
+                GraphMatch::Named(id)
+            }
+        }))
     }
 }
 
-/// A static, allocation-free read view over an RDF dataset (purrdf backend
-/// contract, C2/C3/C6). All methods are infallible for a frozen, validated dataset.
+/// A statically dispatched read view over an RDF dataset (purrdf backend contract,
+/// C2/C3/C6). Resident term guards are borrowed and allocation-free. Operational
+/// sessions admit and pin storage and preserve typed read failures.
 ///
 /// # Termination
 ///
@@ -270,6 +366,92 @@ pub trait DatasetView {
     /// its own id, which is meaningful only within this view.
     type Id: ViewTermId;
 
+    /// Typed failures of forward/reverse term access. Resident reads are
+    /// [`std::convert::Infallible`]; operational sessions preserve the root cause.
+    type ReadError: std::error::Error + Clone + Send + Sync + 'static;
+
+    /// The pin returned by one term read. A guard may borrow resident storage or
+    /// own a decoded-block pin; its references never escape its lifetime.
+    type TermGuard<'a>: TermGuard<Self::Id>
+    where
+        Self: 'a;
+
+    /// The first operational failure observed by this read session, including an
+    /// iterator that stopped after a failed admission. Once set it remains sticky.
+    /// Resident implementations return `None` with an uninhabited error type.
+    fn read_error(&self) -> Option<Self::ReadError> {
+        None
+    }
+
+    /// Reserve operator scratch, owned results or output staging before allocation.
+    /// Operational adapters forward this to their shared session's live budget.
+    /// Resident implementations return a zero-sized, infallible no-op.
+    ///
+    /// # Errors
+    /// Returns a typed read/resource failure before the requested allocation.
+    fn reserve_workspace(
+        &self,
+        _: u64,
+    ) -> Result<impl WorkspaceReservation<Error = Self::ReadError> + '_, Self::ReadError> {
+        Ok(NoopReservation::<Self::ReadError>::default())
+    }
+
+    /// A certified upper bound for fully expanded owned term allocation, including
+    /// nested triples and their string/box payloads. `None` makes no bounded claim.
+    fn max_owned_term_bytes(&self) -> Option<u64> {
+        None
+    }
+
+    /// The operational session's total inclusive live ceiling, if it has one.
+    fn storage_live_budget(&self) -> Option<u64> {
+        None
+    }
+
+    /// Publish a drain only if the session was ready before and after it.
+    /// Internal partial rows are discarded when any lazy read or iterator failed.
+    ///
+    /// # Errors
+    /// Returns the first typed operational failure, before or during the drain.
+    fn checked_read<T>(&self, read: impl FnOnce(&Self) -> T) -> Result<T, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        let result = read(self);
+        match self.read_error() {
+            Some(error) => Err(error),
+            None => Ok(result),
+        }
+    }
+
+    /// Inspect a term while its pin is held, releasing the pin before returning.
+    ///
+    /// # Errors
+    /// Returns the first typed term-read failure.
+    fn with_term<T>(
+        &self,
+        id: Self::Id,
+        inspect: impl FnOnce(TermRef<'_, Self::Id>) -> T,
+    ) -> Result<T, Self::ReadError> {
+        let guard = self.resolve(id)?;
+        Ok(inspect(guard.term()))
+    }
+
+    /// Resolve inside a [`Self::checked_read`] drain that will discard partial
+    /// work on failure. A missing guard is an operational stop, never an RDF term.
+    /// This adapter preserves the internal iterator/visitor shape; public lookup
+    /// boundaries use [`Self::resolve`] to retain the typed cause immediately.
+    #[doc(hidden)]
+    fn resolve_if_ready(&self, id: Self::Id) -> Option<Self::TermGuard<'_>> {
+        self.resolve(id).ok()
+    }
+
+    /// Reverse lookup inside a checked drain. Operational failure is sticky and
+    /// the drain may publish no result unless its final checkpoint succeeds.
+    #[doc(hidden)]
+    fn term_id_if_ready(&self, value: &TermValue) -> Option<Self::Id> {
+        self.term_id_by_value(value).ok().flatten()
+    }
+
     /// The opaque, loop-invariant probe plan a pattern query precomputes once (from
     /// which axes a pattern binds) and reuses across the probe rows of one
     /// index-nested-loop join slot (see [`Self::probe_plan`] /
@@ -290,17 +472,40 @@ pub trait DatasetView {
     /// a resolved quad is by definition its id row resolved, so every view shares
     /// this one body. A view overrides it only when it holds its quads already
     /// resolved and can hand them out without the per-term lookup.
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
-        self.quads().map(|q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|id| self.resolve(id)),
+    fn quad_refs(
+        &self,
+    ) -> impl Iterator<Item = Result<ResolvedQuad<Self::TermGuard<'_>>, Self::ReadError>> + '_ {
+        self.quads().map(|q| {
+            Ok(ResolvedQuad {
+                s: self.resolve(q.s)?,
+                p: self.resolve(q.p)?,
+                o: self.resolve(q.o)?,
+                g: q.g.map(|id| self.resolve(id)).transpose()?,
+            })
         })
     }
 
-    /// Resolve a dataset-local id to its borrowed [`TermRef`].
-    fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id>;
+    /// Resolve an id, admitting and pinning its backing storage before borrowing.
+    ///
+    /// # Errors
+    /// Returns the session's typed storage, corruption or resource refusal.
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError>;
+
+    /// Resolve a batch without retaining pins beyond each visitor invocation.
+    ///
+    /// # Errors
+    /// Stops at the first typed term-read failure.
+    fn resolve_batch(
+        &self,
+        ids: &[Self::Id],
+        mut visit: impl FnMut(Self::Id, TermRef<'_, Self::Id>),
+    ) -> Result<(), Self::ReadError> {
+        for &id in ids {
+            let guard = self.resolve(id)?;
+            visit(id, guard.term());
+        }
+        Ok(())
+    }
 
     /// Resolve a dataset-local id to its dataset-independent [`TermValue`], through a
     /// literal's datatype and a triple term's `(s, p, o)` components: the literal
@@ -319,9 +524,12 @@ pub trait DatasetView {
     /// this view: a literal whose datatype resolves to anything but an IRI. A view
     /// never mints such a literal (the IR expands every datatype to an interned IRI at
     /// intern time), so the id was minted by another view. No part of the value is
-    /// invented in its place.
-    fn term_value(&self, id: Self::Id) -> Result<TermValue, TermLookupError> {
-        crate::fold_term(
+    /// invented in its place. [`TermLookupError::Read`] preserves backing-store
+    /// failure. Returned owned values are caller-owned allocations: a bounded
+    /// operation reserves their certified footprint before calling this method and
+    /// retains that reservation until those values are released.
+    fn term_value(&self, id: Self::Id) -> Result<TermValue, TermLookupError<Self::ReadError>> {
+        crate::ir::try_fold_term(
             self,
             id,
             |_, term| {
@@ -337,7 +545,8 @@ pub trait DatasetView {
                         language,
                         direction,
                     } => {
-                        let TermRef::Iri(datatype) = self.resolve(datatype) else {
+                        let guard = self.resolve(datatype).map_err(TermLookupError::Read)?;
+                        let TermRef::Iri(datatype) = guard.term() else {
                             return Err(TermLookupError::ForeignId);
                         };
                         TermValue::Literal {
@@ -359,6 +568,7 @@ pub trait DatasetView {
                     o: crate::TermBox::new(o),
                 })
             },
+            TermLookupError::Read,
         )
     }
 
@@ -390,13 +600,28 @@ pub trait DatasetView {
     /// structural walk keyed on a not-present IRI simply finds nothing — absence is
     /// an empty match, never an error. Backends with a reverse value index use
     /// it; others may scan.
-    fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id>;
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+
+    /// Look up a batch without allocating a whole batch result.
+    ///
+    /// # Errors
+    /// Stops at the first typed reverse-lookup failure.
+    fn lookup_batch(
+        &self,
+        values: &[TermValue],
+        mut visit: impl FnMut(&TermValue, Option<Self::Id>),
+    ) -> Result<(), Self::ReadError> {
+        for value in values {
+            visit(value, self.term_id_by_value(value)?);
+        }
+        Ok(())
+    }
 
     /// The capabilities this view's backing data exposes (C7).
     fn capabilities(&self) -> RdfStoreCapabilities;
 
     /// A size hint for the number of quads, if known.
-    fn len_hint(&self) -> Option<usize> {
+    fn len_hint(&self) -> Option<u64> {
         None
     }
 
@@ -449,12 +674,14 @@ pub trait DatasetView {
         p: Option<Self::Id>,
         o: Option<Self::Id>,
         g: GraphMatch<Self::Id>,
-    ) -> usize {
-        self.quads_for_pattern(s, p, o, g).count()
+    ) -> u64 {
+        self.quads_for_pattern(s, p, o, g).fold(0_u64, |count, _| {
+            count.checked_add(1).expect("quad count fits logical width")
+        })
     }
 
     /// The number of distinct interned terms this view addresses.
-    fn term_count(&self) -> usize;
+    fn term_count(&self) -> u64;
 
     /// The total UTF-8 byte length of the term strings this view would hand back —
     /// the size a destination's string arena has to reach to hold a full replay of
@@ -469,7 +696,7 @@ pub trait DatasetView {
     /// A backend that already stores its strings in one arena (an [`RdfDataset`], a
     /// pack dictionary) answers with that arena's length, which is exact for the
     /// terms it owns.
-    fn term_bytes_hint(&self) -> Option<usize> {
+    fn term_bytes_hint(&self) -> Option<u64> {
         None
     }
 
@@ -653,9 +880,9 @@ pub trait DatasetView {
         head: Self::Id,
         graph: GraphMatch<Self::Id>,
     ) -> Result<Vec<Self::Id>, ListError<Self::Id>> {
-        let first = self.term_id_by_value(&TermValue::iri(RDF_FIRST));
-        let rest = self.term_id_by_value(&TermValue::iri(RDF_REST));
-        let nil = self.term_id_by_value(&TermValue::iri(RDF_NIL));
+        let first = self.term_id_if_ready(&TermValue::iri(RDF_FIRST));
+        let rest = self.term_id_if_ready(&TermValue::iri(RDF_REST));
+        let nil = self.term_id_if_ready(&TermValue::iri(RDF_NIL));
         walk_rdf_list(
             head,
             nil,
@@ -696,7 +923,7 @@ pub trait DatasetView {
             // A node with neither edge: the head is no list, an interior node
             // is a dangling tail.
             ListErrorKind::MissingFirst => {
-                let rest = self.term_id_by_value(&TermValue::iri(RDF_REST));
+                let rest = self.term_id_if_ready(&TermValue::iri(RDF_REST));
                 let has_rest = rest.is_some_and(|rest| {
                     self.quads_for_pattern(Some(error.node), Some(rest), None, graph)
                         .next()
@@ -717,7 +944,10 @@ pub trait DatasetView {
     fn rdf_container_members(&self, head: Self::Id, graph: GraphMatch<Self::Id>) -> Vec<Self::Id> {
         let mut indexed: Vec<(u64, Self::Id)> = Vec::new();
         for q in self.quads_for_pattern(Some(head), None, None, graph) {
-            if let TermRef::Iri(iri) = self.resolve(q.p)
+            let Some(guard) = self.resolve_if_ready(q.p) else {
+                break;
+            };
+            if let TermRef::Iri(iri) = guard.term()
                 && let Some(n) = container_member_index(iri)
             {
                 indexed.push((n, q.o));
@@ -739,7 +969,7 @@ pub trait DatasetView {
         graph: GraphMatch<Self::Id>,
     ) -> Result<Vec<Self::Id>, RdfListError> {
         // Collection shape wins: an `rdf:first` edge marks a cons cell.
-        if let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST))
+        if let Some(first_p) = self.term_id_if_ready(&TermValue::iri(RDF_FIRST))
             && self
                 .quads_for_pattern(Some(head), Some(first_p), None, graph)
                 .next()
@@ -789,14 +1019,14 @@ pub trait DatasetView {
     /// helper for [`members`](Self::members) container dispatch.
     #[doc(hidden)]
     fn is_typed_container(&self, head: Self::Id, graph: GraphMatch<Self::Id>) -> bool {
-        let Some(type_p) = self.term_id_by_value(&TermValue::iri(RDF_TYPE)) else {
+        let Some(type_p) = self.term_id_if_ready(&TermValue::iri(RDF_TYPE)) else {
             return false;
         };
         // One reverse lookup (`rdf:type`); the container classes are matched by
         // resolving each type object's IRI, not by three extra id probes.
         self.quads_for_pattern(Some(head), Some(type_p), None, graph)
             .any(|q| {
-                matches!(self.resolve(q.o), TermRef::Iri(iri) if iri == RDF_SEQ || iri == RDF_BAG || iri == RDF_ALT)
+                self.with_term(q.o, |term| matches!(term, TermRef::Iri(iri) if iri == RDF_SEQ || iri == RDF_BAG || iri == RDF_ALT)).unwrap_or(false)
             })
     }
 }
@@ -850,9 +1080,11 @@ impl<Error, Evidence> ViewOperationStatus<Error, Evidence> {
 /// boundary must sample the status before evaluation and again after all evaluation
 /// and result materialization; it may publish a result as complete only when the final
 /// checkpoint is [`ViewOperationStatus::Ready`]. Internal partial rows are never a
-/// completeness signal.
-pub trait FallibleDatasetView: DatasetView {
-    /// The typed operational root cause.
+/// completeness signal. Point-read and workspace-admission errors use the same
+/// type as the checkpoint root cause, so a refused reservation can be propagated
+/// without rendering or allocating a diagnostic first.
+pub trait FallibleDatasetView: DatasetView<ReadError = Self::Error> {
+    /// The typed operational root cause, also [`DatasetView::ReadError`].
     type Error: std::error::Error + Clone + Send + Sync + 'static;
     /// Deterministic request and resource evidence.
     type Evidence: Clone + std::fmt::Debug + PartialEq + Eq + Send + Sync + 'static;
@@ -1047,6 +1279,11 @@ pub(crate) fn widest_nesting_bound(
 /// The production read view: the immutable value-interned [`RdfDataset`] (C1).
 impl DatasetView for RdfDataset {
     type Id = TermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = QuadProbePlan;
 
     /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
@@ -1064,13 +1301,8 @@ impl DatasetView for RdfDataset {
     }
 
     #[inline]
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        Self::quad_refs(self)
-    }
-
-    #[inline]
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        Self::resolve(self, id)
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok(Self::resolve(self, id))
     }
 
     #[inline]
@@ -1088,9 +1320,11 @@ impl DatasetView for RdfDataset {
     }
 
     #[inline]
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        // Delegate to the retained store-once term index (no minting).
-        Self::term_id_by_value(self, value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok({
+            // Delegate to the retained store-once term index (no minting).
+            Self::term_id_by_value(self, value)
+        })
     }
 
     #[inline]
@@ -1099,8 +1333,9 @@ impl DatasetView for RdfDataset {
     }
 
     #[inline]
-    fn len_hint(&self) -> Option<usize> {
-        Some(Self::quad_count(self))
+    fn len_hint(&self) -> Option<u64> {
+        ({ Some(Self::quad_count(self)) })
+            .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
     }
 
     #[inline]
@@ -1134,20 +1369,24 @@ impl DatasetView for RdfDataset {
         p: Option<TermId>,
         o: Option<TermId>,
         g: GraphMatch,
-    ) -> usize {
-        Self::cardinality_estimate(self, s, p, o, g)
+    ) -> u64 {
+        u64::try_from(Self::cardinality_estimate(self, s, p, o, g))
+            .expect("bounded local count fits u64")
     }
 
     #[inline]
-    fn term_count(&self) -> usize {
-        Self::term_count(self)
+    fn term_count(&self) -> u64 {
+        u64::try_from(Self::term_count(self)).expect("bounded local count fits u64")
     }
 
     #[inline]
-    fn term_bytes_hint(&self) -> Option<usize> {
-        // The frozen dataset stores every term string in ONE arena, so its length is
-        // exactly the figure the hint asks for.
-        Some(self.rdf_text_bytes())
+    fn term_bytes_hint(&self) -> Option<u64> {
+        ({
+            // The frozen dataset stores every term string in ONE arena, so its length is
+            // exactly the figure the hint asks for.
+            Some(self.rdf_text_bytes())
+        })
+        .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
     }
 
     #[inline]
@@ -1197,7 +1436,29 @@ impl DatasetView for RdfDataset {
 /// can silently diverge from the inner view.
 impl<T: DatasetView> DatasetView for Arc<T> {
     type Id = T::Id;
+    type ReadError = T::ReadError;
+    type TermGuard<'a>
+        = T::TermGuard<'a>
+    where
+        Self: 'a;
     type ProbePlan = T::ProbePlan;
+
+    #[inline]
+    fn reserve_workspace(
+        &self,
+        bytes: u64,
+    ) -> Result<impl WorkspaceReservation<Error = Self::ReadError> + '_, Self::ReadError> {
+        (**self).reserve_workspace(bytes)
+    }
+    fn max_owned_term_bytes(&self) -> Option<u64> {
+        (**self).max_owned_term_bytes()
+    }
+    fn storage_live_budget(&self) -> Option<u64> {
+        (**self).storage_live_budget()
+    }
+    fn read_error(&self) -> Option<Self::ReadError> {
+        (**self).read_error()
+    }
 
     #[inline]
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
@@ -1205,12 +1466,14 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
 
     #[inline]
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
+    fn quad_refs(
+        &self,
+    ) -> impl Iterator<Item = Result<ResolvedQuad<Self::TermGuard<'_>>, Self::ReadError>> + '_ {
         (**self).quad_refs()
     }
 
     #[inline]
-    fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
         (**self).resolve(id)
     }
 
@@ -1226,7 +1489,7 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
 
     #[inline]
-    fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id> {
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
         (**self).term_id_by_value(value)
     }
 
@@ -1236,7 +1499,7 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
 
     #[inline]
-    fn len_hint(&self) -> Option<usize> {
+    fn len_hint(&self) -> Option<u64> {
         (**self).len_hint()
     }
 
@@ -1246,7 +1509,7 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
 
     #[inline]
-    fn term_bytes_hint(&self) -> Option<usize> {
+    fn term_bytes_hint(&self) -> Option<u64> {
         (**self).term_bytes_hint()
     }
 
@@ -1280,12 +1543,12 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         p: Option<Self::Id>,
         o: Option<Self::Id>,
         g: GraphMatch<Self::Id>,
-    ) -> usize {
+    ) -> u64 {
         (**self).cardinality_estimate(s, p, o, g)
     }
 
     #[inline]
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         (**self).term_count()
     }
 
@@ -1376,15 +1639,18 @@ mod tests {
         );
         b.push_quad(s, p, o, Some(g));
         let ds = b.freeze().expect("freeze");
-        assert_eq!(GraphSelector::Any.resolve(&ds), Some(GraphMatch::Any));
         assert_eq!(
-            GraphSelector::Default.resolve(&ds),
+            GraphSelector::Any.resolve(&ds).unwrap(),
+            Some(GraphMatch::Any)
+        );
+        assert_eq!(
+            GraphSelector::Default.resolve(&ds).unwrap(),
             Some(GraphMatch::Default)
         );
         let named = GraphSelector::Named(TermValue::iri("http://example.org/g"));
-        assert_eq!(named.resolve(&ds), Some(GraphMatch::Named(g)));
+        assert_eq!(named.resolve(&ds).unwrap(), Some(GraphMatch::Named(g)));
         let absent = GraphSelector::Named(TermValue::iri("http://example.org/absent"));
-        assert_eq!(absent.resolve(&ds), None);
+        assert_eq!(absent.resolve(&ds).unwrap(), None);
     }
 
     /// Every value a predicate takes, once, ascending by id: a value stated by
@@ -1528,22 +1794,27 @@ mod tests {
 
     impl DatasetView for ProbeView {
         type Id = TermId;
+        type ReadError = ProbeFault;
+        type TermGuard<'a>
+            = TermRef<'a, Self::Id>
+        where
+            Self: 'a;
         type ProbePlan = ();
+
+        fn read_error(&self) -> Option<Self::ReadError> {
+            self.operation_status().error().cloned()
+        }
 
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
             self.inner.quads()
         }
 
-        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-            DatasetView::quad_refs(&*self.inner)
+        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            self.checked_read(|_| self.inner.as_ref().resolve(id))
         }
 
-        fn resolve(&self, id: TermId) -> TermRef<'_> {
-            self.inner.resolve(id)
-        }
-
-        fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-            self.inner.term_id_by_value(value)
+        fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+            self.checked_read(|_| self.inner.as_ref().term_id_by_value(value))
         }
 
         fn capabilities(&self) -> RdfStoreCapabilities {
@@ -1563,7 +1834,7 @@ mod tests {
             self.quads_for_pattern(s, p, o, g)
         }
 
-        fn term_count(&self) -> usize {
+        fn term_count(&self) -> u64 {
             self.inner.term_count()
         }
     }
@@ -1681,8 +1952,14 @@ mod term_value_tests {
             datatype: blank,
             foreign: true,
         };
-        assert_eq!(view.term_value(empty), Err(TermLookupError::ForeignId));
-        assert_eq!(view.term_value(quoted), Err(TermLookupError::ForeignId));
+        assert_eq!(
+            view.term_value(empty),
+            Err(TermLookupError::<std::convert::Infallible>::ForeignId)
+        );
+        assert_eq!(
+            view.term_value(quoted),
+            Err(TermLookupError::<std::convert::Infallible>::ForeignId)
+        );
         // A term with no literal in it still resolves through the same view.
         assert_eq!(view.term_value(blank), Ok(TermValue::blank("b")));
     }
@@ -1739,7 +2016,7 @@ mod term_value_tests {
     #[test]
     fn the_lookup_error_names_the_foreign_id() {
         assert!(
-            TermLookupError::ForeignId
+            TermLookupError::<std::convert::Infallible>::ForeignId
                 .to_string()
                 .contains("does not name a term of this view")
         );

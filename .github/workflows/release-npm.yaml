@@ -97,6 +97,19 @@ jobs:
         working-directory: crates/rdf-wasm/js
         run: npm pack
 
+      - name: Audit actual npm tarball recipient notices
+        run: |
+          python3 scripts/fetch-locked-deps.py
+          python3 scripts/package-licenses.py --profile npm --check
+          python3 scripts/package-licenses.py --profile npm --add-runtime crates/rdf-wasm/js/*.tgz
+          python3 scripts/package-licenses.py --profile npm --audit crates/rdf-wasm/js/*.tgz --receipt license-evidence-npm.json
+
+      - name: Upload npm artifact license evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: license-evidence-npm
+          path: license-evidence-npm.json
+
       - name: Attest build provenance for the tarball
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:

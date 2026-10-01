@@ -363,6 +363,13 @@ LUBM_PUBLISHED_QUERIES: int = 14
 # are LUBM's OWN PUBLISHED ANSWERS for LUBM(1, 0), corroborated by the paper rather
 # than by this tree, so those two are an independent oracle and not self-derived at
 # all. They are the only external check either lane has.
+# The project-version pins below were freshly requalified with the 3.0.0 CLI:
+# UBA 1.7, one university, index/seed 0, and the existing document-base law
+# produced 102,737 converted rows with the same corpus digest. The frozen WatDiv
+# 10M data (10,916,457 rows), census and seed-0 query-set identities were verified;
+# all 20 original queries executed and reproduced their individual counts and
+# the 434,748-row total. This is functional output evidence, not timing evidence.
+# The project version does not change the external generator or frozen data.
 WORKLOAD_PINS: dict[str, str] = {
     # sha256 over the normalised LUBM query set, at the default ontology namespace.
     "lubm.queries.sha256": (
@@ -416,7 +423,7 @@ WORKLOAD_PINS: dict[str, str] = {
     # version bump a MISSING pin, which the lane reports as "not checked for this
     # binary", instead of a mismatch that would blame generation or conversion for
     # a difference the new serializer is entitled to.
-    "lubm.1.0.seed0.corpus.sha256.purrdf-2.0.2": (
+    "lubm.1.0.seed0.corpus.sha256.purrdf-3.0.0": (
         "b3fbfcc822092428fcf6e03757f0ca555e39c2b29304bc8638c9d9d05f875308"
     ),
     # The total answer rows the twenty WatDiv queries return at the default scale and
@@ -436,7 +443,7 @@ WORKLOAD_PINS: dict[str, str] = {
     # corpus and the keyed binary version, and a row count is a cheaper and far more
     # legible refusal than a second hex string. "434748 rows, expected 434748" says
     # what is wrong; two digests say only that something is.
-    "watdiv.10M.seed0.total_rows.purrdf-2.0.2": "434748",
+    "watdiv.10M.seed0.total_rows.purrdf-3.0.0": "434748",
     # AND PER QUERY, because the aggregate alone was disabled by the very failure it
     # most needed to survive. The total was asserted only when every query executed --
     # defensible in itself, since a query that cannot run makes a SUM incomparable --
@@ -460,26 +467,26 @@ WORKLOAD_PINS: dict[str, str] = {
     # concentrates a property on some entities and leaves others without it, so a
     # pattern demanding several at once legitimately matches none -- and pinning that
     # zero is what turns "matched nothing" from an unfalsifiable note into a claim.
-    "watdiv.10M.seed0.rows.C1.purrdf-2.0.2": "16",
-    "watdiv.10M.seed0.rows.C2.purrdf-2.0.2": "0",
-    "watdiv.10M.seed0.rows.C3.purrdf-2.0.2": "434169",
-    "watdiv.10M.seed0.rows.F1.purrdf-2.0.2": "0",
-    "watdiv.10M.seed0.rows.F2.purrdf-2.0.2": "2",
-    "watdiv.10M.seed0.rows.F3.purrdf-2.0.2": "8",
-    "watdiv.10M.seed0.rows.F4.purrdf-2.0.2": "36",
-    "watdiv.10M.seed0.rows.F5.purrdf-2.0.2": "13",
-    "watdiv.10M.seed0.rows.L1.purrdf-2.0.2": "1",
-    "watdiv.10M.seed0.rows.L2.purrdf-2.0.2": "103",
-    "watdiv.10M.seed0.rows.L3.purrdf-2.0.2": "36",
-    "watdiv.10M.seed0.rows.L4.purrdf-2.0.2": "56",
-    "watdiv.10M.seed0.rows.L5.purrdf-2.0.2": "269",
-    "watdiv.10M.seed0.rows.S1.purrdf-2.0.2": "8",
-    "watdiv.10M.seed0.rows.S2.purrdf-2.0.2": "25",
-    "watdiv.10M.seed0.rows.S3.purrdf-2.0.2": "0",
-    "watdiv.10M.seed0.rows.S4.purrdf-2.0.2": "1",
-    "watdiv.10M.seed0.rows.S5.purrdf-2.0.2": "0",
-    "watdiv.10M.seed0.rows.S6.purrdf-2.0.2": "5",
-    "watdiv.10M.seed0.rows.S7.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.C1.purrdf-3.0.0": "16",
+    "watdiv.10M.seed0.rows.C2.purrdf-3.0.0": "0",
+    "watdiv.10M.seed0.rows.C3.purrdf-3.0.0": "434169",
+    "watdiv.10M.seed0.rows.F1.purrdf-3.0.0": "0",
+    "watdiv.10M.seed0.rows.F2.purrdf-3.0.0": "2",
+    "watdiv.10M.seed0.rows.F3.purrdf-3.0.0": "8",
+    "watdiv.10M.seed0.rows.F4.purrdf-3.0.0": "36",
+    "watdiv.10M.seed0.rows.F5.purrdf-3.0.0": "13",
+    "watdiv.10M.seed0.rows.L1.purrdf-3.0.0": "1",
+    "watdiv.10M.seed0.rows.L2.purrdf-3.0.0": "103",
+    "watdiv.10M.seed0.rows.L3.purrdf-3.0.0": "36",
+    "watdiv.10M.seed0.rows.L4.purrdf-3.0.0": "56",
+    "watdiv.10M.seed0.rows.L5.purrdf-3.0.0": "269",
+    "watdiv.10M.seed0.rows.S1.purrdf-3.0.0": "8",
+    "watdiv.10M.seed0.rows.S2.purrdf-3.0.0": "25",
+    "watdiv.10M.seed0.rows.S3.purrdf-3.0.0": "0",
+    "watdiv.10M.seed0.rows.S4.purrdf-3.0.0": "1",
+    "watdiv.10M.seed0.rows.S5.purrdf-3.0.0": "0",
+    "watdiv.10M.seed0.rows.S6.purrdf-3.0.0": "5",
+    "watdiv.10M.seed0.rows.S7.purrdf-3.0.0": "0",
     # sha256 over the instantiated WatDiv query set, at scale 10M and seed 0.
     "watdiv.10M.seed0.queries.sha256": (
         "2fabc0ef56b5d18bb9a7c9d6a4aa5c661043500103d6f133087d39d41fa59301"
@@ -1254,7 +1261,7 @@ def self_test() -> int:
 
     # THE NEIGHBOUR: a recorded pin still prints its value on stdout and exits 0. Without
     # this, "exit 2 for everything" would pass the check above while breaking every lane.
-    present_key = "watdiv.10M.seed0.total_rows.purrdf-2.0.2"
+    present_key = "watdiv.10M.seed0.total_rows.purrdf-3.0.0"
     present = subprocess.run(
         [sys.executable, here, "--workload-pin", present_key],
         capture_output=True,
@@ -1312,7 +1319,7 @@ def self_test() -> int:
     # already present: 21 pins summing to 434748, reported GREEN.
     watdiv_stem = "watdiv.10M.seed0.rows."
     per_query = {k: int(v) for k, v in counts.items() if k.startswith(watdiv_stem)}
-    total_key = "watdiv.10M.seed0.total_rows.purrdf-2.0.2"
+    total_key = "watdiv.10M.seed0.total_rows.purrdf-3.0.0"
     # AND EVERY ANSWER PIN MUST BE CLASSIFIED. A third workload family added to the table
     # was checked by nothing at all: not by the oracle arm (which selects `lubm.`), not by
     # the per-query arm (now `watdiv.10M.seed0.rows.`), and not by the sum.

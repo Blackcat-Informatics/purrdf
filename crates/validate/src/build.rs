@@ -311,7 +311,7 @@ fn sort_results(results: &mut [SarifResult]) {
 /// Extract `(artifactUri, startLine, startColumn)` from a result's primary
 /// physical location for stable ordering. Results without a physical location
 /// sort together (empty uri, line/column 0).
-fn location_sort_key(result: &SarifResult) -> (String, u32, u32) {
+fn location_sort_key(result: &SarifResult) -> (String, u64, u32) {
     let phys = result
         .locations
         .first()
@@ -564,7 +564,7 @@ fn focus_physical_location(
         region: Some(Region {
             start_line: Some(position.line),
             start_column: Some(position.column),
-            byte_offset: Some(position.byte_offset),
+            byte_offset: Some(position.byte_offset as u64),
             ..Region::default()
         }),
     })
@@ -594,10 +594,17 @@ fn diagnostic_to_sarif(diagnostic: &RdfDiagnostic, base_id: Option<&str>) -> Sar
         text.push(')');
     }
 
-    let (locations, properties) = diagnostic.location.as_deref().map_or_else(
+    let (locations, mut properties) = diagnostic.location.as_deref().map_or_else(
         || (Vec::new(), PropertyBag::new()),
         |location| diagnostic_location(location, base_id),
     );
+
+    // Standard SARIF numeric positions remain standard. The typed record preserves
+    // exact logical anchors for hosts whose JSON numbers are binary64.
+    properties.insert("diagnosticRecord", diagnostic.to_json());
+    if let Some(presentation) = diagnostic.presentation() {
+        properties.insert("diagnosticPresentation", presentation.to_json());
+    }
 
     SarifResult {
         rule_id: diagnostic.code.clone(),
@@ -798,6 +805,43 @@ mod tests {
     use super::*;
     use purrdf_lex::json;
     use purrdf_shapes::term::{Literal, NamedNode, Term};
+
+    #[test]
+    fn structured_diagnostic_arguments_survive_sarif_independently_of_prose() {
+        let mut diagnostic = RdfDiagnostic::from_iri(&purrdf_rdf::IriError::BadPercentEncoding(7))
+            .with_location(RdfLocation::file("data.nt").with_line((1 << 53) + 1));
+        // A host may replace the compatibility prose. Machine projection reads the
+        // original typed payload, never attempting to recover fields from prose.
+        diagnostic.message = "host presentation".to_owned();
+        let result = diagnostic_to_sarif(&diagnostic, None);
+        assert_eq!(result.rule_id, "iri-bad-percent-encoding");
+        assert_eq!(result.message.text, "host presentation");
+        assert_eq!(
+            result.locations[0]
+                .physical_location
+                .as_ref()
+                .unwrap()
+                .region
+                .as_ref()
+                .unwrap()
+                .start_line,
+            Some((1 << 53) + 1)
+        );
+        let record = result.properties.0.get("diagnosticRecord").unwrap();
+        assert_eq!(
+            record["location"]["line"].as_str(),
+            Some("9007199254740993")
+        );
+        let presentation = result.properties.0.get("diagnosticPresentation").unwrap();
+        assert_eq!(
+            presentation.get("messageId").and_then(Value::as_str),
+            Some("iri-bad-percent-encoding")
+        );
+        assert_eq!(
+            presentation["parameters"]["offset"]["value"].as_str(),
+            Some("7")
+        );
+    }
 
     fn result(component: &str, severity: Severity, message: Option<&str>) -> ValidationResult {
         ValidationResult {

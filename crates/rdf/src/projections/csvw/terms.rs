@@ -1996,10 +1996,10 @@ mod tests {
             Some(CsvwTextDirection::Ltr)
         );
         assert!(read.dataset.quads().any(|quad| {
-            matches!(read.dataset.resolve(quad.s), TermRef::Iri(value) if value == format!("{VOCAB}ClassA"))
-                && matches!(read.dataset.resolve(quad.p), TermRef::Iri(value) if value == NOTE)
+            matches!(read.dataset.as_ref().resolve(quad.s), TermRef::Iri(value) if value == format!("{VOCAB}ClassA"))
+                && matches!(read.dataset.as_ref().resolve(quad.p), TermRef::Iri(value) if value == NOTE)
                 && matches!(
-                    read.dataset.resolve(quad.o),
+                    read.dataset.as_ref().resolve(quad.o),
                     TermRef::Literal {
                         lexical: "Curated note",
                         language: Some("en"),

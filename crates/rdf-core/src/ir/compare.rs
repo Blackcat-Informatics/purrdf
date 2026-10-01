@@ -61,7 +61,13 @@ use crate::dataset_view::DatasetView;
 /// from the canonical bytes, which carry no view-local ids (see
 /// [`canon::canonicalize_view`]). `&RdfDataset` call sites are the `RdfDataset`
 /// instantiation and are unaffected.
-pub fn datasets_isomorphic<A: DatasetView, B: DatasetView>(a: &A, b: &B) -> bool {
+pub fn datasets_isomorphic<
+    A: DatasetView<ReadError = core::convert::Infallible>,
+    B: DatasetView<ReadError = core::convert::Infallible>,
+>(
+    a: &A,
+    b: &B,
+) -> bool {
     // Cheap structural rejections that do not depend on blank labeling — they avoid
     // running the (poison-guarded) canonicalizer on obviously-different inputs. Each
     // is an EXACT count off the view's own accessors, never `len_hint` (a hint a view
@@ -101,7 +107,13 @@ pub struct DatasetDiff {
 
 /// A richer diff for test diagnostics: structural counts plus the isomorphism verdict.
 /// View-generic and cross-type on the same terms as [`datasets_isomorphic`].
-pub fn dataset_diff<A: DatasetView, B: DatasetView>(a: &A, b: &B) -> DatasetDiff {
+pub fn dataset_diff<
+    A: DatasetView<ReadError = core::convert::Infallible>,
+    B: DatasetView<ReadError = core::convert::Infallible>,
+>(
+    a: &A,
+    b: &B,
+) -> DatasetDiff {
     DatasetDiff {
         quad_counts: (a.quads().count(), b.quads().count()),
         reifier_counts: (a.reifier_quads().count(), b.reifier_quads().count()),

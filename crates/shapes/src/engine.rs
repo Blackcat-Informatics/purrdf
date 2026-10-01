@@ -1042,7 +1042,7 @@ impl FocusNode {
     pub(crate) fn is_subject(&self, dataset: &impl ShaclRead) -> bool {
         match self {
             Self::Interned(id) => matches!(
-                dataset.resolve(*id),
+                dataset.resolve_term(*id),
                 ::purrdf::TermRef::Iri(_) | ::purrdf::TermRef::Blank { .. }
             ),
             Self::Foreign(term) => term.is_subject(),
@@ -2202,7 +2202,9 @@ impl PreparedValidator {
             // `pub(crate)`, so a future in-crate mint site that got the binding
             // right and the id wrong has to fail here rather than read past the
             // table.
-            if focus.id.index() >= self.data.core_view().term_count() {
+            if u64::try_from(focus.id.index()).expect("local id fits u64")
+                >= self.data.core_view().term_count()
+            {
                 return Err(ShapesError::Invalid(format!(
                     "focus node TermId {} is outside the prepared dataset's {}-term table",
                     focus.id.index(),
@@ -2392,7 +2394,7 @@ impl PreparedValidator {
                     // unpacked before the chain is walked back. A changed
                     // `rdf:reifies` row whose object is NOT a triple term reifies
                     // nothing and is not this read — skipped, not guessed at.
-                    Endpoint::ObjectTripleSubject => match core.resolve(quad.o) {
+                    Endpoint::ObjectTripleSubject => match core.resolve_term(quad.o) {
                         ::purrdf::TermRef::Triple { s, .. } => s,
                         ::purrdf::TermRef::Iri(_)
                         | ::purrdf::TermRef::Blank { .. }
@@ -2942,7 +2944,7 @@ fn changes_a_shapes_graph_link(delta: &::purrdf::ir::DeltaDatasetView) -> bool {
     let link = ::purrdf::TermValue::iri(crate::imports::SH_SHAPES_GRAPH_LINK);
     // The snapshot interns every term of its base and of its change: a snapshot that does
     // not intern `sh:shapesGraph` has no link on either side.
-    let Some(predicate) = delta.term_id_by_value(&link) else {
+    let Some(predicate) = delta.term_id_by_value(&link).unwrap() else {
         return false;
     };
     if delta.changed_quads().any(|quad| quad.p == predicate) {
@@ -6334,7 +6336,7 @@ mod tests {
             .map(|index| TermId::from_index(u32::try_from(index).expect("fixture fits in u32")))
             .filter(|id| {
                 matches!(
-                    data.core_view().resolve(*id),
+                    data.core_view().resolve_term(*id),
                     ::purrdf::TermRef::Iri(iri) if iri.contains("/ns#n")
                 )
             })
@@ -6473,7 +6475,7 @@ mod tests {
         assert!(!ids.is_empty(), "the fixture must hold focus nodes");
         for &id in &ids {
             assert!(
-                id.index() < here.data.core_view().term_count(),
+                u64::try_from(id.index()).unwrap() < here.data.core_view().term_count(),
                 "the refused ids must be IN RANGE for the receiving binding, or the existing \
                  range check would be what rejected them"
             );
@@ -6583,11 +6585,13 @@ mod tests {
         let mut denoting_differently = 0_usize;
         for (term, focus) in terms.iter().zip(&there_ids) {
             assert!(
-                focus.term_id().index() < here.data.core_view().term_count(),
+                u64::try_from(focus.term_id().index()).unwrap()
+                    < here.data.core_view().term_count(),
                 "{term}'s id from the other binding must be IN RANGE here, or the range check \
                  would be what rejected it rather than the provenance stamp"
             );
-            if let ::purrdf::TermRef::Iri(denoted) = here.data.core_view().resolve(focus.term_id())
+            if let ::purrdf::TermRef::Iri(denoted) =
+                here.data.core_view().resolve_term(focus.term_id())
                 && NamedNode::new_unchecked(denoted).into_term() != *term
             {
                 denoting_differently += 1;

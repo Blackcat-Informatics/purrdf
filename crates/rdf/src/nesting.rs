@@ -122,7 +122,7 @@ pub(crate) fn parse_xml(text: &str) -> Result<Document<'_>, XmlReadError> {
 /// The diagnostic every first-party text codec returns for an input nested past
 /// [`MAX_PARSE_NESTING_DEPTH`], located at the token that would have opened the level too
 /// many. One spelling, so a caller matches one message whichever grammar produced it.
-pub(crate) fn nesting_too_deep(line: u32, column: u32) -> RdfDiagnostic {
+pub(crate) fn nesting_too_deep(line: u64, column: u32) -> RdfDiagnostic {
     RdfDiagnostic::error(
         "native-codec-parse",
         format!("term nesting exceeds the parser limit of {MAX_PARSE_NESTING_DEPTH} levels"),

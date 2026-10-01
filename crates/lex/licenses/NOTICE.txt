@@ -1,0 +1,28 @@
+PurRDF recipient notices
+========================
+
+Copyright 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0 (choose any one option).
+The three complete first-party license texts accompany this notice.
+Third-party and derived material retains its own terms, in addition to
+the chosen first-party license. Documentation with CC-BY-4.0 headers
+retains that grant. No trademark rights are granted.
+
+This inventory preserves notices for the source material and resolved
+build inputs described below. Platform alternatives and build inputs
+need not occur in every compiled binary. Test data is source-only.
+
+libyaml-emitter: MIT
+Scope: emitter style/layout decisions reproduced from unsafe-libyaml 0.2.11; retained MIT permission notice
+Source: https://github.com/dtolnay/unsafe-libyaml/tree/0.2.11
+Evidence: crates/lex/PROVENANCE.md
+Notice: third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt
+Notice: third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt
+
+unicode: Unicode-3.0
+Scope: generated and vendored Unicode data; terms apply in addition to the first-party grant
+Source: https://www.unicode.org/Public/17.0.0/ucd/
+Evidence: crates/iri/unicode/PROVENANCE.md
+Evidence: LICENSING.md
+Notice: third-party/unicode/0-Unicode-3.0.txt
+

@@ -16,11 +16,11 @@ use purrdf_gts::writer::Writer;
 
 /// Owned copy of one streamed [`FrameContext`], captured for later assertion.
 struct CapturedFrame {
-    segment_index: usize,
-    frame_index: usize,
+    segment_index: u64,
+    frame_index: u64,
     content_id: Vec<u8>,
-    start: usize,
-    end: usize,
+    start: u64,
+    end: u64,
     frame_type: String,
     valid: bool,
 }
@@ -136,27 +136,22 @@ impl StreamingSink for OrderingSink {
         self.log
             .push(format!("frame:{}:{}", ctx.segment_index, ctx.frame_index));
     }
-    fn term(&mut self, segment_index: usize, term_id: usize, _term: &Term) {
+    fn term(&mut self, segment_index: u64, term_id: usize, _term: &Term) {
         self.log.push(format!("term:{segment_index}:{term_id}"));
     }
-    fn quad(&mut self, segment_index: usize, _quad: Quad) {
+    fn quad(&mut self, segment_index: u64, _quad: Quad) {
         self.log.push(format!("quad:{segment_index}"));
     }
-    fn reifier(&mut self, segment_index: usize, _reifier: ReifierRow) {
+    fn reifier(&mut self, segment_index: u64, _reifier: ReifierRow) {
         self.log.push(format!("reifier:{segment_index}"));
     }
-    fn annotation(&mut self, segment_index: usize, _annotation: AnnotationRow) {
+    fn annotation(&mut self, segment_index: u64, _annotation: AnnotationRow) {
         self.log.push(format!("annotation:{segment_index}"));
     }
-    fn blob(
-        &mut self,
-        segment_index: usize,
-        _digest: &str,
-        _meta: Option<&purrdf_lex::cbor::Value>,
-    ) {
+    fn blob(&mut self, segment_index: u64, _digest: &str, _meta: Option<&purrdf_lex::cbor::Value>) {
         self.log.push(format!("blob:{segment_index}"));
     }
-    fn opaque(&mut self, segment_index: usize, _opaque: &OpaqueNode) {
+    fn opaque(&mut self, segment_index: u64, _opaque: &OpaqueNode) {
         self.log.push(format!("opaque:{segment_index}"));
     }
 }

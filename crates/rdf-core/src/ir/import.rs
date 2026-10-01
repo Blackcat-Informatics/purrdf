@@ -7,7 +7,7 @@ use core::convert::Infallible;
 
 use super::term_walk::{Nested, try_fold_nested};
 use crate::hash::FastMap;
-use crate::{DatasetView, RdfDatasetBuilder, TermId, TermRef};
+use crate::{DatasetView, RdfDatasetBuilder, TermGuard, TermId, TermRef};
 
 /// Resolve a source term in another native dictionary without an owned term
 /// tree. The memo belongs to this exact source/target/scope translation.
@@ -85,6 +85,32 @@ pub struct DatasetImportStats {
     pub named_graphs: usize,
 }
 
+/// A read or bounded resident-materialization failure.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum DatasetImportError<E> {
+    /// The source could not be read completely.
+    Read(E),
+    /// The requested materialization cannot be addressed by the resident builder.
+    Capacity,
+}
+impl<E: core::fmt::Display> core::fmt::Display for DatasetImportError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Read(error) => write!(f, "dataset import read failed: {error}"),
+            Self::Capacity => f.write_str("dataset import exceeds resident address capacity"),
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for DatasetImportError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Read(error) => Some(error),
+            Self::Capacity => None,
+        }
+    }
+}
+
 /// An import bound to exactly one immutable source and one destination builder.
 ///
 /// Repeated source IDs reuse the destination ID without constructing an owned
@@ -124,19 +150,40 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
     /// answer simply reserves nothing for that table. A replay that overruns any
     /// figure still grows normally; the reserve removes the doubling walk, it does
     /// not bound the import.
-    pub fn new(builder: &'builder mut RdfDatasetBuilder, view: &'view D) -> Self {
-        let terms = view.term_count();
-        builder.reserve_for_replay(
-            terms,
-            view.term_bytes_hint().unwrap_or(0),
-            view.len_hint().unwrap_or(0),
-        );
-        Self {
+    pub fn new(builder: &'builder mut RdfDatasetBuilder, view: &'view D) -> Self
+    where
+        D: DatasetView<ReadError = Infallible>,
+    {
+        Self::try_new(builder, view).expect("trusted resident import fits the resident builder")
+    }
+
+    /// Bind a materialization after checking all logical sizes before reservation.
+    ///
+    /// # Errors
+    /// Returns a source read failure or [`DatasetImportError::Capacity`] before
+    /// allocating when a logical size cannot be represented by the resident builder.
+    pub fn try_new(
+        builder: &'builder mut RdfDatasetBuilder,
+        view: &'view D,
+    ) -> Result<Self, DatasetImportError<D::ReadError>> {
+        if let Some(error) = view.read_error() {
+            return Err(DatasetImportError::Read(error));
+        }
+        let terms = usize::try_from(view.term_count()).map_err(|_| DatasetImportError::Capacity)?;
+        if u32::try_from(terms).is_err() {
+            return Err(DatasetImportError::Capacity);
+        }
+        let bytes = usize::try_from(view.term_bytes_hint().unwrap_or(0))
+            .map_err(|_| DatasetImportError::Capacity)?;
+        let rows = usize::try_from(view.len_hint().unwrap_or(0))
+            .map_err(|_| DatasetImportError::Capacity)?;
+        builder.reserve_for_replay(terms, bytes, rows);
+        Ok(Self {
             builder,
             view,
             terms: FastMap::with_capacity_and_hasher(terms, crate::hash::FastHasher::default()),
             stats: DatasetImportStats::default(),
-        }
+        })
     }
 
     /// Transfer one source-local term, preserving its complete RDF 1.2 value.
@@ -146,22 +193,37 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
     /// consulting the memo; a triple term's subject, predicate and object are each
     /// transferred fully, in that order, before the triple. Every term is recorded in
     /// the memo as soon as its own id exists.
-    pub fn term(&mut self, id: D::Id) -> TermId {
+    pub fn term(&mut self, id: D::Id) -> TermId
+    where
+        D: DatasetView<ReadError = Infallible>,
+    {
+        match self.try_term(id) {
+            Ok(id) => id,
+            Err(error) => panic!("trusted resident import failed: {error}"),
+        }
+    }
+
+    /// Transfer one term while retaining the backing source's typed failure.
+    ///
+    /// # Errors
+    /// Returns [`DatasetImportError::Read`] when any component cannot be read.
+    pub fn try_term(&mut self, id: D::Id) -> Result<TermId, DatasetImportError<D::ReadError>> {
         // The source outlives this importer, so its resolved strings can be handed to
         // the destination interner BORROWED: the interner keys on `&str` and owns the
         // bytes in its own arena, so an owned `RdfLiteral` here would allocate a
         // lexical form, a datatype IRI and a language tag per literal for the interner
         // to immediately copy and drop.
         let view = self.view;
-        let mapped = try_fold_nested(
+        try_fold_nested(
             id,
             self,
             |this, id| {
                 if let Some(mapped) = this.terms.get(&id) {
                     this.stats.reused_terms += 1;
-                    return Ok::<_, Infallible>(Nested::Leaf(*mapped));
+                    return Ok::<_, DatasetImportError<D::ReadError>>(Nested::Leaf(*mapped));
                 }
-                let mapped = match view.resolve(id) {
+                let guard = view.resolve(id).map_err(DatasetImportError::Read)?;
+                let mapped = match guard.term() {
                     TermRef::Iri(iri) => this.builder.intern_iri(iri),
                     TermRef::Blank { label, scope } => this.builder.intern_blank(label, scope),
                     TermRef::Literal {
@@ -170,7 +232,9 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
                         language,
                         direction,
                     } => {
-                        let TermRef::Iri(datatype) = view.resolve(datatype) else {
+                        let datatype_guard =
+                            view.resolve(datatype).map_err(DatasetImportError::Read)?;
+                        let TermRef::Iri(datatype) = datatype_guard.term() else {
                             unreachable!("a literal datatype must resolve to an IRI");
                         };
                         this.builder.intern_literal_parts(
@@ -190,10 +254,7 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
                 this.record(id, mapped);
                 Ok(mapped)
             },
-        );
-        match mapped {
-            Ok(mapped) => mapped,
-        }
+        )
     }
 
     /// Record that source term `id` was transferred as `mapped`.
@@ -209,45 +270,62 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
     /// `DatasetView` does not expose source locations or non-RDF lookaside
     /// records; owners must carry those sidecars separately. This operation does
     /// not invent or claim to transfer them.
-    pub fn append(&mut self) {
+    pub fn append(&mut self)
+    where
+        D: DatasetView<ReadError = Infallible>,
+    {
+        self.try_append()
+            .expect("trusted resident import is readable");
+    }
+
+    /// Replay every stream, refusing incomplete reads before returning success.
+    ///
+    /// # Errors
+    /// A source read failure aborts the replay. The caller must discard the
+    /// partially populated destination on error.
+    pub fn try_append(&mut self) -> Result<(), DatasetImportError<D::ReadError>> {
         let view = self.view;
-        for quad in view.quads() {
-            let s = self.term(quad.s);
-            let p = self.term(quad.p);
-            let o = self.term(quad.o);
-            let g = quad.g.map(|g| self.term(g));
-            self.builder.push_quad(s, p, o, g);
-            self.stats.quads += 1;
-        }
-        // The RDF 1.2 overlay has no count on the view seam, but its own iterator
-        // states one: a backend reading columns off a side-table knows its row count
-        // before it yields a row. A source that cannot say reports a zero lower bound
-        // and the tables grow as they always did.
-        let reifiers = view.reifier_quads();
-        self.builder.reserve_reifiers(reifiers.size_hint().0);
-        for quad in reifiers {
-            let reifier = self.term(quad.s);
-            let triple = self.term(quad.o);
-            let graph = quad.g.map(|g| self.term(g));
-            self.builder.push_reifier_in_graph(reifier, triple, graph);
-            self.stats.reifiers += 1;
-        }
-        let annotations = view.annotation_quads();
-        self.builder.reserve_annotations(annotations.size_hint().0);
-        for quad in annotations {
-            let reifier = self.term(quad.s);
-            let predicate = self.term(quad.p);
-            let object = self.term(quad.o);
-            let graph = quad.g.map(|g| self.term(g));
-            self.builder
-                .push_annotation_in_graph(reifier, predicate, object, graph);
-            self.stats.annotations += 1;
-        }
-        for graph in view.named_graphs() {
-            let graph = self.term(graph);
-            self.builder.declare_named_graph(graph);
-            self.stats.named_graphs += 1;
-        }
+        view.checked_read(|_| {
+            for quad in view.quads() {
+                let s = self.try_term(quad.s)?;
+                let p = self.try_term(quad.p)?;
+                let o = self.try_term(quad.o)?;
+                let g = quad.g.map(|g| self.try_term(g)).transpose()?;
+                self.builder.push_quad(s, p, o, g);
+                self.stats.quads += 1;
+            }
+            // The RDF 1.2 overlay has no count on the view seam, but its own iterator
+            // states one: a backend reading columns off a side-table knows its row count
+            // before it yields a row. A source that cannot say reports a zero lower bound
+            // and the tables grow as they always did.
+            let reifiers = view.reifier_quads();
+            self.builder.reserve_reifiers(reifiers.size_hint().0);
+            for quad in reifiers {
+                let reifier = self.try_term(quad.s)?;
+                let triple = self.try_term(quad.o)?;
+                let graph = quad.g.map(|g| self.try_term(g)).transpose()?;
+                self.builder.push_reifier_in_graph(reifier, triple, graph);
+                self.stats.reifiers += 1;
+            }
+            let annotations = view.annotation_quads();
+            self.builder.reserve_annotations(annotations.size_hint().0);
+            for quad in annotations {
+                let reifier = self.try_term(quad.s)?;
+                let predicate = self.try_term(quad.p)?;
+                let object = self.try_term(quad.o)?;
+                let graph = quad.g.map(|g| self.try_term(g)).transpose()?;
+                self.builder
+                    .push_annotation_in_graph(reifier, predicate, object, graph);
+                self.stats.annotations += 1;
+            }
+            for graph in view.named_graphs() {
+                let graph = self.try_term(graph)?;
+                self.builder.declare_named_graph(graph);
+                self.stats.named_graphs += 1;
+            }
+            Ok(())
+        })
+        .map_err(DatasetImportError::Read)?
     }
 
     /// Work performed by this import so far.
@@ -266,7 +344,10 @@ mod term_walk_tests {
     use crate::backend::TermFactory as _;
     use crate::hash::FastMap;
     use crate::term_fixture::TermShape;
-    use crate::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
+    use crate::{
+        DatasetView, RdfDataset, RdfDatasetBuilder, TermGuard, TermId, TermRef, TermValue,
+    };
+    use core::convert::Infallible;
 
     fn reference_lookup(
         source: &RdfDataset,
@@ -296,7 +377,7 @@ mod term_walk_tests {
         found
     }
 
-    fn reference_term<D: DatasetView>(
+    fn reference_term<D: DatasetView<ReadError = Infallible>>(
         importer: &mut DatasetImporter<'_, '_, D>,
         id: D::Id,
     ) -> TermId {
@@ -304,7 +385,12 @@ mod term_walk_tests {
             importer.stats.reused_terms += 1;
             return *mapped;
         }
-        let mapped = match importer.view.resolve(id) {
+        let mapped = match importer
+            .view
+            .resolve(id)
+            .expect("resident fixture is readable")
+            .term()
+        {
             TermRef::Triple { s, p, o } => {
                 let s = reference_term(importer, s);
                 let p = reference_term(importer, p);

@@ -407,6 +407,9 @@ pub enum EntailError {
     /// literal whose datatype is not an IRI, so the id is foreign to it. Nothing is
     /// reasoned over a term the input does not actually hold.
     ForeignTerm(purrdf_core::TermLookupError),
+    /// The input source refused a term, index or iterator read. No partial closure or
+    /// report is returned as complete.
+    SourceRead(String),
     /// The knowledge base is inconsistent: every query would be entailed, so no
     /// meaningful answer set exists. A hard failure rather than a silent default.
     ///
@@ -537,6 +540,11 @@ pub enum EntailError {
 }
 
 impl EntailError {
+    /// Preserve the operational refusal's classification at this crate's boundary.
+    pub(crate) fn source_read(error: impl std::fmt::Display) -> Self {
+        Self::SourceRead(error.to_string())
+    }
+
     /// This error, with any report it carries restated for a run whose `owl:imports` were
     /// resolved by [`resolve_imports`] — the error-side twin of
     /// [`ReasoningReport::with_resolved_imports`], and under the same precondition.
@@ -563,6 +571,7 @@ impl std::fmt::Display for EntailError {
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
             Self::ForeignTerm(error) => write!(f, "entailment input error: {error}"),
+            Self::SourceRead(error) => write!(f, "entailment source read error: {error}"),
             Self::Inconsistent(run) => write!(
                 f,
                 "knowledge base is inconsistent: {} was satisfied by {} asserted {}",
@@ -650,9 +659,14 @@ impl std::fmt::Display for EntailError {
     }
 }
 
-impl From<purrdf_core::TermLookupError> for EntailError {
-    fn from(error: purrdf_core::TermLookupError) -> Self {
-        Self::ForeignTerm(error)
+impl<E: std::fmt::Display> From<purrdf_core::TermLookupError<E>> for EntailError {
+    fn from(error: purrdf_core::TermLookupError<E>) -> Self {
+        match error {
+            purrdf_core::TermLookupError::ForeignId => {
+                Self::ForeignTerm(purrdf_core::TermLookupError::ForeignId)
+            }
+            purrdf_core::TermLookupError::Read(error) => Self::source_read(error),
+        }
     }
 }
 
@@ -684,6 +698,7 @@ impl std::error::Error for EntailError {
             Self::Canonicalization(inner) => Some(inner),
             Self::ForeignTerm(inner) => Some(inner),
             Self::Build(_)
+            | Self::SourceRead(_)
             | Self::Parse(_)
             | Self::MalformedList(_)
             | Self::Inconsistent(_)
@@ -889,29 +904,32 @@ pub fn materialize_with<D: DatasetView>(
     options: &EvalOptions,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
-    if stop.is_some_and(|stop| stop.stopped()) {
-        return Err(EntailError::Stopped);
-    }
-    let regime = plan.regime();
-    let (closure, stats) = match plan {
-        Materialization::Simple => (engine::copy_of(ds)?, report::RunStats::none(*options)),
-        Materialization::Rdf
-        | Materialization::Rdfs
-        | Materialization::OwlRl
-        | Materialization::D => engine::close(ds, regime, options, stop)?,
-        // The two query-directed lanes are DELEGATED, not restated: each already assembles
-        // its own report, so returning here is what keeps one implementation per lane. The
-        // report names the calculus under `options` like every other lane's does.
-        Materialization::OwlDirect(query_bgp) => {
-            return materialize_dl_reported_until(ds, query_bgp, stop)
-                .map(|(closure, report)| (closure, report.under(options)));
+    ds.checked_read(|ds| {
+        if stop.is_some_and(|stop| stop.stopped()) {
+            return Err(EntailError::Stopped);
         }
-        Materialization::Rif(rules) => {
-            return materialize_rif_with(ds, rules, options, stop)
-                .map(|(closure, report)| (closure, report.under(options)));
-        }
-    };
-    Ok((closure, ReasoningReport::of_run(ds, regime, &stats)))
+        let regime = plan.regime();
+        let (closure, stats) = match plan {
+            Materialization::Simple => (engine::copy_of(ds)?, report::RunStats::none(*options)),
+            Materialization::Rdf
+            | Materialization::Rdfs
+            | Materialization::OwlRl
+            | Materialization::D => engine::close(ds, regime, options, stop)?,
+            // The two query-directed lanes are DELEGATED, not restated: each already assembles
+            // its own report, so returning here is what keeps one implementation per lane. The
+            // report names the calculus under `options` like every other lane's does.
+            Materialization::OwlDirect(query_bgp) => {
+                return materialize_dl_reported_until(ds, query_bgp, stop)
+                    .map(|(closure, report)| (closure, report.under(options)));
+            }
+            Materialization::Rif(rules) => {
+                return materialize_rif_with(ds, rules, options, stop)
+                    .map(|(closure, report)| (closure, report.under(options)));
+            }
+        };
+        Ok((closure, ReasoningReport::of_run(ds, regime, &stats)?))
+    })
+    .map_err(EntailError::source_read)?
 }
 
 /// [`materialize_with`] over `premise` TOGETHER WITH its whole `owl:imports` closure, the
@@ -994,6 +1012,109 @@ mod tests {
     const C: &str = "http://example.org/C";
     const X: &str = "http://example.org/x";
     const Y: &str = "http://example.org/y";
+
+    /// A source that exposes one real row before its iterator fails, or refuses a
+    /// term read immediately. Its sticky failure must prevent a partial result.
+    struct FailingSource {
+        dataset: Arc<RdfDataset>,
+        fail_term: bool,
+        failed: std::cell::Cell<bool>,
+    }
+
+    impl FailingSource {
+        fn failure() -> Arc<std::io::Error> {
+            Arc::new(std::io::Error::other("injected source failure"))
+        }
+    }
+
+    impl DatasetView for FailingSource {
+        type Id = purrdf_core::TermId;
+        type ReadError = Arc<std::io::Error>;
+        type TermGuard<'a> = TermRef<'a>;
+        type ProbePlan = ();
+
+        fn read_error(&self) -> Option<Self::ReadError> {
+            self.failed.get().then(Self::failure)
+        }
+
+        fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            let mut rows = self.dataset.quads();
+            let mut yielded = false;
+            std::iter::from_fn(move || {
+                if yielded {
+                    self.failed.set(true);
+                    return None;
+                }
+                yielded = true;
+                rows.next()
+            })
+        }
+
+        fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            if self.fail_term {
+                self.failed.set(true);
+                return Err(Self::failure());
+            }
+            Ok(self.dataset.as_ref().resolve(id))
+        }
+
+        fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+            Ok(self.dataset.as_ref().term_id_by_value(value))
+        }
+
+        fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+            self.dataset.capabilities()
+        }
+
+        fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            (): &Self::ProbePlan,
+            s: Option<Self::Id>,
+            p: Option<Self::Id>,
+            o: Option<Self::Id>,
+            g: purrdf_core::GraphMatch,
+        ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            self.quads_for_pattern(s, p, o, g)
+        }
+
+        fn term_count(&self) -> u64 {
+            DatasetView::term_count(self.dataset.as_ref())
+        }
+    }
+
+    #[test]
+    fn operational_failure_returns_no_partial_closure_or_report() {
+        let rules = RuleSet::default();
+        for fail_term in [false, true] {
+            for plan in [
+                Materialization::Simple,
+                Materialization::Rdfs,
+                Materialization::OwlDirect(&[]),
+                Materialization::Rif(&rules),
+            ] {
+                let source = FailingSource {
+                    dataset: dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
+                    fail_term,
+                    failed: std::cell::Cell::new(false),
+                };
+                let error = materialize(&source, plan).expect_err("source refusal is fatal");
+                assert!(matches!(error, EntailError::SourceRead(_)), "{error}");
+                assert!(error.to_string().contains("injected source failure"));
+            }
+
+            let source = FailingSource {
+                dataset: dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
+                fail_term,
+                failed: std::cell::Cell::new(false),
+            };
+            assert!(matches!(
+                materialize_combined(&source, &[]),
+                Err(EntailError::SourceRead(_))
+            ));
+        }
+    }
 
     /// `owl:differentFrom` — what the one extension rule concludes.
     use purrdf_iri::vocab::owl::DIFFERENT_FROM as OWL_DIFFERENTFROM;
@@ -2123,12 +2244,14 @@ mod tests {
         let (closed, _) = materialize(&ds, Materialization::D).expect("d");
         let datatype = "http://www.w3.org/2000/01/rdf-schema#Datatype";
         let typings = closed
+            .as_ref()
             .quad_refs()
             .filter(|q| matches!(q.o, TermRef::Iri(o) if o == datatype))
             .count();
         assert_eq!(typings, 32, "dt-type1 typed the datatypes once per graph");
         assert!(
             closed
+                .as_ref()
                 .quad_refs()
                 .all(|q| !matches!(q.o, TermRef::Iri(o) if o == datatype) || q.g.is_none())
         );
@@ -2570,6 +2693,7 @@ mod tests {
         let (closed, report) = materialize_with(&ds, Materialization::Rdfs, &native, None)
             .expect("raised limits admit the cross product");
         let typed = closed
+            .as_ref()
             .quad_refs()
             .filter(|q| matches!(q.p, TermRef::Iri(p) if p == RDF_TYPE))
             .filter(|q| matches!(q.o, TermRef::Iri(o) if o.starts_with("http://example.org/C")))

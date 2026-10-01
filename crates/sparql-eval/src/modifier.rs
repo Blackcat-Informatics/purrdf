@@ -179,7 +179,8 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
                 // being put back. See `ScratchInterner::intern`.
                 row[i] = Some(
                     ctx.scratch
-                        .intern(ctx.dataset, ground_term_to_value(ground)),
+                        .try_intern(ctx.dataset, ground_term_to_value(ground))
+                        .map_err(EvalError::source_read)?,
                 );
             }
         }
@@ -198,13 +199,20 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
     variables: &[Variable],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    let layout = || {
+        if ctx.dataset.storage_live_budget().is_some() {
+            Arc::new(VarSchema::from_vars(variables.iter().cloned()))
+        } else {
+            VarSchema::interned(variables)
+        }
+    };
     let mut lift = Lift::at(node);
     let evaluated = crate::service_endpoints::eval_projected(inner, variables, ctx)?;
     let Some(seq) = lift.absorb(0, evaluated) else {
-        let schema = VarSchema::interned(variables);
+        let schema = layout();
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
-    let out = VarSchema::interned(variables);
+    let out = layout();
     // For each projected column, the source column in the inner schema (if any).
     let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
     let rows = seq
@@ -323,7 +331,11 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     for row in &seq.rows {
         for key in &mut linked {
             let term = key.term(row, &schema, ctx)?;
-            values.push(term.map(|t| ctx.scratch.value_of(ctx.dataset, t)));
+            values.push(
+                term.map(|t| ctx.scratch.try_value_of(ctx.dataset, t))
+                    .transpose()
+                    .map_err(EvalError::source_read)?,
+            );
         }
     }
     let keys: Vec<SortKey<'_>> = values.iter().map(|v| project(v.as_ref())).collect();
@@ -368,7 +380,11 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
     match name {
         NamedNodePattern::NamedNode(n) => {
             let mut lift = Lift::at(node);
-            match ctx.dataset.term_id_by_value(&named_node_to_value(n)) {
+            match ctx
+                .dataset
+                .term_id_by_value(&named_node_to_value(n))
+                .map_err(EvalError::source_read)?
+            {
                 // Addressable only if the active dataset's named set admits it (a
                 // `FROM NAMED` / `USING NAMED` may restrict which graphs `GRAPH` sees).
                 Some(id) if ctx.active_dataset.named_allows(id) => {
@@ -1458,7 +1474,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         minted
             .into_iter()
             .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         let mut rows = Vec::with_capacity(groups.len());
         for (_, key, idxs) in &groups {
@@ -1646,7 +1662,11 @@ fn eval_aggregate<D: DatasetView + Sync>(
             CountAccumulator::default,
             |acc, ()| acc.step(&[]),
         )?;
-        return Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)));
+        return Ok(value
+            .map(|v| ctx.scratch.try_intern_checked(ctx.dataset, v))
+            .transpose()
+            .map_err(EvalError::source_read)?
+            .flatten());
     }
 
     // Every built-in aggregate reaching here is `COUNT(?x)`/`SUM`/`AVG`/`MIN`/
@@ -1713,7 +1733,10 @@ fn eval_aggregate<D: DatasetView + Sync>(
             {
                 continue;
             }
-            let value = ctx.scratch.value_of(ctx.dataset, term);
+            let value = ctx
+                .scratch
+                .try_value_of(ctx.dataset, term)
+                .map_err(EvalError::source_read)?;
             if let Err(tripped) = ctx.charge_amount(
                 purrdf_core::ResourceDimension::ScratchBytes,
                 crate::scratch::value_bytes(&value),
@@ -1799,7 +1822,11 @@ fn eval_aggregate<D: DatasetView + Sync>(
             ));
         }
     };
-    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
+    Ok(value
+        .map(|v| ctx.scratch.try_intern_checked(ctx.dataset, v))
+        .transpose()
+        .map_err(EvalError::source_read)?
+        .flatten())
 }
 
 /// [`fold_builtin`]'s per-row step closure for every built-in whose argument
@@ -1928,7 +1955,11 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
                 every_position_bound = false;
                 break;
             };
-            tuple.push(ctx.scratch.value_of(ctx.dataset, term));
+            tuple.push(
+                ctx.scratch
+                    .try_value_of(ctx.dataset, term)
+                    .map_err(EvalError::source_read)?,
+            );
         }
         if !every_position_bound {
             continue;
@@ -2026,7 +2057,11 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // this is where that value would otherwise become a solution term. `and_then`
     // routes a refused tag onto the same unbound answer an accumulator that
     // returned `None` gets — see `ScratchInterner::intern_checked`.
-    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
+    Ok(value
+        .map(|v| ctx.scratch.try_intern_checked(ctx.dataset, v))
+        .transpose()
+        .map_err(EvalError::source_read)?
+        .flatten())
 }
 
 /// The running numeric fold `SUM`/`AVG` share, wrapped `Option`-poisonable by

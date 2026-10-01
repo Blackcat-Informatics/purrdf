@@ -124,8 +124,8 @@ impl EventGraph {
         if let Some(&id) = self.ids.get(&term) {
             return Ok(id);
         }
-        let index = u32::try_from(self.terms.len())
-            .map_err(|_| OkfError::new("OKF event stream exceeds the u32 term-id space"))?;
+        let index = u64::try_from(self.terms.len())
+            .map_err(|_| OkfError::new("OKF event stream exceeds the u64 term-id space"))?;
         let id = EventTermId(index);
         self.ids.insert(term.clone(), id);
         self.terms.push(term);
@@ -492,7 +492,7 @@ fn drive_event_graph<S: RdfEventSink + ?Sized>(
     }
     for (index, term) in graph.terms.iter().enumerate() {
         let id = EventTermId(
-            u32::try_from(index).map_err(|_| OkfError::new("OKF event term index exceeds u32"))?,
+            u64::try_from(index).map_err(|_| OkfError::new("OKF event term index exceeds u64"))?,
         );
         let event = match term {
             OwnedEventTerm::Iri(iri) => EventTerm::Iri(iri),

@@ -1,0 +1,1330 @@
+{
+  "components": [
+    {
+      "id": "aead-0.6.1",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/aead-0.6.1/LICENSE-APACHE",
+        "dependencies/aead-0.6.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/traits",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "1973cfbc1a2daf9cf550e74e1f088c28e7f7d8c1e1418fb6c9dc5184b7e84c99"
+    },
+    {
+      "id": "aes-0.9.3",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/aes-0.9.3/LICENSE-APACHE",
+        "dependencies/aes-0.9.3/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/block-ciphers",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "35f0f96ce78e38c3dc6d8948aa8163d06385be74000f3c7a95bf1eef35d3ea32"
+    },
+    {
+      "id": "aes-gcm-0.11.1",
+      "license": "Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/aes-gcm-0.11.1/LICENSE-APACHE",
+        "dependencies/aes-gcm-0.11.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/AEADs",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "7f2b8006a0c83f52b62ba44a97b58bf76fe2f70a329e588f67f89691d93d498f"
+    },
+    {
+      "id": "aho-corasick-1.1.4",
+      "license": "Unlicense OR MIT",
+      "notices": [
+        "dependencies/aho-corasick-1.1.4/COPYING",
+        "dependencies/aho-corasick-1.1.4/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/BurntSushi/aho-corasick",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+    },
+    {
+      "id": "block-buffer-0.12.1",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/block-buffer-0.12.1/LICENSE-APACHE",
+        "dependencies/block-buffer-0.12.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/utils",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
+    },
+    {
+      "id": "bumpalo-3.20.3",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/bumpalo-3.20.3/LICENSE-APACHE",
+        "dependencies/bumpalo-3.20.3/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/fitzgen/bumpalo",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+    },
+    {
+      "id": "cfg-if-1.0.4",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/cfg-if-1.0.4/LICENSE-APACHE",
+        "dependencies/cfg-if-1.0.4/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rust-lang/cfg-if",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+    },
+    {
+      "id": "cipher-0.5.2",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/cipher-0.5.2/LICENSE-APACHE",
+        "dependencies/cipher-0.5.2/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/traits",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
+    },
+    {
+      "id": "cmov-0.5.4",
+      "license": "Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/cmov-0.5.4/LICENSE-APACHE",
+        "dependencies/cmov-0.5.4/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/utils",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+    },
+    {
+      "id": "const-oid-0.10.2",
+      "license": "Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/const-oid-0.10.2/LICENSE-APACHE",
+        "dependencies/const-oid-0.10.2/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/formats",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+    },
+    {
+      "id": "cpubits-0.1.1",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/cpubits-0.1.1/LICENSE-APACHE",
+        "dependencies/cpubits-0.1.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/utils",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
+    },
+    {
+      "id": "cpufeatures-0.3.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/cpufeatures-0.3.0/LICENSE-APACHE",
+        "dependencies/cpufeatures-0.3.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/utils",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
+    },
+    {
+      "id": "crossbeam-deque-0.8.6",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/crossbeam-deque-0.8.6/LICENSE-APACHE",
+        "dependencies/crossbeam-deque-0.8.6/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
+    },
+    {
+      "id": "crossbeam-epoch-0.9.18",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/crossbeam-epoch-0.9.18/LICENSE-APACHE",
+        "dependencies/crossbeam-epoch-0.9.18/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+    },
+    {
+      "id": "crossbeam-utils-0.8.21",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/crossbeam-utils-0.8.21/LICENSE-APACHE",
+        "dependencies/crossbeam-utils-0.8.21/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+    },
+    {
+      "id": "crypto-common-0.2.2",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/crypto-common-0.2.2/LICENSE-APACHE",
+        "dependencies/crypto-common-0.2.2/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/traits",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
+    },
+    {
+      "id": "csvw",
+      "license": "LicenseRef-W3C-Document",
+      "notices": [
+        "third-party/csvw/0-W3C-document-license.html",
+        "third-party/csvw/1-LICENSE.md"
+      ],
+      "paths": [
+        "crates/rdf/tests/fixtures/csvw-w3c/**"
+      ],
+      "provenance": [
+        "crates/rdf/tests/fixtures/csvw-w3c/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/csvw"
+    },
+    {
+      "id": "ctr-0.10.1",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/ctr-0.10.1/LICENSE-APACHE",
+        "dependencies/ctr-0.10.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/block-modes",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "baaca1c4b237092596f64d571e9db6ce4109c4ef9742e27590f1709594461f21"
+    },
+    {
+      "id": "ctutils-0.4.2",
+      "license": "Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/ctutils-0.4.2/LICENSE-APACHE",
+        "dependencies/ctutils-0.4.2/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/utils",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+    },
+    {
+      "id": "digest-0.11.3",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/digest-0.11.3/LICENSE-APACHE",
+        "dependencies/digest-0.11.3/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/traits",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+    },
+    {
+      "id": "either-1.16.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/either-1.16.0/LICENSE-APACHE",
+        "dependencies/either-1.16.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rayon-rs/either",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
+    },
+    {
+      "id": "fastrand-2.4.1",
+      "license": "Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/fastrand-2.4.1/LICENSE-APACHE",
+        "dependencies/fastrand-2.4.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/smol-rs/fastrand",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+    },
+    {
+      "id": "getrandom-0.3.4",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/getrandom-0.3.4/LICENSE-APACHE",
+        "dependencies/getrandom-0.3.4/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rust-random/getrandom",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+    },
+    {
+      "id": "ghash-0.6.0",
+      "license": "Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/ghash-0.6.0/LICENSE-APACHE",
+        "dependencies/ghash-0.6.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/universal-hashes",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
+    },
+    {
+      "id": "hashbrown-0.17.1",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/hashbrown-0.17.1/LICENSE-APACHE",
+        "dependencies/hashbrown-0.17.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rust-lang/hashbrown",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+    },
+    {
+      "id": "heck-0.5.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/heck-0.5.0/LICENSE-APACHE",
+        "dependencies/heck-0.5.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/withoutboats/heck",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+    },
+    {
+      "id": "hybrid-array-0.4.15",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/hybrid-array-0.4.15/LICENSE-APACHE",
+        "dependencies/hybrid-array-0.4.15/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/hybrid-array",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
+    },
+    {
+      "id": "inout-0.2.2",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/inout-0.2.2/LICENSE-APACHE",
+        "dependencies/inout-0.2.2/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/utils",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "4250ce6452e92010fdf7268ccc5d14faa80bb12fc741938534c58f16804e03c7"
+    },
+    {
+      "id": "json-tests",
+      "license": "MIT",
+      "notices": [
+        "third-party/json-tests/0-LICENSE"
+      ],
+      "paths": [
+        "vectors/JSONTestSuite/**"
+      ],
+      "provenance": [
+        "vectors/JSONTestSuite/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/nst/JSONTestSuite"
+    },
+    {
+      "id": "jsonld-w3c",
+      "license": "LicenseRef-W3C-Test-Suite",
+      "notices": [
+        "third-party/jsonld-w3c/0-W3C-software-document-2015.html",
+        "third-party/jsonld-w3c/1-W3C-test-suites-policy.html",
+        "third-party/jsonld-w3c/2-W3C-test-suite-license.html",
+        "third-party/jsonld-w3c/3-W3C-test-suite-BSD.html",
+        "third-party/jsonld-w3c/4-LICENSE.md"
+      ],
+      "paths": [
+        "crates/rdf/tests/fixtures/jsonld-w3c-rec/**"
+      ],
+      "provenance": [
+        "LICENSING.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/json-ld-api"
+    },
+    {
+      "id": "jsonschema-metaschemas",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/jsonschema-metaschemas/0-BSD-3-Clause.txt"
+      ],
+      "paths": [
+        "crates/jsonschema/tests/metaschemas/**"
+      ],
+      "provenance": [
+        "crates/jsonschema/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/json-schema-org/json-schema-spec"
+    },
+    {
+      "id": "jsonschema-suite",
+      "license": "MIT",
+      "notices": [
+        "third-party/jsonschema-suite/0-MIT.txt"
+      ],
+      "paths": [
+        "crates/jsonschema/tests/suite/**",
+        "crates/jsonschema/tests/boon_differential_vectors.txt",
+        "crates/jsonschema/tests/pattern_differential_vectors.txt"
+      ],
+      "provenance": [
+        "crates/jsonschema/PROVENANCE.md"
+      ],
+      "scope": "suite schema/instance inputs retained in frozen differential vectors, in addition to verdicts recorded from replaced engines",
+      "source": "https://github.com/json-schema-org/JSON-Schema-Test-Suite/tree/5b0ee1613e45fcc2bddac00e07c19cd49b00d8a8"
+    },
+    {
+      "id": "libc-0.2.186",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/libc-0.2.186/LICENSE-APACHE",
+        "dependencies/libc-0.2.186/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rust-lang/libc",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+    },
+    {
+      "id": "libyaml-emitter",
+      "license": "MIT",
+      "notices": [
+        "third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt",
+        "third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt"
+      ],
+      "paths": [
+        "crates/lex/src/yaml/write.rs"
+      ],
+      "provenance": [
+        "crates/lex/PROVENANCE.md"
+      ],
+      "scope": "emitter style/layout decisions reproduced from unsafe-libyaml 0.2.11; retained MIT permission notice",
+      "source": "https://github.com/dtolnay/unsafe-libyaml/tree/0.2.11"
+    },
+    {
+      "id": "memchr-2.8.2",
+      "license": "Unlicense OR MIT",
+      "notices": [
+        "dependencies/memchr-2.8.2/COPYING",
+        "dependencies/memchr-2.8.2/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/BurntSushi/memchr",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
+    },
+    {
+      "id": "obographs",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/obographs/0-BSD-3-Clause.txt"
+      ],
+      "paths": [
+        "crates/rdf/tests/fixtures/obographs-0.3.2/**"
+      ],
+      "provenance": [
+        "LICENSING.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/geneontology/obographs"
+    },
+    {
+      "id": "once_cell-1.21.4",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/once_cell-1.21.4/LICENSE-APACHE",
+        "dependencies/once_cell-1.21.4/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/matklad/once_cell",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+    },
+    {
+      "id": "polyval-0.7.3",
+      "license": "Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/polyval-0.7.3/LICENSE-APACHE",
+        "dependencies/polyval-0.7.3/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/universal-hashes",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "f0fa31d631f2b2cb2a544d0aa321ce847a94764d701ca2becc411138b93d49cd"
+    },
+    {
+      "id": "portable-atomic-1.13.1",
+      "license": "Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/portable-atomic-1.13.1/LICENSE-APACHE",
+        "dependencies/portable-atomic-1.13.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/taiki-e/portable-atomic",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
+    },
+    {
+      "id": "proc-macro2-1.0.106",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/proc-macro2-1.0.106/LICENSE-APACHE",
+        "dependencies/proc-macro2-1.0.106/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/dtolnay/proc-macro2",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
+    },
+    {
+      "id": "pyo3-0.29.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/pyo3-0.29.0/LICENSE-APACHE",
+        "dependencies/pyo3-0.29.0/LICENSE-MIT",
+        "dependencies/pyo3-0.29.0/pyo3-runtime/LICENSE-APACHE",
+        "dependencies/pyo3-0.29.0/pyo3-runtime/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/pyo3/pyo3",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "cd274650b21d4bfc26a0a47587962c1edb425f69287324355cd040c3ea66071c"
+    },
+    {
+      "id": "pyo3-build-config-0.29.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/pyo3-build-config-0.29.0/LICENSE-APACHE",
+        "dependencies/pyo3-build-config-0.29.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/pyo3/pyo3",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "c5e2a7d2f0d013342f295c048ad19237add5154a55b1c5a254c0ec93d4109078"
+    },
+    {
+      "id": "pyo3-ffi-0.29.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/pyo3-ffi-0.29.0/LICENSE-APACHE",
+        "dependencies/pyo3-ffi-0.29.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/pyo3/pyo3",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "ca85c467da1bbc8d866eea5deff9cf29ea5f7785054a17da36e65bda9c05845b"
+    },
+    {
+      "id": "pyo3-macros-0.29.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/pyo3-macros-0.29.0/LICENSE-APACHE",
+        "dependencies/pyo3-macros-0.29.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/pyo3/pyo3",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "9ac53762fd065daa3194dd09337a38bd793a188100fd1a9304c4ab312d901771"
+    },
+    {
+      "id": "pyo3-macros-backend-0.29.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/pyo3-macros-backend-0.29.0/LICENSE-APACHE",
+        "dependencies/pyo3-macros-backend-0.29.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/pyo3/pyo3",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "4ca3a1557399783172dc5bf39cfca835157732532cba56b71d2292161e53b362"
+    },
+    {
+      "id": "quote-1.0.46",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/quote-1.0.46/LICENSE-APACHE",
+        "dependencies/quote-1.0.46/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/dtolnay/quote",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
+    },
+    {
+      "id": "r-efi-5.3.0",
+      "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "notices": [
+        "dependencies/r-efi-5.3.0/AUTHORS"
+      ],
+      "repository": "https://github.com/r-efi/r-efi",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+    },
+    {
+      "id": "rayon-1.12.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/rayon-1.12.0/LICENSE-APACHE",
+        "dependencies/rayon-1.12.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rayon-rs/rayon",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+    },
+    {
+      "id": "rayon-core-1.13.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/rayon-core-1.13.0/LICENSE-APACHE",
+        "dependencies/rayon-core-1.13.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rayon-rs/rayon",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+    },
+    {
+      "id": "rdf-w3c",
+      "license": "LicenseRef-W3C-Test-Suite",
+      "notices": [
+        "third-party/rdf-w3c/0-W3C-software-document-2015.html",
+        "third-party/rdf-w3c/1-W3C-test-suites-policy.html",
+        "third-party/rdf-w3c/2-W3C-test-suite-license.html",
+        "third-party/rdf-w3c/3-W3C-test-suite-BSD.html",
+        "third-party/rdf-w3c/4-LICENSE"
+      ],
+      "paths": [
+        "crates/rdf/tests/corpus/w3c/**"
+      ],
+      "provenance": [
+        "crates/rdf/tests/corpus/w3c/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/rdf-tests"
+    },
+    {
+      "id": "rdfc",
+      "license": "W3C-20150513",
+      "notices": [
+        "third-party/rdfc/0-W3C-software-document-2015.html",
+        "third-party/rdfc/1-LICENSE.md"
+      ],
+      "paths": [
+        "crates/rdf/tests/fixtures/rdfc/**"
+      ],
+      "provenance": [
+        "LICENSING.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/rdf-canon"
+    },
+    {
+      "id": "rdflib-tests",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/rdflib-tests/0-LICENSE"
+      ],
+      "paths": [
+        "bindings/python/tests/rdflib_suite/vendor/**"
+      ],
+      "provenance": [
+        "bindings/python/tests/rdflib_suite/vendor/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/RDFLib/rdflib/tree/7.6.0"
+    },
+    {
+      "id": "regex-1.12.4",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/regex-1.12.4/LICENSE-APACHE",
+        "dependencies/regex-1.12.4/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rust-lang/regex",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "f1292b7759ae1cb9ec195452d1390a074f0cd8541ab7a5a8c31cd6db45d4a6ba"
+    },
+    {
+      "id": "regex-automata-0.4.14",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/regex-automata-0.4.14/LICENSE-APACHE",
+        "dependencies/regex-automata-0.4.14/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/rust-lang/regex",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
+    },
+    {
+      "id": "regex-syntax-0.8.11",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/regex-syntax-0.8.11/LICENSE-APACHE",
+        "dependencies/regex-syntax-0.8.11/LICENSE-MIT",
+        "dependencies/regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE"
+      ],
+      "repository": "https://github.com/rust-lang/regex",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+    },
+    {
+      "id": "rustversion-1.0.22",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/rustversion-1.0.22/LICENSE-APACHE",
+        "dependencies/rustversion-1.0.22/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/dtolnay/rustversion",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+    },
+    {
+      "id": "sha2-0.11.0",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/sha2-0.11.0/LICENSE-APACHE",
+        "dependencies/sha2-0.11.0/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/hashes",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+    },
+    {
+      "id": "shacl",
+      "license": "W3C-20150513",
+      "notices": [
+        "third-party/shacl/0-W3C-software-document-2015.html",
+        "third-party/shacl/1-LICENSE.md"
+      ],
+      "paths": [
+        "vectors/shacl/core/**",
+        "vectors/shacl/sparql/**",
+        "crates/shapes/spec/**"
+      ],
+      "provenance": [
+        "vectors/shacl/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/data-shapes/tree/08adb3776709a014bc3062ede793c36275b22446"
+    },
+    {
+      "id": "shacl-af",
+      "license": "Apache-2.0",
+      "notices": [
+        "third-party/shacl-af/0-LICENSE-APACHE",
+        "third-party/shacl-af/1-README.md"
+      ],
+      "paths": [
+        "vectors/shacl/af/**"
+      ],
+      "provenance": [
+        "vectors/shacl/af/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/RDFLib/pySHACL/tree/5b46638cadde2e32efaed0ee53fc2545d5c0a179"
+    },
+    {
+      "id": "shacl12",
+      "license": "W3C-20150513",
+      "notices": [
+        "third-party/shacl12/0-W3C-software-document-2015.html",
+        "third-party/shacl12/1-LICENSE.md"
+      ],
+      "paths": [
+        "vectors/shacl12/**"
+      ],
+      "provenance": [
+        "vectors/shacl12/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/data-shapes"
+    },
+    {
+      "id": "shex-tests",
+      "license": "MIT",
+      "notices": [
+        "third-party/shex-tests/0-shexTest-v2.1.0-package.json",
+        "third-party/shex-tests/1-MIT-permission.txt"
+      ],
+      "paths": [
+        "vectors/shexTest/**"
+      ],
+      "provenance": [
+        "vectors/shexTest/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/shexSpec/shexTest/tree/8772d2d32c94bfba21a30c09915dfc7662e1539f"
+    },
+    {
+      "id": "sparql-cdt",
+      "license": "Apache-2.0",
+      "notices": [
+        "third-party/sparql-cdt/0-LICENSE"
+      ],
+      "paths": [
+        "vectors/sparql-cdt/**"
+      ],
+      "provenance": [
+        "vectors/sparql-cdt/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/sparql-dev"
+    },
+    {
+      "id": "structured-zstd-0.0.49",
+      "license": "Apache-2.0",
+      "notices": [
+        "dependencies/structured-zstd-0.0.49/LICENSE"
+      ],
+      "repository": "https://github.com/structured-world/structured-zstd",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "392eea135985654a313cdfee001e93031bacd96a3693a5dc4b0d13793e40b27a"
+    },
+    {
+      "id": "syn-2.0.118",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/syn-2.0.118/LICENSE-APACHE",
+        "dependencies/syn-2.0.118/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/dtolnay/syn",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+    },
+    {
+      "id": "target-lexicon-0.13.5",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "notices": [
+        "dependencies/target-lexicon-0.13.5/LICENSE"
+      ],
+      "repository": "https://github.com/bytecodealliance/target-lexicon",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+    },
+    {
+      "id": "twox-hash-2.1.2",
+      "license": "MIT",
+      "notices": [
+        "dependencies/twox-hash-2.1.2/LICENSE.txt"
+      ],
+      "repository": "https://github.com/shepmaster/twox-hash",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
+    },
+    {
+      "id": "typenum-1.20.1",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/typenum-1.20.1/LICENSE",
+        "dependencies/typenum-1.20.1/LICENSE-APACHE",
+        "dependencies/typenum-1.20.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/paholg/typenum",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+    },
+    {
+      "id": "unicode",
+      "license": "Unicode-3.0",
+      "notices": [
+        "third-party/unicode/0-Unicode-3.0.txt"
+      ],
+      "paths": [
+        "crates/lex/src/unicode_tables.rs",
+        "crates/iri/src/idna_tables.rs",
+        "crates/rdf-core/src/xsd_regex/blocks.rs",
+        "crates/text/src/unicode_tables.rs",
+        "crates/jsonschema/src/ecma/property_tables.rs",
+        "crates/jsonschema/src/ecma/unicode_ranges.rs",
+        "crates/iri/unicode/**",
+        "crates/rdf-core/vendor/unicode/**"
+      ],
+      "provenance": [
+        "crates/iri/unicode/PROVENANCE.md",
+        "LICENSING.md"
+      ],
+      "scope": "generated and vendored Unicode data; terms apply in addition to the first-party grant",
+      "source": "https://www.unicode.org/Public/17.0.0/ucd/"
+    },
+    {
+      "id": "unicode-ident-1.0.24",
+      "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "notices": [
+        "dependencies/unicode-ident-1.0.24/LICENSE-APACHE",
+        "dependencies/unicode-ident-1.0.24/LICENSE-MIT",
+        "dependencies/unicode-ident-1.0.24/LICENSE-UNICODE"
+      ],
+      "repository": "https://github.com/dtolnay/unicode-ident",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+    },
+    {
+      "id": "universal-hash-0.6.1",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/universal-hash-0.6.1/LICENSE-APACHE",
+        "dependencies/universal-hash-0.6.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/RustCrypto/traits",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "f4987bdc12753382e0bec4a65c50738ffaabc998b9cdd1f952fb5f39b0048a96"
+    },
+    {
+      "id": "visual-hashing-1.0.0",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "notices": [
+        "dependencies/visual-hashing-1.0.0/LICENSE-APACHE",
+        "dependencies/visual-hashing-1.0.0/LICENSE-MIT",
+        "dependencies/visual-hashing-1.0.0/LICENSE-MULAN"
+      ],
+      "repository": "https://github.com/Blackcat-Informatics/visual-hashing",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "5056c65a9a789c9c1156fbfab38df224d7b729089e3b075892136e8f3092166e"
+    },
+    {
+      "id": "w3c-owl2",
+      "license": "LicenseRef-W3C-Test-Suite",
+      "notices": [
+        "third-party/w3c-owl2/0-W3C-software-document-2015.html",
+        "third-party/w3c-owl2/1-W3C-test-suites-policy.html",
+        "third-party/w3c-owl2/2-W3C-test-suite-license.html",
+        "third-party/w3c-owl2/3-W3C-test-suite-BSD.html",
+        "third-party/w3c-owl2/4-LicenseRef-W3C-Test-Suite.txt"
+      ],
+      "paths": [
+        "crates/sparql-conformance/entailment-suite/w3c-owl2/**"
+      ],
+      "provenance": [
+        "crates/sparql-conformance/entailment-suite/w3c-owl2/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://www.w3.org/2007/OWL/testsuite/"
+    },
+    {
+      "id": "w3c-owl2-rl",
+      "license": "LicenseRef-W3C-Test-Suite",
+      "notices": [
+        "third-party/w3c-owl2-rl/0-W3C-software-document-2015.html",
+        "third-party/w3c-owl2-rl/1-W3C-test-suites-policy.html",
+        "third-party/w3c-owl2-rl/2-W3C-test-suite-license.html",
+        "third-party/w3c-owl2-rl/3-W3C-test-suite-BSD.html",
+        "third-party/w3c-owl2-rl/4-LicenseRef-W3C-Test-Suite.txt"
+      ],
+      "paths": [
+        "crates/sparql-conformance/entailment-suite/w3c-owl2-rl/**"
+      ],
+      "provenance": [
+        "crates/sparql-conformance/entailment-suite/w3c-owl2-rl/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://www.w3.org/2007/OWL/testsuite/"
+    },
+    {
+      "id": "w3c-sparql11",
+      "license": "LicenseRef-W3C-Test-Suite",
+      "notices": [
+        "third-party/w3c-sparql11/0-W3C-software-document-2015.html",
+        "third-party/w3c-sparql11/1-W3C-test-suites-policy.html",
+        "third-party/w3c-sparql11/2-W3C-test-suite-license.html",
+        "third-party/w3c-sparql11/3-W3C-test-suite-BSD.html",
+        "third-party/w3c-sparql11/4-LicenseRef-W3C-Test-Suite.txt"
+      ],
+      "paths": [
+        "crates/sparql-conformance/suite/w3c-sparql11/**"
+      ],
+      "provenance": [
+        "crates/sparql-conformance/suite/w3c-sparql11/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/rdf-tests"
+    },
+    {
+      "id": "w3c-sparql12",
+      "license": "LicenseRef-W3C-Test-Suite",
+      "notices": [
+        "third-party/w3c-sparql12/0-W3C-software-document-2015.html",
+        "third-party/w3c-sparql12/1-W3C-test-suites-policy.html",
+        "third-party/w3c-sparql12/2-W3C-test-suite-license.html",
+        "third-party/w3c-sparql12/3-W3C-test-suite-BSD.html",
+        "third-party/w3c-sparql12/4-LicenseRef-W3C-Test-Suite.txt"
+      ],
+      "paths": [
+        "crates/sparql-conformance/suite/w3c-sparql12/**"
+      ],
+      "provenance": [
+        "crates/sparql-conformance/suite/w3c-sparql12/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/rdf-tests"
+    },
+    {
+      "id": "wasip2-1.0.4+wasi-0.2.12",
+      "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-APACHE",
+        "dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-Apache-2.0_WITH_LLVM-exception",
+        "dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/bytecodealliance/wasi-rs",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+    },
+    {
+      "id": "wasm-bindgen-0.2.125",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/wasm-bindgen-0.2.125/LICENSE-APACHE",
+        "dependencies/wasm-bindgen-0.2.125/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/wasm-bindgen/wasm-bindgen",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "8ddb3f79143bced6de84270411622a2699cee572fc0875aeaf1e7867cf9fca1a"
+    },
+    {
+      "id": "wasm-bindgen-macro-0.2.125",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/wasm-bindgen-macro-0.2.125/LICENSE-APACHE",
+        "dependencies/wasm-bindgen-macro-0.2.125/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "4e21a184b13fb19e157296e2c46056aec9092264fab83e4ba59e68c61b323c3d"
+    },
+    {
+      "id": "wasm-bindgen-macro-support-0.2.125",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-APACHE",
+        "dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "fecefd9c35bd935a20fc3fc344b5f29138961e4f47fb03297d88f2587afb5ebd"
+    },
+    {
+      "id": "wasm-bindgen-shared-0.2.125",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/wasm-bindgen-shared-0.2.125/LICENSE-APACHE",
+        "dependencies/wasm-bindgen-shared-0.2.125/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "23939e44bb9a5d7576fa2b563dc2e136628f1224e88a8deed09e04858b77871f"
+    },
+    {
+      "id": "windows-link-0.2.1",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/windows-link-0.2.1/license-apache-2.0",
+        "dependencies/windows-link-0.2.1/license-mit"
+      ],
+      "repository": "https://github.com/microsoft/windows-rs",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+    },
+    {
+      "id": "windows-sys-0.61.2",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "dependencies/windows-sys-0.61.2/license-apache-2.0",
+        "dependencies/windows-sys-0.61.2/license-mit"
+      ],
+      "repository": "https://github.com/microsoft/windows-rs",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+    },
+    {
+      "id": "wit-bindgen-0.57.1",
+      "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "notices": [
+        "dependencies/wit-bindgen-0.57.1/LICENSE-APACHE",
+        "dependencies/wit-bindgen-0.57.1/LICENSE-Apache-2.0_WITH_LLVM-exception",
+        "dependencies/wit-bindgen-0.57.1/LICENSE-MIT"
+      ],
+      "repository": "https://github.com/bytecodealliance/wit-bindgen",
+      "scope": "resolved normal/build input, including target-specific alternatives",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "source_checksum": "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+    },
+    {
+      "id": "wycheproof",
+      "license": "Apache-2.0",
+      "notices": [
+        "third-party/wycheproof/0-LICENSE"
+      ],
+      "paths": [
+        "vectors/wycheproof/**"
+      ],
+      "provenance": [
+        "vectors/wycheproof/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/C2SP/wycheproof"
+    },
+    {
+      "id": "yaml-tests",
+      "license": "MIT",
+      "notices": [
+        "third-party/yaml-tests/0-LICENSE"
+      ],
+      "paths": [
+        "vectors/yaml-test-suite/**"
+      ],
+      "provenance": [
+        "vectors/yaml-test-suite/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/yaml/yaml-test-suite/tree/data-2022-01-17"
+    }
+  ],
+  "files": {
+    "CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+    "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+    "NOTICE.txt": "0f19709e7cbb62c28c075f0a5b07d58d9fd6d84349fc783c48af7d55d8c61c5f",
+    "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
+    "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
+    "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/aes-0.9.3/LICENSE-MIT": "25f77efa393854f7c15eaf6a2589a2071db2d7337642742763adb12bdecf0445",
+    "dependencies/aes-gcm-0.11.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/aes-gcm-0.11.1/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+    "dependencies/aho-corasick-1.1.4/COPYING": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+    "dependencies/aho-corasick-1.1.4/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+    "dependencies/block-buffer-0.12.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/block-buffer-0.12.1/LICENSE-MIT": "98181e7249d0c01737645ec982499ce99a0f07eb8f7d625b8840d799d10dbc01",
+    "dependencies/bumpalo-3.20.3/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/bumpalo-3.20.3/LICENSE-MIT": "65f94e99ddaf4f5d1782a6dae23f35d4293a9a01444a13135a6887017d353cee",
+    "dependencies/cfg-if-1.0.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/cfg-if-1.0.4/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+    "dependencies/cipher-0.5.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/cipher-0.5.2/LICENSE-MIT": "950d712c518a02fcb7cff96950aee304a1cc5283361712c980ea21e8d6d669a5",
+    "dependencies/cmov-0.5.4/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "dependencies/cmov-0.5.4/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+    "dependencies/const-oid-0.10.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/const-oid-0.10.2/LICENSE-MIT": "73b9dc2e79c7308998dd30296e073aefaefb944a68fb89aa412c23c0edcabcaa",
+    "dependencies/cpubits-0.1.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/cpubits-0.1.1/LICENSE-MIT": "003736bc98408b53511b9cc8ff5d1af3bf0a8f17d53841cc39d8ab1b96a195b0",
+    "dependencies/cpufeatures-0.3.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/cpufeatures-0.3.0/LICENSE-MIT": "ae9baa7beea910273c2f384c2a6b721fb7bd02bda3436074a1072e4ee689f985",
+    "dependencies/crossbeam-deque-0.8.6/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/crossbeam-deque-0.8.6/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+    "dependencies/crossbeam-epoch-0.9.18/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/crossbeam-epoch-0.9.18/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+    "dependencies/crossbeam-utils-0.8.21/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/crossbeam-utils-0.8.21/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+    "dependencies/crypto-common-0.2.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/crypto-common-0.2.2/LICENSE-MIT": "d2e7ec5355c96eeade56b09187ceb48a6a30299da3ce7531a66d3d11405ab963",
+    "dependencies/ctr-0.10.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/ctr-0.10.1/LICENSE-MIT": "63af4bea227c94d021e99427f6ca3a4b8efddadcca93ab6130f708cf6138cf68",
+    "dependencies/ctutils-0.4.2/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "dependencies/ctutils-0.4.2/LICENSE-MIT": "91585c36e4fb9ab4ca0d3dfac5d66d3c0c62cc51f640a0e1196542daf2267eae",
+    "dependencies/digest-0.11.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/digest-0.11.3/LICENSE-MIT": "af59cea35d7f5e2777a713b8d155d65efa2c339eb43f3c14e868c6ac8506edad",
+    "dependencies/either-1.16.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/either-1.16.0/LICENSE-MIT": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545",
+    "dependencies/fastrand-2.4.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/fastrand-2.4.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/getrandom-0.3.4/LICENSE-APACHE": "aaff376532ea30a0cd5330b9502ad4a4c8bf769c539c87ffe78819d188a18ebf",
+    "dependencies/getrandom-0.3.4/LICENSE-MIT": "29e9fe5074bd27e0e5d5d110394fbbcd841baee2651a3c4b4560a632702cede4",
+    "dependencies/ghash-0.6.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/ghash-0.6.0/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+    "dependencies/hashbrown-0.17.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/hashbrown-0.17.1/LICENSE-MIT": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+    "dependencies/heck-0.5.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/heck-0.5.0/LICENSE-MIT": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0",
+    "dependencies/hybrid-array-0.4.15/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/hybrid-array-0.4.15/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+    "dependencies/inout-0.2.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/inout-0.2.2/LICENSE-MIT": "a07fcacc3c60de4dc0fab10ac9d6aaba7379974e28451c99da7f7df09c25b28c",
+    "dependencies/libc-0.2.186/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+    "dependencies/libc-0.2.186/LICENSE-MIT": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e",
+    "dependencies/memchr-2.8.2/COPYING": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+    "dependencies/memchr-2.8.2/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+    "dependencies/once_cell-1.21.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/once_cell-1.21.4/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/polyval-0.7.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/polyval-0.7.3/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+    "dependencies/portable-atomic-1.13.1/LICENSE-APACHE": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+    "dependencies/portable-atomic-1.13.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/proc-macro2-1.0.106/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+    "dependencies/proc-macro2-1.0.106/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/pyo3-0.29.0/LICENSE-APACHE": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+    "dependencies/pyo3-0.29.0/LICENSE-MIT": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+    "dependencies/pyo3-0.29.0/pyo3-runtime/LICENSE-APACHE": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+    "dependencies/pyo3-0.29.0/pyo3-runtime/LICENSE-MIT": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+    "dependencies/pyo3-build-config-0.29.0/LICENSE-APACHE": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+    "dependencies/pyo3-build-config-0.29.0/LICENSE-MIT": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+    "dependencies/pyo3-ffi-0.29.0/LICENSE-APACHE": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+    "dependencies/pyo3-ffi-0.29.0/LICENSE-MIT": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+    "dependencies/pyo3-macros-0.29.0/LICENSE-APACHE": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+    "dependencies/pyo3-macros-0.29.0/LICENSE-MIT": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+    "dependencies/pyo3-macros-backend-0.29.0/LICENSE-APACHE": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+    "dependencies/pyo3-macros-backend-0.29.0/LICENSE-MIT": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+    "dependencies/quote-1.0.46/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+    "dependencies/quote-1.0.46/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/r-efi-5.3.0/AUTHORS": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7",
+    "dependencies/rayon-1.12.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/rayon-1.12.0/LICENSE-MIT": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+    "dependencies/rayon-core-1.13.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/rayon-core-1.13.0/LICENSE-MIT": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+    "dependencies/regex-1.12.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/regex-1.12.4/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+    "dependencies/regex-automata-0.4.14/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/regex-automata-0.4.14/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+    "dependencies/regex-syntax-0.8.11/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/regex-syntax-0.8.11/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+    "dependencies/regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE": "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3",
+    "dependencies/rustversion-1.0.22/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+    "dependencies/rustversion-1.0.22/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/sha2-0.11.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/sha2-0.11.0/LICENSE-MIT": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25",
+    "dependencies/structured-zstd-0.0.49/LICENSE": "5150a07aead61dc34bc33bca091dd91a7fbe1c6c0458da14a4d72030abe30b00",
+    "dependencies/syn-2.0.118/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+    "dependencies/syn-2.0.118/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/target-lexicon-0.13.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+    "dependencies/twox-hash-2.1.2/LICENSE.txt": "f59bcb1c02654665f78a5f290bae76b6358137675f6459f51e6d474a4623d8ea",
+    "dependencies/typenum-1.20.1/LICENSE": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a",
+    "dependencies/typenum-1.20.1/LICENSE-APACHE": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406",
+    "dependencies/typenum-1.20.1/LICENSE-MIT": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f",
+    "dependencies/unicode-ident-1.0.24/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+    "dependencies/unicode-ident-1.0.24/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/unicode-ident-1.0.24/LICENSE-UNICODE": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
+    "dependencies/universal-hash-0.6.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+    "dependencies/universal-hash-0.6.1/LICENSE-MIT": "efa52eb70a774b62c50cf50f5e57e2625c29d375d09b91132f4f020e47b9944e",
+    "dependencies/visual-hashing-1.0.0/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "dependencies/visual-hashing-1.0.0/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+    "dependencies/visual-hashing-1.0.0/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+    "dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+    "dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "dependencies/wasm-bindgen-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/wasm-bindgen-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+    "dependencies/wasm-bindgen-macro-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/wasm-bindgen-macro-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+    "dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+    "dependencies/wasm-bindgen-shared-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/wasm-bindgen-shared-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+    "dependencies/windows-link-0.2.1/license-apache-2.0": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+    "dependencies/windows-link-0.2.1/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+    "dependencies/windows-sys-0.61.2/license-apache-2.0": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+    "dependencies/windows-sys-0.61.2/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+    "dependencies/wit-bindgen-0.57.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "dependencies/wit-bindgen-0.57.1/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+    "dependencies/wit-bindgen-0.57.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "third-party/csvw/0-W3C-document-license.html": "1ce63a482b3fe34cf19bab6846d179f7b5a5e0fdf1e995c43031962591713d55",
+    "third-party/csvw/1-LICENSE.md": "e7b710c5c57e14969bfc5ea371f0859769e11016cd9d99e6c6f6def9dddb535a",
+    "third-party/json-tests/0-LICENSE": "8bd0e0578be788c617ea01d18b2a8146e3746ae50bddadc65a5f9d3aad08ad49",
+    "third-party/jsonld-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/jsonld-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+    "third-party/jsonld-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+    "third-party/jsonld-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+    "third-party/jsonld-w3c/4-LICENSE.md": "a13d29acf165699ae8c57ef9eac2f489560d2753dd84a684c735a4c7c7a15d64",
+    "third-party/jsonschema-metaschemas/0-BSD-3-Clause.txt": "d57ac1ad2022def8ddbf253b57452abf7a713465e494443cf52cc1bbd721b323",
+    "third-party/jsonschema-suite/0-MIT.txt": "837402bd25fad9b704265801ca3f92566a98157c1f9a7acd6f446299ba1c305a",
+    "third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
+    "third-party/obographs/0-BSD-3-Clause.txt": "f24d1328dbfffe7bf66aa877957db75e60629358357d8c366ccab616fef487ab",
+    "third-party/rdf-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/rdf-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+    "third-party/rdf-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+    "third-party/rdf-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+    "third-party/rdf-w3c/4-LICENSE": "7fa36904d5d6d32848307af7b22d416b708aaa0b98f5c719b26adb5ed3594b2a",
+    "third-party/rdfc/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727",
+    "third-party/rdflib-tests/0-LICENSE": "53a705e51bfd199e8c97d0442376cb4bbd4ffcf13ba4f2c4c2794211400e4012",
+    "third-party/shacl-af/0-LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "third-party/shacl-af/1-README.md": "aefec7f960b49a18e7ffb2667d31cdae3d40e07acd0743a72c0849c1a7e4b7b6",
+    "third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
+    "third-party/shacl12/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/shacl12/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
+    "third-party/shex-tests/0-shexTest-v2.1.0-package.json": "02890e50cedec0c80de6d1fd7a0ec84115c683a6eeb9594bbb7c32125a1b0d6f",
+    "third-party/shex-tests/1-MIT-permission.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "third-party/sparql-cdt/0-LICENSE": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+    "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
+    "third-party/w3c-owl2-rl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/w3c-owl2-rl/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+    "third-party/w3c-owl2-rl/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+    "third-party/w3c-owl2-rl/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+    "third-party/w3c-owl2-rl/4-LicenseRef-W3C-Test-Suite.txt": "46d9012081a70ce9045197471f767be2577aa819d6bacab2ca72a43667cdb157",
+    "third-party/w3c-owl2/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/w3c-owl2/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+    "third-party/w3c-owl2/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+    "third-party/w3c-owl2/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+    "third-party/w3c-owl2/4-LicenseRef-W3C-Test-Suite.txt": "46d9012081a70ce9045197471f767be2577aa819d6bacab2ca72a43667cdb157",
+    "third-party/w3c-sparql11/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/w3c-sparql11/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+    "third-party/w3c-sparql11/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+    "third-party/w3c-sparql11/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+    "third-party/w3c-sparql11/4-LicenseRef-W3C-Test-Suite.txt": "13819bd3f7e3d2ea60ec7e602c4aa7bfe294fb6280949bf51d9a8d9bdc65639e",
+    "third-party/w3c-sparql12/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/w3c-sparql12/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+    "third-party/w3c-sparql12/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+    "third-party/w3c-sparql12/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+    "third-party/w3c-sparql12/4-LicenseRef-W3C-Test-Suite.txt": "13819bd3f7e3d2ea60ec7e602c4aa7bfe294fb6280949bf51d9a8d9bdc65639e",
+    "third-party/wycheproof/0-LICENSE": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+    "third-party/yaml-tests/0-LICENSE": "c9562189164244554a69ab3f29d2d93ed9492c165723aaaa5fffc932cdbbfc85"
+  },
+  "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "profile": "python",
+  "schema": 1
+}

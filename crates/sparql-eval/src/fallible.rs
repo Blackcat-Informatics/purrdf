@@ -34,6 +34,11 @@ use crate::governed::PartialAnswers;
 pub type FallibleSparqlResult<OperationalError, Evidence> =
     Result<CompleteSparqlResult<Evidence>, FallibleSparqlError<OperationalError, Evidence>>;
 
+/// A scoped visitor value and its exact final operational receipt. The visitor
+/// output may be published only after this complete read boundary returns `Ok`.
+pub type FallibleScopedResult<R, OperationalError, Evidence> =
+    Result<(R, Evidence), FallibleSparqlError<OperationalError, Evidence>>;
+
 /// A fully materialized SPARQL result whose backing view reached a final ready
 /// checkpoint.
 ///
@@ -108,6 +113,35 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
 }
 
 impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence> {
+    /// Attach an outer operation receipt without changing the outcome or root cause.
+    pub(crate) fn map_evidence<V>(
+        self,
+        map: impl FnOnce(Evidence) -> V,
+    ) -> FallibleSparqlError<OperationalError, V> {
+        match self {
+            Self::Query {
+                diagnostic,
+                evidence,
+            } => FallibleSparqlError::Query {
+                diagnostic,
+                evidence: map(evidence),
+            },
+            Self::Operational { error, evidence } => FallibleSparqlError::Operational {
+                error,
+                evidence: map(evidence),
+            },
+            Self::BudgetExhausted {
+                tripped,
+                partial,
+                evidence,
+            } => FallibleSparqlError::BudgetExhausted {
+                tripped,
+                partial,
+                evidence: map(evidence),
+            },
+        }
+    }
+
     /// Borrow the deterministic evidence carried by every non-complete outcome.
     #[must_use]
     pub const fn evidence(&self) -> &Evidence {

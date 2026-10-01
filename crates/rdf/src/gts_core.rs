@@ -101,7 +101,7 @@ fn segment_records(graph: &Graph) -> Vec<RdfSegmentRecord> {
         .map(|index| {
             let streamable = graph.segment_streamable.get(index);
             RdfSegmentRecord {
-                index,
+                index: index as u64,
                 head: graph.segment_heads.get(index).map(|head| hex::encode(head)),
                 profile: graph.segment_profiles.get(index).cloned(),
                 claimed_streamable: streamable.is_some_and(|info| info.claimed),
@@ -131,7 +131,7 @@ fn blob_records(graph: &Graph) -> Vec<RdfBlobRecord> {
                 // forces a lazy decode. A transformed (Lazy) blob — potentially
                 // multi-terabyte — therefore reports `None` rather than decoding
                 // the whole payload just to learn its length.
-                decoded_len: entry.cached_bytes().map(<[u8]>::len),
+                decoded_len: entry.cached_bytes().map(|bytes| bytes.len() as u64),
                 metadata,
                 origin: origin.clone(),
             }

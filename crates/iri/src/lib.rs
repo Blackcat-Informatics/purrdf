@@ -174,4 +174,4 @@ pub use curie::{
 };
 pub use error::{IriError, Result};
 pub use parse::{Iri, is_absolute, parse, parse_uri};
-pub use pos::{LineIndex, Position};
+pub use pos::{LineIndex, Position, PositionError};

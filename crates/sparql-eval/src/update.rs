@@ -1156,7 +1156,7 @@ fn instantiate_quad_with_default<D: purrdf_core::DatasetView + Sync>(
         Some(NamedNodePattern::NamedNode(n)) => Some(named_node_to_value(n)),
         Some(NamedNodePattern::Variable(_)) => {
             let term = ordinal.graph.and_then(|c| row[c])?;
-            let value = ctx.scratch.value_of(ctx.dataset, term);
+            let value = ctx.scratch.try_value_of(ctx.dataset, term).ok()?;
             // A graph name must be an IRI; a non-IRI binding makes the quad
             // ill-formed → skip.
             if !matches!(value, TermValue::Iri(_)) {

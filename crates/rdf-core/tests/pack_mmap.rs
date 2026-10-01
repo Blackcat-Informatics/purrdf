@@ -42,6 +42,7 @@ use purrdf_core::{
 /// (never by minting).
 fn id_of<V: DatasetView>(v: &V, value: &TermValue) -> V::Id {
     v.term_id_by_value(value)
+        .expect("fixture reverse lookup succeeds")
         .unwrap_or_else(|| panic!("value {value:?} must be interned"))
 }
 

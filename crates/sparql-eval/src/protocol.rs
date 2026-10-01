@@ -1246,7 +1246,11 @@ impl From<&EvalError> for FailureCode {
             EvalError::ServiceHostFault { .. } => Self::HostFault,
             EvalError::StackExhausted { .. } => Self::EvaluationStackExhausted,
             EvalError::HostStackExhausted { .. } => Self::HostStackExhausted,
-            EvalError::Dataset(_)
+            EvalError::SourceRead(_)
+            | EvalError::ExchangeIdExhausted
+            | EvalError::WorkspaceUnpriced(_)
+            | EvalError::WorkspaceBoundOverflow
+            | EvalError::Dataset(_)
             | EvalError::Internal(_)
             | EvalError::Data(_)
             | EvalError::Function(_)
@@ -1294,6 +1298,7 @@ impl From<&LoadError> for FailureCode {
 impl From<&RemoteError> for FailureCode {
     fn from(error: &RemoteError) -> Self {
         match error {
+            RemoteError::SourceRead(_) | RemoteError::ExchangeIdExhausted => Self::Evaluation,
             RemoteError::Transport(_) | RemoteError::Decode(_) | RemoteError::Disabled => {
                 Self::ServiceFailed
             }

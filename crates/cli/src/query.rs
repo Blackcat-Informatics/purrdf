@@ -248,7 +248,10 @@ fn engine_options(env: &ExtensionEnv) -> EngineQueryOptions<'_> {
 impl ViewOp for QueryOp<'_> {
     type Output = SparqlResult;
 
-    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<SparqlResult, CliError> {
+    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        self,
+        view: &D,
+    ) -> Result<SparqlResult, CliError> {
         let (relations, prepared) =
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
@@ -306,7 +309,10 @@ struct GovernedQueryOp<'a> {
 impl ViewOp for GovernedQueryOp<'_> {
     type Output = GovernedOutcome;
 
-    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<GovernedOutcome, CliError> {
+    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        self,
+        view: &D,
+    ) -> Result<GovernedOutcome, CliError> {
         let governors: QueryGovernors = self.flags.to_governors()?;
         let (relations, prepared) =
             self.relations
@@ -351,7 +357,10 @@ struct ExplainOp<'a> {
 impl ViewOp for ExplainOp<'_> {
     type Output = QueryExplanation;
 
-    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<QueryExplanation, CliError> {
+    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        self,
+        view: &D,
+    ) -> Result<QueryExplanation, CliError> {
         // Routed through the one options-carrying explain entry rather than a
         // narrower per-registry explain entry (none exist any more; see
         // `NativeSparqlEngine::explain_query_with_options`'s documentation): it is the
@@ -687,7 +696,10 @@ impl ViewOp for EntailedQueryOp<'_> {
     /// query was read. The two registries agree on everything that parse decides — the
     /// call IRIs, their arity, their modes — and differ only in the edges the second one
     /// walks, which is exactly the difference this pairing exists to introduce.
-    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        self,
+        view: &D,
+    ) -> Result<Self::Output, CliError> {
         let specs = self.relations.specs;
         let admitted = path_relation::build_registry(view, specs)?;
         let rebuild = |closure: &purrdf_core::RdfDataset| {

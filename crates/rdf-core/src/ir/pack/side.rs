@@ -83,8 +83,8 @@
 
 use std::cmp::Ordering;
 
+use crate::TermLookupError;
 use crate::dataset_view::DatasetView;
-use crate::ir::composite::owned_value;
 use crate::{RdfStoreCapabilities, TermValue};
 
 use super::bits::{IntVector, IntVectorRef, PackBitsError, read_header_u64};
@@ -248,94 +248,115 @@ impl SideTables {
     /// Panics (via [`resolve_any`]'s `expect`) if `dict` was not built from
     /// `view` — a caller-side contract violation, not a data-dependent error.
     #[must_use]
-    pub fn encode<D: DatasetView>(dict: &PackDict, view: &D) -> Self {
-        let mut reifier_rows: Vec<(PackTermId, PackTermId, PackTermId)> = view
-            .reifier_quads()
-            .map(|binding| {
-                let r = resolve_any(dict, &owned_value(view, binding.s));
-                let t = resolve_any(dict, &owned_value(view, binding.o));
-                let g = binding
-                    .g
-                    .map_or(0, |g| resolve_any(dict, &owned_value(view, g)));
-                (r, t, g)
-            })
-            .collect();
-        reifier_rows.sort_unstable();
-        reifier_rows.dedup();
+    pub fn encode<D: DatasetView<ReadError = std::convert::Infallible>>(
+        dict: &PackDict,
+        view: &D,
+    ) -> Self {
+        Self::try_encode(dict, view).expect("a validated resident view resolves its own terms")
+    }
 
-        let mut annotation_rows: Vec<(PackTermId, PackTermId, PackTermId, PackTermId)> = view
-            .annotation_quads()
-            .map(|annotation| {
-                let r = resolve_any(dict, &owned_value(view, annotation.s));
-                let p = resolve_any(dict, &owned_value(view, annotation.p));
-                let o = resolve_any(dict, &owned_value(view, annotation.o));
-                let g = annotation
-                    .g
-                    .map_or(0, |g| resolve_any(dict, &owned_value(view, g)));
-                (r, p, o, g)
-            })
-            .collect();
-        annotation_rows.sort_unstable();
-        annotation_rows.dedup();
+    /// Encode a read session without publishing a partial source.
+    ///
+    /// # Errors
+    /// Returns the source's typed read refusal or an invalid source term.
+    pub fn try_encode<D: DatasetView>(
+        dict: &PackDict,
+        view: &D,
+    ) -> Result<Self, TermLookupError<D::ReadError>> {
+        view.checked_read(|view| {
+            let mut reifier_rows: Vec<(PackTermId, PackTermId, PackTermId)> = view
+                .reifier_quads()
+                .map(|binding| {
+                    let r = resolve_any(dict, &view.term_value(binding.s)?);
+                    let t = resolve_any(dict, &view.term_value(binding.o)?);
+                    let g = binding
+                        .g
+                        .map(|g| view.term_value(g).map(|value| resolve_any(dict, &value)))
+                        .transpose()?
+                        .unwrap_or(0);
+                    Ok((r, t, g))
+                })
+                .collect::<Result<_, TermLookupError<D::ReadError>>>()?;
+            reifier_rows.sort_unstable();
+            reifier_rows.dedup();
 
-        // The virtual `reifies` predicate: present iff at least one reifier row
-        // exists (see the [`RDF_REIFIES`] doc comment).
-        let reifies_predicate = if reifier_rows.is_empty() {
-            0
-        } else {
-            resolve_any(dict, &TermValue::Iri(RDF_REIFIES.to_owned()))
-        };
+            let mut annotation_rows: Vec<(PackTermId, PackTermId, PackTermId, PackTermId)> = view
+                .annotation_quads()
+                .map(|annotation| {
+                    let r = resolve_any(dict, &view.term_value(annotation.s)?);
+                    let p = resolve_any(dict, &view.term_value(annotation.p)?);
+                    let o = resolve_any(dict, &view.term_value(annotation.o)?);
+                    let g = annotation
+                        .g
+                        .map(|g| view.term_value(g).map(|value| resolve_any(dict, &value)))
+                        .transpose()?
+                        .unwrap_or(0);
+                    Ok((r, p, o, g))
+                })
+                .collect::<Result<_, TermLookupError<D::ReadError>>>()?;
+            annotation_rows.sort_unstable();
+            annotation_rows.dedup();
 
-        // CSR-style per-reifier grouping: `annotation_rows` is already sorted by
-        // its first (`reifier_uni`) key, so one linear pass finds every group's
-        // extent.
-        let mut local_reifier: Vec<u64> = Vec::new();
-        let mut offsets: Vec<u64> = Vec::new();
-        let mut counts: Vec<u64> = Vec::new();
-        let mut i = 0usize;
-        while i < annotation_rows.len() {
-            let r = annotation_rows[i].0;
-            let start = i;
-            while i < annotation_rows.len() && annotation_rows[i].0 == r {
-                i += 1;
+            // The virtual `reifies` predicate: present iff at least one reifier row
+            // exists (see the [`RDF_REIFIES`] doc comment).
+            let reifies_predicate = if reifier_rows.is_empty() {
+                0
+            } else {
+                resolve_any(dict, &TermValue::Iri(RDF_REIFIES.to_owned()))
+            };
+
+            // CSR-style per-reifier grouping: `annotation_rows` is already sorted by
+            // its first (`reifier_uni`) key, so one linear pass finds every group's
+            // extent.
+            let mut local_reifier: Vec<u64> = Vec::new();
+            let mut offsets: Vec<u64> = Vec::new();
+            let mut counts: Vec<u64> = Vec::new();
+            let mut i = 0usize;
+            while i < annotation_rows.len() {
+                let r = annotation_rows[i].0;
+                let start = i;
+                while i < annotation_rows.len() && annotation_rows[i].0 == r {
+                    i += 1;
+                }
+                local_reifier.push(r);
+                offsets.push(start as u64);
+                counts.push((i - start) as u64);
             }
-            local_reifier.push(r);
-            offsets.push(start as u64);
-            counts.push((i - start) as u64);
-        }
 
-        let mut out = Vec::new();
-        out.push(SIDE_FORMAT_VERSION);
-        out.extend_from_slice(&reifies_predicate.to_le_bytes());
-        out.extend_from_slice(
-            &IntVector::from_values(&reifier_rows.iter().map(|r| r.0).collect::<Vec<_>>())
-                .to_bytes(),
-        );
-        out.extend_from_slice(
-            &IntVector::from_values(&reifier_rows.iter().map(|r| r.1).collect::<Vec<_>>())
-                .to_bytes(),
-        );
-        out.extend_from_slice(
-            &IntVector::from_values(&reifier_rows.iter().map(|r| r.2).collect::<Vec<_>>())
-                .to_bytes(),
-        );
-        out.extend_from_slice(&IntVector::from_values(&local_reifier).to_bytes());
-        out.extend_from_slice(&IntVector::from_values(&offsets).to_bytes());
-        out.extend_from_slice(&IntVector::from_values(&counts).to_bytes());
-        out.extend_from_slice(
-            &IntVector::from_values(&annotation_rows.iter().map(|r| r.1).collect::<Vec<_>>())
-                .to_bytes(),
-        );
-        out.extend_from_slice(
-            &IntVector::from_values(&annotation_rows.iter().map(|r| r.2).collect::<Vec<_>>())
-                .to_bytes(),
-        );
-        out.extend_from_slice(
-            &IntVector::from_values(&annotation_rows.iter().map(|r| r.3).collect::<Vec<_>>())
-                .to_bytes(),
-        );
+            let mut out = Vec::new();
+            out.push(SIDE_FORMAT_VERSION);
+            out.extend_from_slice(&reifies_predicate.to_le_bytes());
+            out.extend_from_slice(
+                &IntVector::from_values(&reifier_rows.iter().map(|r| r.0).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(
+                &IntVector::from_values(&reifier_rows.iter().map(|r| r.1).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(
+                &IntVector::from_values(&reifier_rows.iter().map(|r| r.2).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(&IntVector::from_values(&local_reifier).to_bytes());
+            out.extend_from_slice(&IntVector::from_values(&offsets).to_bytes());
+            out.extend_from_slice(&IntVector::from_values(&counts).to_bytes());
+            out.extend_from_slice(
+                &IntVector::from_values(&annotation_rows.iter().map(|r| r.1).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(
+                &IntVector::from_values(&annotation_rows.iter().map(|r| r.2).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(
+                &IntVector::from_values(&annotation_rows.iter().map(|r| r.3).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
 
-        Self { bytes: out }
+            Ok(Self { bytes: out })
+        })
+        .map_err(TermLookupError::Read)?
     }
 
     /// The serialized byte buffer [`SideTablesRef::from_bytes`] reads.
@@ -838,7 +859,10 @@ mod tests {
         let side = SideTablesRef::from_bytes(&bytes).expect("opens");
 
         let r_value = iri("r");
-        let r_dataset_id = dataset.term_id_by_value(&r_value).expect("interned");
+        let r_dataset_id = dataset
+            .as_ref()
+            .term_id_by_value(&r_value)
+            .expect("interned");
         let r_pack_id = dict.id_by_value(&r_value).expect("in dict");
 
         let expected: crate::FastSet<(TermValue, TermValue, Option<TermValue>)> = dataset

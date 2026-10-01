@@ -2943,7 +2943,10 @@ pub(crate) fn ground_term_from_id<D: DatasetView>(
     id: D::Id,
 ) -> Result<GroundTerm, RdfDiagnostic> {
     ground_term_over(id, |id| {
-        Ok(match dataset.resolve(id) {
+        let guard = dataset.resolve(id).map_err(|error| {
+            RdfDiagnostic::error("native-sparql-source-read", error.to_string())
+        })?;
+        Ok(match purrdf_core::TermGuard::term(&guard) {
             TermRef::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node(iri)?)),
             // Qualified exactly as `ground_term_from_value` qualifies a `TermValue::Blank`,
             // because the two doors must produce the same algebra term for the same
@@ -2959,7 +2962,10 @@ pub(crate) fn ground_term_from_id<D: DatasetView>(
                 language,
                 direction,
             } => {
-                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                let datatype_guard = dataset.resolve(datatype).map_err(|error| {
+                    RdfDiagnostic::error("native-sparql-source-read", error.to_string())
+                })?;
+                let TermRef::Iri(datatype) = purrdf_core::TermGuard::term(&datatype_guard) else {
                     return Err(RdfDiagnostic::error(
                         "native-sparql-subst-literal-datatype",
                         "a literal's datatype must be an IRI".to_owned(),
@@ -3556,7 +3562,9 @@ mod walk_tests {
         dataset: &D,
         id: D::Id,
     ) -> Result<GroundTerm, RdfDiagnostic> {
-        match dataset.resolve(id) {
+        use purrdf_core::dataset_view::TermGuard as _;
+        let guard = dataset.resolve(id).unwrap();
+        match guard.term() {
             TermRef::Iri(iri) => Ok(GroundTerm::NamedNode(node(iri)?)),
             TermRef::Blank { label, scope } => Ok(GroundTerm::BlankNode(BlankNode::new(
                 scope.qualify_label(label).into_owned(),
@@ -3567,7 +3575,8 @@ mod walk_tests {
                 language,
                 direction,
             } => {
-                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                let datatype_guard = dataset.resolve(datatype).unwrap();
+                let TermRef::Iri(datatype) = datatype_guard.term() else {
                     return Err(RdfDiagnostic::error(
                         "native-sparql-subst-literal-datatype",
                         "a literal's datatype must be an IRI".to_owned(),

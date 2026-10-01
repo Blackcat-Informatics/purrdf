@@ -48,7 +48,7 @@ pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
 /// [`FixedState`](purrdf_hash::fixed::FixedState) hash, so it is stable within
 /// one build and never persisted.
 #[inline]
-pub(crate) fn stats_fingerprint(quads: usize, terms: usize) -> u64 {
+pub(crate) fn stats_fingerprint(quads: u64, terms: u64) -> u64 {
     use core::hash::BuildHasher as _;
     FastHasher::new().hash_one((quads, terms))
 }

@@ -522,6 +522,10 @@ source on every run.
 | `b"purrdf-json-profile-v1"` | `PROFILE_DOMAIN` | `crates/json/src/profile.rs` |
 | `b"purrdf-owl-dl-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-owl-dl-proof-v3"` | `PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
+| `b"purrdf-segmented-block-v1\0"` | `SEGMENTED_BLOCK_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
+| `b"purrdf-segmented-node-v1\0"` | `SEGMENTED_NODE_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
+| `b"purrdf-segmented-requests-v1\0"` | `SEGMENTED_REQUESTS_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
+| `b"purrdf-segmented-snapshot-v1\0"` | `SEGMENTED_SNAPSHOT_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-shapes/product/class-catalog"` | `CLASS_CATALOG_DOMAIN` | `crates/shapes/src/product/identity.rs` |
 | `b"purrdf-shapes/schema-compilation-key/v1"` | `SCHEMA_KEY_SALT` | `crates/shapes/src/json_schema.rs` |
 | `b"purrdf-sparql-eval/aggregate-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/agg_fn.rs` |

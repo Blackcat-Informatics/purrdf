@@ -150,7 +150,10 @@ fn assert_narrowed_equals_scan<V: DatasetView>(view: &V, label: &str) {
 
     let mut reached = 0usize;
     for name in TERM_NAMES {
-        let Some(probe) = view.term_id_by_value(&iri(name)) else {
+        let Some(probe) = view
+            .term_id_by_value(&iri(name))
+            .expect("fixture reverse lookup succeeds")
+        else {
             continue;
         };
         let expected: Vec<ValueQuad> = view
@@ -181,6 +184,7 @@ fn assert_narrowed_equals_scan<V: DatasetView>(view: &V, label: &str) {
     // the search lands mid-table rather than at either end.
     let bystander = view
         .term_id_by_value(&iri("not-a-reifier"))
+        .expect("fixture reverse lookup succeeds")
         .expect("bystander is interned");
     assert_eq!(
         view.reifier_quads_of(bystander).count(),
@@ -232,7 +236,10 @@ fn paged_dataset_composes_one_reifiers_rows_across_pages() {
     let paged =
         PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(build_split_pages())))
             .expect("pages seal");
-    let r_a = paged.term_id_by_value(&iri("rA")).expect("rA interned");
+    let r_a = paged
+        .term_id_by_value(&iri("rA"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("rA interned");
     let mut rows: Vec<ValueQuad> = paged
         .reifier_quads_of(r_a)
         .map(|q| value_quad(&paged, q))

@@ -721,9 +721,11 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         "SELECT ?o WHERE { GRAPH <https://example.org/page/0> { ?s <https://example.org/p> ?o } }";
     let predicate_id = paged
         .term_id_by_value(&TermValue::iri("https://example.org/p"))
+        .unwrap_or_else(|error| match error {})
         .ok_or_else(|| "the single-graph query's predicate is not interned".to_owned())?;
     let graph_id = paged
         .term_id_by_value(&TermValue::iri("https://example.org/page/0"))
+        .unwrap_or_else(|error| match error {})
         .ok_or_else(|| "the single-graph query's graph is not interned".to_owned())?;
     let predicted = paged
         .pages_for_pattern(None, Some(predicate_id), None, GraphMatch::Named(graph_id))
@@ -788,7 +790,7 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
     // rather than about this query, and is pinned by name in the paged backend's own
     // tests.
     let retained = paged.retain_graph(graph_id);
-    let retained_pages = retained.page_count() as u64;
+    let retained_pages = retained.page_count();
     if retained_pages >= profile.paged_pages as u64 {
         return Err(format!(
             "retaining the single-graph pages kept {retained_pages} of {} pages: an eviction \

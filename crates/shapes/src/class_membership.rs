@@ -25,7 +25,7 @@ use std::sync::{Arc, OnceLock};
 use ::purrdf::ir::QuadProbePlan;
 use ::purrdf::{
     DatasetView, FastMap, FastSet, GraphMatch, QuadIds, RdfDataset, RdfStoreCapabilities, SmallVec,
-    TermId, TermRef, TermValue,
+    TermId, TermValue,
 };
 
 use crate::model::{rdf, rdfs};
@@ -696,6 +696,11 @@ impl crate::sparql::FocusGraphSource for ClassMembershipView {
 
 impl DatasetView for ClassMembershipView {
     type Id = TermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = purrdf_core::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = QuadProbePlan;
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -705,8 +710,8 @@ impl DatasetView for ClassMembershipView {
     }
 
     #[inline]
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        self.base.resolve(id)
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok(self.base.resolve_term(id))
     }
 
     fn quads_for_pattern(
@@ -722,7 +727,7 @@ impl DatasetView for ClassMembershipView {
     }
 
     #[inline]
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
         self.base.term_id_by_value(value)
     }
 
@@ -731,7 +736,7 @@ impl DatasetView for ClassMembershipView {
         self.base.capabilities()
     }
 
-    fn len_hint(&self) -> Option<usize> {
+    fn len_hint(&self) -> Option<u64> {
         if self.rdf_type.is_none() || self.index().is_none() {
             self.base.len_hint()
         } else {
@@ -769,20 +774,25 @@ impl DatasetView for ClassMembershipView {
         p: Option<TermId>,
         o: Option<TermId>,
         g: GraphMatch,
-    ) -> usize {
-        let asserted = self.base.cardinality_estimate(s, p, o, g);
-        let can_match_virtual = !matches!(g, GraphMatch::Named(_))
-            && self
-                .rdf_type
-                .is_some_and(|rdf_type| p.is_none_or(|bound| bound == rdf_type));
-        if !can_match_virtual {
-            return asserted;
+    ) -> u64 {
+        {
+            let asserted = self.base.cardinality_estimate(s, p, o, g);
+            let can_match_virtual = !matches!(g, GraphMatch::Named(_))
+                && self
+                    .rdf_type
+                    .is_some_and(|rdf_type| p.is_none_or(|bound| bound == rdf_type));
+            if !can_match_virtual {
+                return asserted;
+            }
+            asserted.saturating_add(
+                u64::try_from(self.derived_cardinality_upper_bound(s, o))
+                    .expect("resident row bound fits u64"),
+            )
         }
-        asserted.saturating_add(self.derived_cardinality_upper_bound(s, o))
     }
 
     #[inline]
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         self.base.term_count()
     }
 
@@ -871,7 +881,11 @@ fn build_index(
     // irrelevant to this view and must not inflate the compact index.
     let mut ancestry: FastMap<TermId, Box<[TermId]>> = FastMap::default();
     let mut retained_classes = FastSet::default();
-    let mut marks = vec![0u32; dataset.term_count()];
+    let mut marks = vec![
+        0u32;
+        usize::try_from(dataset.term_count())
+            .expect("admitted local term count fits usize")
+    ];
     let mut generation = 0u32;
     let mut frontier = Vec::new();
     for &class in &asserted_type_classes {
@@ -1188,7 +1202,10 @@ mod tests {
             view.quads().collect::<Vec<_>>(),
             dataset.quads().collect::<Vec<_>>()
         );
-        assert_eq!(view.len_hint(), Some(dataset.quad_count()));
+        assert_eq!(
+            view.len_hint(),
+            Some(u64::try_from(dataset.quad_count()).unwrap())
+        );
         assert_eq!(view.build_count(), 1);
     }
 
@@ -1352,12 +1369,15 @@ mod tests {
 
         let rdf_type = forward
             .term_id_by_value(&TermValue::iri(rdf::TYPE))
+            .expect("resident dictionary read")
             .expect("rdf:type is interned");
         let top = forward
             .term_id_by_value(&TermValue::iri(format!("{EX}Top")))
+            .expect("resident dictionary read")
             .expect("top is interned");
         let subject = forward
             .term_id_by_value(&TermValue::iri(format!("{EX}subject")))
+            .expect("resident dictionary read")
             .expect("subject is interned");
         assert_eq!(
             forward
@@ -1532,7 +1552,7 @@ mod tests {
                             expected.dedup();
                             assert_eq!(actual_keys, expected, "probe differed from eager closure");
                             assert!(
-                                view.cardinality_estimate(s, p, o, g) >= actual_len,
+                                view.cardinality_estimate(s, p, o, g) >= u64::try_from(actual_len).unwrap(),
                                 "cardinality estimate must be a sound upper bound"
                             );
                         }

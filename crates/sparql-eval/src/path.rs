@@ -103,7 +103,7 @@ fn resolve_negated<D: DatasetView + Sync>(
         } else {
             forward.get_or_insert_with(BTreeSet::new)
         };
-        if let Some(id) = dataset.term_id_by_value(&named_node_to_value(&element.predicate)) {
+        if let Some(id) = dataset.term_id_if_ready(&named_node_to_value(&element.predicate)) {
             target.insert(id);
         }
     }
@@ -188,7 +188,7 @@ impl<'p, I: ViewTermId> PathProgram<'p, I> {
                     let index = ops.len();
                     ops.push(match node {
                         P::NamedNode(predicate) => Some(PathOp::Predicate(
-                            dataset.term_id_by_value(&named_node_to_value(predicate)),
+                            dataset.term_id_if_ready(&named_node_to_value(predicate)),
                         )),
                         P::NegatedPropertySet(elements) => {
                             Some(PathOp::Negated(resolve_negated(elements, dataset)))
@@ -558,7 +558,10 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // query text by the SPARQL parser, a hand-built `Query` by
                 // `purrdf_sparql_algebra`'s algebra validator on this same
                 // profile. See `ScratchInterner::intern`.
-                let term = ctx.scratch.intern(dataset, sval);
+                let term = ctx
+                    .scratch
+                    .try_intern(dataset, sval)
+                    .map_err(EvalError::source_read)?;
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
@@ -579,7 +582,10 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // to the subject-absent case above.
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
             if pctx.program.is_reflexive() {
-                let term = ctx.scratch.intern(dataset, oval);
+                let term = ctx
+                    .scratch
+                    .try_intern(dataset, oval)
+                    .map_err(EvalError::source_read)?;
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
@@ -692,10 +698,15 @@ fn resolve_end<D: DatasetView + Sync>(
         // not a wiring gap this conversion helper's `site` parameter can close.
         other => {
             let value = ground_term_pattern_to_value(other, "a property-path endpoint")?;
-            Ok(match dataset.term_id_by_value(&value) {
-                Some(id) => Endpoint::Bound(id),
-                None => Endpoint::BoundAbsent(value),
-            })
+            Ok(
+                match dataset
+                    .term_id_by_value(&value)
+                    .map_err(EvalError::source_read)?
+                {
+                    Some(id) => Endpoint::Bound(id),
+                    None => Endpoint::BoundAbsent(value),
+                },
+            )
         }
     }
 }
@@ -2023,9 +2034,13 @@ fn step_wildcard<D: DatasetView + Sync>(
     let pred_ok = |pid: D::Id| -> bool {
         match prefix {
             None => true,
-            Some(pfx) => {
-                matches!(ctx.dataset.resolve(pid), TermRef::Iri(iri) if iri.starts_with(pfx))
-            }
+            Some(pfx) => ctx
+                .dataset
+                .with_term(
+                    pid,
+                    |term| matches!(term, TermRef::Iri(iri) if iri.starts_with(pfx)),
+                )
+                .unwrap_or(false),
         }
     };
     let mut out = BTreeSet::new();
@@ -2278,6 +2293,7 @@ mod tests {
         ]);
         let path = named("p");
         let sid = ds
+            .as_ref()
             .term_id_by_value(&named_node_to_value(&nn("a")))
             .expect("start present");
         let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(3)));
@@ -3215,8 +3231,9 @@ mod recursion_free_tests {
                         } else {
                             forward.get_or_insert_with(BTreeSet::new)
                         };
-                        if let Some(id) =
-                            dataset.term_id_by_value(&named_node_to_value(&e.predicate))
+                        if let Some(id) = dataset
+                            .term_id_by_value(&named_node_to_value(&e.predicate))
+                            .unwrap()
                         {
                             target.insert(id);
                         }
@@ -3409,7 +3426,11 @@ mod recursion_free_tests {
         forward: bool,
         ctx: &ReferenceCtx<'_, D>,
     ) -> BTreeSet<D::Id> {
-        let pid = ctx.base.dataset.term_id_by_value(&named_node_to_value(p));
+        let pid = ctx
+            .base
+            .dataset
+            .term_id_by_value(&named_node_to_value(p))
+            .unwrap();
         step_predicate(pid, node, forward, ctx.base)
     }
 

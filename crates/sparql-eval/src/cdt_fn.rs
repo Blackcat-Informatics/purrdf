@@ -129,7 +129,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
         },
 
         CdtFn::Size => match composite_argument(vals, 0)? {
-            Some(value) => Ok(Some(intern_integer(ctx, purrdf_cdt::size(&value) as u64))),
+            Some(value) => Ok(Some(intern_integer(ctx, purrdf_cdt::size(&value) as u64)?)),
             None => Ok(None),
         },
         CdtFn::Head => match composite_argument(vals, 0)? {
@@ -198,7 +198,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
             };
             match purrdf_cdt::remove(&value, &key) {
                 CdtOutcome::Value(MapRemoval::Removed(value)) => {
-                    Ok(intern(ctx, composite_literal(&value)))
+                    Ok(intern(ctx, composite_literal(&value))?)
                 }
                 // Nothing was removed, so the answer is the caller's OWN term, with
                 // its own lexical form — `map-functions/remove-01.rq` asserts it
@@ -207,7 +207,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
                     let original = vals[0]
                         .clone()
                         .ok_or_else(|| EvalError::internal("cdt:remove lost its map argument"))?;
-                    Ok(intern(ctx, original))
+                    Ok(intern(ctx, original)?)
                 }
                 CdtOutcome::Error(_) => Ok(None),
                 CdtOutcome::Bound(error) => Err(bound(&error)),
@@ -233,7 +233,7 @@ fn value_result<D: DatasetView + Sync>(
     outcome: CdtOutcome<CdtValue>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match outcome {
-        CdtOutcome::Value(value) => Ok(intern(ctx, composite_literal(&value))),
+        CdtOutcome::Value(value) => Ok(intern(ctx, composite_literal(&value))?),
         CdtOutcome::Error(_) => Ok(None),
         CdtOutcome::Bound(error) => Err(bound(&error)),
     }
@@ -247,7 +247,10 @@ fn term_result<D: DatasetView + Sync>(
     outcome: CdtOutcome<CdtTerm>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match outcome {
-        CdtOutcome::Value(term) => Ok(from_cdt_term(&term).and_then(|value| intern(ctx, value))),
+        CdtOutcome::Value(term) => Ok(from_cdt_term(&term)
+            .map(|value| intern(ctx, value))
+            .transpose()?
+            .flatten()),
         CdtOutcome::Error(_) => Ok(None),
         CdtOutcome::Bound(error) => Err(bound(&error)),
     }
@@ -259,7 +262,7 @@ fn bool_result<D: DatasetView + Sync>(
     outcome: CdtOutcome<bool>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match outcome {
-        CdtOutcome::Value(answer) => Ok(Some(intern_boolean(ctx, answer))),
+        CdtOutcome::Value(answer) => Ok(Some(intern_boolean(ctx, answer)?)),
         CdtOutcome::Error(_) => Ok(None),
         CdtOutcome::Bound(error) => Err(bound(&error)),
     }

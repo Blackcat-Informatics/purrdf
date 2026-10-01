@@ -7,6 +7,8 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ProjectionErrorKind {
+    /// The source dictionary or row stream failed operationally.
+    SourceRead,
     /// Mandatory configuration is absent, malformed, or contradictory.
     Configuration,
     /// A caller-supplied resource bound was exceeded.
@@ -25,6 +27,7 @@ impl ProjectionErrorKind {
     /// Stable lowercase machine label for this category.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::SourceRead => "source-read",
             Self::Configuration => "configuration",
             Self::ResourceLimit => "resource-limit",
             Self::Package => "package",
@@ -44,6 +47,10 @@ pub struct ProjectionError {
 }
 
 impl ProjectionError {
+    pub(crate) fn source_read(error: impl fmt::Display) -> Self {
+        Self::new(ProjectionErrorKind::SourceRead, error.to_string())
+    }
+
     pub(crate) fn new(kind: ProjectionErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,

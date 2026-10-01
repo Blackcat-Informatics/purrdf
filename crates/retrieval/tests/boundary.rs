@@ -1592,7 +1592,10 @@ fn reporting_names_plan_and_profile() {
 // reason — the dataset is a caller-chosen type parameter, so the future's
 // `Send`-ness is the caller's to establish and is not required here.
 #[allow(clippy::future_not_send)]
-async fn execute_shape<'d, D: purrdf_core::DatasetView + Sync>(
+async fn execute_shape<
+    'd,
+    D: purrdf_core::DatasetView<ReadError = std::convert::Infallible> + Sync,
+>(
     compiled: &CompiledRetrieval,
     registry: &PropertyFunctionRegistry,
     dataset: &'d D,
@@ -1626,7 +1629,7 @@ async fn search_shape<S, D>(
 ) -> Result<SearchResult, SearchError>
 where
     S: Statistics,
-    D: purrdf_core::DatasetView + Sync,
+    D: purrdf_core::DatasetView<ReadError = std::convert::Infallible> + Sync,
 {
     search(request, registry, statistics, dataset, env, profile).await
 }

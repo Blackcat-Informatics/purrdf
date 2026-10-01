@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-name: Publish purrdf to PyPI
+name: Publish coordinated PurRDF Python distributions
 
 # Publish the Python ``purrdf`` package via PyPI trusted publishing (OIDC).
-# Pending publisher:
-#   Project: purrdf
+# Required publisher configuration (separate entries for both projects):
+#   Projects: purrdf and purrdf-rdflib (configure one publisher per project)
 #   Publisher: GitHub
 #   Repository: Blackcat-Informatics/purrdf
 #   Workflow: release-pypi.yaml
@@ -28,6 +28,15 @@ env:
 
 jobs:
   build:
+    strategy:
+      matrix:
+        include:
+          - project: purrdf
+            directory: bindings/python
+            profile: python
+          - project: purrdf-rdflib
+            directory: bindings/python-rdflib-shadow
+            profile: python-rdflib
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -55,74 +64,117 @@ jobs:
           toolchain: stable
 
       - id: version
-        name: Verify tag matches Python and Rust package versions
+        name: Verify tag matches both Python distributions and all suite versions
         run: |
+          python3 scripts/check-versions.py
           python_version="$(python3 -c "import tomllib; print(tomllib.load(open('bindings/python/pyproject.toml','rb'))['project']['version'])")"
-          # The crate inherits version.workspace = true, so resolve it through
-          # cargo metadata rather than reading the member TOML directly.
-          rust_version="$(cargo metadata --no-deps --format-version 1 | python3 -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name'] == 'purrdf-python'))")"
-          tag_version="${GITHUB_REF_NAME#py-v}"
-          if [ "$python_version" != "$tag_version" ]; then
-            echo "::error::Tag version (${tag_version}) does not match bindings/python/pyproject.toml version (${python_version})"
-            exit 1
-          fi
-          if [ "$rust_version" != "$tag_version" ]; then
-            echo "::error::Tag version (${tag_version}) does not match bindings/python/Cargo.toml version (${rust_version})"
-            exit 1
-          fi
+          test "${GITHUB_REF_NAME#py-v}" = "$python_version"
           echo "version=${python_version}" >> "$GITHUB_OUTPUT"
 
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: false
 
-      - name: Build Python distributions
-        working-directory: bindings/python
+      - name: Verify recipient notices before building
+        run: |
+          python3 scripts/fetch-locked-deps.py
+          python3 scripts/package-licenses.py --profile '${{ matrix.profile }}' --check
+
+      - name: Build native Python distributions
+        if: matrix.project == 'purrdf'
+        run: |
+          uv build --sdist --project bindings/python --out-dir bindings/python/dist
+          uv build --wheel bindings/python/dist/*.tar.gz --out-dir bindings/python/dist \
+            --config-setting 'maturin.build-args=--compatibility manylinux_2_34'
+
+      - name: Build rdflib shadow wheel and sdist
+        if: matrix.project == 'purrdf-rdflib'
+        run: uv build --project bindings/python-rdflib-shadow --out-dir bindings/python-rdflib-shadow/dist
+
+      - name: Qualify native distribution license metadata
+        if: matrix.project == 'purrdf'
+        run: python3 bindings/python/purrdf_build_backend.py bindings/python/dist/*
+
+      - name: Audit actual wheel and sdist recipient notices
         run: >
-          uv run --no-project --with 'maturin>=1.7,<2'
-          maturin build --manifest-path Cargo.toml
-          --release --out dist --sdist
-          --compatibility manylinux_2_34
+          python3 scripts/package-licenses.py --profile '${{ matrix.profile }}'
+          --audit ${{ matrix.directory }}/dist/*
+          --receipt license-receipt-${{ matrix.project }}.json
+
+      - name: Validate distribution core metadata
+        run: >
+          uv run --no-project --with 'twine>=6,<7'
+          twine check --strict ${{ matrix.directory }}/dist/*
+
+      - name: Upload license evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: license-evidence-pypi-${{ matrix.project }}
+          path: license-receipt-${{ matrix.project }}.json
 
       - name: Attest build provenance
         id: attest
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-path: bindings/python/dist/*
+          subject-path: ${{ matrix.directory }}/dist/*
 
       - name: Generate SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          path: bindings/python
+          path: ${{ matrix.directory }}
           format: spdx-json
-          output-file: sbom-pypi-purrdf.spdx.json
+          output-file: sbom-pypi-${{ matrix.project }}.spdx.json
           upload-artifact: false
 
       - name: Attest SBOM for Python distributions
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
-          subject-path: bindings/python/dist/*
-          sbom-path: sbom-pypi-purrdf.spdx.json
+          subject-path: ${{ matrix.directory }}/dist/*
+          sbom-path: sbom-pypi-${{ matrix.project }}.spdx.json
 
       - name: Upload attestation bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: attestation-pypi-purrdf
+          name: attestation-pypi-${{ matrix.project }}
           path: ${{ steps.attest.outputs.bundle-path }}
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: sbom-pypi-purrdf
-          path: sbom-pypi-purrdf.spdx.json
+          name: sbom-pypi-${{ matrix.project }}
+          path: sbom-pypi-${{ matrix.project }}.spdx.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: dist-pypi-purrdf
-          path: bindings/python/dist/*
+          name: dist-pypi-${{ matrix.project }}
+          path: ${{ matrix.directory }}/dist/*
 
-  publish:
+  install:
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: dist-pypi-*
+          path: dist
+          merge-multiple: true
+      - name: Install both exact candidate wheels in a clean environment
+        run: |
+          python3 -m venv candidate
+          candidate/bin/python -m pip install --no-deps dist/*.whl
+          candidate/bin/python scripts/check-python-release-install.py "${GITHUB_REF_NAME#py-v}"
+
+  publish-main:
+    needs: [build, install]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -133,7 +185,23 @@ jobs:
         with:
           name: dist-pypi-purrdf
           path: dist
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          attestations: true
+          skip-existing: true
 
+  publish-shadow:
+    needs: [build, install, publish-main]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: dist-pypi-purrdf-rdflib
+          path: dist
       - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           attestations: true

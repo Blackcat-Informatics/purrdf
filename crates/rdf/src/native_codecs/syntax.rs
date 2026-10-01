@@ -18,6 +18,7 @@ use purrdf_core::blank_label::LabelAlphabet;
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_core::sink::TextOut;
 use purrdf_core::xml_escape::{self, Context};
+use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
 use purrdf_iri::langtag::{self, LanguageTagError};
 use purrdf_lex::xml::Node;
 
@@ -32,13 +33,38 @@ pub(super) struct CodecName(pub(super) &'static str);
 impl CodecName {
     /// A parse refusal (`native-codec-parse`), worded `"<codec>: <detail>"`.
     pub(super) fn parse_err(self, detail: impl fmt::Display) -> RdfDiagnostic {
-        RdfDiagnostic::error("native-codec-parse", format!("{}: {detail}", self.0))
+        self.diagnostic(
+            "native-codec-parse",
+            "native-codec-parse.named",
+            detail.to_string(),
+        )
     }
 
     /// A serialize refusal (`native-codec-serialize`), worded
     /// `"<codec>: <detail>"`.
     pub(super) fn serialize_err(self, detail: impl fmt::Display) -> RdfDiagnostic {
-        RdfDiagnostic::error("native-codec-serialize", format!("{}: {detail}", self.0))
+        self.diagnostic(
+            "native-codec-serialize",
+            "native-codec-serialize.named",
+            detail.to_string(),
+        )
+    }
+
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "the named template is interpreted and contract-checked by DiagnosticPresentation"
+    )]
+    fn diagnostic(self, code: &str, identity: &str, detail: String) -> RdfDiagnostic {
+        let presentation = DiagnosticPresentation::new(
+            identity,
+            "{codec}: {detail}",
+            vec![
+                DiagnosticParameter::new("codec", DiagnosticValue::Text(self.0.to_owned())),
+                DiagnosticParameter::new("detail", DiagnosticValue::Text(detail)),
+            ],
+        )
+        .expect("named codec template agrees with its arguments");
+        RdfDiagnostic::error(code, "").with_presentation(presentation)
     }
 
     /// The serialization term `tid` names.
@@ -48,9 +74,17 @@ impl CodecName {
     /// A serialize refusal for an id past the graph's terms.
     pub(super) fn term(self, graph: &SerGraph, tid: usize) -> Result<&SerTerm, RdfDiagnostic> {
         graph.terms.get(tid).ok_or_else(|| {
-            self.serialize_err(format_args!(
-                "term id {tid} is out of range for the serialization graph"
-            ))
+            RdfDiagnostic::error("native-codec-serialize", "").with_presentation(
+                DiagnosticPresentation::new(
+                    "native-codec-serialize.term-out-of-range",
+                    "{codec}: term id {term} is out of range for the serialization graph",
+                    vec![
+                        DiagnosticParameter::new("codec", DiagnosticValue::Text(self.0.to_owned())),
+                        DiagnosticParameter::new("term", DiagnosticValue::Unsigned(tid as u64)),
+                    ],
+                )
+                .expect("term refusal template agrees with its arguments"),
+            )
         })
     }
 

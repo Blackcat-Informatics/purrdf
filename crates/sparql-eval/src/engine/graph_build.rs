@@ -78,7 +78,10 @@ impl NativeSparqlEngine {
     /// # Errors
     /// Refuses non-CONSTRUCT forms, registry mismatches and evaluation failures.
     /// On every error the destination remains untouched.
-    pub fn construct_prepared_into_view<'d, D: DatasetView + Sync>(
+    pub fn construct_prepared_into_view<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &'d self,
         dataset: &'d D,
         prepared: &PreparedQuery,
@@ -86,16 +89,12 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         destination: &mut RdfDatasetBuilder,
     ) -> Result<GraphBuildStats, GraphBuildError> {
-        let prefix = destination_mint_prefix(destination, options.bnode_mint_prefix);
-        let options = QueryOptions {
-            bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
-            ..options
-        };
         let staged = self.stage_construct(
             dataset,
             prepared,
             substitutions,
             options,
+            destination,
             None,
             super::Sequencing::Free,
         )?;
@@ -115,7 +114,10 @@ impl NativeSparqlEngine {
         clippy::too_many_arguments,
         reason = "mirrors the prepared operation entry with an explicit publication destination"
     )]
-    pub fn construct_prepared_in_operation_into_view<'d, D: DatasetView + Sync>(
+    pub fn construct_prepared_in_operation_into_view<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &'d self,
         dataset: &'d D,
         prepared: &PreparedQuery,
@@ -124,16 +126,12 @@ impl NativeSparqlEngine {
         state: &Arc<GovernorState>,
         destination: &mut RdfDatasetBuilder,
     ) -> Result<GraphBuildStats, GraphBuildError> {
-        let prefix = destination_mint_prefix(destination, options.bnode_mint_prefix);
-        let options = QueryOptions {
-            bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
-            ..options
-        };
         let staged = self.stage_construct(
             dataset,
             prepared,
             substitutions,
             options,
+            destination,
             Some(state),
             super::Sequencing::Free,
         )?;
@@ -172,18 +170,17 @@ impl NativeSparqlEngine {
                 evidence: GovernedEvidence::new(evidence, state.evidence()),
             });
         }
-        let prefix = destination_mint_prefix(destination, options.bnode_mint_prefix);
-        let options = QueryOptions {
-            bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
-            ..options
-        };
+        let _reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
+            error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+        })?;
         let evaluation = self.stage_construct(
             dataset,
             prepared,
             substitutions,
             options,
+            destination,
             Some(state),
-            super::Sequencing::Sequential,
+            super::Sequencing::for_view::<D>(),
         );
         match dataset.operation_status() {
             ViewOperationStatus::Failed { error, evidence } => {
@@ -215,15 +212,31 @@ impl NativeSparqlEngine {
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the shared staging body borrows its publication destination to choose fresh minted blank identities after admission"
+    )]
     fn stage_construct<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
         options: QueryOptions<'d>,
+        destination: &RdfDatasetBuilder,
         state: Option<&Arc<GovernorState>>,
         sequencing: super::Sequencing,
     ) -> Result<ValidatedRdfDatasetBuilder, GraphBuildError> {
+        let workspace = super::bounded_workspace::reserve(
+            dataset,
+            &prepared.query,
+            !substitutions.is_empty(),
+            options,
+        )?;
+        let prefix = destination_mint_prefix(destination, options.bnode_mint_prefix);
+        let options = QueryOptions {
+            bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
+            ..options
+        };
         self.admit_construct(dataset, prepared, options, state)?;
         let query = if substitutions.is_empty() {
             Cow::Borrowed(&prepared.query)
@@ -239,7 +252,7 @@ impl NativeSparqlEngine {
                 )?,
             })
         };
-        let mut ctx = apply_query_options(self.eval_ctx(dataset), options)?;
+        let mut ctx = apply_query_options(self.eval_ctx(dataset, &workspace), options)?;
         if let Some(state) = state {
             ctx = ctx.with_governors(Arc::clone(state));
         }

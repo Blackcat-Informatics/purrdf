@@ -543,7 +543,7 @@ impl PreparedExecution {
     /// arrives EARLIER than the value door's, which grounds at run time rather than
     /// at bind time; it is the same judgement on the same components, made as soon as
     /// there is something to judge.
-    pub fn bind_id<D: DatasetView>(
+    pub fn bind_id<D: DatasetView<ReadError = std::convert::Infallible>>(
         &mut self,
         slot: usize,
         dataset: &D,

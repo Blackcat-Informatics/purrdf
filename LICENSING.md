@@ -3,7 +3,8 @@
 
 # Licensing
 
-Blackcat Informatics® Inc. is the sole copyright holder of PurRDF (© 2026).
+Blackcat Informatics® Inc. holds the copyright in PurRDF’s first-party material
+(© 2026). Third-party material retains its original ownership and grants.
 Two distinct things are true about its licensing, and this document keeps
 them distinct:
 
@@ -14,9 +15,9 @@ them distinct:
 
 ## Open-source terms
 
-All first-party material in this repository — the Rust workspace, the Python,
-WebAssembly, and C bindings, first-party test fixtures and harnesses,
-documentation, and build tooling — is offered under your choice of any one of:
+First-party code in the Rust workspace, Python, WebAssembly and C bindings,
+first-party fixtures and harnesses, and build tooling is offered under your
+choice of any one of:
 
 | License | Text |
 |---|---|
@@ -24,8 +25,8 @@ documentation, and build tooling — is offered under your choice of any one of:
 | **Apache License 2.0** | [`LICENSE-APACHE`](./LICENSE-APACHE) |
 | **Mulan Permissive Software License, Version 2 (MulanPSL-2.0)** | [`LICENSE-MULAN`](./LICENSE-MULAN) |
 
-This is expressed in every first-party source file and package manifest with
-the SPDX identifier:
+This is the grant in first-party source headers and the owned-code part of
+package metadata:
 
 ```text
 SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
@@ -38,17 +39,21 @@ those are still first-party Blackcat Informatics® material, licensed under
 ### About MulanPSL-2.0, precisely
 
 MulanPSL-2.0 is an [OSI-approved](https://opensource.org/license/MulanPSL-2.0)
-permissive license published bilingually in Chinese and English. Its terms an
-adopter should know exactly:
+permissive license published bilingually in Chinese and English. An adopter
+should know these terms:
 
-- **The Chinese text governs** (its §6): in any divergence between the
-  Chinese and English versions, the Chinese version prevails. The committed
+- Its Chinese and English versions have equal legal effect; **the Chinese
+  text governs if they conflict or differ** (§6). The committed
   [`LICENSE-MULAN`](./LICENSE-MULAN) carries both languages.
-- It grants a **patent license** per contributor that **terminates** if you
-  initiate patent litigation over the software (§2).
-- It grants **no trademark rights** (§3), and requires recipients to receive
-  a copy of the license and to retain copyright, patent, trademark, and
-  disclaimer statements (§4).
+- Each contributor grants you a **patent license** within the scope and
+  conditions of §2. The software patent license **terminates from the date**
+  you or your affiliates directly or indirectly initiate patent-infringement
+  litigation (including counterclaims or crossclaims), or another patent
+  enforcement action, alleging that the software or a contribution infringes
+  a patent. The full §2 controls the grant and its conditions.
+- It grants **no trademark license except use necessary for §4 notices**
+  (§3). Section 4 requires providing recipients with a license copy and
+  retaining copyright, patent, trademark, and disclaimer statements.
 - Unlike Apache-2.0, it does **not** require stating changes to modified
   files.
 - Choosing MulanPSL-2.0 does not alter the third-party carve-outs below:
@@ -97,8 +102,7 @@ that sit *inside* those trees carry the repository's own
 for its upstream terms, source URL, and pinned revision; the table above is a
 summary, not a substitute.
 
-Two gates keep this honest, and each covers a stated subset rather than the
-whole repository:
+The checks have distinct scopes:
 
 - `scripts/check-licenses.py` treats any directory under `crates/` or
   `bindings/` that holds a `LICENSES/` subdirectory as a vendored root, and
@@ -113,12 +117,80 @@ whole repository:
   and `crates/sparql-conformance/entailment-suite/w3c-owl2-rl` against
   committed freeze manifests, so vendored bytes cannot be edited in place.
 
+The JSON-Schema-Test-Suite schemas and instances retained in frozen differential
+vectors also retain MIT; recording an engine’s verdict does not remove the grant
+on its input data. RDFLib’s vendored test suite retains BSD-3-Clause. The
+JSONTestSuite, YAML, Wycheproof and SPARQL CDT corpora retain their recorded
+upstream grants. `license-inventory.toml` names the material, scope, provenance
+and exact notice sources used by the package generator.
+
+The XML conformance suite is acquired into `target/` from the byte-pinned W3C
+archive and verified against all 3,386 frozen digests. Extracted payloads are not
+redistributed: the original James Clark collection permits redistribution only
+as its unmodified original archive. See `vectors/xmlconf/PROVENANCE.md` for the
+precise grants and acquisition evidence.
+
+## Notices in release artifacts
+
+`scripts/package-licenses.py` projects `license-inventory.toml` and `Cargo.lock`
+into package-local `licenses/` directories. Each carries all three first-party
+texts, the documentation license, byte-preserved applicable third-party texts,
+a human-readable notice and a machine-readable inventory with SHA-256 digests.
+Linked Python, npm/WASM and C profiles additionally preserve the resolved
+normal/build dependency notices, including platform alternatives. Their
+inventory identifies that build-input scope; it does not claim every input is
+linked into every binary. No dependency or inherited work is relicensed.
+
+Compiled Python wheels, WASM/npm packages and C bundles also retain the actual
+Rust compiler distribution's standard-library copyright report and license
+texts. The runtime inventory records the compiler's version and commit. Its
+complete report includes build and target alternatives without claiming that
+every listed component occurs in the resulting binary; source-only Cargo
+packages and Python sdists do not bundle the standard library itself.
+
+`make metadata` regenerates these projections. CI verifies the committed
+projections; release workflows audit the actual 31 Cargo archives, both Python
+wheel/sdist pairs, the npm tarball and the C distribution. They reject absent
+or modified texts, incomplete Cargo archive sets, private working material and
+acquired XML payloads, and retain per-artifact digest receipts. The C install
+places the same notices in `share/purrdf/licenses/` beside the native library.
+
+Python `License-Expression` describes the containing distribution, so it also
+names the applicable inherited and linked component grants. The source archive
+matches the material actually shipped. Both `License-Expression` and the
+`License-File` list are marked dynamic in source metadata because a compiled
+wheel has a different component set and adds its compiler's notices. The local
+PEP 517 adapter delegates compilation to Maturin and computes the wheel expression
+from its selected normal Cargo dependencies and target; build tools, proc macros
+and unused lockfile edges are excluded. Release builds qualify the same metadata
+before attestation, and actual-archive gates verify it. The shadow distribution
+also retains the CC-BY-4.0 grant of its distributed README. This changes no source
+grant. See the [PyPA distribution-license specification](https://packaging.python.org/en/latest/specifications/core-metadata/#license-expression)
+and its [source-to-wheel metadata rules](https://packaging.python.org/en/latest/specifications/core-metadata/#dynamic-multiple-use).
+
+The YAML emitter’s style and layout decisions were read from `unsafe-libyaml`
+0.2.11. Its MIT permission notice is preserved in the lexical crate and every
+linked profile containing it, as recorded in `crates/lex/PROVENANCE.md`.
+
+The GTS specification and first-party frozen vectors are maintained in the
+[authoritative GTS repository](https://github.com/Blackcat-Informatics/gmeow-gts).
+Its first-party license offer is aligned independently; inherited material,
+other documentation and IETF submission boilerplate keep their existing terms.
+This licensing work changes no wire-format or vector bytes.
+
+A [Simplified Chinese explanation](docs/LICENSING.zh-Hans.md) accompanies this
+document. It is an explanatory draft and has not undergone legal review.
+The completed [independent model backtranslation record](docs/LICENSING-BACKTRANSLATION.md)
+identifies the exact Chinese source and the comparison performed. It is not
+human or legal review.
+The complete controlling bilingual MulanPSL text remains the recipient’s license.
+
 ## Unicode data compiled into published crates
 
 Five published crates compile tables generated from the Unicode Character
 Database, and so ship Unicode, Inc. data under the
 [Unicode License v3](./LICENSES/Unicode-3.0.txt) (`Unicode-3.0`) alongside
-Blackcat Informatics® code. Their package metadata declares the combined
+Blackcat Informatics® code. Their package metadata includes the combined
 expression:
 
 ```text
@@ -127,6 +199,10 @@ expression:
 
 You choose one of the three first-party licences as usual; the Unicode-3.0
 terms apply in addition, to the data.
+
+`purrdf-lex` also preserves the reference YAML emitter's MIT terms, so its
+complete package expression is
+`(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0`.
 
 | Crate | Generated file | Generator | Source data |
 |---|---|---|---|

@@ -158,7 +158,7 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
     // Before the substitution walk copies `pattern` for this row, and before the copy is
     // evaluated: both recurse over the correlated subtree. See `crate::stack`.
     crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
-    let row = crate::expr::outer_bindings_for_substitution(mu, schema, ctx);
+    let row = crate::expr::outer_bindings_for_substitution(mu, schema, ctx)?;
     eval_substituted(pattern, &row, source, ctx)
 }
 
@@ -256,7 +256,7 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
     let site = &slot.site;
-    let current = crate::expr::outer_bindings_for_substitution(mu, schema, ctx);
+    let current = crate::expr::outer_bindings_for_substitution(mu, schema, ctx)?;
     let source = crate::deferred_exists::CorrelatedSource {
         sites: crate::deferred_exists::SiteSlot::Lateral(site),
         plan_map: Some(&site.plan_map),
@@ -662,7 +662,7 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
             // directly, then padded — no write-None-then-overwrite pass over the prefix.
             for minted in branch.rows {
                 let reinterned =
-                    crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
+                    crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted)?;
                 let mut row = Solution::with_capacity(out_len);
                 row.extend_from_slice(&reinterned);
                 row.resize(out_len, None);
@@ -673,7 +673,7 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         let arm_to_out = right_to_out_map(&branch.schema, &out);
         for minted in branch.rows {
             let reinterned =
-                crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
+                crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted)?;
             let mut row = purrdf_core::smallvec![None; out_len];
             for (j, &cell) in reinterned.iter().enumerate() {
                 row[arm_to_out[j]] = cell;
@@ -1757,9 +1757,11 @@ mod tests {
     fn cell_bounded_cross_product_refuses_before_constructing_limit_plus_one() {
         let ds = graph();
         let left_id = ds
+            .as_ref()
             .term_id_by_value(&TermValue::Iri("http://ex/a".to_owned()))
             .expect("left term");
         let right_id = ds
+            .as_ref()
             .term_id_by_value(&TermValue::Iri("http://ex/b".to_owned()))
             .expect("right term");
         let left = SolutionSeq {

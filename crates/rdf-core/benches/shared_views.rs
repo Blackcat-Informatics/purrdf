@@ -93,8 +93,8 @@ fn benches(c: &mut Bench) {
     assert_eq!(frozen.quad_count(), base.quad_count());
     assert_eq!(shared.named_graphs().count(), frozen.named_graphs().count());
     let subject = TermValue::iri("http://example.org/s42");
-    let shared_subject = shared.term_id_by_value(&subject).unwrap();
-    let frozen_subject = frozen.term_id_by_value(&subject).unwrap();
+    let shared_subject = shared.term_id_by_value(&subject).unwrap().unwrap();
+    let frozen_subject = frozen.as_ref().term_id_by_value(&subject).unwrap();
     assert_eq!(
         shared
             .quads_for_pattern(Some(shared_subject), None, None, GraphMatch::Any)

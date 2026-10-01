@@ -220,8 +220,11 @@ fn cross_page_join_order_is_cost_driven_and_flips_with_skew() {
     // The estimator's Σ-per-page cross-page cardinality is what drives the order. These
     // direct estimates (using the same GraphMatch::Default scope the planner uses) show
     // the skew is real and inverted between the two fixtures.
-    let card = |ds: &PagedDataset, pred: &str| -> usize {
-        let p = ds.term_id_by_value(&iri(pred)).expect("predicate interned");
+    let card = |ds: &PagedDataset, pred: &str| -> u64 {
+        let p = ds
+            .term_id_by_value(&iri(pred))
+            .expect("resident dictionary read")
+            .expect("predicate interned");
         ds.cardinality_estimate(None, Some(p), None, GraphMatch::Default)
     };
     assert_eq!(card(&fixture1, "pa"), 1, "pa is selective in fixture 1");
@@ -278,7 +281,7 @@ fn query_materializes_only_the_pages_the_plan_needs() {
     // The seal pass materialized each page exactly once.
     let hits_after_seal = provider.hits();
     assert_eq!(
-        hits_after_seal,
+        u64::try_from(hits_after_seal).expect("fixture hits fit u64"),
         paged.page_count(),
         "seal pass pulls each of the 3 pages once"
     );

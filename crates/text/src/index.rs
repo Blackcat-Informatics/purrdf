@@ -1283,57 +1283,69 @@ fn collect_rows<D: DatasetView>(
     dataset: &D,
     config: &TextIndexConfig,
 ) -> Result<(Vec<SourceRow>, SourceCoverage), TextError> {
-    let Some(graph) = config.graph().resolve(dataset) else {
-        return Ok((
-            Vec::new(),
-            SourceCoverage::nothing_in_scope(dataset, config),
-        ));
-    };
-    let mut predicate_ids: Vec<(D::Id, &TermValue, usize)> =
-        Vec::with_capacity(config.predicates().len());
-    for (ordinal, predicate) in config.predicates().iter().enumerate() {
-        if let Some(id) = dataset.term_id_by_value(predicate) {
-            predicate_ids.push((id, predicate, ordinal));
-        }
-    }
-    if predicate_ids.is_empty() {
-        // No configured predicate is interned, so no statement in either layer
-        // can carry one. Returning here rather than sweeping the annotation side
-        // table to match every row against an empty id set.
-        return Ok((
-            Vec::new(),
-            SourceCoverage::nothing_in_scope(dataset, config),
-        ));
-    }
+    dataset
+        .checked_read(|dataset| {
+            let Some(graph) = config
+                .graph()
+                .resolve(dataset)
+                .map_err(|error| TextError::source_read(error.to_string()))?
+            else {
+                return Ok((
+                    Vec::new(),
+                    SourceCoverage::nothing_in_scope(dataset, config),
+                ));
+            };
+            let mut predicate_ids: Vec<(D::Id, &TermValue, usize)> =
+                Vec::with_capacity(config.predicates().len());
+            for (ordinal, predicate) in config.predicates().iter().enumerate() {
+                if let Some(id) = dataset
+                    .term_id_by_value(predicate)
+                    .map_err(|error| TextError::source_read(error.to_string()))?
+                {
+                    predicate_ids.push((id, predicate, ordinal));
+                }
+            }
+            if predicate_ids.is_empty() {
+                // No configured predicate is interned, so no statement in either layer
+                // can carry one. Returning here rather than sweeping the annotation side
+                // table to match every row against an empty id set.
+                return Ok((
+                    Vec::new(),
+                    SourceCoverage::nothing_in_scope(dataset, config),
+                ));
+            }
 
-    let mut rows = Vec::new();
-    let mut represented = vec![false; config.predicates().len()];
+            let mut rows = Vec::new();
+            let mut represented = vec![false; config.predicates().len()];
 
-    // Layer one: the asserted triple table.
-    for &(predicate_id, predicate, ordinal) in &predicate_ids {
-        for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
-            represented[ordinal] = true;
-            push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
-        }
-    }
+            // Layer one: the asserted triple table.
+            for &(predicate_id, predicate, ordinal) in &predicate_ids {
+                for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
+                    represented[ordinal] = true;
+                    push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
+                }
+            }
 
-    // Layer two: the RDF 1.2 annotation side table, whose subject IS the
-    // reifier. `quads_for_pattern` above cannot see these rows at all.
-    for quad in dataset.annotation_quads() {
-        if !graph.matches(quad.g) {
-            continue;
-        }
-        let Some(&(_, predicate, ordinal)) = predicate_ids.iter().find(|&&(id, _, _)| id == quad.p)
-        else {
-            continue;
-        };
-        represented[ordinal] = true;
-        push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
-    }
+            // Layer two: the RDF 1.2 annotation side table, whose subject IS the
+            // reifier. `quads_for_pattern` above cannot see these rows at all.
+            for quad in dataset.annotation_quads() {
+                if !graph.matches(quad.g) {
+                    continue;
+                }
+                let Some(&(_, predicate, ordinal)) =
+                    predicate_ids.iter().find(|&&(id, _, _)| id == quad.p)
+                else {
+                    continue;
+                };
+                represented[ordinal] = true;
+                push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
+            }
 
-    rows.sort();
-    let coverage = SourceCoverage::of_walk(dataset, config, &represented);
-    Ok((rows, coverage))
+            rows.sort();
+            let coverage = SourceCoverage::of_walk(dataset, config, &represented);
+            Ok((rows, coverage))
+        })
+        .map_err(|error| TextError::source_read(error.to_string()))?
 }
 
 impl SourceCoverage {
@@ -1439,9 +1451,10 @@ fn push_row<D: DatasetView>(
 /// [`TextError`] naming the inconsistency when the view hands back an id that is not
 /// its own — a literal whose datatype does not resolve to an IRI.
 fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, TextError> {
-    dataset
-        .term_value(id)
-        .map_err(|error| TextError::data(error.to_string()))
+    dataset.term_value(id).map_err(|error| match error {
+        foreign @ purrdf_core::TermLookupError::ForeignId => TextError::data(foreign.to_string()),
+        purrdf_core::TermLookupError::Read(error) => TextError::source_read(error.to_string()),
+    })
 }
 
 // ---------------------------------------------------------------------------

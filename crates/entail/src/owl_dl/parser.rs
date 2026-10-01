@@ -1046,130 +1046,133 @@ pub(crate) fn build_until<D: DatasetView>(
     ds: &D,
     stop: Option<&dyn StopSignal>,
 ) -> Result<Kb, EntailError> {
-    poll(stop)?;
-    let mut interner = Interner::default();
-    let v = Vocab::intern(&mut interner);
-    let mut table = ConceptTable::default();
-    let top = table.top();
-    let bottom = table.bottom();
-
-    // Intern every default-graph triple and build the subject index.
-    let mut index: TripleIndex = BTreeMap::new();
-    let mut triples: Vec<(u32, u32, u32)> = Vec::new();
-    for q in ds.quads() {
+    ds.checked_read(|ds| {
         poll(stop)?;
-        if q.g.is_some() {
-            continue;
-        }
-        let s = interner.intern(ds.term_value(q.s)?);
-        let p = interner.intern(ds.term_value(q.p)?);
-        let o = interner.intern(ds.term_value(q.o)?);
-        triples.push((s, p, o));
-        index_insert(&mut index, s, p, o);
-    }
+        let mut interner = Interner::default();
+        let v = Vocab::intern(&mut interner);
+        let mut table = ConceptTable::default();
+        let top = table.top();
+        let bottom = table.bottom();
 
-    let mut acc = Accums::default();
-    let mut ranges = DataRangeTable::default();
-    {
-        let mut ce = CeExtractor::new_until(&index, &interner, &v, &mut ranges, stop);
-        // The n-ary axioms are stated as a node carrying a list or a reification, so they
-        // are read from the node rather than from any one of its triples.
-        for (&node, preds) in &index {
-            ce.poll()?;
-            for &axiom_class in preds.get(&v.ty).map_or(&[][..], Vec::as_slice) {
+        // Intern every default-graph triple and build the subject index.
+        let mut index: TripleIndex = BTreeMap::new();
+        let mut triples: Vec<(u32, u32, u32)> = Vec::new();
+        for q in ds.quads() {
+            poll(stop)?;
+            if q.g.is_some() {
+                continue;
+            }
+            let s = interner.intern(ds.term_value(q.s)?);
+            let p = interner.intern(ds.term_value(q.p)?);
+            let o = interner.intern(ds.term_value(q.o)?);
+            triples.push((s, p, o));
+            index_insert(&mut index, s, p, o);
+        }
+
+        let mut acc = Accums::default();
+        let mut ranges = DataRangeTable::default();
+        {
+            let mut ce = CeExtractor::new_until(&index, &interner, &v, &mut ranges, stop);
+            // The n-ary axioms are stated as a node carrying a list or a reification, so they
+            // are read from the node rather than from any one of its triples.
+            for (&node, preds) in &index {
                 ce.poll()?;
-                axiom_node(&mut ce, &mut table, &mut acc, &v, node, axiom_class)?;
+                for &axiom_class in preds.get(&v.ty).map_or(&[][..], Vec::as_slice) {
+                    ce.poll()?;
+                    axiom_node(&mut ce, &mut table, &mut acc, &v, node, axiom_class)?;
+                }
+                // A negative property assertion is identified by its VOCABULARY, not by its
+                // typing: OWL 2's RDF-Based Semantics states the axiom over any node carrying
+                // `owl:sourceIndividual`, and the W3C corpus contains such a node with no
+                // `rdf:type owl:NegativePropertyAssertion` triple at all. Keying on the typing
+                // alone would read that ontology as saying nothing.
+                if preds.contains_key(&v.source_individual)
+                    && !preds
+                        .get(&v.ty)
+                        .is_some_and(|types| types.contains(&v.negative_property_assertion))
+                {
+                    negative_assertion(&ce, &mut table, &mut acc, &v, node)?;
+                }
             }
-            // A negative property assertion is identified by its VOCABULARY, not by its
-            // typing: OWL 2's RDF-Based Semantics states the axiom over any node carrying
-            // `owl:sourceIndividual`, and the W3C corpus contains such a node with no
-            // `rdf:type owl:NegativePropertyAssertion` triple at all. Keying on the typing
-            // alone would read that ontology as saying nothing.
-            if preds.contains_key(&v.source_individual)
-                && !preds
-                    .get(&v.ty)
-                    .is_some_and(|types| types.contains(&v.negative_property_assertion))
-            {
-                negative_assertion(&ce, &mut table, &mut acc, &v, node)?;
+            for &spo in &triples {
+                ce.poll()?;
+                axiom(&mut ce, &mut table, &mut acc, &v, &interner, spo)?;
+            }
+            acc.boundaries.extend(ce.boundaries().iter().copied());
+            // OWL 2 DL forbids a number restriction over a NON-SIMPLE role. The transitivity
+            // axioms are only all known now, so the condition is checked here rather than
+            // while the restriction was being decoded.
+            for &role in ce.counted_roles() {
+                ce.poll()?;
+                if is_non_simple(role, &acc, stop)? {
+                    acc.boundaries.insert(Construct::NonSimpleRole);
+                    break;
+                }
             }
         }
-        for &spo in &triples {
-            ce.poll()?;
-            axiom(&mut ce, &mut table, &mut acc, &v, &interner, spo)?;
-        }
-        acc.boundaries.extend(ce.boundaries().iter().copied());
-        // OWL 2 DL forbids a number restriction over a NON-SIMPLE role. The transitivity
-        // axioms are only all known now, so the condition is checked here rather than
-        // while the restriction was being decoded.
-        for &role in ce.counted_roles() {
-            ce.poll()?;
-            if is_non_simple(role, &acc, stop)? {
-                acc.boundaries.insert(Construct::NonSimpleRole);
-                break;
-            }
-        }
-    }
 
-    // Every literal that reaches the knowledge base carries its VALUE into the completion
-    // graph, and the literals' value classes decide which of them are one element of the data
-    // domain and which are provably different ones.
-    let literal_class = register_literals(
-        &interner,
-        &mut table,
-        &mut ranges,
-        &acc.abox_roles,
-        &mut acc.abox_types,
-        &mut acc.boundaries,
-        stop,
-    )?;
-    // A data range this layer cannot decide EXACTLY is a reported boundary rather than a
-    // silent weakening. The predicate is `purrdf-xsd`'s own, so the boundary and the decision
-    // procedure cannot drift apart.
-    if !ranges.exactly_decided() {
-        acc.boundaries.insert(Construct::DataRange);
-    }
+        // Every literal that reaches the knowledge base carries its VALUE into the completion
+        // graph, and the literals' value classes decide which of them are one element of the data
+        // domain and which are provably different ones.
+        let literal_class = register_literals(
+            &interner,
+            &mut table,
+            &mut ranges,
+            &acc.abox_roles,
+            &mut acc.abox_types,
+            &mut acc.boundaries,
+            stop,
+        )?;
+        // A data range this layer cannot decide EXACTLY is a reported boundary rather than a
+        // silent weakening. The predicate is `purrdf-xsd`'s own, so the boundary and the decision
+        // procedure cannot drift apart.
+        if !ranges.exactly_decided() {
+            acc.boundaries.insert(Construct::DataRange);
+        }
 
-    poll(stop)?;
-    let mut kb = Kb {
-        interner,
-        table,
-        top,
-        bottom,
-        tbox: acc.tbox,
-        // Both TBox encodings are DERIVED, not accumulated: `Kb::encode_until` below
-        // clausifies the whole inclusion list at once, which is what lets absorption split
-        // an axiom against inclusions the scan had not yet reached.
-        meta: Vec::new(),
-        absorbed: Vec::new(),
-        // Derived with them, and from them: the generating closure reads the absorbed table.
-        generating: Vec::new(),
-        inverses: acc.inverses,
-        role_sub: acc.role_sub,
-        abox_types: acc.abox_types,
-        abox_roles: acc.abox_roles,
-        same_as: acc.same_as,
-        different_from: acc.different_from,
-        individuals: acc.individuals,
-        transitive: acc.transitive,
-        asymmetric: acc.asymmetric,
-        disjoint_roles: acc.disjoint_roles,
-        keys: acc.keys,
-        data_ranges: ranges,
-        literal_class,
-        boundaries: acc.boundaries,
-        encoded: false,
-        #[cfg(test)]
-        absorb_calls: 0,
-        // The reverse mapping is not the place a caller's stop signal is named:
-        // `Kb::with_stop` installs it on the knowledge base the caller then reasons over.
-        stop: None,
-        #[cfg(test)]
-        internalize_only: false,
-        #[cfg(test)]
-        label_only_blocking: false,
-    };
-    kb.encode_until(|| poll(stop))?;
-    Ok(kb)
+        poll(stop)?;
+        let mut kb = Kb {
+            interner,
+            table,
+            top,
+            bottom,
+            tbox: acc.tbox,
+            // Both TBox encodings are DERIVED, not accumulated: `Kb::encode_until` below
+            // clausifies the whole inclusion list at once, which is what lets absorption split
+            // an axiom against inclusions the scan had not yet reached.
+            meta: Vec::new(),
+            absorbed: Vec::new(),
+            // Derived with them, and from them: the generating closure reads the absorbed table.
+            generating: Vec::new(),
+            inverses: acc.inverses,
+            role_sub: acc.role_sub,
+            abox_types: acc.abox_types,
+            abox_roles: acc.abox_roles,
+            same_as: acc.same_as,
+            different_from: acc.different_from,
+            individuals: acc.individuals,
+            transitive: acc.transitive,
+            asymmetric: acc.asymmetric,
+            disjoint_roles: acc.disjoint_roles,
+            keys: acc.keys,
+            data_ranges: ranges,
+            literal_class,
+            boundaries: acc.boundaries,
+            encoded: false,
+            #[cfg(test)]
+            absorb_calls: 0,
+            // The reverse mapping is not the place a caller's stop signal is named:
+            // `Kb::with_stop` installs it on the knowledge base the caller then reasons over.
+            stop: None,
+            #[cfg(test)]
+            internalize_only: false,
+            #[cfg(test)]
+            label_only_blocking: false,
+        };
+        kb.encode_until(|| poll(stop))?;
+        Ok(kb)
+    })
+    .map_err(EntailError::source_read)?
 }
 
 /// Give every literal that reaches the knowledge base its VALUE, and return the value-class

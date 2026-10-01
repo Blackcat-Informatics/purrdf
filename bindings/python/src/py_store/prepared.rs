@@ -391,7 +391,9 @@ impl PyPreparedQuery {
 ///
 /// The interned rows do not outlive the evaluation that produced them, so they are
 /// read here, inside `visit`, rather than returned.
-fn materialize_interned<D: purrdf_core::DatasetView + Sync>(
+fn materialize_interned<
+    D: purrdf_core::DatasetView<ReadError = std::convert::Infallible> + Sync,
+>(
     outcome: &InternedOutcome<'_, '_, D>,
 ) -> purrdf_core::SparqlResult {
     match outcome {

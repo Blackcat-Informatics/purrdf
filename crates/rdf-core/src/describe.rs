@@ -58,7 +58,7 @@ use std::sync::Arc;
 
 use crate::{
     DatasetView, FastSet, QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral,
-    RdfTerm, RdfTriple, TermId, TermRef, TermValue, fold_term,
+    RdfTerm, RdfTriple, TermGuard as _, TermId, TermRef, TermValue,
 };
 
 /// Resolve a term id to the owned [`RdfTerm`] model through the [`DatasetView`] read
@@ -66,14 +66,18 @@ use crate::{
 /// `RdfDataset::to_owned_term`, so the extractor rebuilds a describing subgraph over
 /// any backend whose id type is [`TermId`].
 ///
-/// A triple term is assembled bottom-up over [`fold_term`]'s work list: its subject,
+/// A triple term is assembled bottom-up over [`crate::ir::try_fold_term`]'s work list: its subject,
 /// predicate and object are resolved in that order, each fully before the next.
-fn owned_term<D: DatasetView>(dataset: &D, id: D::Id) -> RdfTerm {
-    let owned = fold_term(
+fn read_diagnostic(error: impl std::fmt::Display) -> RdfDiagnostic {
+    RdfDiagnostic::error("rdf-describe-source-read", error.to_string())
+}
+
+fn owned_term<D: DatasetView>(dataset: &D, id: D::Id) -> Result<RdfTerm, RdfDiagnostic> {
+    crate::ir::try_fold_term(
         dataset,
         id,
         |_, term| {
-            Ok::<_, Infallible>(match term {
+            Ok::<_, RdfDiagnostic>(match term {
                 TermRef::Iri(iri) => RdfTerm::iri(iri),
                 TermRef::Blank { label, scope } => RdfTerm::blank_node(scope.qualify_label(label)),
                 TermRef::Literal {
@@ -82,10 +86,14 @@ fn owned_term<D: DatasetView>(dataset: &D, id: D::Id) -> RdfTerm {
                     language,
                     direction,
                 } => {
-                    let datatype_iri = match dataset.resolve(datatype) {
+                    let guard = dataset.resolve(datatype).map_err(read_diagnostic)?;
+                    let datatype_iri = match guard.term() {
                         TermRef::Iri(iri) => iri.to_owned(),
                         other => {
-                            unreachable!("literal datatype must resolve to an IRI, got {other:?}")
+                            return Err(RdfDiagnostic::error(
+                                "rdf-describe-invalid-term",
+                                format!("literal datatype must resolve to an IRI, got {other:?}"),
+                            ));
                         }
                     };
                     RdfTerm::literal(RdfLiteral {
@@ -102,14 +110,15 @@ fn owned_term<D: DatasetView>(dataset: &D, id: D::Id) -> RdfTerm {
         },
         |_, subject, predicate, object| {
             let RdfTerm::Iri(predicate) = predicate else {
-                unreachable!("triple predicate must resolve to an IRI, got {predicate:?}")
+                return Err(RdfDiagnostic::error(
+                    "rdf-describe-invalid-term",
+                    format!("triple predicate must resolve to an IRI, got {predicate:?}"),
+                ));
             };
             Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
         },
-    );
-    match owned {
-        Ok(term) => term,
-    }
+        read_diagnostic,
+    )
 }
 
 /// A view id → the quads touching it as subject/object (the endpoint adjacency).
@@ -154,10 +163,27 @@ pub struct Describer<'a, D: DatasetView = RdfDataset> {
     annotations_by_reifier: ReifierAnnotations<D::Id>,
 }
 
-impl<'a, D: DatasetView> Describer<'a, D> {
-    /// Build the adjacency indices over `dataset`.
+impl<'a, D: DatasetView<ReadError = Infallible>> Describer<'a, D> {
+    /// Build the adjacency indices over a resident, infallible dataset.
     #[must_use]
     pub fn new(dataset: &'a D) -> Self {
+        match Self::try_new(dataset) {
+            Ok(describer) => describer,
+            Err(error) => match error {},
+        }
+    }
+}
+
+impl<'a, D: DatasetView> Describer<'a, D> {
+    /// Build adjacency indices through a fallible read session.
+    ///
+    /// # Errors
+    /// Returns a typed source failure instead of publishing a partial index.
+    pub fn try_new(dataset: &'a D) -> Result<Self, D::ReadError> {
+        dataset.checked_read(|_| Self::build(dataset))?
+    }
+
+    fn build(dataset: &'a D) -> Result<Self, D::ReadError> {
         let mut by_endpoint: EndpointQuads<D::Id> = BTreeMap::new();
         for q in dataset.quads() {
             by_endpoint.entry(q.s).or_default().push(q);
@@ -169,7 +195,8 @@ impl<'a, D: DatasetView> Describer<'a, D> {
 
         let mut reifiers_by_endpoint: EndpointReifiers<D::Id> = BTreeMap::new();
         for (reifier, triple, g) in dataset.reifier_quads().map(|q| (q.s, q.o, q.g)) {
-            if let TermRef::Triple { s, p: _, o } = dataset.resolve(triple) {
+            let guard = dataset.resolve(triple)?;
+            if let TermRef::Triple { s, p: _, o } = guard.term() {
                 reifiers_by_endpoint
                     .entry(s)
                     .or_default()
@@ -191,12 +218,12 @@ impl<'a, D: DatasetView> Describer<'a, D> {
                 .push((p, o, g));
         }
 
-        Self {
+        Ok(Self {
             dataset,
             by_endpoint,
             reifiers_by_endpoint,
             annotations_by_reifier,
-        }
+        })
     }
 
     /// The SCBD of the IRI `subject`, or an **empty** dataset if the dataset contains
@@ -207,7 +234,10 @@ impl<'a, D: DatasetView> Describer<'a, D> {
     /// Propagates a freeze diagnostic if the extracted subgraph is somehow invalid
     /// (it never should be, being a subset of an already-valid dataset).
     pub fn describe_iri(&self, subject: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let seed = self.dataset.term_id_by_value(&TermValue::iri(subject));
+        let seed = self
+            .dataset
+            .term_id_by_value(&TermValue::iri(subject))
+            .map_err(read_diagnostic)?;
         self.describe_seeds(seed.into_iter().collect())
     }
 
@@ -220,10 +250,16 @@ impl<'a, D: DatasetView> Describer<'a, D> {
         &self,
         subjects: impl IntoIterator<Item = &'s str>,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let seeds: Vec<D::Id> = subjects
-            .into_iter()
-            .filter_map(|s| self.dataset.term_id_by_value(&TermValue::iri(s)))
-            .collect();
+        let mut seeds = Vec::new();
+        for subject in subjects {
+            if let Some(id) = self
+                .dataset
+                .term_id_by_value(&TermValue::iri(subject))
+                .map_err(read_diagnostic)?
+            {
+                seeds.push(id);
+            }
+        }
         self.describe_seeds(seeds)
     }
 
@@ -240,6 +276,12 @@ impl<'a, D: DatasetView> Describer<'a, D> {
     /// pushed to the frontier when the annotation is harvested. Otherwise those blanks
     /// dangle — emitted in the subgraph with nothing describing them.
     fn describe_seeds(&self, seeds: Vec<D::Id>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        self.dataset
+            .checked_read(|_| self.describe_seeds_read(seeds))
+            .map_err(read_diagnostic)?
+    }
+
+    fn describe_seeds_read(&self, seeds: Vec<D::Id>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         let mut anchors: BTreeSet<D::Id> = BTreeSet::new();
         let mut frontier: Vec<D::Id> = Vec::new();
         for s in seeds {
@@ -263,7 +305,7 @@ impl<'a, D: DatasetView> Describer<'a, D> {
         macro_rules! expand_blank {
             ($frontier:ident, $anchors:ident, $end:expr) => {{
                 let end = $end;
-                if self.is_blank(end) && $anchors.insert(end) {
+                if self.is_blank(end)? && $anchors.insert(end) {
                     $frontier.push(end);
                 }
             }};
@@ -290,10 +332,12 @@ impl<'a, D: DatasetView> Describer<'a, D> {
                     // (and a blank reifier id, whose own plain quads live in
                     // `by_endpoint`) must be anchored — `expand_blank!` is idempotent.
                     expand_blank!(frontier, anchors, reifier);
-                    if let TermRef::Triple { s, p: _, o } = self.dataset.resolve(triple) {
+                    let guard = self.dataset.resolve(triple).map_err(read_diagnostic)?;
+                    if let TermRef::Triple { s, p: _, o } = guard.term() {
                         expand_blank!(frontier, anchors, s);
                         expand_blank!(frontier, anchors, o);
                     }
+                    drop(guard);
                     // Harvest this DECLARATION's annotations once: the rows keyed by
                     // this reifier that were asserted in the declaration's own graph.
                     // The guard is `(reifier, graph)` because a reifier that reifies two
@@ -323,26 +367,32 @@ impl<'a, D: DatasetView> Describer<'a, D> {
         let mut builder = RdfDatasetBuilder::new();
         let mut remap: BTreeMap<D::Id, TermId> = BTreeMap::new();
         for q in &ordered {
-            let s = self.map_id(&mut builder, &mut remap, q.s);
-            let p = self.map_id(&mut builder, &mut remap, q.p);
-            let o = self.map_id(&mut builder, &mut remap, q.o);
-            let g = q.g.map(|g| self.map_id(&mut builder, &mut remap, g));
+            let s = self.map_id(&mut builder, &mut remap, q.s)?;
+            let p = self.map_id(&mut builder, &mut remap, q.p)?;
+            let o = self.map_id(&mut builder, &mut remap, q.o)?;
+            let g =
+                q.g.map(|g| self.map_id(&mut builder, &mut remap, g))
+                    .transpose()?;
             builder.push_quad(s, p, o, g);
         }
         // The statement layer is re-emitted through the `_in_graph` forms, so a
         // declaration and its annotations land back in the graph they were asserted in
         // rather than being relocated into the default graph.
         for &(reifier, triple, g) in &reifiers {
-            let r = self.map_id(&mut builder, &mut remap, reifier);
-            let t = self.map_id(&mut builder, &mut remap, triple);
-            let g = g.map(|g| self.map_id(&mut builder, &mut remap, g));
+            let r = self.map_id(&mut builder, &mut remap, reifier)?;
+            let t = self.map_id(&mut builder, &mut remap, triple)?;
+            let g = g
+                .map(|g| self.map_id(&mut builder, &mut remap, g))
+                .transpose()?;
             builder.push_reifier_in_graph(r, t, g);
         }
         for &(reifier, p, o, g) in &annotations {
-            let r = self.map_id(&mut builder, &mut remap, reifier);
-            let p = self.map_id(&mut builder, &mut remap, p);
-            let o = self.map_id(&mut builder, &mut remap, o);
-            let g = g.map(|g| self.map_id(&mut builder, &mut remap, g));
+            let r = self.map_id(&mut builder, &mut remap, reifier)?;
+            let p = self.map_id(&mut builder, &mut remap, p)?;
+            let o = self.map_id(&mut builder, &mut remap, o)?;
+            let g = g
+                .map(|g| self.map_id(&mut builder, &mut remap, g))
+                .transpose()?;
             builder.push_annotation_in_graph(r, p, o, g);
         }
 
@@ -350,8 +400,10 @@ impl<'a, D: DatasetView> Describer<'a, D> {
     }
 
     /// Whether a term id is a blank node in the source dataset.
-    fn is_blank(&self, id: D::Id) -> bool {
-        matches!(self.dataset.resolve(id), TermRef::Blank { .. })
+    fn is_blank(&self, id: D::Id) -> Result<bool, RdfDiagnostic> {
+        self.dataset
+            .with_term(id, |term| matches!(term, TermRef::Blank { .. }))
+            .map_err(read_diagnostic)
     }
 
     /// Intern a source term id into `builder`, memoized. `to_owned_term` resolves
@@ -362,14 +414,14 @@ impl<'a, D: DatasetView> Describer<'a, D> {
         builder: &mut RdfDatasetBuilder,
         remap: &mut BTreeMap<D::Id, TermId>,
         old: D::Id,
-    ) -> TermId {
+    ) -> Result<TermId, RdfDiagnostic> {
         if let Some(&new) = remap.get(&old) {
-            return new;
+            return Ok(new);
         }
-        let owned = owned_term(self.dataset, old);
+        let owned = owned_term(self.dataset, old)?;
         let new = builder.intern_owned_term(&owned);
         remap.insert(old, new);
-        new
+        Ok(new)
     }
 }
 
@@ -381,7 +433,9 @@ impl<'a, D: DatasetView> Describer<'a, D> {
 /// # Errors
 /// Propagates a freeze diagnostic (see [`Describer::describe_iri`]).
 pub fn describe(dataset: &RdfDataset, subject: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    Describer::new(dataset).describe_iri(subject)
+    Describer::try_new(dataset)
+        .map_err(read_diagnostic)?
+        .describe_iri(subject)
 }
 
 #[cfg(test)]
@@ -503,7 +557,7 @@ mod tests {
             "blank-node closure must keep both hops"
         );
         // The blank's onProperty edge is present (object is the named target).
-        let has_target = scbd.quad_refs().any(|q| {
+        let has_target = scbd.as_ref().quad_refs().any(|q| {
             matches!(q.p, TermRef::Iri(i) if i == "https://e/onProperty")
                 && matches!(q.o, TermRef::Iri(i) if i == "https://e/target")
         });
@@ -584,7 +638,7 @@ mod tests {
             1,
             "the reifier about S must be kept"
         );
-        let has_author = scbd.quad_refs().any(|q| {
+        let has_author = scbd.as_ref().quad_refs().any(|q| {
             matches!(q.s, TermRef::Blank { .. })
                 && matches!(q.p, TermRef::Iri(i) if i == "https://e/author")
                 && matches!(q.o, TermRef::Iri(i) if i == "https://e/alice")
@@ -625,7 +679,7 @@ mod tests {
             "the source annotation must be kept"
         );
         // The blank provenance node's `by agent` triple must survive (no dangling blank).
-        let has_by = scbd.quad_refs().any(|q| {
+        let has_by = scbd.as_ref().quad_refs().any(|q| {
             matches!(q.s, TermRef::Blank { .. })
                 && matches!(q.p, TermRef::Iri(i) if i == "https://e/by")
                 && matches!(q.o, TermRef::Iri(i) if i == "https://e/agent")
@@ -695,6 +749,7 @@ mod tests {
             "the annotation must stay in the graph that asserted it"
         );
         let base_graph = scbd
+            .as_ref()
             .quad_refs()
             .map(|q| q.g.map(|g| format!("{g:?}")))
             .collect::<Vec<_>>();
@@ -812,6 +867,7 @@ mod tests {
             "both reified triples must be kept"
         );
         let has_deep = scbd
+            .as_ref()
             .quad_refs()
             .any(|q| matches!(q.p, TermRef::Iri(i) if i == "https://e/deep"));
         assert!(
@@ -842,7 +898,7 @@ mod term_walk_tests {
                     reference(dataset, o),
                 ))
             }
-            _ => owned_term(dataset, id),
+            _ => owned_term(dataset, id).expect("a generated resident term resolves"),
         }
     }
 
@@ -866,7 +922,7 @@ mod term_walk_tests {
             let dataset = builder.freeze().expect("a generated term freezes");
             let object = dataset.quads().next().expect("one quad").o;
             assert_eq!(
-                owned_term(&*dataset, object),
+                owned_term(&*dataset, object).expect("a generated resident term resolves"),
                 reference(&dataset, object),
                 "seed {seed}"
             );

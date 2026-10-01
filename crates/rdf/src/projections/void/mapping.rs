@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use crate::projections::util::push_iri_triple;
+use purrdf_core::dataset_view::TermGuard as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -77,32 +78,35 @@ fn selected_records<D: DatasetView>(
     view: &D,
     config: &VoidConfig,
 ) -> Result<BTreeSet<SourceRecord>, ProjectionError> {
-    let input_records = view
-        .quads()
-        .count()
-        .checked_add(view.named_graphs().count())
-        .and_then(|count| count.checked_add(view.reifier_quads().count()))
-        .and_then(|count| count.checked_add(view.annotation_quads().count()))
-        .ok_or_else(|| ProjectionError::limit("VoID input record count overflow"))?;
-    if input_records > config.execution_limits().max_input_records() {
-        return Err(ProjectionError::limit(format!(
-            "VoID input has {input_records} records; limit is {}",
-            config.execution_limits().max_input_records()
-        )));
-    }
+    view.checked_read(|view| {
+        let input_records = view
+            .quads()
+            .count()
+            .checked_add(view.named_graphs().count())
+            .and_then(|count| count.checked_add(view.reifier_quads().count()))
+            .and_then(|count| count.checked_add(view.annotation_quads().count()))
+            .ok_or_else(|| ProjectionError::limit("VoID input record count overflow"))?;
+        if input_records > config.execution_limits().max_input_records() {
+            return Err(ProjectionError::limit(format!(
+                "VoID input has {input_records} records; limit is {}",
+                config.execution_limits().max_input_records()
+            )));
+        }
 
-    let mut records = BTreeSet::new();
-    for row in view
-        .quads()
-        .chain(view.reifier_quads())
-        .chain(view.annotation_quads())
-    {
-        let Some(graph) = selected_graph(view, row.g, config)? else {
-            continue;
-        };
-        records.insert(resolve_record(view, row, graph, config)?);
-    }
-    Ok(records)
+        let mut records = BTreeSet::new();
+        for row in view
+            .quads()
+            .chain(view.reifier_quads())
+            .chain(view.annotation_quads())
+        {
+            let Some(graph) = selected_graph(view, row.g, config)? else {
+                continue;
+            };
+            records.insert(resolve_record(view, row, graph, config)?);
+        }
+        Ok(records)
+    })
+    .map_err(ProjectionError::source_read)?
 }
 
 fn selected_graph<D: DatasetView>(
@@ -110,9 +114,13 @@ fn selected_graph<D: DatasetView>(
     graph: Option<D::Id>,
     config: &VoidConfig,
 ) -> Result<Option<VoidGraphSelector>, ProjectionError> {
-    let graph_iri = match graph {
+    let graph_guard = graph
+        .map(|id| view.resolve(id))
+        .transpose()
+        .map_err(ProjectionError::source_read)?;
+    let graph_iri = match graph_guard.as_ref() {
         None => None,
-        Some(graph) => match view.resolve(graph) {
+        Some(graph) => match graph.term() {
             TermRef::Iri(iri) => Some(iri),
             TermRef::Blank { .. } => return Ok(None),
             TermRef::Literal { .. } | TermRef::Triple { .. } => {
@@ -144,7 +152,8 @@ fn resolve_record<D: DatasetView>(
     graph: VoidGraphSelector,
     config: &VoidConfig,
 ) -> Result<SourceRecord, ProjectionError> {
-    let TermRef::Iri(predicate) = view.resolve(row.p) else {
+    let guard = view.resolve(row.p).map_err(ProjectionError::source_read)?;
+    let TermRef::Iri(predicate) = guard.term() else {
         return Err(ProjectionError::integrity(
             "VoID source predicate does not resolve to an IRI",
         ));

@@ -17,6 +17,7 @@
 #[path = "support/values.rs"]
 mod values;
 use purrdf_core::TermBox;
+use purrdf_core::TermGuard as _;
 use purrdf_core::term_fixture::iri;
 use purrdf_core::term_fixture::pack_bytes as build_pack_bytes;
 use std::sync::Arc;
@@ -50,6 +51,7 @@ fn resolve_graph<V: DatasetView>(v: &V, spec: &GraphSpec) -> GraphMatch<V::Id> {
         GraphSpec::Named(value) => {
             let id = v
                 .term_id_by_value(value)
+                .expect("fixture reverse lookup succeeds")
                 .unwrap_or_else(|| panic!("graph value {value:?} must be interned"));
             GraphMatch::Named(id)
         }
@@ -63,6 +65,7 @@ fn opt_id<V: DatasetView>(v: &V, value: Option<&TermValue>) -> Option<V::Id> {
     let value = value?;
     Some(
         v.term_id_by_value(value)
+            .expect("fixture reverse lookup succeeds")
             .unwrap_or_else(|| panic!("value {value:?} must be interned")),
     )
 }
@@ -98,6 +101,7 @@ fn pattern_rows<V: DatasetView>(
 fn walk_members<V: DatasetView>(v: &V, head: &TermValue, graph: &GraphSpec) -> Vec<TermValue> {
     let head_id = v
         .term_id_by_value(head)
+        .expect("fixture reverse lookup succeeds")
         .unwrap_or_else(|| panic!("list head {head:?} must be interned"));
     let g_match = resolve_graph(v, graph);
     v.members(head_id, g_match)
@@ -144,6 +148,7 @@ fn annotation_rows<V: DatasetView>(v: &V) -> Vec<Vec<TermValue>> {
 fn annotations_of_rows<V: DatasetView>(v: &V, reifier: &TermValue) -> Vec<Vec<TermValue>> {
     let reifier_id = v
         .term_id_by_value(reifier)
+        .expect("fixture reverse lookup succeeds")
         .unwrap_or_else(|| panic!("reifier {reifier:?} must be interned"));
     let mut rows: Vec<Vec<TermValue>> = v
         .annotations_of_with_graph(reifier_id)
@@ -428,6 +433,7 @@ fn resolve_and_quad_refs_match_source() {
     for value in &single_values {
         let pack_id = pack
             .term_id_by_value(value)
+            .expect("fixture reverse lookup succeeds")
             .unwrap_or_else(|| panic!("value {value:?} must be interned in the pack"));
         assert_eq!(
             &to_value(&pack, pack_id),
@@ -441,6 +447,8 @@ fn resolve_and_quad_refs_match_source() {
     fn quad_ref_rows<V: DatasetView>(v: &V) -> Vec<Vec<TermValue>> {
         v.quad_refs()
             .map(|qr| {
+                let resolved = qr.expect("fixture row resolves");
+                let qr = resolved.as_ref();
                 let s = quad_ref_term_value(v, qr.s);
                 let p = quad_ref_term_value(v, qr.p);
                 let o = quad_ref_term_value(v, qr.o);
@@ -466,7 +474,8 @@ fn resolve_and_quad_refs_match_source() {
                 language,
                 direction,
             } => {
-                let datatype = match v.resolve(datatype) {
+                let datatype_pin = v.resolve(datatype).expect("fixture datatype resolves");
+                let datatype = match datatype_pin.term() {
                     TermRef::Iri(s) => s.to_owned(),
                     other => panic!("literal datatype must resolve to an IRI, got {other:?}"),
                 };
@@ -541,8 +550,14 @@ fn collection_members_match_source() {
     assert_eq!(single_members, pack_members, "member parity");
 
     // `rdf_list` directly (not just the `members` dispatcher) agrees too.
-    let head_id_single = single.term_id_by_value(&iri("c1")).expect("c1 interned");
-    let head_id_pack = pack.term_id_by_value(&iri("c1")).expect("c1 interned");
+    let head_id_single = single
+        .term_id_by_value(&iri("c1"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("c1 interned");
+    let head_id_pack = pack
+        .term_id_by_value(&iri("c1"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("c1 interned");
     let single_list = single
         .rdf_list(head_id_single, GraphMatch::Default)
         .expect("well-formed list");
@@ -568,8 +583,17 @@ fn term_id_by_value_absent_capabilities_and_term_count() {
 
     // Absence is an empty match, never an error.
     let absent = iri("this-value-was-never-interned");
-    assert_eq!(single.term_id_by_value(&absent), None);
-    assert_eq!(pack.term_id_by_value(&absent), None);
+    assert_eq!(
+        single
+            .term_id_by_value(&absent)
+            .expect("fixture reverse lookup succeeds"),
+        None
+    );
+    assert_eq!(
+        pack.term_id_by_value(&absent)
+            .expect("fixture reverse lookup succeeds"),
+        None
+    );
 
     // Capabilities agree: named graphs, quoted triples, reifiers, and annotations
     // are all exercised by the fixture; source locations/loss records/lookaside are
@@ -597,7 +621,11 @@ fn term_id_by_value_absent_capabilities_and_term_count() {
     // equality that would be sensitive to that closure).
     assert!(pack.term_count() >= single.term_count());
     for value in &named_graph_values(&*single) {
-        assert!(pack.term_id_by_value(value).is_some());
+        assert!(
+            pack.term_id_by_value(value)
+                .expect("fixture reverse lookup succeeds")
+                .is_some()
+        );
     }
 }
 
@@ -615,7 +643,7 @@ fn pack_view_is_dataset_view_send_sync() {
     let single = build_fixture();
     let bytes = build_pack_bytes(&single);
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
-    fn use_as_dataset_view<V: DatasetView>(v: &V) -> usize {
+    fn use_as_dataset_view<V: DatasetView>(v: &V) -> u64 {
         v.term_count()
     }
     assert!(use_as_dataset_view(&pack) > 0);

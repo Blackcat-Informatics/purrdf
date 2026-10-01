@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use purrdf_core::TermBox;
+use purrdf_core::dataset_view::TermGuard as _;
 use std::collections::BTreeSet;
 
 use purrdf_core::{BlankScope, DatasetView, RdfLiteral, RdfTextDirection, TermRef, TermValue};
@@ -179,7 +180,9 @@ impl ProjectionTerm {
         limits: ProjectionLimits,
     ) -> Result<Self, ProjectionError> {
         let mut active = BTreeSet::new();
-        let term = Self::from_view_inner(view, id, limits, 0, &mut active)?;
+        let term = view
+            .checked_read(|view| Self::from_view_inner(view, id, limits, 0, &mut active))
+            .map_err(ProjectionError::source_read)??;
         term.validate(limits)?;
         Ok(term)
     }
@@ -194,7 +197,8 @@ impl ProjectionTerm {
         if !active.insert(id) {
             return Err(ProjectionError::term("cyclic triple-term component graph"));
         }
-        let result = match view.resolve(id) {
+        let guard = view.resolve(id).map_err(ProjectionError::source_read)?;
+        let result = match guard.term() {
             TermRef::Iri(value) => Ok(Self::Iri {
                 value: value.to_owned(),
             }),
@@ -208,7 +212,10 @@ impl ProjectionTerm {
                 language,
                 direction,
             } => {
-                let TermRef::Iri(datatype) = view.resolve(datatype) else {
+                let datatype_guard = view
+                    .resolve(datatype)
+                    .map_err(ProjectionError::source_read)?;
+                let TermRef::Iri(datatype) = datatype_guard.term() else {
                     active.remove(&id);
                     return Err(ProjectionError::term(
                         "literal datatype position does not resolve to an IRI",

@@ -79,6 +79,8 @@ _GTS_EXPORTS = (
     "RdfDataset",
     "GtsFoldViewNative",
     "gts_relational_rows_from_bytes",
+    "gts_columnar_rows_from_bytes",
+    "gts_columnar_parquet_from_bytes",
     "gts_to_sqlite",
     "gts_to_duckdb",
     "gts_to_parquet",
@@ -88,11 +90,8 @@ for _name in _GTS_EXPORTS:
     if _value is not None:
         setattr(_gts, _name, _value)
 
-# The three relational EXPORT writers are pure Python (see `_gts_export`), layered
-# on the native `gts_relational_rows_from_bytes` above. They are attached to the
-# root module as well as to `purrdf.gts` because that is where they have always
-# been importable from: they used to be `#[pyfunction]`s registered natively onto
-# `rdf`, and moving the implementation must not move the name.
+# Relational host I/O uses the Rust-owned canonical native v1 projection.
+# The public writer names remain available at the root and under purrdf.gts.
 from . import _gts_export as _gts_export_impl  # noqa: E402
 
 for _name in ("gts_to_sqlite", "gts_to_duckdb", "gts_to_parquet"):

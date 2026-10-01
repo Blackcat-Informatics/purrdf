@@ -1949,7 +1949,10 @@ impl RdfDataset {
     /// never incorrect. For a content-exact identity use the RDFC-1.0 canonical digest.
     #[inline]
     pub fn stats_fingerprint(&self) -> u64 {
-        crate::hash::stats_fingerprint(self.quads.len(), self.terms.len())
+        crate::hash::stats_fingerprint(
+            u64::try_from(self.quads.len()).expect("local quad count fits u64"),
+            u64::try_from(self.terms.len()).expect("local term count fits u64"),
+        )
     }
 
     /// The caller-configured content-id recognition scheme (see

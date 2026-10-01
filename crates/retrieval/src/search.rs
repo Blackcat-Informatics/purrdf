@@ -527,7 +527,7 @@ pub async fn search<S, D>(
 ) -> Result<SearchResult, SearchError>
 where
     S: Statistics,
-    D: DatasetView + Sync,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
 {
     // 1. Plan. A pure function of the request, the registry and the statistics.
     let plan = plan(request, registry, statistics).map_err(SearchError::PlanError)?;
@@ -580,7 +580,7 @@ async fn read_and_fuse<D>(
     profile: &FusionProfile,
 ) -> Result<Attempt, SearchError>
 where
-    D: DatasetView + Sync,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
 {
     // 3. Execute. Each stratum runs independently against the caller's dataset; a
     //    failed stratum is a status, not a stream.

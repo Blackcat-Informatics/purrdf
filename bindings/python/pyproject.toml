@@ -2,16 +2,18 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 [build-system]
-requires = ["maturin>=1.7,<2"]
-build-backend = "maturin"
+requires = ["maturin>=1.9,<2"]
+build-backend = "purrdf_build_backend"
+backend-path = ["."]
 
 [project]
 name = "purrdf"
-version = "2.0.2"
+version = "3.0.0"
 description = "Python bindings for the PurRDF RDF 1.2 kernel, GTS carrier, SHACL, and slice tooling"
 readme = "README.md"
 requires-python = ">=3.13"
-license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+dynamic = ["license"]
+license-files = ["licenses/*", "licenses/**/*"]
 authors = [
   { name = "Blackcat Informatics Inc.", email = "paudley@blackcatinformatics.ca" },
 ]
@@ -30,11 +32,10 @@ classifiers = [
 # It MUST NOT be installed alongside the genuine rdflib (import-name collision) —
 # hence a separate distribution (bindings/python-rdflib-shadow), never bundled
 # into the main purrdf wheel and deliberately absent from the [dev] oracle env.
-rdflib = ["purrdf-rdflib"]
-# The optional halves of the GTS relational export surface. `gts_to_sqlite` needs
-# NEITHER — `sqlite3` is in the standard library — which is why there is no
-# `sqlite` extra to install: an extra that resolves to nothing is a way to make a
-# caller think they have to opt in to something that already works.
+rdflib = ["purrdf-rdflib==3.0.0"]
+# DuckDB is optional. SQLite uses the standard library; Parquet writing uses
+# the first-party native codec. The parquet extra supplies PyArrow for consumers
+# who want to read or interoperate with the emitted native v1 files.
 duckdb = ["duckdb>=1.1"]
 parquet = ["pyarrow>=17"]
 
@@ -53,7 +54,7 @@ dev = [
   "pytest>=8,<10",
   "rdflib>=7.1,<8",
   "mypy>=1.10",
-  "maturin>=1.7,<2",
+  "maturin>=1.9,<2",
   "pyshacl",
   "SPARQLWrapper",
   "sssom",
@@ -99,5 +100,10 @@ manifest-path = "Cargo.toml"
 module-name = "purrdf.purrdf_native"
 python-source = "python/src"
 bindings = "pyo3"
-include = [{ path = "rust-toolchain.toml", format = "sdist" }]
+include = [
+  { path = "purrdf_build_backend.py", format = "sdist" },
+  { path = "rust-toolchain.toml", format = "sdist" },
+  { path = "licenses/*", format = "sdist" },
+  { path = "licenses/**/*", format = "sdist" },
+]
 exclude = ["**/__pycache__/*", "**/*.pyc"]

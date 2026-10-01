@@ -29,7 +29,10 @@ struct ProjectOp<'a> {
 impl ViewOp for ProjectOp<'_> {
     type Output = ProjectionArchive;
 
-    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        self,
+        view: &D,
+    ) -> Result<Self::Output, CliError> {
         Ok(if let Some(assets) = self.assets {
             project_archive_with_assets(view, self.profile.to_profile(), self.config, assets)?
         } else {

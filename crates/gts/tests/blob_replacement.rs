@@ -11,7 +11,7 @@ use purrdf_lex::cbor::Value;
 
 #[derive(Debug, PartialEq)]
 struct Event {
-    segment: usize,
+    segment: u64,
     bytes: Vec<u8>,
     media_type: Option<String>,
     declared: bool,

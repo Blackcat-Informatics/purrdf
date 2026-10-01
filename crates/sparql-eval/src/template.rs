@@ -30,7 +30,7 @@
 //! it emits documents PurRDF cannot read back.
 //!
 //! These helpers stop at the dataset-independent [`TermValue`]: a bound variable is
-//! resolved via `ctx.scratch.value_of(ctx.dataset, term)`, so the value is valid
+//! resolved via `ctx.scratch.try_value_of(ctx.dataset, term).ok()?`, so the value is valid
 //! across a snapshot→mutable boundary (the UPDATE round-trip).
 
 use purrdf_core::TermBox;
@@ -363,7 +363,7 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
                         return None;
                     };
                     let term = ord.and_then(|c| row[c])?;
-                    values.push(ctx.scratch.value_of(ctx.dataset, term));
+                    values.push(ctx.scratch.try_value_of(ctx.dataset, term).ok()?);
                 }
                 TermPattern::BlankNode(b) => values.push(fresh_blank(b.as_str(), blanks, ctx)),
                 TermPattern::Triple(t) => {
@@ -429,7 +429,7 @@ pub(crate) fn instantiate_predicate<D: DatasetView + Sync>(
                 return None;
             };
             let term = ord.and_then(|c| row[c])?;
-            Some(ctx.scratch.value_of(ctx.dataset, term))
+            Some(ctx.scratch.try_value_of(ctx.dataset, term).ok()?)
         }
     }
 }
@@ -617,7 +617,7 @@ mod term_walk_tests {
                     panic!("the ordinal mirrors the pattern");
                 };
                 let term = ord.and_then(|c| row[c])?;
-                Some(ctx.scratch.value_of(ctx.dataset, term))
+                Some(ctx.scratch.try_value_of(ctx.dataset, term).ok()?)
             }
             TermPattern::BlankNode(b) => Some(fresh_blank(b.as_str(), blanks, ctx)),
             TermPattern::Triple(t) => {

@@ -72,6 +72,117 @@ _EXPORT_MACROS = ("shacl_entries",)
 _MACRO_ENTRY_RE = re.compile(r"^\s+(\w+): fn (\w+)\(")
 
 
+def _cfg_possible_without_test(expression: str) -> bool:
+    """Conservative cfg evaluation: test is false; every other atom is unknown.
+
+    This excludes all(test, target_arch="wasm32") but preserves
+    any(test, target_arch="wasm32"), which really can ship. Unknown syntax
+    remains in the release census rather than hiding an export.
+    """
+    pattern = r'"(?:\\.|[^"\\])*"|[A-Za-z_]\w*|[=(),]'
+    matches = list(re.finditer(pattern, expression))
+    end = 0
+    for match in matches:
+        if expression[end:match.start()].strip():
+            return True
+        end = match.end()
+    if expression[end:].strip():
+        return True
+    tokens = [match.group() for match in matches]
+    position = 0
+
+    def parse() -> tuple[bool, bool]:
+        nonlocal position
+        if position >= len(tokens):
+            raise ValueError("missing cfg predicate")
+        name = tokens[position]
+        position += 1
+        if position < len(tokens) and tokens[position] == "=":
+            position += 2  # Unknown key/value predicate, including its quoted value.
+            return True, True
+        if position >= len(tokens) or tokens[position] != "(":
+            return (False, True) if name == "test" else (True, True)
+        position += 1
+        arguments = []
+        while position < len(tokens) and tokens[position] != ")":
+            arguments.append(parse())
+            if position < len(tokens) and tokens[position] == ",":
+                position += 1
+            elif position < len(tokens) and tokens[position] != ")":
+                raise ValueError("missing cfg separator")
+        if position >= len(tokens):
+            raise ValueError("unclosed cfg predicate")
+        position += 1
+        if name == "all":
+            return all(arg[0] for arg in arguments), any(arg[1] for arg in arguments)
+        if name == "any":
+            return any(arg[0] for arg in arguments), all(arg[1] for arg in arguments)
+        if name == "not" and len(arguments) == 1:
+            return arguments[0][1], arguments[0][0]
+        raise ValueError("unknown cfg operation")
+
+    try:
+        can_be_true, _ = parse()
+        return can_be_true if position == len(tokens) else True
+    except ValueError:
+        return True
+
+
+def _test_only_attributes(text: str) -> bool:
+    return any(
+        not _cfg_possible_without_test(expression)
+        for expression in re.findall(r"#\[cfg\(([\s\S]*?)\)\]", text)
+    )
+
+
+def _attribute_start(lines: list[str], index: int) -> int:
+    """Find the contiguous attribute/doc run before wasm_bindgen, including cfg."""
+    start = index
+    while start > 0:
+        previous = lines[start - 1]
+        if previous.startswith(("#[", "///")):
+            start -= 1
+        elif previous.endswith("]"):
+            candidate = start - 1
+            while candidate > 0 and not lines[candidate].startswith("#["):
+                if not lines[candidate].strip():
+                    break
+                candidate -= 1
+            if not lines[candidate].startswith("#["):
+                break
+            start = candidate
+        else:
+            break
+    return start
+
+
+def self_test() -> None:
+    cases = {
+        "test": False,
+        'all(test, target_arch="wasm32")': False,
+        'all(target_arch="wasm32", test,)': False,
+        'any(test, target_arch="wasm32")': True,
+        "not(test)": True,
+        "not(not(test))": False,
+        'all(not(test), target_arch="wasm32")': True,
+        "all()": True,
+        "any()": False,
+        "unknown(test)": True,
+        "all(test": True,
+        "test!": True,
+    }
+    for expression, expected in cases.items():
+        assert _cfg_possible_without_test(expression) == expected, expression
+    lines = ['/// Test fixture.', '#[cfg(all(test, target_arch = "wasm32"))]',
+             '#[wasm_bindgen]', 'pub fn fixture() {}']
+    assert _test_only_attributes("\n".join(lines[_attribute_start(lines, 2):3]))
+    assert not _test_only_attributes('#[cfg(any(test, target_arch="wasm32"))]')
+    assert not _test_only_attributes('#[cfg_attr(test, allow(dead_code))]')
+    multiline = ['#[cfg(', '    all(test, target_arch="wasm32")', ')]', '#[wasm_bindgen]']
+    assert _attribute_start(multiline, 3) == 0
+    assert _test_only_attributes("\n".join(multiline))
+
+
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -118,7 +229,8 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
                         j += 1
                         depth += lines[j].count("[") - lines[j].count("]")
                 j += 1
-            if j < n and not is_start:
+            test_only = _test_only_attributes("\n".join(lines[_attribute_start(lines, i):j]))
+            if j < n and not is_start and not test_only:
                 fn_match = _PUB_FN_RE.match(lines[j])
                 if fn_match:
                     rust_name = fn_match.group(1)
@@ -298,6 +410,10 @@ def index_dts_declared_names() -> set[str]:
 
 
 def main() -> int:
+    self_test()
+    if sys.argv[1:] == ["--self-test"]:
+        print("OK: release cfg census preserves possible shipping exports and excludes test-only fixtures")
+        return 0
     rust_exports = free_function_exports()
     js_exports = index_mjs_export_names()
     rel_index = _INDEX_MJS.relative_to(_REPO)

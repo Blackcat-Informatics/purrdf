@@ -1,0 +1,35 @@
+{
+  "components": [
+    {
+      "id": "shacl",
+      "license": "W3C-20150513",
+      "notices": [
+        "third-party/shacl/0-W3C-software-document-2015.html",
+        "third-party/shacl/1-LICENSE.md"
+      ],
+      "paths": [
+        "vectors/shacl/core/**",
+        "vectors/shacl/sparql/**",
+        "crates/shapes/spec/**"
+      ],
+      "provenance": [
+        "vectors/shacl/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/data-shapes/tree/08adb3776709a014bc3062ede793c36275b22446"
+    }
+  ],
+  "files": {
+    "CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+    "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+    "NOTICE.txt": "ef181b91122585c53518fe16694450af5b98b3d6cd00155a3e60a1450e34e06f",
+    "third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9"
+  },
+  "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "package_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "profile": "purrdf-shapes",
+  "schema": 1
+}

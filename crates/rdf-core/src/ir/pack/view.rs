@@ -147,6 +147,11 @@ fn unified_graph(g: GraphMatch<PackId>) -> GraphMatch<PackTermId> {
 /// performs at every boundary.
 impl DatasetView for PackView<'_> {
     type Id = PackId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = ();
 
     /// A pack's dictionary is admitted only when no triple term in it nests past
@@ -159,10 +164,12 @@ impl DatasetView for PackView<'_> {
         self.triples().all_quads().map(map_quad)
     }
 
-    fn resolve(&self, id: PackId) -> TermRef<'_, PackId> {
-        self.dict()
-            .resolve(id.as_unified())
-            .map_ids(PackId::from_unified)
+    fn resolve(&self, id: PackId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok({
+            self.dict()
+                .resolve(id.as_unified())
+                .map_ids(PackId::from_unified)
+        })
     }
 
     fn quads_for_pattern(
@@ -182,23 +189,26 @@ impl DatasetView for PackView<'_> {
             .map(map_quad)
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<PackId> {
-        self.dict().id_by_value(value).and_then(PackId::new)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok(self.dict().id_by_value(value).and_then(PackId::new))
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
         Self::capabilities(self)
     }
 
-    fn len_hint(&self) -> Option<usize> {
-        // `cardinality_upper_bound` on the fully-unbound, any-graph pattern sums each
-        // partition's own `n_triples` (see `partition_upper_bound`'s `(None, None,
-        // None)` arm) — an EXACT quad count here, not merely an upper bound, and
-        // cheap (`O(partitions)`, no materialization).
-        Some(
-            self.triples()
-                .cardinality_upper_bound(None, None, None, GraphMatch::Any),
-        )
+    fn len_hint(&self) -> Option<u64> {
+        ({
+            // `cardinality_upper_bound` on the fully-unbound, any-graph pattern sums each
+            // partition's own `n_triples` (see `partition_upper_bound`'s `(None, None,
+            // None)` arm) — an EXACT quad count here, not merely an upper bound, and
+            // cheap (`O(partitions)`, no materialization).
+            Some(
+                self.triples()
+                    .cardinality_upper_bound(None, None, None, GraphMatch::Any),
+            )
+        })
+        .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
     }
 
     fn probe_plan(
@@ -229,24 +239,30 @@ impl DatasetView for PackView<'_> {
         p: Option<PackId>,
         o: Option<PackId>,
         g: GraphMatch<PackId>,
-    ) -> usize {
-        self.triples().cardinality_upper_bound(
-            s.map(PackId::as_unified),
-            p.map(PackId::as_unified),
-            o.map(PackId::as_unified),
-            unified_graph(g),
-        )
+    ) -> u64 {
+        u64::try_from({
+            self.triples().cardinality_upper_bound(
+                s.map(PackId::as_unified),
+                p.map(PackId::as_unified),
+                o.map(PackId::as_unified),
+                unified_graph(g),
+            )
+        })
+        .expect("bounded local count fits u64")
     }
 
-    fn term_count(&self) -> usize {
-        self.dict().n_terms() as usize
+    fn term_count(&self) -> u64 {
+        self.dict().n_terms()
     }
 
-    fn term_bytes_hint(&self) -> Option<usize> {
-        // The dictionary decoded its strings into ONE arena at open time, so the
-        // figure is already sitting there — exact for the terms this view resolves,
-        // and read in O(1).
-        Some(self.dict().arena_len())
+    fn term_bytes_hint(&self) -> Option<u64> {
+        ({
+            // The dictionary decoded its strings into ONE arena at open time, so the
+            // figure is already sitting there — exact for the terms this view resolves,
+            // and read in O(1).
+            Some(self.dict().arena_len())
+        })
+        .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
     }
 
     fn stats_fingerprint(&self) -> u64 {
@@ -255,7 +271,10 @@ impl DatasetView for PackView<'_> {
         let quads = self
             .triples()
             .cardinality_upper_bound(None, None, None, GraphMatch::Any);
-        crate::hash::stats_fingerprint(quads, self.term_count())
+        crate::hash::stats_fingerprint(
+            u64::try_from(quads).expect("local pack row count fits u64"),
+            self.term_count(),
+        )
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<PackId>> + '_ {

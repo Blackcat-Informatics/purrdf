@@ -305,7 +305,7 @@ impl ShapesImports {
     /// # Errors
     ///
     /// [`ShapesImportError::InvalidLink`] when a link's value is not an IRI.
-    pub fn link_data_graph<D: DatasetView>(
+    pub fn link_data_graph<D: DatasetView<ReadError = std::convert::Infallible>>(
         &mut self,
         data: &D,
         loaded: &[&str],
@@ -764,7 +764,7 @@ pub fn resolve_shapes_imports(
 /// # Errors
 ///
 /// [`ShapesImportError::InvalidLink`] naming every anchor's value that is not an IRI.
-pub fn data_graph_links<D: DatasetView>(
+pub fn data_graph_links<D: DatasetView<ReadError = std::convert::Infallible>>(
     data: &D,
     loaded: &[&str],
 ) -> Result<Vec<String>, ShapesImportError> {
@@ -773,17 +773,17 @@ pub fn data_graph_links<D: DatasetView>(
 
 /// [`data_graph_links`] with the `sh:shapesGraph` term already built, so a caller reading
 /// several graphs spells it once.
-pub(crate) fn data_graph_links_by<D: DatasetView>(
+pub(crate) fn data_graph_links_by<D: DatasetView<ReadError = std::convert::Infallible>>(
     data: &D,
     link: &TermValue,
     loaded: &[&str],
 ) -> Result<Vec<String>, ShapesImportError> {
-    let Some(predicate) = data.term_id_by_value(link) else {
+    let Some(predicate) = data.term_id_by_value(link).unwrap() else {
         return Ok(Vec::new());
     };
     let mut anchors: Vec<D::Id> = loaded
         .iter()
-        .filter_map(|iri| data.term_id_by_value(&TermValue::iri(*iri)))
+        .filter_map(|iri| data.term_id_by_value(&TermValue::iri(*iri)).unwrap())
         .collect();
     anchors.extend(
         GraphRoleIndex::classify(data)
@@ -802,7 +802,8 @@ pub(crate) fn data_graph_links_by<D: DatasetView>(
         if anchors.binary_search(&quad.s).is_err() {
             continue;
         }
-        match data.resolve(quad.o) {
+        let guard = data.resolve(quad.o).unwrap();
+        match purrdf_core::TermGuard::term(&guard) {
             TermRef::Iri(iri) => {
                 if !links.iter().any(|link| link == iri) {
                     links.push(iri.to_owned());
@@ -839,7 +840,7 @@ pub(crate) fn data_graph_links_by<D: DatasetView>(
 ///
 /// [`ShapesImportError::InvalidLink`] for a non-IRI link value;
 /// [`ShapesImportError::UnheldLink`] naming every linked graph `shapes` does not hold.
-pub fn check_data_graph_links<D: DatasetView>(
+pub fn check_data_graph_links<D: DatasetView<ReadError = std::convert::Infallible>>(
     data: &D,
     loaded: &[&str],
     shapes: &crate::shapes::Shapes,

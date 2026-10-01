@@ -39,11 +39,44 @@
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct Position {
     /// 1-based line number.
-    pub line: u32,
+    pub line: u64,
     /// 1-based column, counted in Unicode scalar values from the line start.
     pub column: u32,
     /// Byte offset into the source, clamped to a `char` boundary within `[0, len]`.
     pub byte_offset: usize,
+}
+
+impl Position {
+    /// The 1-based column after a line prefix, counted in Unicode scalar values.
+    ///
+    /// # Errors
+    /// Refuses a column exceeding `u32::MAX`.
+    pub fn column_after(prefix: &str) -> Result<u32, PositionError> {
+        checked_column(prefix.chars().count())
+    }
+}
+
+/// A source position cannot fit its explicitly bounded local column space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PositionError {
+    /// The 1-based Unicode-scalar column exceeds `u32::MAX`.
+    ColumnLimit,
+}
+
+impl core::fmt::Display for PositionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ColumnLimit => f.write_str("source column exceeds u32::MAX"),
+        }
+    }
+}
+
+impl std::error::Error for PositionError {}
+
+fn checked_column(scalars: usize) -> Result<u32, PositionError> {
+    let scalars = u32::try_from(scalars).map_err(|_| PositionError::ColumnLimit)?;
+    scalars.checked_add(1).ok_or(PositionError::ColumnLimit)
 }
 
 /// A newline table over one source document.
@@ -78,9 +111,23 @@ impl LineIndex {
     ///
     /// An offset past the end of `src` is clamped to end-of-input, and an offset
     /// landing inside a multi-byte `char` is clamped down to the enclosing `char`
-    /// boundary. This never panics, whatever offset a lexer hands it.
+    /// boundary. Offsets never cause a panic. Use [`Self::try_locate`] for
+    /// sources whose columns may exceed the bounded local column space.
+    ///
+    /// # Panics
+    /// Panics if the source column exceeds `u32::MAX`.
     #[must_use]
     pub fn locate(&self, src: &str, byte_offset: usize) -> Position {
+        self.try_locate(src, byte_offset)
+            .expect("source fits the bounded local column space")
+    }
+
+    /// Resolve a position, refusing a column outside its bounded local space.
+    /// Offsets past the source or inside a scalar clamp as in [`Self::locate`].
+    ///
+    /// # Errors
+    /// Returns [`PositionError::ColumnLimit`] instead of saturating a long column.
+    pub fn try_locate(&self, src: &str, byte_offset: usize) -> Result<Position, PositionError> {
         // Clamp to the source length, then down to a char boundary so the
         // column slice below can never split a multi-byte scalar value.
         let off = src.floor_char_boundary(byte_offset);
@@ -89,13 +136,13 @@ impl LineIndex {
         // `line_starts[0] == 0 <= off`, so `count` is always >= 1.
         let count = self.line_starts.partition_point(|&start| start <= off);
         let line_start = self.line_starts[count - 1];
-        let column = src[line_start..off].chars().count() + 1;
+        let column = Position::column_after(&src[line_start..off])?;
 
-        Position {
-            line: u32::try_from(count).unwrap_or(u32::MAX),
-            column: u32::try_from(column).unwrap_or(u32::MAX),
+        Ok(Position {
+            line: count as u64,
+            column,
             byte_offset: off,
-        }
+        })
     }
 
     /// Resolve `byte_offset` to a `(line, column)` pair (both 1-based).
@@ -103,7 +150,7 @@ impl LineIndex {
     /// A convenience over [`locate`](Self::locate) for callers that only need the
     /// line/column and not the clamped byte offset.
     #[must_use]
-    pub fn line_col(&self, src: &str, byte_offset: usize) -> (u32, u32) {
+    pub fn line_col(&self, src: &str, byte_offset: usize) -> (u64, u32) {
         let p = self.locate(src, byte_offset);
         (p.line, p.column)
     }
@@ -112,6 +159,15 @@ impl LineIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_column_limit_refuses_instead_of_saturating() {
+        assert_eq!(checked_column(u32::MAX as usize - 1), Ok(u32::MAX));
+        assert_eq!(
+            checked_column(u32::MAX as usize),
+            Err(PositionError::ColumnLimit)
+        );
+    }
     use purrdf_testkit::prop::prelude::*;
 
     #[test]

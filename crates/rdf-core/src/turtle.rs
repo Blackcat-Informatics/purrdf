@@ -128,11 +128,26 @@ fn write_owned_literal<W: TextOut + ?Sized>(literal: &RdfLiteral, out: &mut W) {
 /// subject next, with the separators, the predicate, the object and the closing
 /// ` )>>` held back in that order until the subject's whole nesting is written.
 pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId, out: &mut W) {
-    enum Step {
-        Term(TermId),
+    try_write_view_term(dataset, id, out).expect("a validated resident term is readable");
+}
+
+/// Append one term through the shared pinned, fallible read seam.
+/// Text borrows stay inside each guard; traversal retains only compact IDs.
+///
+/// # Errors
+/// Returns a typed source failure or invalid datatype reference. The caller must
+/// discard or abort partial output when this function fails.
+pub fn try_write_view_term<D: crate::DatasetView, W: TextOut + ?Sized>(
+    dataset: &D,
+    id: D::Id,
+    out: &mut W,
+) -> Result<(), crate::TermLookupError<D::ReadError>> {
+    use crate::TermGuard as _;
+    enum Step<Id> {
+        Term(Id),
         Text(&'static str),
     }
-    let mut held: Vec<Step> = Vec::new();
+    let mut held: Vec<Step<D::Id>> = Vec::new();
     let mut next = Some(Step::Term(id));
     while let Some(step) = next.take().or_else(|| held.pop()) {
         let id = match step {
@@ -142,7 +157,8 @@ pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId,
             }
             Step::Term(id) => id,
         };
-        match dataset.resolve(id) {
+        let guard = dataset.resolve(id).map_err(crate::TermLookupError::Read)?;
+        match guard.term() {
             TermRef::Iri(iri) => write_iri(iri, out),
             TermRef::Blank { label, scope } => write_blank(
                 &encode_blank_label(label, scope, LabelAlphabet::BlankNodeLabel),
@@ -154,8 +170,11 @@ pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId,
                 language,
                 direction,
             } => {
-                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
-                    unreachable!("literal datatype must resolve to an IRI")
+                let datatype_guard = dataset
+                    .resolve(datatype)
+                    .map_err(crate::TermLookupError::Read)?;
+                let TermRef::Iri(datatype) = datatype_guard.term() else {
+                    return Err(crate::TermLookupError::ForeignId);
                 };
                 write_literal(
                     lexical,
@@ -180,6 +199,7 @@ pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId,
             }
         }
     }
+    Ok(())
 }
 
 /// The `rdf:reifies` IRI every reifier binding is written under.

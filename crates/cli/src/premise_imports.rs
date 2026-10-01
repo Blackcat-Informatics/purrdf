@@ -22,7 +22,7 @@
 //! # The common case costs nothing
 //!
 //! A premise that imports nothing, closed with no `--import`, runs exactly as it did: the
-//! anchors are read off the zero-copy view ([`purrdf_core::imports::imported_iris`]) and the
+//! anchors are read off the zero-copy view ([`purrdf_core::imports::try_imported_iris`]) and the
 //! closure is materialized over the same view, so a pack is still never rebuilt. Only a
 //! premise that DOES import something, or a command line that supplies a pair, pays for an
 //! owned dataset to resolve the closure against.
@@ -30,7 +30,7 @@
 use std::sync::Arc;
 
 use purrdf_core::DatasetView;
-use purrdf_core::imports::imported_iris;
+use purrdf_core::imports::try_imported_iris;
 use purrdf_entail::{ImportMap, Materialization};
 use purrdf_rdf::SourceFormat;
 use purrdf_validate::regime::MaterializeLimits;
@@ -156,7 +156,11 @@ impl PremiseImports {
         target: &ReportTarget,
     ) -> Result<Arc<purrdf_core::RdfDataset>, CliError> {
         let loaded: Vec<&str> = self.map.loaded().collect();
-        if self.map.is_empty() && imported_iris(view, &loaded).is_empty() {
+        if self.map.is_empty()
+            && try_imported_iris(view, &loaded)
+                .map_err(|error| purrdf_entail::EntailError::SourceRead(error.to_string()))?
+                .is_empty()
+        {
             return report::materialize_reported(view, plan, limits, target);
         }
         let premise = purrdf_core::dataset_from_view(view)?;

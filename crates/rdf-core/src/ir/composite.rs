@@ -249,7 +249,7 @@ impl CompositeSource {
         // composite's own ascending id order, so the local numbering is a function
         // of that view and of nothing transient.
         let dense = match &self.carrier {
-            Carrier::Native(ds) => ds.term_count(),
+            Carrier::Native(ds) => ds.as_ref().term_count(),
             Carrier::Selected(selection) => selection.ids.len(),
             Carrier::Delta(_) => 0,
         };
@@ -267,8 +267,10 @@ impl CompositeSource {
     }
     fn term_count(&self) -> usize {
         match &self.carrier {
-            Carrier::Native(ds) => ds.term_count(),
-            Carrier::Delta(ds) => ds.term_count(),
+            Carrier::Native(ds) => ds.as_ref().term_count(),
+            Carrier::Delta(ds) => {
+                usize::try_from(ds.term_count()).expect("resident delta has a local term table")
+            }
             Carrier::Selected(selection) => selection.ids.len(),
         }
     }
@@ -278,9 +280,9 @@ impl CompositeSource {
                 let LocalId::Base(id) = id else {
                     panic!("native source requires a native handle")
                 };
-                ds.resolve(id).map_ids_scoped(LocalId::Base, |s| s)
+                ds.as_ref().resolve(id).map_ids_scoped(LocalId::Base, |s| s)
             }
-            Carrier::Delta(ds) => ds.resolve(id),
+            Carrier::Delta(ds) => ds.resolve(id).expect("resident delta read is infallible"),
             Carrier::Selected(selection) => {
                 let inner = selection
                     .inner(id)
@@ -291,6 +293,7 @@ impl CompositeSource {
                 selection
                     .view
                     .resolve(inner)
+                    .expect("resident composite read is infallible")
                     .map_ids_scoped(|id| selection.local(id), |scope| scope)
             }
         }
@@ -648,7 +651,7 @@ impl CompositeSource {
         p: Option<LocalId>,
         o: Option<LocalId>,
         g: GraphMatch<LocalId>,
-    ) -> usize {
+    ) -> u64 {
         match &self.carrier {
             Carrier::Native(ds) => local_native_pattern(s, p, o, g)
                 .map_or(0, |(s, p, o, g)| ds.cardinality_estimate(s, p, o, g)),
@@ -657,7 +660,7 @@ impl CompositeSource {
                 selection
                     .probe_pattern((s, p, o, g))
                     .map_or(0, |(s, p, o, only)| {
-                        selection.targets(only).fold(0_usize, |total, graph| {
+                        selection.targets(only).fold(0_u64, |total, graph| {
                             total.saturating_add(selection.view.cardinality_estimate(
                                 s,
                                 p,
@@ -792,7 +795,7 @@ impl SelectedGraphs {
                     "view graph selection requires an IRI or blank node",
                 ));
             }
-            let Some(graph) = inner.term_id_by_value(&name).filter(|id| held.contains(id)) else {
+            let Some(graph) = inner.term_id_if_ready(&name).filter(|id| held.contains(id)) else {
                 return Err(RdfDiagnostic::error(
                     "view-graph-selection",
                     "view graph selection names a graph this composite does not hold",
@@ -837,7 +840,10 @@ impl SelectedGraphs {
         let mut queue: Vec<CompositeViewId> = ids.iter().copied().collect();
         let mut quoted = false;
         while let Some(id) = queue.pop() {
-            match inner.resolve(id) {
+            match inner
+                .resolve(id)
+                .expect("resident composite read is infallible")
+            {
                 TermRef::Literal { datatype, .. } => {
                     if ids.insert(datatype) {
                         queue.push(datatype);
@@ -935,7 +941,7 @@ impl SelectedGraphs {
     /// selection actually holds the resulting handle.
     fn lookup(&self, value: &TermValue) -> Option<LocalId> {
         self.view
-            .term_id_by_value(value)
+            .term_id_if_ready(value)
             .and_then(|id| self.index.get(&id).copied())
             .map(LocalId::Base)
     }
@@ -1288,7 +1294,7 @@ impl CompositeDatasetView {
     pub fn materialize(&self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         let result = crate::ir::pack::dataset_from_view(self)?;
         self.work.add(ViewWork {
-            copied_terms: result.term_count(),
+            copied_terms: result.as_ref().term_count(),
             copied_rows: result.rdf_row_count(),
             freezes: 1,
             materializations: 1,
@@ -1640,7 +1646,12 @@ impl Prefix {
             stats.retain(&graphs);
             stats.auxiliary_bytes = stats
                 .auxiliary_bytes
-                .saturating_add(graphs.term_count().saturating_mul(alias_term_bytes()))
+                .saturating_add(
+                    graphs
+                        .as_ref()
+                        .term_count()
+                        .saturating_mul(alias_term_bytes()),
+                )
                 .saturating_add(size_of::<CompositeSource>());
             limits.check(&stats)?;
             // Charge the dictionary's own freeze and copied terms into the SAME
@@ -1649,7 +1660,7 @@ impl Prefix {
             // alone. Charging it here rather than onto the finished view is the
             // whole of that fix: the counters are identical for a single
             // from-scratch construction, which adds this once either way.
-            work.copied_terms += graphs.term_count();
+            work.copied_terms += graphs.as_ref().term_count();
             work.copied_text_bytes += graphs.rdf_text_bytes();
             work.freezes += 1;
             // The derived dictionary owns the caller's own graph names, so its
@@ -1793,6 +1804,11 @@ fn alias_last(
 
 impl DatasetView for CompositeDatasetView {
     type Id = CompositeViewId;
+    type ReadError = Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = QuadProbePlan;
     /// The widest bound any retained source vouches for.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
@@ -1805,17 +1821,21 @@ impl DatasetView for CompositeDatasetView {
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.quads_for_pattern(None, None, None, GraphMatch::Any)
     }
-    fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
-        let index = id.source as usize;
-        self.sources[index].resolve(id.local).map_ids_scoped(
-            |local| self.map_id(index, local),
-            |scope| self.scopes[index][&scope],
-        )
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok({
+            let index = id.source as usize;
+            self.sources[index].resolve(id.local).map_ids_scoped(
+                |local| self.map_id(index, local),
+                |scope| self.scopes[index][&scope],
+            )
+        })
     }
-    fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id> {
-        (0..self.sources.len()).find_map(|index| {
-            self.lookup_value(index, value)
-                .map(|local| self.map_id(index, local))
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok({
+            (0..self.sources.len()).find_map(|index| {
+                self.lookup_value(index, value)
+                    .map(|local| self.map_id(index, local))
+            })
         })
     }
     fn capabilities(&self) -> RdfStoreCapabilities {
@@ -1830,8 +1850,8 @@ impl DatasetView for CompositeDatasetView {
                 })
             })
     }
-    fn term_count(&self) -> usize {
-        self.unique_terms
+    fn term_count(&self) -> u64 {
+        u64::try_from(self.unique_terms).expect("bounded local count fits u64")
     }
     fn probe_plan(&self, s: bool, p: bool, o: bool, g: GraphMatch<Self::Id>) -> Self::ProbePlan {
         physical_plan([s, p, o, !matches!(g, GraphMatch::Any)])
@@ -1862,9 +1882,9 @@ impl DatasetView for CompositeDatasetView {
         p: Option<Self::Id>,
         o: Option<Self::Id>,
         g: GraphMatch<Self::Id>,
-    ) -> usize {
+    ) -> u64 {
         self.sources[..self.user_sources].iter().enumerate().fold(
-            0_usize,
+            0_u64,
             |total, (index, source)| {
                 total.saturating_add(
                     self.pattern(index, s, p, o, g)
@@ -2111,7 +2131,10 @@ fn lookup_source_term(
 /// # Panics
 ///
 /// On an id `view` did not mint.
-pub(crate) fn owned_value<D: DatasetView>(view: &D, id: D::Id) -> TermValue {
+pub(crate) fn owned_value<D: DatasetView<ReadError = Infallible>>(
+    view: &D,
+    id: D::Id,
+) -> TermValue {
     view.term_value(id)
         .expect("an id the view minted resolves to a value")
 }

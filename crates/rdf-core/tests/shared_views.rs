@@ -27,34 +27,7 @@ use purrdf_iri::vocab::rdf::REIFIES;
 type Row = (TermValue, TermValue, TermValue, Option<TermValue>);
 
 fn owned<D: DatasetView>(view: &D, id: D::Id) -> TermValue {
-    match view.resolve(id) {
-        TermRef::Iri(value) => TermValue::iri(value),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.into(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let TermRef::Iri(datatype) = view.resolve(datatype) else {
-                panic!("datatype")
-            };
-            TermValue::Literal {
-                lexical_form: lexical.into(),
-                datatype: datatype.into(),
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(owned(view, s)),
-            p: TermBox::new(owned(view, p)),
-            o: TermBox::new(owned(view, o)),
-        },
-    }
+    DatasetView::term_value(view, id).expect("valid fixture term")
 }
 
 fn row<D: DatasetView>(view: &D, q: QuadIds<D::Id>) -> Row {
@@ -155,7 +128,9 @@ fn assert_probes<D: DatasetView>(view: &D) {
                     .collect::<BTreeSet<_>>(),
                 expected
             );
-            assert!(view.cardinality_estimate(s, p, o, g) >= expected.len());
+            assert!(
+                view.cardinality_estimate(s, p, o, g) >= u64::try_from(expected.len()).unwrap()
+            );
         }
     }
 }
@@ -186,13 +161,19 @@ fn independent_occurrences_and_shared_contributions_have_explicit_blank_identity
     );
     assert_eq!(shared.source_id(0, blank), shared.source_id(1, blank));
     for view in [&independent, &shared] {
-        assert_eq!(view.term_ids().count(), view.term_count());
         assert_eq!(
-            view.term_ids().collect::<BTreeSet<_>>().len(),
+            u64::try_from(view.term_ids().count()).unwrap(),
+            view.term_count()
+        );
+        assert_eq!(
+            u64::try_from(view.term_ids().collect::<BTreeSet<_>>().len()).unwrap(),
             view.term_count()
         );
         for id in view.term_ids() {
-            assert_eq!(view.term_id_by_value(&view.term_value(id)), Some(id));
+            assert_eq!(
+                view.term_id_by_value(&view.term_value(id)).unwrap(),
+                Some(id)
+            );
         }
         assert_eq!(surface(view), surface(&view.materialize().unwrap()));
         assert_probes(view);
@@ -324,7 +305,7 @@ fn prepared_composite_probes_reuse_plans_across_rows_and_graph_placements() {
             let rows: Vec<_> = view.quads().collect();
             let named: Vec<_> = ["g", "h", "placed", "s"]
                 .into_iter()
-                .filter_map(|name| view.term_id_by_value(&iri(name)))
+                .filter_map(|name| view.term_id_by_value(&iri(name)).unwrap())
                 .map(GraphMatch::Named)
                 .collect();
             for mask in 0..8 {
@@ -435,21 +416,25 @@ fn composite_literals_rebind_external_nested_and_triple_term_references() {
     for id in view.term_ids() {
         let TermRef::Literal {
             lexical, datatype, ..
-        } = view.resolve(id)
+        } = view.resolve(id).unwrap()
         else {
             continue;
         };
-        let TermRef::Iri(datatype) = view.resolve(datatype) else {
+        let TermRef::Iri(datatype) = view.resolve(datatype).unwrap() else {
             panic!("datatype")
         };
         for (label, scope) in purrdf_core::cdt_blank::cdt_embedded_blanks(lexical, datatype) {
             let embedded = view
                 .term_id_by_value(&TermValue::Blank { label, scope })
+                .unwrap()
                 .unwrap();
             assert!(view.quads().any(|q| q.s == embedded));
             scopes.insert(scope);
         }
-        assert_eq!(view.term_id_by_value(&view.term_value(id)), Some(id));
+        assert_eq!(
+            view.term_id_by_value(&view.term_value(id)).unwrap(),
+            Some(id)
+        );
     }
     assert_eq!(scopes.len(), 2);
     let shared = CompositeDatasetView::with_shared_scopes(
@@ -631,7 +616,7 @@ fn admission_limits_cover_sources_payload_rows_terms_and_derived_graph_text() {
             ..ViewLimits::default()
         },
         ViewLimits {
-            max_terms: source.term_count() - 1,
+            max_terms: usize::try_from(source.term_count()).unwrap() - 1,
             ..ViewLimits::default()
         },
         ViewLimits {
@@ -767,17 +752,20 @@ fn repeated_snapshots_release_their_deltas_and_keep_nested_payloads_borrowed() {
     .unwrap();
     assert_eq!(composite.stats().work.copied_text_bytes, 0);
     let literal_id = source
-        .term_id_by_value(&source.term_value(literal).unwrap())
+        .as_ref()
+        .term_id_by_value(&source.as_ref().term_value(literal))
         .unwrap();
     let TermRef::Literal {
         lexical: native, ..
-    } = source.resolve(literal_id)
+    } = source.as_ref().resolve(literal_id)
     else {
         panic!("literal")
     };
     let TermRef::Literal {
         lexical: borrowed, ..
-    } = composite.resolve(composite.source_id(1, literal_id))
+    } = composite
+        .resolve(composite.source_id(1, literal_id))
+        .unwrap()
     else {
         panic!("literal")
     };
@@ -796,7 +784,7 @@ fn blanks_referenced_only_inside_composite_literals_stay_independent() {
     assert!(
         source
             .quads()
-            .all(|q| !matches!(source.resolve(q.s), TermRef::Blank { .. }))
+            .all(|q| !matches!(source.as_ref().resolve(q.s), TermRef::Blank { .. }))
     );
     let view =
         CompositeDatasetView::new(vec![source.clone(), source.clone()], ViewLimits::default())
@@ -1277,7 +1265,7 @@ fn value_probe<D: DatasetView>(
 ) -> BTreeSet<Row> {
     let bind = |value: Option<&TermValue>| match value {
         None => Some(None),
-        Some(value) => view.term_id_by_value(value).map(Some),
+        Some(value) => view.term_id_by_value(value).unwrap().map(Some),
     };
     let (Some(s), Some(p), Some(o)) = (bind(s), bind(p), bind(o)) else {
         return BTreeSet::new();
@@ -1285,7 +1273,7 @@ fn value_probe<D: DatasetView>(
     let graph = match g {
         GraphMatchValue::Any => GraphMatch::Any,
         GraphMatchValue::Default => GraphMatch::Default,
-        GraphMatchValue::Named(value) => match view.term_id_by_value(value) {
+        GraphMatchValue::Named(value) => match view.term_id_by_value(value).unwrap() {
             Some(id) => GraphMatch::Named(id),
             None => return BTreeSet::new(),
         },
@@ -1812,7 +1800,10 @@ fn one_base_shared_by_two_carriers_is_retained_exactly_once() {
     assert_eq!(shared.distinct_owners, 1);
     assert_eq!(shared.live_guards, 2);
     assert_eq!(shared.retained_sources, 1);
-    assert_eq!(shared.retained_terms, base.term_count());
+    assert_eq!(
+        shared.retained_terms,
+        usize::try_from(base.term_count()).unwrap()
+    );
     assert_eq!(shared.retained_rows, base.rdf_row_count());
     assert_eq!(shared.retained_payload_bytes, base.rdf_payload_bytes());
 
@@ -1822,7 +1813,10 @@ fn one_base_shared_by_two_carriers_is_retained_exactly_once() {
             .unwrap()
             .stats();
     assert_eq!(per_view.retained_sources, 2);
-    assert_eq!(per_view.retained_terms, 2 * base.term_count());
+    assert_eq!(
+        per_view.retained_terms,
+        2 * usize::try_from(base.term_count()).unwrap()
+    );
     assert_eq!(
         per_view.retained_payload_bytes,
         2 * base.rdf_payload_bytes()
@@ -1928,7 +1922,10 @@ fn two_distinct_bases_each_report_their_own_retention() {
     assert_eq!(shared.distinct_owners, 2);
     assert_eq!(shared.live_guards, 2);
     assert_eq!(shared.retained_sources, 2);
-    assert_eq!(shared.retained_terms, one.term_count() + two.term_count());
+    assert_eq!(
+        shared.retained_terms,
+        usize::try_from(one.term_count() + two.term_count()).unwrap()
+    );
     assert_eq!(
         shared.retained_rows,
         one.rdf_row_count() + two.rdf_row_count()

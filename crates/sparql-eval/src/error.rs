@@ -90,6 +90,19 @@ pub enum EvalError {
     /// parse error.
     Parse(String),
 
+    /// The backing dataset failed to read a term or index. No partial answer is
+    /// valid; fallible engine entry points retain the view's typed root cause.
+    SourceRead(String),
+    /// The asynchronous host has issued every logical exchange identifier.
+    /// An execution refusal, never an invocation failure or an expression error.
+    ExchangeIdExhausted,
+
+    /// A bounded read has no certified price for this query construct.
+    WorkspaceUnpriced(&'static str),
+
+    /// The certified worst-case workspace bound exceeds the logical byte width.
+    WorkspaceBoundOverflow,
+
     /// A well-formed construct this evaluator does not (or cannot) evaluate.
     ///
     /// This is the hard-fail boundary. `SERVICE` federation, `LATERAL`,
@@ -396,6 +409,32 @@ purrdf_lex::constructors! {
 }
 
 impl EvalError {
+    /// Preserve an operational source failure separately from RDF/type errors.
+    pub(crate) fn source_read(error: impl core::fmt::Display) -> Self {
+        // The typed root error remains in the fallible engine receipt. This
+        // secondary English rendering must fit the fixed report admission even
+        // when a host supplies an arbitrarily long operation label.
+        const LIMIT: usize = 2048;
+        const MARKER: &str = "… [truncated]";
+        struct Bounded(String);
+        impl core::fmt::Write for Bounded {
+            fn write_str(&mut self, text: &str) -> core::fmt::Result {
+                let remaining = (LIMIT - MARKER.len()).saturating_sub(self.0.len());
+                if text.len() > remaining {
+                    self.0
+                        .push_str(&text[..text.floor_char_boundary(remaining)]);
+                    return Err(core::fmt::Error);
+                }
+                self.0.push_str(text);
+                Ok(())
+            }
+        }
+        let mut rendered = Bounded(String::with_capacity(LIMIT));
+        if core::fmt::write(&mut rendered, format_args!("{error}")).is_err() {
+            rendered.0.push_str(MARKER);
+        }
+        Self::SourceRead(rendered.0)
+    }
     /// Construct an unclassified [`EvalError::Unsupported`] from any displayable
     /// construct name — a genuine gap, not one of the narrow classified residue.
     pub fn unsupported(what: impl Into<String>) -> Self {
@@ -427,6 +466,10 @@ impl EvalError {
     #[must_use]
     pub fn diagnostic_code(&self) -> Option<&'static str> {
         match self {
+            Self::SourceRead(_) => Some("native-sparql-source-read"),
+            Self::ExchangeIdExhausted => Some("native-sparql-exchange-id-exhausted"),
+            Self::WorkspaceUnpriced(_) => Some("native-sparql-workspace-unpriced"),
+            Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
             Self::Unsupported { kind, .. } => kind.map(UnsupportedKind::code),
             Self::Parse(_)
             | Self::Dataset(_)
@@ -541,6 +584,17 @@ impl core::fmt::Display for EvalError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
+            Self::SourceRead(msg) => write!(f, "dataset read failed: {msg}"),
+            Self::ExchangeIdExhausted => {
+                f.write_str("asynchronous exchange identifier space is exhausted")
+            }
+            Self::WorkspaceUnpriced(construct) => write!(
+                f,
+                "bounded query workspace has no certified price for {construct}"
+            ),
+            Self::WorkspaceBoundOverflow => {
+                f.write_str("bounded query workspace price exceeds the logical byte width")
+            }
             Self::Unsupported { what, .. } => {
                 write!(f, "unsupported: {what}")
             }
@@ -631,6 +685,20 @@ impl From<ParseError> for EvalError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_read_rendering_is_bounded_and_preserves_utf8_and_short_messages() {
+        let host_message = "漢字操作".repeat(20_000);
+        let EvalError::SourceRead(rendered) = EvalError::source_read(&host_message) else {
+            panic!("source refusal has its own variant")
+        };
+        assert!(rendered.len() <= 2048);
+        assert!(rendered.ends_with("… [truncated]"));
+        assert!(rendered.starts_with("漢字操作"));
+        let EvalError::SourceRead(short) = EvalError::source_read("read refused") else {
+            panic!("source refusal has its own variant")
+        };
+        assert_eq!(short, "read refused");
+    }
     use super::*;
 
     #[test]

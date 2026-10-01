@@ -293,15 +293,15 @@ pub struct ArtifactLocation {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Region {
     /// 1-based start line.
-    pub start_line: Option<u32>,
+    pub start_line: Option<u64>,
     /// 1-based start column.
     pub start_column: Option<u32>,
     /// 1-based end column.
     pub end_column: Option<u32>,
     /// 0-based byte offset of the region start.
-    pub byte_offset: Option<usize>,
+    pub byte_offset: Option<u64>,
     /// Byte length of the region.
-    pub byte_length: Option<usize>,
+    pub byte_length: Option<u64>,
 }
 
 /// A logical location (a program element identified by name/kind rather than a

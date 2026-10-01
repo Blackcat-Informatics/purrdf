@@ -156,7 +156,10 @@ pub(crate) trait ViewOp {
     type Output;
 
     /// Run the operation over a borrowed concrete view.
-    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError>;
+    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        self,
+        view: &D,
+    ) -> Result<Self::Output, CliError>;
 }
 
 /// Read every byte of a path, or of stdin when `path` is `-`, WITHOUT decoding.
@@ -696,7 +699,10 @@ pub(crate) fn serialize_input_to_nquads(
     impl ViewOp for NQuadsOp {
         type Output = SerializeOutcome;
 
-        fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+        fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+            self,
+            view: &D,
+        ) -> Result<Self::Output, CliError> {
             // No EGRESS base, and `None` is the right value rather than an omission:
             // `base` is the INGRESS base, which `run_over_input` has already applied
             // while parsing, and N-Quads' `emits_base` registry column is `false`, so

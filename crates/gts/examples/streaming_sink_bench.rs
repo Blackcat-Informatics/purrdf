@@ -36,40 +36,40 @@ struct CountingSink {
 }
 
 impl StreamingSink for CountingSink {
-    fn term(&mut self, _segment_index: usize, _term_id: usize, _term: &Term) {
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: &Term) {
         self.terms += 1;
     }
 
-    fn quad(&mut self, _segment_index: usize, _quad: Quad) {
+    fn quad(&mut self, _segment_index: u64, _quad: Quad) {
         self.quads += 1;
     }
 
-    fn reifier(&mut self, _segment_index: usize, _reifier: ReifierRow) {
+    fn reifier(&mut self, _segment_index: u64, _reifier: ReifierRow) {
         self.reifiers += 1;
     }
 
-    fn annotation(&mut self, _segment_index: usize, _annotation: AnnotationRow) {
+    fn annotation(&mut self, _segment_index: u64, _annotation: AnnotationRow) {
         self.annotations += 1;
     }
 
-    fn suppression(&mut self, _segment_index: usize, _suppression: &Suppression) {
+    fn suppression(&mut self, _segment_index: u64, _suppression: &Suppression) {
         self.suppressions += 1;
     }
 
     fn blob(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         _digest: &str,
         _meta: Option<&purrdf_lex::cbor::Value>,
     ) {
         self.blobs += 1;
     }
 
-    fn opaque(&mut self, _segment_index: usize, _opaque: &OpaqueNode) {
+    fn opaque(&mut self, _segment_index: u64, _opaque: &OpaqueNode) {
         self.opaque += 1;
     }
 
-    fn signature(&mut self, _segment_index: usize, _signature: &Signature) {
+    fn signature(&mut self, _segment_index: u64, _signature: &Signature) {
         self.signatures += 1;
     }
 
@@ -77,11 +77,11 @@ impl StreamingSink for CountingSink {
         self.diagnostics += 1;
     }
 
-    fn segment_head(&mut self, _segment_index: usize, _head: &[u8]) {
+    fn segment_head(&mut self, _segment_index: u64, _head: &[u8]) {
         self.segment_heads += 1;
     }
 
-    fn streamable_layout(&mut self, _segment_index: usize, _info: &StreamableInfo) {
+    fn streamable_layout(&mut self, _segment_index: u64, _info: &StreamableInfo) {
         self.streamable_layouts += 1;
     }
 }

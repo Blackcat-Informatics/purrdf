@@ -66,6 +66,7 @@ fn build_dataset(triples: &[(u64, u64, u64)]) -> Arc<RdfDataset> {
 
 fn pack_term(pack: &PackView<'_>, role: char, value: u64) -> PackId {
     pack.term_id_by_value(&TermValue::iri(numeric_iri(role, value)))
+        .expect("dictionary read succeeds")
         .expect("reference term is packed")
 }
 

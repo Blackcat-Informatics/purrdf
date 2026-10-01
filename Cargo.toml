@@ -52,7 +52,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "2.0.2"
+version = "3.0.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
@@ -66,7 +66,7 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 # re-enabled per crate with `default-features = true` where required.
 [workspace.dependencies]
 # --- internal crates (paths are relative to the WORKSPACE ROOT) ---
-purrdf = { path = "crates/purrdf", version = "2.0.2" }
+purrdf = { path = "crates/purrdf", version = "3.0.0" }
 # DEV-ONLY instrument (`publish = false`): the shared counting allocator and its
 # two measurement windows. Declared PATH-ONLY, with NO `version` key, and that
 # omission is load-bearing: cargo strips a versionless path dev-dependency from
@@ -75,31 +75,31 @@ purrdf = { path = "crates/purrdf", version = "2.0.2" }
 # resolve it from the registry. Never a normal dependency of anything, so the
 # wasm32 lane (which builds `--lib`) never sees it.
 purrdf-alloc-probe = { path = "crates/alloc-probe" }
-purrdf-cdt = { path = "crates/cdt", version = "2.0.2" }
-purrdf-columnar = { path = "crates/columnar", version = "2.0.2" }
-purrdf-core = { path = "crates/rdf-core", version = "2.0.2" }
-purrdf-datalog = { path = "crates/datalog", version = "2.0.2" }
-purrdf-deflate = { path = "crates/deflate", version = "2.0.2" }
-purrdf-ed25519 = { path = "crates/ed25519", version = "2.0.2" }
-purrdf-entail = { path = "crates/entail", version = "2.0.2" }
-purrdf-events = { path = "crates/rdf-events", version = "2.0.2" }
-purrdf-geo = { path = "crates/geo", version = "2.0.2" }
-purrdf-gts = { path = "crates/gts", version = "2.0.2" }
-purrdf-hash = { path = "crates/hash", version = "2.0.2" }
-purrdf-hnsw = { path = "crates/hnsw", version = "2.0.2" }
-purrdf-iri = { path = "crates/iri", version = "2.0.2" }
-purrdf-json = { path = "crates/json", version = "2.0.2" }
-purrdf-jsonschema = { path = "crates/jsonschema", version = "2.0.2" }
-purrdf-lex = { path = "crates/lex", version = "2.0.2" }
-purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }
-purrdf-rdf = { path = "crates/rdf", version = "2.0.2" }
-purrdf-retrieval = { path = "crates/retrieval", version = "2.0.2" }
-purrdf-shapes = { path = "crates/shapes", version = "2.0.2" }
-purrdf-shex = { path = "crates/shex", version = "2.0.2" }
-purrdf-slice = { path = "crates/slice", version = "2.0.2" }
-purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "2.0.2" }
-purrdf-sparql-eval = { path = "crates/sparql-eval", version = "2.0.2" }
-purrdf-sparql-results = { path = "crates/sparql-results", version = "2.0.2" }
+purrdf-cdt = { path = "crates/cdt", version = "3.0.0" }
+purrdf-columnar = { path = "crates/columnar", version = "3.0.0" }
+purrdf-core = { path = "crates/rdf-core", version = "3.0.0" }
+purrdf-datalog = { path = "crates/datalog", version = "3.0.0" }
+purrdf-deflate = { path = "crates/deflate", version = "3.0.0" }
+purrdf-ed25519 = { path = "crates/ed25519", version = "3.0.0" }
+purrdf-entail = { path = "crates/entail", version = "3.0.0" }
+purrdf-events = { path = "crates/rdf-events", version = "3.0.0" }
+purrdf-geo = { path = "crates/geo", version = "3.0.0" }
+purrdf-gts = { path = "crates/gts", version = "3.0.0" }
+purrdf-hash = { path = "crates/hash", version = "3.0.0" }
+purrdf-hnsw = { path = "crates/hnsw", version = "3.0.0" }
+purrdf-iri = { path = "crates/iri", version = "3.0.0" }
+purrdf-json = { path = "crates/json", version = "3.0.0" }
+purrdf-jsonschema = { path = "crates/jsonschema", version = "3.0.0" }
+purrdf-lex = { path = "crates/lex", version = "3.0.0" }
+purrdf-markdown = { path = "crates/markdown", version = "3.0.0" }
+purrdf-rdf = { path = "crates/rdf", version = "3.0.0" }
+purrdf-retrieval = { path = "crates/retrieval", version = "3.0.0" }
+purrdf-shapes = { path = "crates/shapes", version = "3.0.0" }
+purrdf-shex = { path = "crates/shex", version = "3.0.0" }
+purrdf-slice = { path = "crates/slice", version = "3.0.0" }
+purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "3.0.0" }
+purrdf-sparql-eval = { path = "crates/sparql-eval", version = "3.0.0" }
+purrdf-sparql-results = { path = "crates/sparql-results", version = "3.0.0" }
 # DEV-ONLY test support (`publish = false`): goldens, temporary paths under the
 # target directory, frozen differential vectors and the `harness = false`
 # runner. PATH-ONLY with NO `version`, for the reason given for
@@ -108,10 +108,10 @@ purrdf-sparql-results = { path = "crates/sparql-results", version = "2.0.2" }
 # `purrdf-hash-conformance` rather than in its own tests, so any member's tests
 # may use it without closing a cycle.
 purrdf-testkit = { path = "crates/testkit" }
-purrdf-stack = { path = "crates/stack", version = "2.0.2" }
-purrdf-text = { path = "crates/text", version = "2.0.2" }
-purrdf-validate = { path = "crates/validate", version = "2.0.2" }
-purrdf-xsd = { path = "crates/xsd", version = "2.0.2" }
+purrdf-stack = { path = "crates/stack", version = "3.0.0" }
+purrdf-text = { path = "crates/text", version = "3.0.0" }
+purrdf-validate = { path = "crates/validate", version = "3.0.0" }
+purrdf-xsd = { path = "crates/xsd", version = "3.0.0" }
 
 # --- external crates ---
 # The structural source censuses (the rdf and shapes census tests and the

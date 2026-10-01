@@ -23,8 +23,12 @@ crate everything else in the workspace builds on. It owns:
   `RdfDataset`, with every term stored once in a string arena addressed by
   copyable `TermId`s, triple terms in object position, reifier/annotation
   side-tables, base-direction literals, and copy-on-write mutation.
-- **`DatasetView`** — the static, allocation-free read trait the SPARQL, SHACL,
-  ShEx, and entailment engines all evaluate over.
+- **`DatasetView`** — one statically dispatched read contract with typed failures
+  and pinned GAT guards. Resident guards borrow without allocation; operational
+  sessions admit storage under explicit budgets.
+- **Persistent read sessions** — stable wide IDs, segmented front-coded dictionary
+  blocks, certified indexed reopening, sparse caches and exact bounded evidence.
+  See [the storage contract](STORAGE.md).
 - **Structured diagnostics** — typed `RdfDiagnostic`s with source locations;
   deliberately SARIF-free (the SARIF boundary is
   [`purrdf-validate`](https://crates.io/crates/purrdf-validate)).

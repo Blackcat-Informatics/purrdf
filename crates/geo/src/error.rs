@@ -4,7 +4,7 @@
 //! The one failure channel this crate has, and the single site that maps it onto
 //! the evaluator's.
 //!
-//! Every refusal in `purrdf-geo` reduces to one of five kinds, and each kind
+//! Every refusal in `purrdf-geo` reduces to one of six kinds, and each kind
 //! answers a different question about *whose* mistake it was:
 //!
 //! * [`GeoError::Arity`] — the **call as written** supplies the wrong number of
@@ -33,6 +33,8 @@
 //!   reference systems (this crate reprojects nothing, so it refuses rather than
 //!   pretending the coordinates are comparable), a measure asked of an empty
 //!   geometry, an exponent past the parser's cap.
+//! * [`GeoError::SourceRead`] — the backing source cannot complete a term or
+//!   index read. A partial index or missing row cannot become a successful answer.
 //!
 //! # Why the mapping onto [`EvalError`] lives here and only here
 //!
@@ -49,11 +51,12 @@
 //! travels* ([`GeoError::is_expression_error`]) are separate decisions, and both are
 //! made here. SPARQL 1.1 has two failure distances: a per-solution **expression
 //! error**, which a `FILTER` turns into a dropped row and a `BIND` into an unbound
-//! variable, and a query-fatal error. Two of the five kinds above are the first
+//! variable, and a query-fatal error. Two of the six kinds above are the first
 //! ([`GeoError::Literal`], [`GeoError::Domain`] — both statements about *these
-//! arguments*) and three are the second ([`GeoError::Arity`],
-//! [`GeoError::Unsupported`], [`GeoError::Config`] — all conditions that hold for
-//! every solution alike, so answering "no value" would empty a result set and call
+//! arguments*) and four are the second ([`GeoError::Arity`],
+//! [`GeoError::Unsupported`], [`GeoError::Config`], [`GeoError::SourceRead`] —
+//! conditions whose failure prevents a complete query result, so answering
+//! "no value" would omit answers and call
 //! it an answer). Putting the split in this module keeps it from being re-litigated
 //! once per call site, which is exactly how the two would drift.
 
@@ -61,12 +64,14 @@ use purrdf_sparql_eval::EvalError;
 
 /// Why a `purrdf-geo` operation refused.
 ///
-/// See the module docs for what distinguishes the five kinds; the split is by
+/// See the module docs for what distinguishes the six kinds; the split is by
 /// *whose mistake it was*, not by which function raised it, and it is what
 /// [`Self::is_expression_error`] reads to decide how far a refusal travels.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum GeoError {
+    /// The input source refused a term or iterator read. No partial index is published.
+    SourceRead(String),
     /// The call supplies the wrong number of arguments for the function named.
     Arity(String),
     /// The caller's wiring is unusable as written (an empty IRI, a vocabulary
@@ -84,6 +89,8 @@ pub enum GeoError {
 
 purrdf_lex::constructors! {
     impl GeoError {
+        /// Construct a fatal operational source refusal.
+        pub fn source_read(what) -> Self::SourceRead;
         /// A [`GeoError::Arity`] with `what` as its detail.
         pub fn arity(what) -> Self::Arity;
 
@@ -139,7 +146,7 @@ impl GeoError {
     pub const fn is_expression_error(&self) -> bool {
         match self {
             Self::Domain(_) | Self::Literal(_) => true,
-            Self::Arity(_) | Self::Unsupported(_) | Self::Config(_) => false,
+            Self::Arity(_) | Self::Unsupported(_) | Self::Config(_) | Self::SourceRead(_) => false,
         }
     }
 
@@ -148,6 +155,7 @@ impl GeoError {
     pub fn detail(&self) -> &str {
         match self {
             Self::Arity(msg)
+            | Self::SourceRead(msg)
             | Self::Config(msg)
             | Self::Literal(msg)
             | Self::Unsupported(msg)
@@ -159,6 +167,7 @@ impl GeoError {
 impl core::fmt::Display for GeoError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::SourceRead(msg) => write!(f, "geometry source read error: {msg}"),
             Self::Arity(msg) => write!(f, "wrong argument count: {msg}"),
             Self::Config(msg) => write!(f, "invalid geo configuration: {msg}"),
             Self::Literal(msg) => write!(f, "malformed geometry literal: {msg}"),
@@ -189,6 +198,7 @@ impl From<GeoError> for EvalError {
     ///   framing rather than this type's `Display`.
     fn from(err: GeoError) -> Self {
         match err {
+            GeoError::SourceRead(msg) => Self::SourceRead(msg),
             GeoError::Arity(msg) => Self::function(msg),
             GeoError::Config(msg) => Self::config(msg),
             GeoError::Literal(msg) => Self::data(format!("malformed geometry literal: {msg}")),
@@ -237,6 +247,7 @@ mod tests {
             GeoError::arity("x"),
             GeoError::unsupported("x"),
             GeoError::config("x"),
+            GeoError::source_read("storage checksum mismatch"),
         ] {
             assert!(
                 !fatal.is_expression_error(),
@@ -256,6 +267,14 @@ mod tests {
             )),
             EvalError::Function(_)
         ));
+    }
+
+    #[test]
+    fn source_read_failure_remains_fatal_and_preserves_its_detail() {
+        let converted = EvalError::from(GeoError::source_read("storage checksum mismatch"));
+        assert!(
+            matches!(&converted, EvalError::SourceRead(message) if message == "storage checksum mismatch")
+        );
     }
 
     #[test]

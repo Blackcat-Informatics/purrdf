@@ -159,9 +159,11 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
     ///
     /// This is the only conversion out of the id space, and it is per CELL: a
     /// caller that reads one column of a wide result pays for that column alone.
-    #[must_use]
-    pub fn value_of(&self, term: SolutionTerm<D::Id>) -> TermValue {
-        self.ctx.scratch.value_of(self.ctx.dataset, term)
+    pub fn try_value_of(&self, term: SolutionTerm<D::Id>) -> Result<TermValue, crate::EvalError> {
+        self.ctx
+            .scratch
+            .try_value_of(self.ctx.dataset, term)
+            .map_err(crate::EvalError::source_read)
     }
 
     /// The owned [`TermValue`] of `row`'s `column`-th cell, when the row binds it.
@@ -169,12 +171,16 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
     /// `None` covers both "not a column of this result" and "a column this row
     /// leaves unbound", which is what every caller of a projected-variable lookup
     /// already treats identically.
-    #[must_use]
-    pub fn cell(&self, row: &Solution<D::Id>, column: usize) -> Option<TermValue> {
+    pub fn try_cell(
+        &self,
+        row: &Solution<D::Id>,
+        column: usize,
+    ) -> Result<Option<TermValue>, crate::EvalError> {
         row.get(column)
             .copied()
             .flatten()
-            .map(|term| self.value_of(term))
+            .map(|term| self.try_value_of(term))
+            .transpose()
     }
 
     /// The auxiliary graph of quads this query INVENTED, reachable from a term
@@ -198,9 +204,34 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
     /// every borrowed result, on every row of every SHACL focus node, for an empty
     /// dataset nobody reads. Asked or not, a query that invented no cells walks no
     /// rows here.
-    #[must_use]
-    pub fn constructed_dataset(&self) -> Arc<RdfDataset> {
+    pub fn try_constructed_dataset(&self) -> Result<Arc<RdfDataset>, crate::EvalError> {
         self.ctx.constructed_dataset_of(self.seq)
+    }
+
+    /// Materialize a cell of a resident result.
+    pub fn value_of(&self, term: SolutionTerm<D::Id>) -> TermValue
+    where
+        D: DatasetView<ReadError = core::convert::Infallible>,
+    {
+        self.ctx.scratch.value_of(self.ctx.dataset, term)
+    }
+    /// Read one cell of a resident result.
+    pub fn cell(&self, row: &Solution<D::Id>, column: usize) -> Option<TermValue>
+    where
+        D: DatasetView<ReadError = core::convert::Infallible>,
+    {
+        row.get(column)
+            .copied()
+            .flatten()
+            .map(|term| self.value_of(term))
+    }
+    /// The auxiliary graph of a resident result.
+    pub fn constructed_dataset(&self) -> Arc<RdfDataset>
+    where
+        D: DatasetView<ReadError = core::convert::Infallible>,
+    {
+        self.try_constructed_dataset()
+            .expect("resident result terms were admitted by this view")
     }
 }
 

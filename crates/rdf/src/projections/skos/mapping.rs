@@ -1225,7 +1225,7 @@ mod tests {
         );
         assert!(projected.dataset.quads().any(|quad| {
             matches!(
-                projected.dataset.resolve(quad.o),
+                projected.dataset.as_ref().resolve(quad.o),
                 TermRef::Literal {
                     lexical: "مرحبا",
                     language: Some("ar"),

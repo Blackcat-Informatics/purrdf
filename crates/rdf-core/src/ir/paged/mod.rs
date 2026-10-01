@@ -124,7 +124,7 @@ pub(crate) struct PageSlot {
     caps: RdfStoreCapabilities,
     /// This page's quad count, captured at seal time so a page-subset dataset can sum
     /// its own `total_quads` without re-materializing.
-    quad_count: usize,
+    quad_count: u64,
     /// The deterministic provider-reported byte charge captured at seal time.
     byte_len: u64,
 }
@@ -141,6 +141,8 @@ pub(crate) struct PageSlot {
 pub enum PagedFreezeError {
     /// A page could not be materialized by the provider.
     Page(PageFault),
+    /// A composed logical quad count exceeded the global address space.
+    LogicalCountExhausted,
     /// The provider changed snapshots while sealing, or a warm-restart certificate
     /// names a different generation from the provider's current snapshot.
     GenerationMismatch {
@@ -152,9 +154,9 @@ pub enum PagedFreezeError {
     /// Warm metadata and the provider describe different numbers of pages.
     PageCountMismatch {
         /// The number of persisted page metadata records.
-        metadata: usize,
+        metadata: u64,
         /// The number of pages exposed by the provider.
-        provider: usize,
+        provider: u64,
     },
     /// Two pages carry the SAME global quad — the pages are not quad-disjoint, so the
     /// seal refuses rather than collapse the duplicate. Boxed to keep the enum (and
@@ -238,6 +240,7 @@ impl std::fmt::Display for PagedFreezeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Page(fault) => write!(f, "{fault}"),
+            Self::LogicalCountExhausted => f.write_str("paged logical quad count exhausted"),
             Self::GenerationMismatch { expected, actual } => write!(
                 f,
                 "paged snapshot generation mismatch: metadata/seal generation {expected}, \
@@ -274,7 +277,8 @@ impl std::error::Error for PagedFreezeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Page(fault) => Some(fault),
-            Self::GenerationMismatch { .. }
+            Self::LogicalCountExhausted
+            | Self::GenerationMismatch { .. }
             | Self::PageCountMismatch { .. }
             | Self::QuadOverlap(_)
             | Self::SummaryDrift { .. } => None,
@@ -302,7 +306,7 @@ pub struct PagePart {
     /// The page's capabilities, captured at seal time.
     pub capabilities: RdfStoreCapabilities,
     /// The page's quad count, captured at seal time.
-    pub quad_count: usize,
+    pub quad_count: u64,
     /// The provider-reported byte charge, captured at seal time.
     pub byte_len: u64,
 }
@@ -332,7 +336,7 @@ pub struct PagedDataset {
     caps: RdfStoreCapabilities,
     /// The total quad count, summed at seal time so [`len_hint`](DatasetView::len_hint)
     /// never materializes a page.
-    total_quads: usize,
+    total_quads: u64,
     /// The dataset-level "which pages carry graph G" index, DERIVED (never
     /// persisted) from the completed `pages` in every constructor — see
     /// [`GraphPageIndex::derive`]. Read via [`graph_index`](Self::graph_index) by
@@ -388,8 +392,14 @@ impl PagedDataset {
         let page_count = provider.page_count();
         let mut dictionary = GlobalDictionary::new();
         let mut caps = RdfStoreCapabilities::plain_rdf();
-        let mut total_quads = 0usize;
-        let mut pages: Vec<PageSlot> = Vec::with_capacity(page_count);
+        let mut total_quads = 0_u64;
+        let mut pages: Vec<PageSlot> =
+            Vec::with_capacity(usize::try_from(page_count).map_err(|_| {
+                PagedFreezeError::Page(PageFault::invalid_data(
+                    PageId(0),
+                    "page metadata does not fit a local allocation",
+                ))
+            })?);
         // G3 refusal ledgers: the first page on which each global quad was seen, kept
         // PER composed stream. A second sighting on a LATER page is a non-disjoint
         // overlap in that stream. The paged read path concatenates each stream across
@@ -410,7 +420,7 @@ impl PagedDataset {
         let mut seen_reifier: FastMap<GlobalQuad, PageId> = FastMap::default();
         let mut seen_annotation: FastMap<GlobalQuad, PageId> = FastMap::default();
         for i in 0..page_count {
-            let id = PageId(u32::try_from(i).expect("page count fits u32"));
+            let id = PageId(i);
             let materialization = provider.materialize(id)?;
             if materialization.generation != generation {
                 return Err(PageFault::stale_generation(
@@ -433,7 +443,7 @@ impl PagedDataset {
                     }
                 })?;
             let page_caps = page.capabilities();
-            let page_quads = page.quad_count();
+            let page_quads = u64::try_from(page.quad_count()).expect("bounded page count fits u64");
             // G3: map each of this page's quads (primary + side tables) to the shared id
             // space and refuse on a cross-page collision. A page's own quads within a
             // stream are distinct and its terms map injectively to global ids, so any
@@ -472,7 +482,9 @@ impl PagedDataset {
                 }
             }
             caps = caps.union(page_caps);
-            total_quads += page_quads;
+            total_quads = total_quads
+                .checked_add(page_quads)
+                .ok_or(PagedFreezeError::LogicalCountExhausted)?;
             pages.push(PageSlot {
                 id,
                 translation,
@@ -569,9 +581,10 @@ impl PagedDataset {
         parts: Vec<PagePart>,
     ) -> Result<Self, PagedFreezeError> {
         let provider_page_count = provider.page_count();
-        if parts.len() != provider_page_count {
+        if u64::try_from(parts.len()).expect("local metadata count fits u64") != provider_page_count
+        {
             return Err(PagedFreezeError::PageCountMismatch {
-                metadata: parts.len(),
+                metadata: u64::try_from(parts.len()).expect("local metadata count fits u64"),
                 provider: provider_page_count,
             });
         }
@@ -583,13 +596,15 @@ impl PagedDataset {
             });
         }
         let mut caps = RdfStoreCapabilities::plain_rdf();
-        let mut total_quads = 0usize;
+        let mut total_quads = 0_u64;
         let mut pages: Vec<PageSlot> = Vec::with_capacity(parts.len());
         for (i, part) in parts.into_iter().enumerate() {
             caps = caps.union(part.capabilities);
-            total_quads += part.quad_count;
+            total_quads = total_quads
+                .checked_add(part.quad_count)
+                .ok_or(PagedFreezeError::LogicalCountExhausted)?;
             pages.push(PageSlot {
-                id: PageId(u32::try_from(i).expect("page count fits u32")),
+                id: PageId(u64::try_from(i).expect("resident page count fits u64")),
                 translation: part.translation,
                 // Lazy: query-time access materializes through the provider (the whole
                 // point — construction touches no page).
@@ -658,15 +673,17 @@ impl PagedDataset {
         // value index stays valid.
         let dictionary = self.dictionary.clone();
         let mut caps = RdfStoreCapabilities::plain_rdf();
-        let mut total_quads = 0usize;
+        let mut total_quads = 0_u64;
         let mut pages: Vec<PageSlot> = Vec::with_capacity(keep.len());
         for (new_index, &original) in keep.iter().enumerate() {
             let src = usize::try_from(original.0).expect("page id fits usize");
             let slot = &self.pages[src];
             caps = caps.union(slot.caps);
-            total_quads += slot.quad_count;
+            total_quads = total_quads
+                .checked_add(slot.quad_count)
+                .expect("a subset cannot exceed the validated logical total");
             pages.push(PageSlot {
-                id: PageId(u32::try_from(new_index).expect("page count fits u32")),
+                id: PageId(u64::try_from(new_index).expect("resident page count fits u64")),
                 translation: slot.translation.clone(),
                 resident: OnceLock::new(),
                 caps: slot.caps,
@@ -799,8 +816,8 @@ impl PagedDataset {
 
     /// The number of pages composing this dataset.
     #[must_use]
-    pub fn page_count(&self) -> usize {
-        self.pages.len()
+    pub fn page_count(&self) -> u64 {
+        u64::try_from(self.pages.len()).expect("resident page count fits u64")
     }
 
     /// The shared global dictionary over all pages (read-only).
@@ -853,7 +870,7 @@ impl PagedDataset {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> Vec<PageId> {
-        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
         admission::candidate_pages(self.graph_index(), page_count, g)
             .filter(|&page_id| {
                 let index = usize::try_from(page_id.0).expect("page id fits usize");
@@ -919,7 +936,7 @@ impl PagedDataset {
         // retained order is the ascending `PageId` order every other page-set surface
         // egresses — no hash iteration reaches the result.
         let mut keep: BTreeSet<PageId> = self.pages_for_graph(g).into_iter().collect();
-        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
         for stream in [PageStream::Reifier, PageStream::Annotation] {
             keep.extend(admission::candidate_pages_for_stream(
                 self.graph_index(),
@@ -975,17 +992,19 @@ impl PagedDataset {
                 ),
             ));
         }
-        if materialization.dataset.term_count() != slot.translation.term_count() {
+        if materialization.dataset.as_ref().term_count() != slot.translation.term_count() {
             return Err(PageFault::invalid_data(
                 id,
                 format!(
                     "term count changed from sealed {} to materialized {}",
                     slot.translation.term_count(),
-                    materialization.dataset.term_count()
+                    materialization.dataset.as_ref().term_count()
                 ),
             ));
         }
-        if materialization.dataset.quad_count() != slot.quad_count {
+        if u64::try_from(materialization.dataset.quad_count()).expect("bounded page count fits u64")
+            != slot.quad_count
+        {
             return Err(PageFault::invalid_data(
                 id,
                 format!(
@@ -1145,6 +1164,11 @@ fn disagreeing_field(sealed: &PageSummary, page: &RdfDataset) -> Option<&'static
 
 impl DatasetView for PagedDataset {
     type Id = GlobalTermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = crate::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = ();
 
     fn quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
@@ -1160,9 +1184,11 @@ impl DatasetView for PagedDataset {
         })
     }
 
-    fn resolve(&self, id: GlobalTermId) -> crate::ir::TermRef<'_, GlobalTermId> {
-        // O(1); never materializes a page.
-        self.dictionary.resolve(id)
+    fn resolve(&self, id: GlobalTermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok({
+            // O(1); never materializes a page.
+            self.dictionary.resolve(id)
+        })
     }
 
     fn quads_for_pattern(
@@ -1178,7 +1204,7 @@ impl DatasetView for PagedDataset {
         // materialized: a `Skip` verdict yields an empty inner iterator, so `self.page`
         // — the only materialization — never runs for a skipped page (the lazy hook is
         // preserved by construction).
-        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
         admission::candidate_pages(self.graph_index(), page_count, g).flat_map(move |page_id| {
             let index = usize::try_from(page_id.0).expect("page id fits usize");
             let slot = &self.pages[index];
@@ -1196,16 +1222,18 @@ impl DatasetView for PagedDataset {
         })
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<GlobalTermId> {
-        // The dictionary is complete after the seal pass; never materializes a page.
-        self.dictionary.term_id_by_value(value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok({
+            // The dictionary is complete after the seal pass; never materializes a page.
+            self.dictionary.term_id_by_value(value)
+        })
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
         self.caps
     }
 
-    fn len_hint(&self) -> Option<usize> {
+    fn len_hint(&self) -> Option<u64> {
         Some(self.total_quads)
     }
 
@@ -1236,7 +1264,7 @@ impl DatasetView for PagedDataset {
         p: Option<GlobalTermId>,
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
-    ) -> usize {
+    ) -> u64 {
         // The Merge-scope summation: Σ over admitted pages of
         // `admission::estimate_admitted_page`'s minimum-axis count, read from that
         // page's sealed `PageSummary` alone — NO page is materialized, here or
@@ -1252,8 +1280,8 @@ impl DatasetView for PagedDataset {
         // snapshot could pick different plans. For a pattern with exactly one bound
         // axis the per-page contribution is EXACT (see `estimate_admitted_page`),
         // not merely an upper bound.
-        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
-        let mut total = 0usize;
+        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
+        let mut total = 0_u64;
         for page_id in admission::candidate_pages(self.graph_index(), page_count, g) {
             let index = usize::try_from(page_id.0).expect("page id fits usize");
             let slot = &self.pages[index];
@@ -1272,12 +1300,15 @@ impl DatasetView for PagedDataset {
         total
     }
 
-    fn term_count(&self) -> usize {
-        self.dictionary.len()
+    fn term_count(&self) -> u64 {
+        u64::try_from(self.dictionary.len()).expect("bounded local count fits u64")
     }
 
     fn stats_fingerprint(&self) -> u64 {
-        crate::hash::stats_fingerprint(self.total_quads, self.dictionary.len())
+        crate::hash::stats_fingerprint(
+            self.total_quads,
+            u64::try_from(self.dictionary.len()).expect("resident dictionary count fits u64"),
+        )
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
@@ -1377,7 +1408,7 @@ impl DatasetView for PagedDataset {
         // contribute nothing. A listed page may also hold reifier rows in OTHER
         // graphs, so the per-row `g.matches` filter still runs after materialization —
         // narrowing chooses pages, it does not replace the row predicate.
-        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
         admission::candidate_pages_for_stream(
             self.graph_index(),
             page_count,
@@ -1404,7 +1435,7 @@ impl DatasetView for PagedDataset {
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         // See `reifier_quads_in_graph` above: same narrowing, over the ANNOTATION
         // stream's graph postings instead.
-        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
         admission::candidate_pages_for_stream(
             self.graph_index(),
             page_count,

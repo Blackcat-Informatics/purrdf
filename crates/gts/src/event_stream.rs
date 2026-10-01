@@ -140,8 +140,8 @@ pub trait GtsEventSink: RdfEventSink {
 /// provenance-bearing [`GtsEventSink`] hooks can borrow it after the reader's
 /// borrowed context has expired.
 struct CachedFrame {
-    segment_index: usize,
-    frame_index: usize,
+    segment_index: u64,
+    frame_index: u64,
     content_id: Vec<u8>,
     range: ByteRange,
     frame_type: String,
@@ -174,12 +174,12 @@ pub struct EventEmitter<'s> {
     /// The bridged consumer.
     sink: &'s mut dyn GtsEventSink,
     /// The next [`EventTermId`] to mint; incremented on every intern.
-    next_id: u32,
+    next_id: Option<u64>,
     /// Resolved IRI text by minted id, retained so a literal's datatype id can be
     /// resolved back to its IRI string for [`EventTerm::Literal`].
     iri_map: FastMap<EventTermId, String>,
     /// The segment whose scope is currently open, if any.
-    current_segment: Option<usize>,
+    current_segment: Option<u64>,
     /// The scope opened for [`Self::current_segment`].
     current_scope: ScopeId,
     /// The most recently streamed frame's provenance.
@@ -187,6 +187,12 @@ pub struct EventEmitter<'s> {
     /// Set once any sink call requests [`ControlFlow::Break`]; further sink
     /// emission is suppressed so a cancelled drive is never finalized.
     cancelled: bool,
+}
+
+fn mint_event_id(next_id: &mut Option<u64>) -> Result<EventTermId, EventError> {
+    let next = next_id.ok_or(EventError::IdSpaceExhausted)?;
+    *next_id = next.checked_add(1);
+    Ok(EventTermId(next))
 }
 
 impl std::fmt::Debug for EventEmitter<'_> {
@@ -206,20 +212,13 @@ impl<'s> EventEmitter<'s> {
     pub fn new(sink: &'s mut dyn GtsEventSink) -> Self {
         Self {
             sink,
-            next_id: 0,
+            next_id: Some(0),
             iri_map: FastMap::default(),
             current_segment: None,
             current_scope: ScopeId::DEFAULT,
             cached: None,
             cancelled: false,
         }
-    }
-
-    /// Mint the next monotonically increasing [`EventTermId`].
-    fn mint(&mut self) -> EventTermId {
-        let id = EventTermId(self.next_id);
-        self.next_id += 1;
-        id
     }
 
     /// Count of resolved IRI strings currently retained in `iri_map` (see the
@@ -236,7 +235,7 @@ impl<'s> EventEmitter<'s> {
     /// Ensure the scope for `segment_index` is the open one, closing the previous
     /// segment's scope and opening a fresh one on a segment change. A no-op once
     /// cancelled (beyond recording the segment).
-    fn ensure_scope(&mut self, segment_index: usize) -> Result<(), EventError> {
+    fn ensure_scope(&mut self, segment_index: u64) -> Result<(), EventError> {
         if self.current_segment == Some(segment_index) {
             return Ok(());
         }
@@ -345,12 +344,12 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn intern_iri(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         _gts_id: usize,
         iri: &str,
     ) -> Result<Self::Id, Self::Error> {
         self.ensure_scope(segment_index)?;
-        let id = self.mint();
+        let id = mint_event_id(&mut self.next_id)?;
         self.iri_map.insert(id, iri.to_owned());
         self.emit_term(id, EventTerm::Iri(iri))?;
         Ok(id)
@@ -358,12 +357,12 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn intern_blank(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         _gts_id: usize,
         label: &str,
     ) -> Result<Self::Id, Self::Error> {
         self.ensure_scope(segment_index)?;
-        let id = self.mint();
+        let id = mint_event_id(&mut self.next_id)?;
         let scope = self.current_scope;
         self.emit_term(id, EventTerm::Blank { label, scope })?;
         Ok(id)
@@ -371,7 +370,7 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn intern_literal(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         _gts_id: usize,
         lexical: String,
         datatype: Option<Self::Id>,
@@ -383,7 +382,7 @@ impl ResolvedSink for EventEmitter<'_> {
         // not hold a borrow of `self.iri_map` while it borrows `self.sink`.
         let datatype_iri = self.datatype_iri(datatype, lang.as_deref(), direction.as_deref())?;
         let direction = parse_direction(direction.as_deref(), lang.as_deref())?;
-        let id = self.mint();
+        let id = mint_event_id(&mut self.next_id)?;
         self.emit_term(
             id,
             EventTerm::Literal {
@@ -398,21 +397,21 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn intern_triple(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         _gts_id: usize,
         s: Self::Id,
         p: Self::Id,
         o: Self::Id,
     ) -> Result<Self::Id, Self::Error> {
         self.ensure_scope(segment_index)?;
-        let id = self.mint();
+        let id = mint_event_id(&mut self.next_id)?;
         self.emit_term(id, EventTerm::Triple(EventTriple { s, p, o }))?;
         Ok(id)
     }
 
     fn push_quad(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         s: Self::Id,
         p: Self::Id,
         o: Self::Id,
@@ -430,7 +429,7 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn push_reifier(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         reifier: Self::Id,
         s: Self::Id,
         p: Self::Id,
@@ -454,7 +453,7 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn push_annotation(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         reifier: Self::Id,
         p: Self::Id,
         o: Self::Id,
@@ -475,25 +474,25 @@ impl ResolvedSink for EventEmitter<'_> {
         Ok(())
     }
 
-    fn err_dangling_term(&self, segment_index: usize, gts_id: usize, role: &str) -> Self::Error {
+    fn err_dangling_term(&self, segment_index: u64, gts_id: usize, role: &str) -> Self::Error {
         EventError::message(format!(
             "GTS dangling term reference: segment {segment_index} {role} names undeclared term id {gts_id}"
         ))
     }
 
-    fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> Self::Error {
+    fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> Self::Error {
         EventError::message(format!(
             "GTS quoted-triple nesting limit exceeded resolving segment {segment_index} term id {gts_id}"
         ))
     }
 
-    fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> Self::Error {
+    fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> Self::Error {
         EventError::message(format!(
             "GTS triple term has no reifier binding: segment {segment_index} term id {gts_id}"
         ))
     }
 
-    fn err_missing_reifier(&self, segment_index: usize, reifier: usize) -> Self::Error {
+    fn err_missing_reifier(&self, segment_index: u64, reifier: usize) -> Self::Error {
         EventError::message(format!(
             "GTS triple term references missing reifier {reifier} in segment {segment_index}"
         ))
@@ -519,7 +518,7 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn blob(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         digest: &str,
         meta: Option<&Value>,
     ) -> Result<(), Self::Error> {
@@ -533,7 +532,7 @@ impl ResolvedSink for EventEmitter<'_> {
         Ok(())
     }
 
-    fn opaque(&mut self, _segment_index: usize, node: &OpaqueNode) -> Result<(), Self::Error> {
+    fn opaque(&mut self, _segment_index: u64, node: &OpaqueNode) -> Result<(), Self::Error> {
         if self.cancelled {
             return Ok(());
         }
@@ -544,7 +543,7 @@ impl ResolvedSink for EventEmitter<'_> {
         Ok(())
     }
 
-    fn signature(&mut self, _segment_index: usize, sig: &Signature) -> Result<(), Self::Error> {
+    fn signature(&mut self, _segment_index: u64, sig: &Signature) -> Result<(), Self::Error> {
         if self.cancelled {
             return Ok(());
         }
@@ -557,7 +556,7 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn suppression(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         suppression: &Suppression,
     ) -> Result<(), Self::Error> {
         if self.cancelled {
@@ -610,7 +609,7 @@ impl ResolvedSink for EventEmitter<'_> {
 
     fn streamable_layout(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         _info: &StreamableInfo,
     ) -> Result<(), Self::Error> {
         Ok(())
@@ -653,4 +652,23 @@ pub fn stream_events(
         emitter.sink.finish()?;
     }
     Ok(read_result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_event_ids_cross_u32_and_refuse_terminal_reuse() {
+        let mut next = Some(u64::from(u32::MAX));
+        assert_eq!(
+            mint_event_id(&mut next).unwrap(),
+            EventTermId(u64::from(u32::MAX))
+        );
+        assert_eq!(mint_event_id(&mut next).unwrap(), EventTermId(1 << 32));
+        next = Some(u64::MAX);
+        assert_eq!(mint_event_id(&mut next).unwrap(), EventTermId(u64::MAX));
+        assert_eq!(mint_event_id(&mut next), Err(EventError::IdSpaceExhausted));
+        assert_eq!(mint_event_id(&mut next), Err(EventError::IdSpaceExhausted));
+    }
 }

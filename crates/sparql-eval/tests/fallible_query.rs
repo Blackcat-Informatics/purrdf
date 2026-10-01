@@ -110,7 +110,7 @@ struct CancelAfterSealProvider {
 }
 
 impl PageProvider for CancelAfterSealProvider {
-    fn page_count(&self) -> usize {
+    fn page_count(&self) -> u64 {
         1
     }
 
@@ -269,8 +269,8 @@ impl FaultingProvider {
 }
 
 impl PageProvider for FaultingProvider {
-    fn page_count(&self) -> usize {
-        self.pages.len()
+    fn page_count(&self) -> u64 {
+        u64::try_from(self.pages.len()).unwrap()
     }
 
     fn generation(&self) -> PageGeneration {

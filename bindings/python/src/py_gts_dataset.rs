@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString};
+use pyo3::types::{PyBytes, PyDict, PyString};
 
 use crate::py_gts::rdf_format;
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
@@ -86,6 +86,30 @@ impl PyRdfDataset {
     /// The number of distinct interned terms.
     fn term_count(&self) -> usize {
         self.inner.term_count()
+    }
+
+    /// Canonical native columnar rows, including declared empty named graphs.
+    fn columnar_rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let projection = py
+            .detach(|| {
+                purrdf_columnar::project(self.inner.as_ref(), &purrdf_core::ContentStore::new())
+            })
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        crate::py_gts_view::columnar_rows_dict(py, &projection)
+    }
+
+    /// Native Parquet file bytes; callers choose where to write these files.
+    fn to_parquet_files<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let encoded = py
+            .detach(|| {
+                purrdf_columnar::write(
+                    self.inner.as_ref(),
+                    &purrdf_core::ContentStore::new(),
+                    purrdf_columnar::Compression::Uncompressed,
+                )
+            })
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        crate::py_gts_view::columnar_parquet_dict(py, &encoded.files)
     }
 
     fn __len__(&self) -> usize {

@@ -59,7 +59,9 @@ pub fn eval_target(
 }
 
 /// Internal view-generic implementation of [`eval_target`].
-pub(crate) fn eval_target_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_target_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     select: &str,
     substitutions: &[(String, Term)],
@@ -103,7 +105,9 @@ pub(crate) fn eval_target_view<D: DatasetView + Sync + FocusGraphSource>(
 /// # Errors
 ///
 /// Returns `Err(String)` if execution fails or the query is not an ASK.
-pub(crate) fn eval_target_ask_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_target_ask_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     ask: &str,
     focus: &Term,
@@ -175,7 +179,9 @@ pub fn eval_sparql_constraint(
 /// `focus_id` is `dataset`'s own id for `focus` when the caller holds one in THIS
 /// view's id space, and `None` otherwise; [`bind_focus`] is what it reaches.
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_sparql_constraint_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     focus: &Term,
     focus_id: Option<D::Id>,
@@ -351,7 +357,9 @@ pub fn eval_scalar_expr(
 /// Every in-crate caller is on the plan path and calls that directly with text
 /// assembled once; this spelling exists for [`eval_scalar_expr`]'s published
 /// signature, which takes a bare expression.
-pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_scalar_expr_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     sparql_expr: &str,
     args: &[(String, Term)],
@@ -381,7 +389,9 @@ pub(crate) fn scalar_expr_query(sparql_expr: &str) -> String {
 /// freshly allocated key on every one of those calls. It is now assembled once, at
 /// plan time, for the same reason the aggregate and order-by paths bypass query
 /// text altogether.
-pub(crate) fn eval_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_scalar_query_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     select: &str,
     args: &[(String, Term)],
@@ -400,7 +410,9 @@ pub(crate) fn eval_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
 /// [`eval_scalar_query_view`], with every blank node the evaluation mints (`BNODE()`)
 /// labelled `{bnode_mint_prefix}…` — how a caller that evaluates one expression many
 /// times keeps each evaluation's fresh blank nodes distinct from every other's.
-pub(crate) fn eval_scalar_query_view_minting<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_scalar_query_view_minting<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     select: &str,
     args: &[(String, Term)],
@@ -429,7 +441,7 @@ pub(crate) fn eval_scalar_query_view_minting<D: DatasetView + Sync + FocusGraphS
 /// Shared by the `&str` scalar door and both prepared ones, so "no row at all is a
 /// degenerate/undef result" and "more than one row is a hard error" are one decision
 /// rather than three copies of one.
-fn project_scalar<D: DatasetView + Sync>(
+fn project_scalar<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     solutions: &InternedSolutions<'_, '_, D>,
 ) -> Result<Option<Term>, String> {
     if solutions.len() > 1 {
@@ -457,7 +469,9 @@ fn project_scalar<D: DatasetView + Sync>(
 /// # Errors
 ///
 /// As [`eval_scalar_query_view`].
-pub(crate) fn eval_cached_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_cached_scalar_query_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     select: &str,
     parameters: &[&str],
@@ -489,7 +503,9 @@ pub(crate) fn eval_cached_scalar_query_view<D: DatasetView + Sync + FocusGraphSo
 /// query's result header does not carry `variable` at all (a shapes-load check
 /// already established the projection, so this can only mean the header and the
 /// projection disagree).
-pub(crate) fn eval_select_nodes_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_select_nodes_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     select: &str,
     variable: &str,
@@ -560,7 +576,9 @@ pub fn eval_aggregate(
 /// `dataset` is unused — the fold is a function of the operand VALUES alone —
 /// but the parameter stays so every SHACL-AF evaluation helper keeps one shape
 /// and a caller does not have to remember which of them reads the graph.
-pub(crate) fn eval_aggregate_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_aggregate_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     _dataset: &D,
     agg: &str,
     values: &[Term],
@@ -612,7 +630,9 @@ pub fn eval_order(
 /// Internal view-generic implementation of [`eval_order`].
 ///
 /// `dataset` is unused, for the reason given on [`eval_aggregate_view`].
-pub(crate) fn eval_order_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn eval_order_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     _dataset: &D,
     values: &[Term],
     descending: bool,
@@ -1025,7 +1045,10 @@ pub(crate) fn poll_between_evaluations(governors: Option<&GovernorState>) -> Res
 ///
 /// `SparqlResult` is untouched and remains the egress for every generic
 /// `SparqlEngine` consumer. SHACL is simply a different consumer, not a mode.
-fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
+fn run_query_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+    R,
+>(
     dataset: &D,
     query: &str,
     substitutions: &[Prebinding<'_>],
@@ -1355,7 +1378,7 @@ impl ShaclExecution {
     ///
     /// `Err(String)` if `slot` is not a declared parameter — the identical refusal
     /// [`Self::bind`] gives — or if the term at `id` cannot become an algebra term.
-    pub(crate) fn bind_id<D: DatasetView>(
+    pub(crate) fn bind_id<D: DatasetView<ReadError = std::convert::Infallible>>(
         &mut self,
         slot: usize,
         dataset: &D,
@@ -1418,7 +1441,7 @@ impl ShaclExecution {
 ///
 /// `Err(String)` if `slot` is not a declared parameter, or if the focus node cannot
 /// become an algebra term.
-pub(crate) fn bind_focus<D: DatasetView>(
+pub(crate) fn bind_focus<D: DatasetView<ReadError = std::convert::Infallible>>(
     execution: &mut ShaclExecution,
     slot: usize,
     dataset: &D,
@@ -1480,7 +1503,10 @@ pub(crate) fn parameters_are_distinct(parameters: &[&str]) -> bool {
 /// `Err(String)` if the extension environment cannot be derived, if evaluation
 /// fails, if a parameter is still unbound, or if the governed receipt says no
 /// conformance verdict may be computed from this run.
-fn run_bound_view<D: DatasetView + Sync + FocusGraphSource, R>(
+fn run_bound_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+    R,
+>(
     dataset: &D,
     handle: &mut ShaclExecution,
     prebind: ShaclPrebinding,
@@ -1707,7 +1733,10 @@ pub(crate) fn with_cached_execution<R>(
 ///
 /// As [`with_cached_execution`] and [`run_bound_view`].
 #[allow(clippy::too_many_arguments)] // The prepared door needs its key, its options and its two callbacks.
-fn run_cached_prepared_view<D: DatasetView + Sync + FocusGraphSource, R>(
+fn run_cached_prepared_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+    R,
+>(
     dataset: &D,
     query: &str,
     parameters: &[&str],
@@ -1726,7 +1755,7 @@ fn run_cached_prepared_view<D: DatasetView + Sync + FocusGraphSource, R>(
 ///
 /// A free function rather than a closure written out at each door, so the three
 /// refusal wordings stay one wording however many doors there are.
-fn project_solutions<'a, 'd, D: DatasetView + Sync, R>(
+fn project_solutions<'a, 'd, D: DatasetView<ReadError = std::convert::Infallible> + Sync, R>(
     outcome: InternedOutcome<'a, 'd, D>,
     project: impl FnOnce(&InternedSolutions<'a, 'd, D>) -> Result<R, String>,
 ) -> Result<R, String> {
@@ -1746,7 +1775,7 @@ fn project_solutions<'a, 'd, D: DatasetView + Sync, R>(
 // By value because this is passed AS a `FnOnce(InternedOutcome<'_, '_, D>) -> R`, the
 // shape every run entry's `visit` has; a reference would not satisfy that bound.
 #[allow(clippy::needless_pass_by_value)]
-fn project_boolean<D: DatasetView + Sync>(
+fn project_boolean<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     outcome: InternedOutcome<'_, '_, D>,
 ) -> Result<bool, String> {
     match outcome {
@@ -1764,7 +1793,7 @@ fn project_boolean<D: DatasetView + Sync>(
 /// [`project_solutions`].
 // By value for the same reason as [`project_boolean`].
 #[allow(clippy::needless_pass_by_value)]
-fn project_graph<D: DatasetView + Sync>(
+fn project_graph<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     outcome: InternedOutcome<'_, '_, D>,
 ) -> Result<Arc<RdfDataset>, String> {
     match outcome {
@@ -1789,7 +1818,7 @@ fn project_graph<D: DatasetView + Sync>(
 ///
 /// As [`run_cached_prepared_view`], plus a non-SELECT result.
 pub(crate) fn run_cached_select_with_shacl_prebinding_view<
-    D: DatasetView + Sync + FocusGraphSource,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
     R,
 >(
     dataset: &D,
@@ -1817,7 +1846,10 @@ pub(crate) fn run_cached_select_with_shacl_prebinding_view<
 /// # Errors
 ///
 /// As [`run_cached_prepared_view`], plus a non-SELECT result.
-pub(crate) fn run_cached_select_generic_view<D: DatasetView + Sync + FocusGraphSource, R>(
+pub(crate) fn run_cached_select_generic_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+    R,
+>(
     dataset: &D,
     select: &str,
     parameters: &[&str],
@@ -1843,7 +1875,9 @@ pub(crate) fn run_cached_select_generic_view<D: DatasetView + Sync + FocusGraphS
 /// # Errors
 ///
 /// As [`run_bound_view`], plus a non-ASK result.
-pub(crate) fn run_bound_ask_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn run_bound_ask_with_shacl_prebinding_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     handle: &mut ShaclExecution,
 ) -> Result<bool, String> {
@@ -1867,7 +1901,7 @@ pub(crate) fn run_bound_ask_with_shacl_prebinding_view<D: DatasetView + Sync + F
 ///
 /// As [`run_bound_view`], plus a non-CONSTRUCT result.
 pub(crate) fn run_bound_construct_with_shacl_prebinding_view<
-    D: DatasetView + Sync + FocusGraphSource,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
 >(
     dataset: &D,
     handle: &mut ShaclExecution,
@@ -2341,7 +2375,10 @@ pub(crate) fn bind_shape_context(
 ///
 /// A non-SELECT result is refused here rather than inside each caller, so the
 /// three wordings stay one wording.
-fn run_select_view<D: DatasetView + Sync + FocusGraphSource, R>(
+fn run_select_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+    R,
+>(
     dataset: &D,
     select: &str,
     substitutions: &[Prebinding<'_>],
@@ -2359,7 +2396,10 @@ fn run_select_view<D: DatasetView + Sync + FocusGraphSource, R>(
 /// This is the path used by SHACL-AF node expressions (scalar, aggregate,
 /// order-by). It does NOT apply the SHACL-specific pre-binding rewrite used for
 /// `sh:sparql` constraint/component bodies.
-pub(crate) fn run_select_generic_view<D: DatasetView + Sync + FocusGraphSource, R>(
+pub(crate) fn run_select_generic_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+    R,
+>(
     dataset: &D,
     select: &str,
     substitutions: &[Prebinding<'_>],
@@ -2379,7 +2419,10 @@ pub(crate) fn run_select_generic_view<D: DatasetView + Sync + FocusGraphSource, 
 ///
 /// `substitutions` is the COMPLETE pre-binding list, shape context included; see
 /// [`push_shape_context`] for why it is assembled by the caller.
-pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource, R>(
+pub(crate) fn run_select_with_shacl_prebinding_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+    R,
+>(
     dataset: &D,
     select: &str,
     substitutions: &[Prebinding<'_>],
@@ -2404,7 +2447,9 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + Focu
 ///
 /// `substitutions` is the COMPLETE pre-binding list, shape context included; see
 /// [`push_shape_context`].
-pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn run_ask_with_shacl_prebinding_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
     dataset: &D,
     ask: &str,
     substitutions: &[Prebinding<'_>],

@@ -255,7 +255,10 @@ pub(crate) fn materialize_reported_over_input(
     impl ViewOp for Op<'_> {
         type Output = Arc<RdfDataset>;
 
-        fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+        fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+            self,
+            view: &D,
+        ) -> Result<Self::Output, CliError> {
             self.imports
                 .materialize(view, self.plan, self.limits, self.target)
         }

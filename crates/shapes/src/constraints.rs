@@ -126,7 +126,7 @@ impl ValueNode {
     /// without materializing an interned value node.
     fn lexical<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<&'a str> {
         match self {
-            Self::Interned(id) => match ds.resolve(*id) {
+            Self::Interned(id) => match ds.resolve_term(*id) {
                 TermRef::Iri(iri) => Some(iri),
                 TermRef::Literal { lexical, .. } => Some(lexical),
                 TermRef::Blank { .. } | TermRef::Triple { .. } => None,
@@ -142,7 +142,7 @@ impl ValueNode {
     /// `Blank`→`BlankNode`, `Literal`→`Literal`, `Triple`→`Triple`.
     fn kind(&self, ds: &impl ShaclRead) -> ValueKind {
         match self {
-            Self::Interned(id) => match ds.resolve(*id) {
+            Self::Interned(id) => match ds.resolve_term(*id) {
                 TermRef::Iri(_) => ValueKind::Iri,
                 TermRef::Blank { .. } => ValueKind::Blank,
                 TermRef::Literal { .. } => ValueKind::Literal,
@@ -156,7 +156,7 @@ impl ValueNode {
     /// materializing an interned id; `None` for any other node.
     fn language<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<&'a str> {
         match self {
-            Self::Interned(id) => match ds.resolve(*id) {
+            Self::Interned(id) => match ds.resolve_term(*id) {
                 TermRef::Literal { language, .. } => language,
                 TermRef::Iri(_) | TermRef::Blank { .. } | TermRef::Triple { .. } => None,
             },
@@ -174,7 +174,7 @@ impl ValueNode {
         ds: &'a impl ShaclRead,
     ) -> Option<(&'a str, Option<RdfTextDirection>)> {
         match self {
-            Self::Interned(id) => match ds.resolve(*id) {
+            Self::Interned(id) => match ds.resolve_term(*id) {
                 TermRef::Literal {
                     language: Some(language),
                     direction,
@@ -236,11 +236,11 @@ fn literal_view_of_id(ds: &impl ShaclRead, id: TermId) -> Option<LiteralView<'_>
         datatype,
         language,
         ..
-    } = ds.resolve(id)
+    } = ds.resolve_term(id)
     else {
         return None;
     };
-    let TermRef::Iri(datatype) = ds.resolve(datatype) else {
+    let TermRef::Iri(datatype) = ds.resolve_term(datatype) else {
         return None;
     };
     Some(LiteralView {
@@ -1880,7 +1880,12 @@ fn reifier_ids<D: ShaclRead>(
         Some(triple),
         GraphFilter::DefaultGraph,
     )
-    .filter(move |quad| matches!(ds.resolve(quad.s), TermRef::Iri(_) | TermRef::Blank { .. }))
+    .filter(move |quad| {
+        matches!(
+            ds.resolve_term(quad.s),
+            TermRef::Iri(_) | TermRef::Blank { .. }
+        )
+    })
     .map(|quad| quad.s)
 }
 

@@ -24,9 +24,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use support::solutions;
 
 use purrdf_core::{
-    DatasetView, GraphMatch, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetBuilder,
-    RdfDiagnostic, RdfStoreCapabilities, SparqlEngine, SparqlRequest, SparqlResult, TermId,
-    TermRef, TermValue,
+    DatasetView, GraphMatch, QuadIds, QuadProbePlan, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
+    RdfStoreCapabilities, SparqlEngine, SparqlRequest, SparqlResult, TermId, TermValue,
 };
 use purrdf_sparql_eval::{
     Arity, BoundFunctionRegistry, EvalError, ExtensionEnv, NativeSparqlEngine, QueryOptions,
@@ -120,18 +119,19 @@ impl CountingView {
 
 impl DatasetView for CountingView {
     type Id = TermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = purrdf_core::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = QuadProbePlan;
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         DatasetView::quads(&*self.inner)
     }
 
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        DatasetView::quad_refs(&*self.inner)
-    }
-
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        DatasetView::resolve(&*self.inner, id)
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok({ self.inner.as_ref().resolve(id) })
     }
 
     fn quads_for_pattern(
@@ -144,11 +144,13 @@ impl DatasetView for CountingView {
         DatasetView::quads_for_pattern(&*self.inner, s, p, o, g)
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        if matches!(value, TermValue::Triple { .. }) {
-            self.triple_lookups.fetch_add(1, Ordering::Relaxed);
-        }
-        DatasetView::term_id_by_value(&*self.inner, value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok({
+            if matches!(value, TermValue::Triple { .. }) {
+                self.triple_lookups.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.as_ref().term_id_by_value(value)
+        })
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
@@ -180,12 +182,12 @@ impl DatasetView for CountingView {
         DatasetView::quads_for_pattern_with_plan(&*self.inner, plan, s, p, o, g)
     }
 
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         DatasetView::term_count(&*self.inner)
     }
 }
 
-fn query_on<D: DatasetView + Sync>(
+fn query_on<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     dataset: &D,
     query: &str,
 ) -> Result<SparqlResult, RdfDiagnostic> {

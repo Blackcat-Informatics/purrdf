@@ -134,15 +134,24 @@ first tagged run can publish the complete workspace in dependency order.
    stating that this version creates the registry record and exposes no runtime
    API. Keep the workspace version and dependency requirements at the real
    release version; the isolated package is not part of the release source.
-2. With `bootstrap_dir` pointing to that isolated package, verify and publish
-   it using a token authorized to create the crate. Verification stays enabled:
+2. Prepare all isolated packages and inspect the retained archive receipts, then
+   publish only missing records. The script verifies the entire set before its
+   first upload; it refuses token publication to an existing record.
 
    ```sh
-   rustup run stable cargo publish --dry-run --manifest-path "$bootstrap_dir/Cargo.toml"
-   CARGO_REGISTRY_TOKEN="${CARGO_TOKEN:?CARGO_TOKEN is required}" \
-     rustup run stable cargo publish --manifest-path "$bootstrap_dir/Cargo.toml"
+   bash scripts/bootstrap-crates-io.sh --prepare --output /tmp/purrdf-empty-check
+   bash scripts/bootstrap-crates-io.sh --publish --output /tmp/purrdf-empty-publish
    ```
 
+   Verification uses the `stable` Rust toolchain. Operators with a separate
+   stable validation installation may set `PURRDF_BOOTSTRAP_TOOLCHAIN` to that
+   installed toolchain (for example, `1.98.1`); the script rejects a nightly
+   or beta compiler.
+
+   Both commands use fresh directories outside the workspace. Publication uses
+   `CARGO_REGISTRY_TOKEN` or `CARGO_TOKEN` without displaying its value. Normal
+   package verification, native tests, wasm checks and exact empty-source and
+   license-byte audits remain enabled.
 3. On the new crate's crates.io **Settings** page, add the Trusted Publisher
    using the table above and enable **Require trusted publishing**. Repeat for
    every new crate. The publisher entry and the lock are separate requirements;
@@ -154,15 +163,14 @@ first tagged run can publish the complete workspace in dependency order.
 
    ```sh
    python3 scripts/check-doc-claims.py
-   bash scripts/check-crates-io-records.sh
+   bash scripts/check-crates-io-records.sh --require-all
    ```
 
 5. Follow the normal release steps above. With the ledger empty and every
    publisher configured, the trusted lane publishes every functional crate
    version in one run, without pausing for token publication. The isolated
-   `0.0.0` package needs no unreleased dependencies; the workspace bootstrap
-   script instead publishes real implementations after their dependencies are
-   available on the registry.
+   `0.0.0` package needs no unreleased dependencies. Functional implementations
+   are published only by the normal Trusted Publishing workflow.
 6. After the functional release is published, set `new_crate` to its registered
    name and yank its `0.0.0` version using a token with the separate **yank**
    permission:
@@ -177,54 +185,25 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval`
+### Bootstrap: complete (ledger empty)
 
-Eight crates are in the release set above without a crates.io record yet.
-`purrdf-hash` is the **first** in publish order, `purrdf-stack` the **second**,
-`purrdf-lex` the **third**, `purrdf-jsonschema` the **eighth**, `purrdf-deflate`
-the **ninth**, `purrdf-ed25519` the **tenth**, `purrdf-hnsw` the
-**nineteenth** and `purrdf-retrieval` the **twenty-first**. Each record must be
-created by a token publish (a create-new-crate publish is the only thing an API
-token does in this process — every existing record is locked to Trusted
-Publishing) and Trusted Publishing configured on it from the section above,
-before a `rust-v*` tag can publish the set. `PURRDF_UNBOOTSTRAPPED_CRATES` in
-[`scripts/release-crates.sh`](../scripts/release-crates.sh) names all eight, and
-the registry preflight verifies the ledger in both directions before packaging.
-An entry leaves once its record exists.
+Every crate in the release set has a crates.io record.
+`purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`,
+`purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval` received isolated, empty,
+dependency-free **0.0.0** versions on 2026-10-01. Each upload was preceded by
+native/wasm checks, normal package verification and exact empty-source/license
+archive audits; the public registry subsequently confirmed every version.
+`PURRDF_UNBOOTSTRAPPED_CRATES` is therefore empty. The bootstrap script never
+publishes a functional implementation or token-republishes an existing record.
 
-`purrdf-hnsw` and `purrdf-retrieval` are depended on by no
-other crate in the release set, so the lane publishes the crates ahead of each,
-skips it visibly, and continues through every later crate; only the two
-themselves wait for the
-token step described in
-[New crates: set up publishing before tagging](#new-crates-set-up-publishing-before-tagging).
-`purrdf-jsonschema` is different: `purrdf-rdf` and `purrdf-shapes` take it as a
-dev-dependency, and `cargo publish` resolves dev-dependencies when it verifies a
-package, so neither can be verified until `purrdf-jsonschema` has a record. Its
-token bootstrap therefore comes first, before the tag.
-
-`purrdf-hash` is a normal dependency of `purrdf-xsd`, `purrdf-jsonschema`,
-`purrdf-deflate`, `purrdf-gts`, `purrdf-datalog`, `purrdf-sparql-algebra` and `purrdf-sparql-eval`
-(and a dev-dependency of `purrdf-iri`), and through them of most of the release
-set, so none of those can even be packaged until it has a record. Its
-token bootstrap comes first as well, before the tag. `purrdf-deflate` is a
-normal dependency of `purrdf-gts` and so blocks the same crates; its token
-bootstrap follows `purrdf-hash`'s, before the tag. `purrdf-ed25519` is a normal
-dependency of `purrdf-gts` and `purrdf-rdf` and blocks the same crates for the
-same reason; its token bootstrap also precedes the tag.
-
-`purrdf-lex` is a normal dependency of `purrdf-iri`, and through it of every
-crate that parses an IRI, so it blocks nearly the whole release set the same
-way. Its token bootstrap follows `purrdf-hash`'s and `purrdf-stack`'s and
-precedes every other, before the tag.
-
-`purrdf-stack` is a normal dependency of the SPARQL evaluator and the wasm
-binding, and a dev-dependency of most of the release set, `purrdf-lex` among
-them. It depends on no other crate, so it is published second, ahead of every
-crate whose verification resolves it. Its token bootstrap follows `purrdf-hash`'s, before the tag.
-
-Before publishing, every crate in the release set must have the Trusted
-Publisher configuration above and the *Require trusted publishing* lock.
+On 2026-10-01, the maintainer confirmed the matching Trusted Publisher entries
+are configured for all release crates. The strict public preflight independently
+verified that all **31** records have **Require trusted publishing** enabled
+(`trustpub_only=true`), including the eight new records. Publisher entries have
+no public API; that confirmation is separate from the registry lock evidence.
+The release workflow repeats the record/lock preflight before any functional
+upload. After the functional versions are confirmed, yank the empty versions
+while retaining the records and publisher settings.
 
 `purrdf-markdown` and `purrdf-json` have **0.0.0** bootstrap records, created by
 token publication solely to configure Trusted Publishing. Those versions
@@ -259,8 +238,8 @@ cargo yank --version 0.0.0-bootstrap purrdf-geo
 
 Two things to carry forward if a future release ever needs this pattern again:
 
-* **Yank is a separate permission from publish.** Every PurRDF crate is locked
-  to Trusted Publishing for publishing, but that lock does not grant or deny
+* **Yank is a separate permission from publish.** A crate's required Trusted
+  Publishing lock does not grant or deny
   yank — that needs an API token carrying the yank scope, and the release
   workflow's trusted session cannot do it. This step is always manual.
 * **It is reversible** (`cargo yank --undo --version …`), which is what makes it
@@ -323,33 +302,38 @@ git tag rust-v0.1.5
 git push origin rust-v0.1.5
 ```
 
-The workflow first refuses outright if any crate in the release set has no
-crates.io record and is not in the bootstrap ledger, or has a record that is
-not locked to Trusted Publishing (see
-[bootstrap status](#outstanding-bootstrap-purrdf-hash-purrdf-stack-purrdf-lex-purrdf-jsonschema-purrdf-deflate-purrdf-ed25519-purrdf-hnsw-and-purrdf-retrieval)).
-The ledger names `purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval`, so
-every other release crate must have its record and lock before packaging. The lane publishes crates
-in dependency order and skips any
-crate/version already present on crates.io. A partially completed release
-resumes with `gh run rerun <run-id>`.
+The workflow refuses before packaging if any release crate lacks its record
+or publishing lock, or the bootstrap ledger has not been reconciled with the
+registry; see [bootstrap status](#bootstrap-complete-ledger-empty). It publishes
+functional crates in the declared dependency order and skips a version already
+present. A partially completed release resumes with `gh run rerun <run-id>`.
 
 ## PyPI Release
 
-The Python package is published by `.github/workflows/release-pypi.yaml` from
-tags named `py-v<version>`. The workflow builds `bindings/python`, verifies that
-the tag matches both `bindings/python/pyproject.toml` and
-`bindings/python/Cargo.toml`, attests the Python distributions, attaches an SPDX
-SBOM, and publishes to PyPI through Trusted Publishing.
+The two Python distributions are published by `.github/workflows/release-pypi.yaml`
+from one `py-v<version>` tag. The native `purrdf` distribution and the
+`purrdf-rdflib` shadow distribution share the suite version and exact reciprocal
+requirements. The workflow builds and audits both wheel/sdist pairs, installs
+both exact candidate wheels together in a clean environment, attests the
+artifacts, and publishes `purrdf` before `purrdf-rdflib` through separate OIDC
+jobs. The shadow’s `rdflib` import must resolve to the native binding’s classes.
 
-Configure the PyPI pending publisher exactly as:
+Configure a matching publisher separately for **each** PyPI project; use a
+pending publisher if the project does not yet exist. The main project’s publisher
+does not authorize publication of the shadow project. Configure each as:
 
 | Field | Value |
 | --- | --- |
-| Project | `purrdf` |
+| Project | `purrdf`, then separately `purrdf-rdflib` |
 | Publisher | GitHub |
 | Repository | `Blackcat-Informatics/purrdf` |
 | Workflow | `release-pypi.yaml` |
 | Environment | `(none)` |
+
+On 2026-10-01, the maintainer confirmed the separate `purrdf-rdflib` Trusted
+Publisher uses this repository, workflow and no-environment configuration.
+Publisher configuration confirmation and a successful OIDC upload are separate
+release receipts.
 
 The Python extension wheel uses the workspace Rust `release` profile. That
 profile enables portable high-optimization settings: `opt-level = 3`, fat LTO,
@@ -357,7 +341,7 @@ one codegen unit, and stripped symbols. It deliberately does not use
 `target-cpu=native`, because PyPI wheels must stay portable beyond the GitHub
 runner CPU.
 
-After the release commit is on `main` and the pending publisher is configured:
+After the release commit is on `main` and both project publishers are configured:
 
 ```sh
 git tag py-v0.1.5

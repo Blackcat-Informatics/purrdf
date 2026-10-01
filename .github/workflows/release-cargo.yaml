@@ -86,32 +86,15 @@ jobs:
           PY
 
       # THE POINT OF NO RETURN IS THE PUBLISH LOOP, AND IT IS NOT ATOMIC.
-      # `cargo publish` runs once per crate, in dependency order, and cannot be
-      # undone — and the OIDC token this lane uses cannot create a crate record
-      # ("Trusted Publishing tokens do not support creating new crates"). So the
-      # state of the whole set is settled HERE, before anything leaves the runner:
-      #
-      #   * a crate with no record that PURRDF_UNBOOTSTRAPPED_CRATES names is
-      #     "bootstrap pending": permitted, because the publish loop below skips
-      #     it and stops cleanly at its first dependent for the token step (the
-      #     interleave — docs/RELEASE.md, "Outstanding bootstrap");
-      #   * a crate with no record the ledger does NOT name is a clean refusal
-      #     naming the crate — an undocumented bootstrap requirement;
-      #   * a record NOT locked to Trusted Publishing (`trustpub_only` in the
-      #     public record JSON) is a refusal naming the setting: this lane is the
-      #     only one that publishes versions of these crates, an unlocked record
-      #     is one a leaked token could publish, and a record the token step just
-      #     created is unlocked until the maintainer enables it — that is the
-      #     step this check exists to catch between interleave runs.
-      #
-      # The preflight reads the same scripts/release-crates.sh the publish step
-      # sources, so it cannot check a different list than the one published. What
-      # no preflight can see is whether a Trusted Publisher ENTRY exists for a
-      # crate; see the publish step for what that failure looks like.
-      - name: Preflight — every release crate has a crates.io record or is ledgered for bootstrap; every record is locked to this lane
+      # `cargo publish` runs once per crate, in dependency order, and cannot be undone.
+      # Every record must exist and be locked before the first irreversible
+      # functional upload. Isolated empty 0.0.0 packages create new records in
+      # advance; their Trusted Publisher entries are configured by the maintainer.
+      # Public trustpub_only proves the lock, not publisher-entry configuration.
+      - name: Preflight — every release crate already has a record locked to this lane
         env:
           PURRDF_RELEASE_VERSION: ${{ github.ref_name }}
-        run: bash scripts/check-crates-io-records.sh
+        run: bash scripts/check-crates-io-records.sh --require-all
 
       - name: Verify workspace
         run: |
@@ -154,12 +137,39 @@ jobs:
           # would have to resolve crate N-1 at this version from crates.io, where
           # it does not exist yet. The `.crate` files are produced now so that a
           # packaging failure surfaces before the first irreversible upload.
-          cargo package --workspace \
-            --exclude purrdf-python \
-            --exclude purrdf-capi \
-            --exclude purrdf-sparql-conformance \
-            --locked \
-            --no-verify
+          # cargo package --workspace also packages publish=false members;
+          # several host-only helpers intentionally have path-only dependencies.
+          # Package the exact release set, not the development workspace.
+          source scripts/release-crates.sh
+          package_args=()
+          for crate in "${PURRDF_RELEASE_CRATES[@]}"; do
+            package_args+=("-p" "$crate")
+          done
+          cargo package --locked --no-verify "${package_args[@]}"
+
+      - name: Audit actual crate archives
+        run: |
+          python3 scripts/fetch-locked-deps.py
+          python3 scripts/package-licenses.py --check
+          python3 scripts/package-licenses.py --audit target/package/*.crate --require-cargo-set --receipt target/license-evidence-cargo.json
+
+      - name: Build C distribution through the pinned cargo-c
+        run: |
+          cargo install cargo-c --version 0.10.23 --locked
+          make capi-bundle
+
+      - name: Attest build provenance for C distribution
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: target/dist/purrdf-capi-*.tar.gz
+
+      - name: Upload artifact license evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: license-evidence-cargo-c
+          path: |
+            target/license-evidence-cargo.json
+            target/dist/*.license-receipt.json
 
       - name: Attest build provenance for crates
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
@@ -180,6 +190,12 @@ jobs:
           subject-path: target/package/*.crate
           sbom-path: sbom-purrdf-crates.spdx.json
 
+      - name: Attest SBOM for C distribution
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: target/dist/purrdf-capi-*.tar.gz
+          sbom-path: sbom-purrdf-crates.spdx.json
+
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -192,17 +208,14 @@ jobs:
 
       # The loop lives in scripts/publish-release-crates.sh so the one piece of
       # logic that decides what is published can be dry-run and self-tested
-      # locally against a mock registry (`--self-test` runs the whole interleave
-      # on every `make check`). Per crate, in publish order: already published
-      # -> skip (re-runs resume); in PURRDF_UNBOOTSTRAPPED_CRATES with no record
-      # -> SKIP, visibly; depends on a skipped ledger crate -> STOP CLEANLY
-      # (exit 0, `complete=false`) naming the crate, the ledger crate it waits
-      # on, and the token step as what comes next; otherwise `cargo publish
-      # --locked`, VERIFIED, then wait until crates.io serves the version.
+      # locally against a mock registry. Every record and its publishing lock
+      # must exist before this lane starts. Per crate, in publish order:
+      # already published -> skip (re-runs resume); otherwise cargo publish
+      # --locked, VERIFIED, then wait until crates.io serves the version.
       #
       # Verification resolves the packaged crate's whole graph, dev-dependencies
-      # included, which is resolvable because every dependency is either already
-      # served or a ledger crate the token step created — or the loop stopped.
+      # included, which is resolvable because every packaged dependency is
+      # already served at the functional version by an earlier upload.
       # This loop used to pass `--no-verify`, load-bearing until `purrdf-geo`
       # (dev-depending on two later crates) was reordered — see docs/RELEASE.md,
       # "Verification is on, and why it was off".
@@ -232,23 +245,11 @@ jobs:
           # scripts/release-crates.sh (see also the wasm gate above).
           bash scripts/publish-release-crates.sh "${VERSION#rust-v}"
 
-      - name: Release incomplete — the interleave continues with the token step
+      - name: Require complete crates.io publication before creating the release
         if: steps.publish.outputs.complete != 'true'
-        env:
-          VERSION: ${{ github.ref_name }}
-          RUN_ID: ${{ github.run_id }}
         run: |
-          cat <<EOF
-          This run stopped cleanly with crates still to publish (see the publish
-          step for the crate it stopped at and the ledger crate it waits on). The
-          GitHub Release for ${VERSION} is NOT created until the set is complete.
-
-          Next, from a clean checkout of ${VERSION}:
-            CARGO_REGISTRY_TOKEN="\${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh ${VERSION#rust-v}
-          then on crates.io, for EACH record it created, add the Trusted Publisher
-          entry and enable "Require trusted publishing"; then resume this run:
-            gh run rerun ${RUN_ID}
-          EOF
+          echo "::error::The publisher did not confirm the complete release set. No GitHub Release will be created; inspect the publication and registry preflight results before rerunning."
+          exit 1
 
       - name: Publish GitHub Release with changelog notes
         if: steps.publish.outputs.complete == 'true'
@@ -282,3 +283,10 @@ jobs:
           else
             gh release create "$VERSION" --verify-tag --title "purrdf ${version}" --notes-file /tmp/purrdf-release-notes.md
           fi
+
+      - name: Attach the C bundle and artifact license evidence to the GitHub release
+        if: steps.publish.outputs.complete == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: gh release upload "$VERSION" target/dist/purrdf-capi-*.tar.gz target/dist/*.license-receipt.json target/license-evidence-cargo.json --clobber

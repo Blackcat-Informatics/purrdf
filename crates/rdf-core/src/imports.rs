@@ -952,24 +952,40 @@ pub fn unresolved_imports(graph: &RdfDataset, loaded: &[&str]) -> Vec<String> {
 /// assert!(imported_iris(&graph, &[]).is_empty());
 /// ```
 #[must_use]
-pub fn imported_iris<D: DatasetView>(graph: &D, loaded: &[&str]) -> Vec<String> {
-    // The common case — a document that imports nothing — costs this one term lookup, and
-    // the graph-role classifier never runs.
-    let Some(imports) = graph.term_id_by_value(&TermValue::iri(OWL_IMPORTS)) else {
-        return Vec::new();
-    };
-    let anchors = anchors(graph, loaded);
-    if anchors.is_empty() {
-        return Vec::new();
-    }
-    graph
-        .quads()
-        .filter(|quad| quad.p == imports && anchors.binary_search(&quad.s).is_ok())
-        .filter_map(|quad| match graph.resolve(quad.o) {
-            TermRef::Iri(iri) => Some(iri.to_owned()),
-            _ => None,
-        })
-        .collect()
+pub fn imported_iris<D: DatasetView<ReadError = Infallible>>(
+    graph: &D,
+    loaded: &[&str],
+) -> Vec<String> {
+    try_imported_iris(graph, loaded).unwrap_or_else(|error| match error {})
+}
+
+/// Read import IRIs through a fallible source, preserving operational refusals.
+///
+/// # Errors
+/// Returns the source's typed read or iteration failure.
+pub fn try_imported_iris<D: DatasetView>(
+    graph: &D,
+    loaded: &[&str],
+) -> Result<Vec<String>, D::ReadError> {
+    graph.checked_read(|graph| {
+        let Some(imports) = graph.term_id_by_value(&TermValue::iri(OWL_IMPORTS))? else {
+            return Ok(Vec::new());
+        };
+        let anchors = try_anchors(graph, loaded)?;
+        let mut iris = Vec::new();
+        for quad in graph
+            .quads()
+            .filter(|quad| quad.p == imports && anchors.binary_search(&quad.s).is_ok())
+        {
+            if let Some(iri) = graph.with_term(quad.o, |term| match term {
+                TermRef::Iri(iri) => Some(iri.to_owned()),
+                _ => None,
+            })? {
+                iris.push(iri);
+            }
+        }
+        Ok(iris)
+    })?
 }
 
 /// Every `owl:imports` triple of `graph` that is NOT an import — its subject is no anchor of
@@ -995,21 +1011,36 @@ pub fn imported_iris<D: DatasetView>(graph: &D, loaded: &[&str]) -> Vec<String> 
 /// assert_eq!(unanchored_import_triples(graph.as_ref(), &[]), [(data, lib)]);
 /// ```
 #[must_use]
-pub fn unanchored_import_triples<D: DatasetView>(
+pub fn unanchored_import_triples<D: DatasetView<ReadError = Infallible>>(
     graph: &D,
     loaded: &[&str],
 ) -> Vec<(D::Id, D::Id)> {
-    let Some(imports) = graph.term_id_by_value(&TermValue::iri(OWL_IMPORTS)) else {
-        return Vec::new();
-    };
-    let anchors = anchors(graph, loaded);
-    let mut seen: BTreeSet<(D::Id, D::Id)> = BTreeSet::new();
-    graph
-        .quads()
-        .filter(|quad| quad.p == imports && anchors.binary_search(&quad.s).is_err())
-        .map(|quad| (quad.s, quad.o))
-        .filter(|pair| seen.insert(*pair))
-        .collect()
+    try_unanchored_import_triples(graph, loaded).unwrap_or_else(|error| match error {})
+}
+
+type UnanchoredRows<Id> = Vec<(Id, Id)>;
+
+/// Read unanchored import rows through a fallible source.
+///
+/// # Errors
+/// Returns the source's typed read or iteration failure.
+pub fn try_unanchored_import_triples<D: DatasetView>(
+    graph: &D,
+    loaded: &[&str],
+) -> Result<UnanchoredRows<D::Id>, D::ReadError> {
+    graph.checked_read(|graph| {
+        let Some(imports) = graph.term_id_by_value(&TermValue::iri(OWL_IMPORTS))? else {
+            return Ok(Vec::new());
+        };
+        let anchors = try_anchors(graph, loaded)?;
+        let mut seen = BTreeSet::new();
+        Ok(graph
+            .quads()
+            .filter(|quad| quad.p == imports && anchors.binary_search(&quad.s).is_err())
+            .map(|quad| (quad.s, quad.o))
+            .filter(|pair| seen.insert(*pair))
+            .collect())
+    })?
 }
 
 /// One `owl:imports` triple that is not an import: its subject is no anchor of the document
@@ -1029,13 +1060,22 @@ pub struct UnanchoredImport {
 /// graph interns, each import anchor of the one graph-role classifier (a SHACL instance of
 /// `owl:Ontology` or of `sh:ShapesGraph`), and each subject naming one of those as its
 /// `owl:versionIRI` (the one `^owl:versionIRI?` step).
-fn anchors<D: DatasetView>(graph: &D, loaded: &[&str]) -> Vec<D::Id> {
+fn anchors<D: DatasetView<ReadError = Infallible>>(graph: &D, loaded: &[&str]) -> Vec<D::Id> {
+    try_anchors(graph, loaded).unwrap_or_else(|error| match error {})
+}
+
+fn try_anchors<D: DatasetView>(graph: &D, loaded: &[&str]) -> Result<Vec<D::Id>, D::ReadError> {
     let term = |iri: &str| graph.term_id_by_value(&TermValue::iri(iri));
-    let mut anchors: Vec<D::Id> = loaded.iter().filter_map(|iri| term(iri)).collect();
-    anchors.extend(GraphRoleIndex::classify(graph).import_anchors());
+    let mut anchors = Vec::new();
+    for iri in loaded {
+        if let Some(id) = term(iri)? {
+            anchors.push(id);
+        }
+    }
+    anchors.extend(GraphRoleIndex::try_classify(graph)?.import_anchors());
     anchors.sort_unstable();
     anchors.dedup();
-    if let Some(version_iri) = term(OWL_VERSIONIRI) {
+    if let Some(version_iri) = term(OWL_VERSIONIRI)? {
         let versioned: Vec<D::Id> = graph
             .quads_for_pattern(None, Some(version_iri), None, GraphMatch::Any)
             .filter(|quad| anchors.binary_search(&quad.o).is_ok())
@@ -1045,7 +1085,7 @@ fn anchors<D: DatasetView>(graph: &D, loaded: &[&str]) -> Vec<D::Id> {
         anchors.sort_unstable();
         anchors.dedup();
     }
-    anchors
+    Ok(anchors)
 }
 
 /// Every term id `graph` holds, in every position [`copy_scoped`] writes: the quads, the

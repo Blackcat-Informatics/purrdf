@@ -34,6 +34,8 @@ pub struct PurrdfError {
     /// label and the IRIs it names. `None` for every other error, and the
     /// `purrdf_shapes_import_error_*` accessors answer NULL / 0 for those.
     pub(crate) import: Option<ImportRefusal>,
+    /// Original structured RDF presentation, borrowed through the error handle.
+    diagnostic: Option<CString>,
 }
 
 /// The typed half of a [`PurrdfStatus::ShapesImportError`], kept as C strings so the
@@ -58,6 +60,7 @@ impl PurrdfError {
             message: sanitized(&message.into()),
             dimension: None,
             import: None,
+            diagnostic: None,
         }
     }
 
@@ -94,6 +97,7 @@ impl PurrdfError {
             code: PurrdfStatus::ShapesImportError,
             message: sanitized(&error.to_string()),
             dimension: None,
+            diagnostic: None,
             import: Some(ImportRefusal {
                 kind: sanitized(error.kind()),
                 iris: error.iris().into_iter().map(sanitized).collect(),
@@ -113,16 +117,19 @@ impl PurrdfError {
             message: sanitized(&message.into()),
             dimension: dimension.map(sanitized),
             import: None,
+            diagnostic: None,
         }
     }
 
     /// Map a kernel [`RdfDiagnostic`] to a `PurrdfError` under the given C status,
     /// preserving the diagnostic's own code and message.
     pub(crate) fn from_diagnostic(code: PurrdfStatus, diagnostic: &RdfDiagnostic) -> Self {
-        Self::new(
+        let mut error = Self::new(
             code,
             format!("[{}] {}", diagnostic.code, diagnostic.message),
-        )
+        );
+        error.diagnostic = Some(sanitized(&diagnostic.to_json().to_string()));
+        error
     }
 }
 
@@ -180,6 +187,28 @@ pub unsafe extern "C" fn purrdf_error_message(err: *const PurrdfError) -> *const
     }
 }
 
+/// Return a borrowed JSON record of the original RDF diagnostic, including its
+/// stable code, optional message identity, typed parameters and logical anchors. Exact integers are decimal strings with type labels.
+/// Returns null when the error carries no RDF diagnostic or `err` is null.
+/// The pointer remains valid until `purrdf_error_free(err)`.
+///
+/// # Safety
+/// Same contract as [`purrdf_error_code`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_error_presentation_json(err: *const PurrdfError) -> *const c_char {
+    unsafe {
+        ffi_guard!(std::ptr::null(), {
+            if err.is_null() {
+                return std::ptr::null();
+            }
+            (*err)
+                .diagnostic
+                .as_ref()
+                .map_or(std::ptr::null(), |record| record.as_ptr())
+        })
+    }
+}
+
 /// Release an error handle. No-op on null. Idempotent only in the sense that the
 /// caller must not pass the same non-null pointer twice.
 ///
@@ -194,6 +223,31 @@ pub unsafe extern "C" fn purrdf_error_free(err: *mut PurrdfError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_machine_record_preserves_typed_fields_and_large_anchors() {
+        let diagnostic = RdfDiagnostic::from_iri(&purrdf_rs::IriError::BadPercentEncoding(7))
+            .with_location(
+                purrdf_core::RdfLocation::file("data.nt")
+                    .with_line((1 << 32) + 1)
+                    .with_gts_frame((1 << 53) + 1),
+            );
+        let error = into_handle(PurrdfError::from_diagnostic(
+            PurrdfStatus::ParseError,
+            &diagnostic,
+        ));
+        unsafe {
+            let record = std::ffi::CStr::from_ptr(purrdf_error_presentation_json(error))
+                .to_str()
+                .unwrap();
+            assert!(record.contains("iri-bad-percent-encoding"));
+            assert!(record.contains("\"offset\":{\"kind\":\"unsigned\",\"value\":\"7\"}"));
+            assert!(record.contains("\"line\":\"4294967297\""));
+            assert!(record.contains("\"gtsFrameIndex\":\"9007199254740993\""));
+            purrdf_error_free(error);
+            assert!(purrdf_error_presentation_json(std::ptr::null()).is_null());
+        }
+    }
 
     #[test]
     fn new_sanitizes_interior_nul() {

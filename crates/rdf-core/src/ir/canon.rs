@@ -149,11 +149,11 @@ use sha2::{Digest, Sha256, Sha384};
 use super::dataset::{QuadIds, RdfDataset, TermRef};
 use super::skolem::{TermMapper, rebuild_dataset};
 use super::term::{BlankScope, TermId, TermValue};
-use super::term_walk::fold_term;
+use super::term_walk::try_fold_term;
 use crate::content_store::ContentDigest;
 use crate::dataset_view::{
-    DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch, ViewTermId,
-    checkpointed_drain,
+    DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch, TermGuard,
+    ViewTermId, checkpointed_drain,
 };
 use purrdf_lex::term_syntax::{
     TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
@@ -531,7 +531,10 @@ pub fn try_canonicalize_with(
 /// poison-budget exhaustion and on reserved-vocabulary input alike. See
 /// [`try_canonicalize_view`] for the fallible equivalent.
 #[must_use]
-pub fn canonicalize_view<D: DatasetView>(view: &D, hash: CanonHash) -> Canonicalized<D::Id> {
+pub fn canonicalize_view<D: DatasetView<ReadError = Infallible>>(
+    view: &D,
+    hash: CanonHash,
+) -> Canonicalized<D::Id> {
     CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run()
 }
 
@@ -550,7 +553,10 @@ pub fn try_canonicalize_view<D: DatasetView>(
     view: &D,
     hash: CanonHash,
 ) -> Result<Canonicalized<D::Id>, CanonError> {
-    CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run_fallible()
+    view.checked_read(|view| {
+        CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run_fallible()
+    })
+    .map_err(|error| CanonError::Read(error.to_string()))?
 }
 
 /// Canonicalize the subgraph of `view` asserted in the named graph `graph` (an IRI),
@@ -577,7 +583,7 @@ pub fn try_canonicalize_view<D: DatasetView>(
 /// Trusted callers only, exactly like [`canonicalize_view`]; see
 /// [`try_canonicalize_graph_view`] for the fallible equivalent.
 #[must_use]
-pub fn canonicalize_graph_view<D: DatasetView>(
+pub fn canonicalize_graph_view<D: DatasetView<ReadError = Infallible>>(
     view: &D,
     graph: &str,
     hash: CanonHash,
@@ -603,12 +609,13 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
     graph: &str,
     hash: CanonHash,
 ) -> Result<Canonicalized<D::Id>, CanonError> {
-    match graph_scope(view, graph) {
+    view.checked_read(|view| match graph_scope(view, graph) {
         Some(scope) => {
             CanonState::new(view, scope, CanonPresentation::Overlay, hash).run_fallible()
         }
         None => Ok(empty_canonicalized(CanonPresentation::Overlay)),
-    }
+    })
+    .map_err(|error| CanonError::Read(error.to_string()))?
 }
 
 /// The SHA-256 [`ContentDigest`] of one named graph's canonical form — the value a
@@ -618,7 +625,10 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
 /// Trusted callers only, exactly like [`canonicalize_graph_view`]; see
 /// [`try_graph_digest_view`] for the fallible equivalent.
 #[must_use]
-pub fn graph_digest_view<D: DatasetView>(view: &D, graph: &str) -> ContentDigest {
+pub fn graph_digest_view<D: DatasetView<ReadError = Infallible>>(
+    view: &D,
+    graph: &str,
+) -> ContentDigest {
     ContentDigest::of(
         canonicalize_graph_view(view, graph, CanonHash::Sha256)
             .nquads
@@ -816,7 +826,7 @@ pub fn try_flat_digest_view<D: FallibleDatasetView>(
 /// The [`CanonScope`] naming `graph` in `view`, or `None` when `view` interns no such
 /// IRI (so no quad or statement row can carry it as a graph name).
 fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id>> {
-    view.term_id_by_value(&TermValue::iri(graph))
+    view.term_id_if_ready(&TermValue::iri(graph))
         .map(CanonScope::Graph)
 }
 
@@ -1085,7 +1095,9 @@ pub fn check_admissible(ds: &RdfDataset) -> Result<(), ReservedVocabulary> {
 ///
 /// # Errors
 /// [`ReservedVocabulary`] naming the least offending `(position, iri)`.
-pub fn check_admissible_view<D: DatasetView>(view: &D) -> Result<(), ReservedVocabulary> {
+pub fn check_admissible_view<D: DatasetView<ReadError = Infallible>>(
+    view: &D,
+) -> Result<(), ReservedVocabulary> {
     reserved_vocabulary(view, CanonScope::Dataset, CanonPresentation::Overlay).map_or(Ok(()), Err)
 }
 
@@ -1104,7 +1116,24 @@ pub fn blank_count(ds: &RdfDataset) -> usize {
 /// differ only in `(label, scope)` count the same, and two sources of a composite that
 /// happen to share a local label count as the two distinct nodes they are.
 #[must_use]
-pub fn blank_count_view<D: DatasetView>(view: &D) -> usize {
+pub fn blank_count_view<D: DatasetView<ReadError = Infallible>>(view: &D) -> usize {
+    match try_blank_count_view(view) {
+        Ok(count) => usize::try_from(count).expect("resident blank set fits local memory"),
+        Err(never) => match never {},
+    }
+}
+
+/// Count blanks only after the complete source traversal succeeds.
+///
+/// # Errors
+/// Returns backing-store failure and discards the partial count.
+pub fn try_blank_count_view<D: DatasetView>(view: &D) -> Result<u64, D::ReadError> {
+    view.checked_read(|view| {
+        u64::try_from(blank_count_unchecked(view)).expect("local blank set count fits u64")
+    })
+}
+
+fn blank_count_unchecked<D: DatasetView>(view: &D) -> usize {
     let mut set: BTreeSet<D::Id> = BTreeSet::new();
     collect_components(
         view,
@@ -1303,11 +1332,11 @@ impl<Id: ViewTermId> Component<Id> {
 /// consistent renaming of such a node canonicalize differently, and would let
 /// [`canonical_relabel`] emit a dangling label.
 ///
-/// The walk is [`fold_term`]'s work list: a triple term's subject, predicate and
+/// The walk is [`try_fold_term`]'s work list: a triple term's subject, predicate and
 /// object are visited in that order, each fully before the next, and `f` fires
 /// for each blank as the walk reaches it.
 fn blanks_in_term<D: DatasetView>(ds: &D, id: D::Id, f: &mut impl FnMut(D::Id)) {
-    match fold_term(
+    let _ = try_fold_term(
         ds,
         id,
         |id, term| {
@@ -1322,12 +1351,11 @@ fn blanks_in_term<D: DatasetView>(ds: &D, id: D::Id, f: &mut impl FnMut(D::Id)) 
                 }
                 TermRef::Iri(_) | TermRef::Triple { .. } => {}
             }
-            Ok::<(), Infallible>(())
+            Ok::<(), D::ReadError>(())
         },
         |_, (), (), ()| Ok(()),
-    ) {
-        Ok(()) => {}
-    }
+        |error| error,
+    );
 }
 
 /// The view ids of the blank nodes a composite literal's lexical form names,
@@ -1346,7 +1374,10 @@ fn blanks_in_term<D: DatasetView>(ds: &D, id: D::Id, f: &mut impl FnMut(D::Id)) 
 /// minting — the same non-minting resolve the flat path's `term_id_by_blank` performs,
 /// so an embedded pair naming no node stays absent rather than becoming one.
 fn composite_blanks<D: DatasetView>(ds: &D, lexical: &str, datatype: D::Id) -> Vec<D::Id> {
-    let TermRef::Iri(iri) = ds.resolve(datatype) else {
+    let Some(guard) = ds.resolve_if_ready(datatype) else {
+        return Vec::new();
+    };
+    let TermRef::Iri(iri) = guard.term() else {
         return Vec::new();
     };
     if !crate::cdt_blank::is_cdt_datatype(iri) {
@@ -1355,7 +1386,7 @@ fn composite_blanks<D: DatasetView>(ds: &D, lexical: &str, datatype: D::Id) -> V
     let mut seen = BTreeSet::new();
     crate::cdt_blank::cdt_embedded_blanks(lexical, iri)
         .into_iter()
-        .filter_map(|(label, scope)| ds.term_id_by_value(&TermValue::Blank { label, scope }))
+        .filter_map(|(label, scope)| ds.term_id_if_ready(&TermValue::Blank { label, scope }))
         .filter(|id| seen.insert(*id))
         .collect()
 }
@@ -1387,8 +1418,8 @@ impl<Id: ViewTermId> Sentinels<Id> {
     /// missed fold refuses, it never admits a second spelling.
     fn of<D: DatasetView<Id = Id>>(ds: &D) -> Self {
         Self {
-            reifies: ds.term_id_by_value(&TermValue::iri(SENTINEL_REIFIES)),
-            annotation: ds.term_id_by_value(&TermValue::iri(SENTINEL_ANNOTATION_GRAPH)),
+            reifies: ds.term_id_if_ready(&TermValue::iri(SENTINEL_REIFIES)),
+            annotation: ds.term_id_if_ready(&TermValue::iri(SENTINEL_ANNOTATION_GRAPH)),
         }
     }
 }
@@ -1402,7 +1433,10 @@ impl<Id: ViewTermId> Sentinels<Id> {
 /// recognizes is EXACTLY the shape the lowering emits, and a shape test that assumes
 /// away one of its conjuncts is not exact.
 fn is_asserted_subject<D: DatasetView>(ds: &D, id: D::Id) -> bool {
-    matches!(ds.resolve(id), TermRef::Iri(_) | TermRef::Blank { .. })
+    ds.with_term(id, |term| {
+        matches!(term, TermRef::Iri(_) | TermRef::Blank { .. })
+    })
+    .unwrap_or(false)
 }
 
 /// The statement-layer row a base quad SPELLS when it is in exactly the shape this
@@ -1424,26 +1458,32 @@ fn fold_sentinel_row<D: DatasetView>(
     q: QuadIds<D::Id>,
 ) -> Option<Component<D::Id>> {
     if sentinels.reifies == Some(q.p) {
-        return (is_asserted_subject(ds, q.s) && matches!(ds.resolve(q.o), TermRef::Triple { .. }))
-            .then_some(Component::Reifier {
-                r: q.s,
-                t: q.o,
-                g: q.g,
-            });
+        return (is_asserted_subject(ds, q.s)
+            && ds
+                .with_term(q.o, |term| matches!(term, TermRef::Triple { .. }))
+                .unwrap_or(false))
+        .then_some(Component::Reifier {
+            r: q.s,
+            t: q.o,
+            g: q.g,
+        });
     }
     if let Some(annotation) = sentinels.annotation
         && q.g == Some(annotation)
     {
-        return (is_asserted_subject(ds, q.s) && matches!(ds.resolve(q.p), TermRef::Iri(_)))
-            .then_some(Component::Annotation {
-                r: q.s,
-                p: q.p,
-                o: q.o,
-                // The lowering spends the graph slot on the sentinel itself, so the
-                // shape it emits is the DEFAULT-graph annotation and nothing else; a
-                // named-graph annotation lowers to a five-token line no quad can hold.
-                g: None,
-            });
+        return (is_asserted_subject(ds, q.s)
+            && ds
+                .with_term(q.p, |term| matches!(term, TermRef::Iri(_)))
+                .unwrap_or(false))
+        .then_some(Component::Annotation {
+            r: q.s,
+            p: q.p,
+            o: q.o,
+            // The lowering spends the graph slot on the sentinel itself, so the
+            // shape it emits is the DEFAULT-graph annotation and nothing else; a
+            // named-graph annotation lowers to a five-token line no quad can hold.
+            g: None,
+        });
     }
     None
 }
@@ -1561,7 +1601,7 @@ fn lower_folded_row<D: DatasetView>(
     match folded {
         Component::Reifier { r, t, g } => {
             let dup = ds
-                .term_id_by_value(&TermValue::iri(RDF_REIFIES))
+                .term_id_if_ready(&TermValue::iri(RDF_REIFIES))
                 .is_some_and(|p| already_asserted(ds, graph_probe, r, p, t));
             (!dup).then_some(Component::FlatReifier { r, t, g })
         }
@@ -1977,6 +2017,8 @@ pub enum CanonError {
     BudgetExceeded(BudgetExceeded),
     /// The input carries an IRI in the profile's reserved namespace.
     ReservedVocabulary(ReservedVocabulary),
+    /// The backing dataset could not be read completely. No canonical result is returned.
+    Read(String),
 }
 
 impl std::fmt::Display for CanonError {
@@ -1984,6 +2026,7 @@ impl std::fmt::Display for CanonError {
         match self {
             Self::BudgetExceeded(err) => err.fmt(f),
             Self::ReservedVocabulary(err) => err.fmt(f),
+            Self::Read(error) => write!(f, "dataset read failed: {error}"),
         }
     }
 }
@@ -1993,6 +2036,7 @@ impl std::error::Error for CanonError {
         match self {
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
+            Self::Read(_) => None,
         }
     }
 }
@@ -2122,7 +2166,8 @@ fn reserved_in_term<D: DatasetView>(ds: &D, id: D::Id) -> Option<Box<str>> {
     let mut held: Vec<D::Id> = Vec::new();
     let mut next = Some(id);
     while let Some(id) = next.take().or_else(|| held.pop()) {
-        match ds.resolve(id) {
+        let guard = ds.resolve_if_ready(id)?;
+        match guard.term() {
             TermRef::Iri(iri) => {
                 if iri.starts_with(RESERVED_NAMESPACE) {
                     return Some(Box::from(iri));
@@ -2486,7 +2531,10 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let mut held: Vec<(D::Id, Cow<'_, str>)> = Vec::new();
         let mut next = Some((id, Cow::Borrowed(position)));
         while let Some((id, position)) = next.take().or_else(|| held.pop()) {
-            match self.ds.resolve(id) {
+            let Some(guard) = self.ds.resolve_if_ready(id) else {
+                return;
+            };
+            match guard.term() {
                 TermRef::Blank { .. } => {
                     if id != focus {
                         let h = self.hash_related_blank_node(id, &position, predicate, issuer);
@@ -2540,7 +2588,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         input.push_str(position);
         if position != "g" && !position.starts_with("g.") {
             input.push('<');
-            input.push_str(self.predicate_iri(predicate));
+            self.write_predicate_iri(predicate, &mut input);
             input.push('>');
         }
         if let Some(id) = self.canonical.issued_for(related) {
@@ -2558,13 +2606,18 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// The IRI value of a predicate slot (a real IRI term or a sentinel). Borrowed
     /// from the sentinel table or the dataset arena: this sits inside Hash Related
     /// Blank Node, the innermost loop of the n-degree search, so it mints nothing.
-    fn predicate_iri(&self, predicate: &Slot<D::Id>) -> &str {
+    fn write_predicate_iri(&self, predicate: &Slot<D::Id>, out: &mut String) {
         match predicate {
-            Slot::Sentinel(iri) => iri,
-            Slot::Term(id) => match self.ds.resolve(*id) {
-                TermRef::Iri(iri) => iri,
-                other => unreachable!("predicate must be an IRI, got {other:?}"),
-            },
+            Slot::Sentinel(iri) => out.push_str(iri),
+            Slot::Term(id) => {
+                let Some(guard) = self.ds.resolve_if_ready(*id) else {
+                    return;
+                };
+                let TermRef::Iri(iri) = guard.term() else {
+                    unreachable!("validated predicates are IRIs")
+                };
+                out.push_str(iri);
+            }
             Slot::AnnotationGraph(_) => {
                 unreachable!("the annotation-graph marker is never a predicate slot")
             }
@@ -2663,7 +2716,10 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 }
                 Step::Term(id) => id,
             };
-            match self.ds.resolve(id) {
+            let Some(guard) = self.ds.resolve_if_ready(id) else {
+                return;
+            };
+            match guard.term() {
                 TermRef::Iri(iri) => write_iri(iri, out),
                 TermRef::Blank { .. } => write_blank(render.label(id), out),
                 TermRef::Literal {
@@ -2673,7 +2729,10 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     direction,
                 } => {
                     let rendered = self.render_composite_lexical(lexical, datatype, render);
-                    let TermRef::Iri(dt) = self.ds.resolve(datatype) else {
+                    let Some(datatype_guard) = self.ds.resolve_if_ready(datatype) else {
+                        return;
+                    };
+                    let TermRef::Iri(dt) = datatype_guard.term() else {
                         unreachable!("literal datatype must be an IRI")
                     };
                     write_literal(
@@ -2712,7 +2771,10 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         datatype: D::Id,
         render: BlankRender<'_, D::Id>,
     ) -> Cow<'l, str> {
-        let TermRef::Iri(iri) = self.ds.resolve(datatype) else {
+        let Some(guard) = self.ds.resolve_if_ready(datatype) else {
+            return Cow::Borrowed(lexical);
+        };
+        let TermRef::Iri(iri) = guard.term() else {
             return Cow::Borrowed(lexical);
         };
         crate::cdt_blank::rewrite_cdt_blank_terms(lexical, iri, &mut |label| {
@@ -2720,7 +2782,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 label,
                 crate::blank_label::LabelAlphabet::BlankNodeLabel,
             );
-            let id = self.ds.term_id_by_value(&TermValue::Blank {
+            let id = self.ds.term_id_if_ready(&TermValue::Blank {
                 label: label.into_owned(),
                 scope,
             })?;
@@ -2797,7 +2859,6 @@ mod tests {
     use crate::RdfStoreCapabilities;
     use crate::dataset_view::ViewOperationStatus;
     use crate::ir::RdfDatasetBuilder;
-    use crate::ir::dataset::QuadRef;
     use crate::{RdfLiteral, RdfTextDirection};
     use std::sync::Arc;
 
@@ -4950,7 +5011,16 @@ mod tests {
 
     impl DatasetView for FlatProbeView {
         type Id = TermId;
+        type ReadError = FlatProbeFault;
+        type TermGuard<'a>
+            = TermRef<'a, Self::Id>
+        where
+            Self: 'a;
         type ProbePlan = ();
+
+        fn read_error(&self) -> Option<Self::ReadError> {
+            self.operation_status().error().cloned()
+        }
 
         /// A row-reading accessor: trips [`mark_read`](Self::mark_read) before
         /// delegating, so a run that only calls this still faults on its second
@@ -4960,24 +5030,17 @@ mod tests {
             self.inner.quads()
         }
 
-        /// A row-reading accessor: trips [`mark_read`](Self::mark_read) before
-        /// delegating, same as [`quads`](Self::quads).
-        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-            self.mark_read();
-            DatasetView::quad_refs(&*self.inner)
-        }
-
         /// A point lookup, not a row stream — deliberately does NOT trip
         /// [`mark_read`](Self::mark_read), so a run that only resolves ids the drain
         /// closure already holds never manufactures a fault it didn't earn.
-        fn resolve(&self, id: TermId) -> TermRef<'_> {
-            self.inner.resolve(id)
+        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            self.checked_read(|_| self.inner.as_ref().resolve(id))
         }
 
         /// A point lookup; does not trip [`mark_read`](Self::mark_read), matching
         /// [`resolve`](Self::resolve).
-        fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-            self.inner.term_id_by_value(value)
+        fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+            self.checked_read(|_| self.inner.as_ref().term_id_by_value(value))
         }
 
         /// A point lookup; does not trip [`mark_read`](Self::mark_read).
@@ -5006,7 +5069,7 @@ mod tests {
         }
 
         /// A point lookup; does not trip [`mark_read`](Self::mark_read).
-        fn term_count(&self) -> usize {
+        fn term_count(&self) -> u64 {
             self.inner.term_count()
         }
 

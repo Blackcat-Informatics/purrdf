@@ -457,6 +457,11 @@ pub struct ExecutionResult<'d> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ExecutionError {
+    /// The backing read session failed; no stratum may publish partial source data.
+    SourceRead {
+        /// The operational refusal, retained for the caller.
+        reason: String,
+    },
     /// The compiled units were built against a different live registry instance.
     RegistryMismatch {
         /// The instance the compiled bundle records.
@@ -597,6 +602,7 @@ pub enum ExecutionError {
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SourceRead { reason } => write!(f, "retrieval source read failed: {reason}"),
             Self::RegistryMismatch { expected, got } => write!(
                 f,
                 "compiled units name registry instance {expected:?}, but execution holds {got:?}"
@@ -895,7 +901,7 @@ struct PreparedLookup {
 /// every call of a conforming unit invokes the one relation at one generation — so a
 /// verdict from any lookup answered by another index generation is refused, whichever
 /// alternative and lookup it was.
-struct DatasetExclusion<'d, D: DatasetView + Sync> {
+struct DatasetExclusion<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync> {
     /// The stratum this lookup answers for, so its refusals name a producer
     /// rather than a query.
     stratum: Iri,
@@ -925,7 +931,9 @@ struct DatasetExclusion<'d, D: DatasetView + Sync> {
     pinned: PfAttestation,
 }
 
-impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
+impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> fmt::Debug
+    for DatasetExclusion<'_, D>
+{
     /// Names the stratum and nothing else. A prepared execution has no `Debug` a
     /// reader could act on, and a dataset's is unbounded — printing either would
     /// make a stream's `{:?}` a dump of the store it was read from.
@@ -936,7 +944,9 @@ impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
     }
 }
 
-impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
+impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> ExclusionLookup
+    for DatasetExclusion<'_, D>
+{
     fn look_up(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
         let binding = self.candidates.borrow().get(candidate).cloned();
         for alternative in 0..self.lookups.len() {
@@ -957,7 +967,7 @@ impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
     }
 }
 
-impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
+impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusion<'_, D> {
     /// Ask the `index`-th lookup of the `alternative`-th alternative whether
     /// `candidate`, bound as `binding` says, is out of its call's reach.
     fn ask(
@@ -1510,7 +1520,7 @@ impl<'d> RankedStreamImpl<'d> {
     clippy::unused_async_trait_impl,
     clippy::future_not_send
 )]
-pub async fn execute<'d, D: DatasetView + Sync>(
+pub async fn execute<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     compiled: &CompiledRetrieval,
     registry: &PropertyFunctionRegistry,
     dataset: &'d D,
@@ -1557,7 +1567,7 @@ pub async fn execute<'d, D: DatasetView + Sync>(
     clippy::unused_async_trait_impl,
     clippy::future_not_send
 )]
-pub async fn execute_within<'d, D: DatasetView + Sync>(
+pub async fn execute_within<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     compiled: &CompiledRetrieval,
     registry: &PropertyFunctionRegistry,
     dataset: &'d D,
@@ -1630,6 +1640,11 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         let sparql = unit.sparql();
         let prepared = match engine.prepare_query_with_options(&sparql, None, options()) {
             Ok(prepared) => prepared,
+            Err(diagnostic) if diagnostic.code == "native-sparql-source-read" => {
+                return Err(ExecutionError::SourceRead {
+                    reason: diagnostic.message,
+                });
+            }
             Err(diagnostic) => {
                 statuses.insert(
                     unit.stratum.clone(),
@@ -1822,7 +1837,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                                 &rows,
                                 &ranked,
                                 dataset,
-                            );
+                            )?;
                         }
                         // `?`, not a per-stratum status: a producer that beat
                         // its own declaration broke the number every other
@@ -1904,6 +1919,11 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                     ),
                 });
             }
+            Err(diagnostic) if diagnostic.code == "native-sparql-source-read" => {
+                return Err(ExecutionError::SourceRead {
+                    reason: diagnostic.message,
+                });
+            }
             Err(diagnostic) => {
                 statuses.insert(
                     unit.stratum.clone(),
@@ -1951,15 +1971,16 @@ fn index_candidates_into<D: DatasetView>(
     rows: &[Vec<Option<TermValue>>],
     ranked: &[(u64, Term, RowBlock)],
     dataset: &D,
-) {
+) -> Result<(), ExecutionError> {
     let Some(column) = variables.iter().position(|name| name == CANDIDATE_NAME) else {
-        return;
+        return Ok(());
     };
     for ((_, term, _), row) in ranked.iter().zip(rows) {
         if let Some(value) = row.get(column).and_then(Option::as_ref) {
-            index_candidate(index, term, value, dataset);
+            index_candidate(index, term, value, dataset)?;
         }
     }
+    Ok(())
 }
 
 /// Record how one candidate, named `term` and read as `value`, is bound into an
@@ -1971,15 +1992,21 @@ fn index_candidate<D: DatasetView>(
     term: &Term,
     value: &TermValue,
     dataset: &D,
-) {
+) -> Result<(), ExecutionError> {
     if index.contains_key(term) {
-        return;
+        return Ok(());
     }
-    let binding = dataset.term_id_by_value(value).map_or_else(
-        || CandidateBinding::Value(value.clone()),
-        CandidateBinding::Id,
-    );
+    let binding = dataset
+        .term_id_by_value(value)
+        .map_err(|error| ExecutionError::SourceRead {
+            reason: error.to_string(),
+        })?
+        .map_or_else(
+            || CandidateBinding::Value(value.clone()),
+            CandidateBinding::Id,
+        );
     index.insert(term.clone(), binding);
+    Ok(())
 }
 
 /// What one stratum's read came to: the rows that reach the stream, how the read
@@ -2367,7 +2394,10 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
         let Some(row) = self
             .cursor
             .next_row(self.dataset)
-            .map_err(|error| isolated(error.to_string()))?
+            .map_err(|error| ReadFault {
+                whole_run: matches!(error, purrdf_sparql_eval::EvalError::SourceRead(_)),
+                reason: error.to_string(),
+            })?
         else {
             // Ran out. A caller's own text is the stopper nobody observed past, and
             // the ending names it, exactly as `bound_to_depth` does: a `LIMIT` inside
@@ -2416,7 +2446,12 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
         if let Some(index) = &self.candidates
             && let Some(value) = self.columns.candidate_of(&row)
         {
-            index_candidate(&mut index.borrow_mut(), &ranked.1, value, self.dataset);
+            index_candidate(&mut index.borrow_mut(), &ranked.1, value, self.dataset).map_err(
+                |error| ReadFault {
+                    reason: error.to_string(),
+                    whole_run: true,
+                },
+            )?;
         }
         Ok(ReadStep::Row(ranked))
     }
@@ -2544,6 +2579,75 @@ mod tests {
     use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, ReadReach};
     use crate::iri::{Iri, Term};
     use crate::render::decode_term;
+
+    #[derive(Debug)]
+    struct RefusingProvider {
+        bytes: purrdf_core::SegmentedBytes,
+        refuse: std::sync::atomic::AtomicBool,
+    }
+    impl purrdf_core::SegmentedProvider for RefusingProvider {
+        fn snapshot(&self) -> purrdf_core::SegmentedSnapshot {
+            purrdf_core::SegmentedProvider::snapshot(&self.bytes)
+        }
+        fn byte_len(&self) -> u64 {
+            purrdf_core::SegmentedProvider::byte_len(&self.bytes)
+        }
+        fn read_at(
+            &self,
+            position: u64,
+            output: &mut [u8],
+        ) -> Result<(), purrdf_core::SegmentedError> {
+            if self.refuse.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(purrdf_core::SegmentedError::Provider {
+                    operation: "candidate lookup test",
+                    host_code: Some(5),
+                });
+            }
+            purrdf_core::SegmentedProvider::read_at(&self.bytes, position, output)
+        }
+    }
+
+    #[test]
+    fn refused_candidate_lookup_cannot_become_an_owned_value_fallback() {
+        let value = TermValue::iri("https://example.org/candidate");
+        let term = term_candidate(&value).unwrap();
+        let limits = purrdf_core::SegmentedBuildLimits::new(8, 4096, 8, 512, 4)
+            .unwrap()
+            .with_first_term_index((1_u64 << 53) + 7)
+            .unwrap();
+        let mut builder = purrdf_core::SegmentedBuilder::new(limits);
+        builder
+            .intern_batch(std::slice::from_ref(&value), |_, _| {})
+            .unwrap();
+        let image = builder.seal().unwrap();
+        let provider = std::sync::Arc::new(RefusingProvider {
+            bytes: image.provider(),
+            refuse: std::sync::atomic::AtomicBool::new(false),
+        });
+        let source = purrdf_core::SegmentedSession::open(
+            provider.clone(),
+            image.receipt(),
+            purrdf_core::SegmentedReadLimits::new(1_000_000, 2, 256, 1_000_000, 4),
+        )
+        .unwrap();
+        provider
+            .refuse
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut candidates = super::CandidateIndex::default();
+        let error = super::index_candidate(&mut candidates, &term, &value, &source).unwrap_err();
+        assert!(matches!(error, ExecutionError::SourceRead { .. }));
+        assert_eq!(candidates.len(), 0);
+        let healthy = purrdf_core::SegmentedSession::open(
+            std::sync::Arc::new(image.provider()),
+            image.receipt(),
+            purrdf_core::SegmentedReadLimits::new(1_000_000, 2, 256, 1_000_000, 4),
+        )
+        .unwrap();
+        super::index_candidate(&mut candidates, &term, &value, &healthy).unwrap();
+        assert!(
+            matches!(candidates.get(&term), Some(super::CandidateBinding::Id(id)) if id.index() > 1_u64 << 53)
+        );
+    }
 
     fn variables() -> Vec<String> {
         vec![CANDIDATE_NAME.to_owned()]

@@ -170,7 +170,7 @@ def set_uv_lock(root: Path, version: str) -> None:
     lock = py_dir / "uv.lock"
     try:
         subprocess.run(
-            ["uv", "lock", "--upgrade-package", "purrdf"],
+            ["uv", "lock", "--upgrade-package", "purrdf", "--upgrade-package", "purrdf-rdflib"],
             cwd=py_dir,
             check=True,
             capture_output=True,
@@ -181,11 +181,12 @@ def set_uv_lock(root: Path, version: str) -> None:
         detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else exc
         print(f"WARN: `uv lock` unavailable ({detail}); rewriting uv.lock directly")
 
-    # Fallback: rewrite the version of the [[package]] block whose name = "purrdf".
+    # The two local distributions and their exact reciprocal requirements are
+    # coupled; the fallback must preserve the same coherence as uv's resolver.
     text = lock.read_text(encoding="utf-8")
     blocks = text.split("[[package]]")
     for idx, block in enumerate(blocks):
-        if re.search(r'^\s*name\s*=\s*"purrdf"\s*$', block, flags=re.MULTILINE):
+        if re.search(r'^\s*name\s*=\s*"(?:purrdf|purrdf-rdflib)"\s*$', block, flags=re.MULTILINE):
             blocks[idx] = re.sub(
                 r'(^\s*version\s*=\s*")[^"]*(")',
                 rf"\g<1>{version}\g<2>",
@@ -193,7 +194,10 @@ def set_uv_lock(root: Path, version: str) -> None:
                 count=1,
                 flags=re.MULTILINE,
             )
-            break
+            blocks[idx] = re.sub(
+                r'(\{ name = "(?:purrdf|purrdf-rdflib)"[^\n]*?specifier = ")[^"]*(")',
+                rf'\g<1>=={version}\g<2>', blocks[idx],
+            )
     lock.write_text("[[package]]".join(blocks), encoding="utf-8")
 
 
@@ -248,6 +252,20 @@ def main(argv: list[str]) -> int:
     set_toml_version(
         root / "bindings" / "python" / "pyproject.toml", "[project]", version
     )
+    set_toml_version(
+        root / "bindings/python-rdflib-shadow/pyproject.toml", "[project]", version
+    )
+    for relative, package in (
+        ("bindings/python/pyproject.toml", "purrdf-rdflib"),
+        ("bindings/python-rdflib-shadow/pyproject.toml", "purrdf"),
+    ):
+        path = root / relative
+        source, count = re.subn(
+            rf'"{package}(?:==[^\"]+)?"', f'"{package}=={version}"', path.read_text(),
+        )
+        if count != 1:
+            raise SystemExit(f"FAIL: {relative}: expected one {package} requirement, found {count}")
+        path.write_text(source)
     set_json_version(root / "crates" / "rdf-wasm" / "js" / "package.json", version)
     set_npm_lock_version(root / "crates" / "rdf-wasm" / "js" / "package-lock.json", version)
 

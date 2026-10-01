@@ -123,6 +123,11 @@ harness = false
 name = "knn_wasm_reassociated"
 harness = false
 
+[[test]]
+# Execute the typed prepared-query refusal on real native/wasm stack scopes.
+name = "stack_refusal"
+harness = false
+
 [[bench]]
 # `EXISTS` decorrelation: naive per-row inner re-eval vs cached inner, measured
 # head-to-head over a synthetic 1k-row anti-join. Report-only; `make bench` lane
@@ -272,4 +277,9 @@ harness = false
 # by bisection before sampling. Report-only; `make bench` lane only — excluded
 # from `make check`.
 name = "deep_nesting"
+harness = false
+
+[[test]]
+# Public generic query publication includes post-node and visitor reads.
+name = "query_completion"
 harness = false

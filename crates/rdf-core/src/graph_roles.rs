@@ -190,20 +190,39 @@ impl<I: Copy + Ord> Default for GraphRoleIndex<I> {
 
 impl<I: Copy + Ord> GraphRoleIndex<I> {
     /// Classify every node of `graph` (all of its graphs, default and named).
-    pub fn classify<D: DatasetView<Id = I>>(graph: &D) -> Self {
+    pub fn classify<D: DatasetView<Id = I, ReadError = std::convert::Infallible>>(
+        graph: &D,
+    ) -> Self {
+        Self::try_classify(graph).unwrap_or_else(|error| match error {})
+    }
+
+    /// Classify through a fallible read session, refusing incomplete observations.
+    ///
+    /// # Errors
+    /// Returns the first typed source read or iteration failure.
+    pub fn try_classify<D: DatasetView<Id = I>>(graph: &D) -> Result<Self, D::ReadError> {
+        graph.checked_read(|graph| Self::classify_read(graph))?
+    }
+
+    fn classify_read<D: DatasetView<Id = I>>(graph: &D) -> Result<Self, D::ReadError> {
         let term = |iri: &str| graph.term_id_by_value(&TermValue::iri(iri));
-        let Some(rdf_type) = term(RDF_TYPE) else {
-            return Self::default();
+        let Some(rdf_type) = term(RDF_TYPE)? else {
+            return Ok(Self::default());
         };
         let roots: [(GraphRoles, &[&str]); 3] = [
             (GraphRoles::ONTOLOGY_HEADER, &[OWL_ONTOLOGY]),
             (GraphRoles::SHAPES_GRAPH, &[SH_SHAPES_GRAPH, SH_RULES_GRAPH]),
             (GraphRoles::DATA_GRAPH, &[SH_DATA_GRAPH]),
         ];
-        let sub_class_of = term(RDFS_SUB_CLASS_OF);
+        let sub_class_of = term(RDFS_SUB_CLASS_OF)?;
         let mut nodes: Vec<(I, GraphRoles)> = Vec::new();
         for (role, classes) in roots {
-            let mut reached: Vec<I> = classes.iter().filter_map(|iri| term(iri)).collect();
+            let mut reached = Vec::new();
+            for iri in classes {
+                if let Some(id) = term(iri)? {
+                    reached.push(id);
+                }
+            }
             if reached.is_empty() {
                 continue;
             }
@@ -242,7 +261,7 @@ impl<I: Copy + Ord> GraphRoleIndex<I> {
                 _ => merged.push((node, role)),
             }
         }
-        Self { nodes: merged }
+        Ok(Self { nodes: merged })
     }
 
     /// The roles `node` declares; [`GraphRoles::NONE`] for a node that declares none.

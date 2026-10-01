@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> */
 /* SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 */
 /* A C smoke test for libpurrdf: it links the real C-ABI (header + shared
  * library), exercises a full round-trip, and returns non-zero on any failure.
@@ -1132,6 +1133,26 @@ int main(int argc, char **argv) {
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "malformed parse error");
     CHECK(bad_dataset == NULL && bad_error != NULL, "error set");
     CHECK(purrdf_error_message(bad_error) != NULL, "error message present");
+    CHECK(purrdf_error_presentation_json(bad_error) != NULL,
+          "diagnostic JSON record present");
+    CHECK(strstr(purrdf_error_presentation_json(bad_error),
+                 "purrdf-diagnostic-v1") != NULL,
+          "diagnostic JSON record schema");
+    purrdf_error_free(bad_error);
+    CHECK(purrdf_error_presentation_json(NULL) == NULL,
+          "null error has no diagnostic record");
+
+    const char *bad_iri = "<http://example.org/%zz> <http://example.org/p> <http://example.org/o> .";
+    bad_error = NULL;
+    rc = purrdf_parse((const uint8_t *)bad_iri, strlen(bad_iri), "application/n-triples",
+                      NULL, NULL, &bad_dataset, &bad_error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && bad_error != NULL,
+          "IRI producer refuses invalid percent escape");
+    const char *iri_record = purrdf_error_presentation_json(bad_error);
+    CHECK(iri_record != NULL && strstr(iri_record, "iri-bad-percent-encoding") != NULL,
+          "IRI producer retains structured message identity");
+    CHECK(strstr(iri_record, "\"offset\":{\"kind\":\"unsigned\"") != NULL,
+          "IRI producer retains typed offset without parsing English");
     purrdf_error_free(bad_error);
 
     /* ── entailment: the tri-host golden vector, and the reasoning services ── */

@@ -140,6 +140,21 @@ jobs:
       - name: Fetch all locked platform dependencies for the offline audit
         run: python3 scripts/fetch-locked-deps.py
 
+      - name: Check the packaged-license audit can still fail
+        run: python3 scripts/package-licenses.py --self-test
+
+      - name: Check C artifact capture refuses stale and mismatched outputs
+        run: python3 scripts/build-capi-bundle.py --self-test
+
+      - name: Check WebAssembly capture refuses stale and ambiguous outputs
+        run: python3 scripts/build-private-wasm.py --self-test
+
+      - name: Check Python distribution license metadata and wheel integrity
+        run: python3 bindings/python/purrdf_build_backend.py --self-test
+
+      - name: Check all generated recipient notices against provenance and resolved inputs
+        run: python3 scripts/package-licenses.py --check
+
       - name: Check the banned-dependency gate can still fail
         run: python3 scripts/check-banned-deps.py --self-test
 
@@ -200,10 +215,10 @@ jobs:
       - name: Check the crates.io record preflight refuses every wrong registry state (offline)
         run: bash scripts/check-crates-io-records.sh --self-test
 
-      - name: Check the release publish loop runs the bootstrap interleave to completion (offline)
+      - name: Check release publication guards and resumable decisions (offline)
         run: bash scripts/publish-release-crates.sh --self-test
 
-      - name: Check the crates.io bootstrap refuses existing records and defers missing dependencies (offline)
+      - name: Check isolated empty bootstrap verification and registry refusals (offline)
         run: bash scripts/bootstrap-crates-io.sh --self-test
 
       - name: Check every wasm-bindgen free function is re-exported from the npm package root

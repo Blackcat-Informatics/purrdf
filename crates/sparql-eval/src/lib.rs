@@ -191,7 +191,9 @@ pub use execution::PreparedExecution;
 #[cfg(debug_assertions)]
 pub use execution::set_memo_verification_enabled;
 pub use extension_env::ExtensionEnv;
-pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
+pub use fallible::{
+    CompleteSparqlResult, FallibleScopedResult, FallibleSparqlError, FallibleSparqlResult,
+};
 pub use governed::{
     BudgetExhausted, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
     PartialSparqlResult, RelationIdentity,

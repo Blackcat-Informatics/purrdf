@@ -418,6 +418,13 @@ pub(crate) fn minted_label(prefix: Option<&str>, stem: &str, n: u64) -> String {
 /// incorrect result, so the fingerprint can be cheap.
 pub type BgpOrderCache = std::sync::RwLock<DetHashMap<(u64, u64), Arc<[usize]>>>;
 
+/// Whether the engine retains an operational workspace reservation for this drain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkspaceAdmission {
+    Unpriced,
+    Admitted,
+}
+
 /// The mutable evaluation context threaded through [`eval`].
 ///
 /// Generic over the read view `D` (the storage-backend seam): the evaluator drives
@@ -430,6 +437,8 @@ pub type BgpOrderCache = std::sync::RwLock<DetHashMap<(u64, u64), Arc<[usize]>>>
 pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// The frozen read view being queried, driven through the [`DatasetView`] trait.
     pub dataset: &'d D,
+    /// The engine retains a certified workspace reservation through its drain.
+    pub(crate) bounded_workspace: WorkspaceAdmission,
     /// The per-query interner for terms computed during evaluation (BIND, VALUES,
     /// aggregate output, arithmetic/string-function results).
     pub scratch: ScratchInterner,
@@ -906,6 +915,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
         Self {
             dataset,
+            bounded_workspace: WorkspaceAdmission::Unpriced,
             scratch: ScratchInterner::default(),
             active_graph: GraphMatch::Default,
             active_dataset: ActiveDataset::store_default(),
@@ -1092,16 +1102,24 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// included — resolves not one cell out of the id space and yields the empty
     /// dataset, so the borrowed door is never charged a row walk for a graph that
     /// has no quads in it.
-    pub(crate) fn constructed_dataset_of(&self, seq: &SolutionSeq<D::Id>) -> Arc<RdfDataset> {
+    pub(crate) fn constructed_dataset_of(
+        &self,
+        seq: &SolutionSeq<D::Id>,
+    ) -> Result<Arc<RdfDataset>, EvalError> {
         if self.constructed.is_empty() {
-            return freeze_constructed(&[]);
+            return Ok(freeze_constructed(&[]));
         }
         let seed = seq
             .rows
             .iter()
             .flat_map(|row| row.iter().copied().flatten())
-            .map(|term| self.scratch.value_of(self.dataset, term));
-        freeze_constructed(&self.reachable_from(seed))
+            .map(|term| {
+                self.scratch
+                    .try_value_of(self.dataset, term)
+                    .map_err(EvalError::source_read)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(freeze_constructed(&self.reachable_from(seed.into_iter())))
     }
 
     /// The constructed cells (see [`Self::constructed`]) reachable, via
@@ -1490,6 +1508,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// placeholder is judged by its site ([`crate::deferred_exists::ExistsSite::parallel_unsafe`]),
     /// the body the placeholder stands for, rather than by the placeholder.
     pub(crate) fn may_fork_row_loop(&self, expr: &purrdf_sparql_algebra::Expression) -> bool {
+        // This target has no worker threads. A one-chunk worker would only copy the
+        // context and retain a closure frame while an EXISTS recursively evaluates;
+        // the direct row loop preserves its order and runs on the same context. Keep
+        // the native fork gate below, including its parallel execution, unchanged.
+        if cfg!(target_arch = "wasm32") {
+            return false;
+        }
         let safe = match &self.deferred_exists {
             None => crate::parallel::is_parallel_safe(expr, self.safety_registries()),
             Some(deferred) => {
@@ -2018,6 +2043,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn fork_for_worker(&self) -> Self {
         Self {
             dataset: self.dataset,
+            bounded_workspace: self.bounded_workspace,
             scratch: self.scratch.clone(),
             active_graph: self.active_graph,
             active_dataset: self.active_dataset.clone(),
@@ -2247,6 +2273,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
         Ok(Some(Self {
             dataset: self.dataset,
+            bounded_workspace: WorkspaceAdmission::Unpriced,
             // Fresh: the body is an independent query that mints its own computed
             // terms; its parameter inputs ride in as ground substitutions, not
             // scratch ids, so no parent scratch state is needed.
@@ -2405,6 +2432,13 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    if ctx.dataset.storage_live_budget().is_some()
+        && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
+    {
+        return Err(EvalError::WorkspaceUnpriced(
+            "raw evaluation without an engine drain reservation",
+        ));
+    }
     // Every algebra node is one level of this recursion, and the stack that parsed a
     // request bounds how many levels it has, not how much stack evaluating them takes:
     // see `crate::stack`. The construct is named only on the refusal.
@@ -2417,9 +2451,15 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     // that subtree is active, so a LIMIT-free ordinary query does not walk the plan at
     // all and two independent subquery slices do not overwrite one another.
     let local_cap = install_local_slice_pushdown(pattern, ctx);
+    if let Some(error) = ctx.dataset.read_error() {
+        return Err(EvalError::source_read(error));
+    }
     let evaluated = eval_evaluated_inner(pattern, ctx);
     if local_cap {
         ctx.cap_pushdown = None;
+    }
+    if let Some(error) = ctx.dataset.read_error() {
+        return Err(EvalError::source_read(error));
     }
     evaluated
 }
@@ -3064,6 +3104,13 @@ pub fn eval<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
+    if ctx.dataset.storage_live_budget().is_some()
+        && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
+    {
+        return Err(EvalError::WorkspaceUnpriced(
+            "raw evaluation without an engine drain reservation",
+        ));
+    }
     crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
     // Raw algebra has not passed admission, which is where a blank node label shared
     // by two pieces of one basic graph pattern is made the one variable it is — so
@@ -3360,10 +3407,23 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
     kept: Option<&crate::plan::PlanCache>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+    if ctx.dataset.storage_live_budget().is_some()
+        && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
+    {
+        return Err(EvalError::WorkspaceUnpriced(
+            "raw evaluation without an engine drain reservation",
+        ));
+    }
     // Benches and differential tests can hold the operation on the sequential branch
     // (`EvalOptions::force_sequential`, read by every fork gate through
     // `EvalCtx::sequential_operation_required`); production keeps the ordered parallel fold.
+    if let Some(error) = ctx.dataset.read_error() {
+        return Err(EvalError::source_read(error));
+    }
     prepare_query_context_over(query, kept, ctx)?;
+    if let Some(error) = ctx.dataset.read_error() {
+        return Err(EvalError::source_read(error));
+    }
     match query {
         // A parsed `SELECT` ends in a projection, which already names only the
         // pattern's variables; a caller-built one need not, so a shared blank's column
@@ -3449,6 +3509,13 @@ pub(crate) fn evaluate_query_over<D: DatasetView + Sync>(
     kept: Option<&crate::plan::PlanCache>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, EvalError> {
+    if ctx.dataset.storage_live_budget().is_some()
+        && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
+    {
+        return Err(EvalError::WorkspaceUnpriced(
+            "raw evaluation without an engine drain reservation",
+        ));
+    }
     // As [`eval`]: a query handed in here has not passed admission, so the shared
     // blank labels admission joins are joined here.
     let joined = crate::blank_scope::join_shared_blanks_in_query(query);
@@ -3491,6 +3558,8 @@ fn freeze_constructed(cells: &[(TermValue, TermValue, TermValue)]) -> Arc<RdfDat
         .expect("constructed list cells are positionally valid by construction")
 }
 
+type MaterializedSolutions = (Vec<String>, Vec<Vec<Option<TermValue>>>);
+
 /// Materialize a [`SolutionSeq`] into dataset-independent egress form: the
 /// projected variable names plus the owned [`TermValue`] rows (a `None` cell is
 /// an unbound binding). The interned-`TermId` space ends here.
@@ -3501,7 +3570,7 @@ fn freeze_constructed(cells: &[(TermValue, TermValue, TermValue)]) -> Arc<RdfDat
 pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
     seq: &SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
-) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+) -> Result<MaterializedSolutions, EvalError> {
     let variables = seq
         .schema
         .vars()
@@ -3512,11 +3581,17 @@ pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
     for row in &seq.rows {
         let mut out = Vec::with_capacity(row.len());
         for cell in row {
-            out.push(cell.map(|t| ctx.scratch.value_of(ctx.dataset, t)));
+            out.push(
+                cell.map(|t| ctx.scratch.try_value_of(ctx.dataset, t))
+                    .transpose()
+                    .map_err(EvalError::source_read)?,
+            );
         }
         rows.push(out);
     }
-    (variables, rows)
+    ctx.dataset
+        .checked_read(|_| (variables, rows))
+        .map_err(EvalError::source_read)
 }
 
 #[cfg(test)]
@@ -3712,7 +3787,7 @@ mod tests {
                 .g
                 .unwrap_or_else(|| panic!("{prologue:?}: emitted a default-graph triple"));
             assert!(
-                matches!(out.resolve(graph), TermRef::Iri(iri) if iri == TARGET),
+                matches!(out.as_ref().resolve(graph), TermRef::Iri(iri) if iri == TARGET),
                 "{prologue:?}: the statement landed in the wrong graph"
             );
         }

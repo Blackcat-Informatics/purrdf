@@ -835,7 +835,10 @@ fn statement_from_triple_target_id(
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
-    let TermRef::Triple { s, p, o } = pack.resolve(triple) else {
+    let guard = pack
+        .resolve(triple)
+        .expect("validated resident pack read is infallible");
+    let TermRef::Triple { s, p, o } = guard else {
         return Err(EmbeddingError::Malformed(
             "source reifier does not reference a triple term",
         ));

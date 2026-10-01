@@ -42,7 +42,7 @@ impl ParquetFiles {
     }
 }
 
-const fn table_index(table: Table) -> usize {
+pub(crate) const fn table_index(table: Table) -> usize {
     match table {
         Table::Terms => 0,
         Table::Quads => 1,

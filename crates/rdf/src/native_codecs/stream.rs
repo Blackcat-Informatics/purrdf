@@ -220,7 +220,7 @@ struct LineReader<R> {
     raw: Vec<u8>,
     /// Document-global byte offset of the current line's first byte, so a UTF-8
     /// diagnostic names the same index the buffered whole-document validation would.
-    offset: usize,
+    offset: u64,
     /// The grammar's terminator set (see [`LineEnd`]).
     line_end: LineEnd,
 }
@@ -282,7 +282,12 @@ impl<R: Read> LineReader<R> {
 
     /// The next logical line without its terminator, or `None` at end of input.
     fn next_line(&mut self) -> Result<Option<&str>, RdfDiagnostic> {
-        self.offset += self.raw.len();
+        self.offset = self
+            .offset
+            .checked_add(self.raw.len() as u64)
+            .ok_or_else(|| {
+                RdfDiagnostic::error("native-codec-limit", "source byte offset exceeds u64::MAX")
+            })?;
         self.raw.clear();
         if !self.fill_raw_line()? {
             return Ok(None);
@@ -325,19 +330,61 @@ fn read_error(error: &std::io::Error) -> RdfDiagnostic {
 /// The message reproduces `Utf8Error`'s own `Display` with the index shifted from
 /// line-local to document-global, so a streamed parse and a buffered parse of the same
 /// bytes report the SAME diagnostic — code and text — for a document that is not UTF-8.
-fn utf8_error(error: &Utf8Error, line_offset: usize) -> RdfDiagnostic {
-    let index = line_offset + error.valid_up_to();
-    let detail = match error.error_len() {
-        Some(len) => format!("invalid utf-8 sequence of {len} bytes from index {index}"),
-        None => format!("incomplete utf-8 byte sequence from index {index}"),
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "named templates are interpreted and contract-checked by DiagnosticPresentation"
+)]
+pub(super) fn utf8_error(error: &Utf8Error, line_offset: u64) -> RdfDiagnostic {
+    let Some(index) = line_offset.checked_add(error.valid_up_to() as u64) else {
+        return RdfDiagnostic::error("native-codec-limit", "source byte offset exceeds u64::MAX");
     };
-    RdfDiagnostic::error("native-codec-utf8", detail)
+    use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
+    let mut parameters = vec![DiagnosticParameter::new(
+        "index",
+        DiagnosticValue::Unsigned(index),
+    )];
+    let (identity, template) = match error.error_len() {
+        Some(len) => {
+            parameters.push(DiagnosticParameter::new(
+                "length",
+                DiagnosticValue::Unsigned(len as u64),
+            ));
+            (
+                "native-codec-utf8.invalid",
+                "invalid utf-8 sequence of {length} bytes from index {index}",
+            )
+        }
+        None => (
+            "native-codec-utf8.incomplete",
+            "incomplete utf-8 byte sequence from index {index}",
+        ),
+    };
+    RdfDiagnostic::error("native-codec-utf8", "").with_presentation(
+        DiagnosticPresentation::new(identity, template, parameters)
+            .expect("UTF-8 template agrees with its typed arguments"),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use std::fmt::Write as _;
     use std::io::Cursor;
+
+    #[test]
+    fn streamed_source_offsets_cross_u32_and_refuse_terminal_overflow() {
+        let mut reader = LineReader::new(Cursor::new(vec![0xff]), LineEnd::RdfEol);
+        reader.offset = (1 << 32) + 3;
+        let error = reader.next_line().unwrap_err();
+        assert_eq!(error.code, "native-codec-utf8");
+        let presentation = error.presentation().unwrap();
+        assert_eq!(presentation.message_id(), "native-codec-utf8.invalid");
+        assert!(presentation.to_json().to_string().contains("4294967299"));
+        let mut reader = LineReader::new(Cursor::new(b"next"), LineEnd::RdfEol);
+        reader.offset = u64::MAX;
+        reader.raw.push(b'x');
+        assert_eq!(reader.next_line().unwrap_err().code, "native-codec-limit");
+        assert_eq!(reader.offset, u64::MAX);
+    }
 
     use super::*;
     use crate::SerializeGraph;

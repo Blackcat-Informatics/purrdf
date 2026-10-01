@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use purrdf_datalog::seminaive::{BudgetReport, EvalOptions};
-use purrdf_entail::entails::imports::imported_iris;
 use purrdf_entail::{
     Construct, EntailError, ImportMap, Materialization, QNode, QTriple, ReasoningReport, Regime,
     RuleSet, materialize_combined_until,
@@ -580,7 +579,11 @@ fn close_premise<D: DatasetView>(
 ) -> Result<Closed, ReasoningError> {
     let imports = closure.imports;
     let loaded: Vec<&str> = imports.loaded().collect();
-    if imports.is_empty() && imported_iris(dataset, &loaded).is_empty() {
+    if imports.is_empty()
+        && purrdf_entail::entails::imports::try_imported_iris(dataset, &loaded)
+            .map_err(|error| EntailError::SourceRead(error.to_string()))?
+            .is_empty()
+    {
         return close_lane(dataset, closure.entailment, pattern, &closure.limits, stop);
     }
     let premise = dataset_from_view(dataset)?;

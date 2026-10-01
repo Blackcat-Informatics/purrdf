@@ -174,90 +174,93 @@ pub fn materialize_rif_with<D: DatasetView>(
     options: &EvalOptions,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
-    // Refuse a run that was already stopped before interning source terms, ground facts,
-    // or compiled rules. The round-level checks below remain the mid-fixpoint boundary.
-    if stop.is_some_and(|signal| signal.stopped()) {
-        return Err(EntailError::Stopped);
-    }
-    let mut terms = Terms::default();
-
-    // Seed: the source dataset's default-graph triples, in dataset order. A quad outside
-    // it is not a premise, and the boundary below is where the run says so.
-    let mut named_graph = false;
-    let mut edb = RelationStore::new();
-    let mut original: FastSet<[u32; 3]> = FastSet::default();
-    for q in ds.quads() {
-        if q.g.is_some() {
-            named_graph = true;
-            continue; // entailment operates over the default graph
+    ds.checked_read(|ds| {
+        // Refuse a run that was already stopped before interning source terms, ground facts,
+        // or compiled rules. The round-level checks below remain the mid-fixpoint boundary.
+        if stop.is_some_and(|signal| signal.stopped()) {
+            return Err(EntailError::Stopped);
         }
-        let s = terms.intern(ds.term_value(q.s)?);
-        let p = terms.intern(ds.term_value(q.p)?);
-        let o = terms.intern(ds.term_value(q.o)?);
-        seed_fact(&mut edb, &terms, [s, p, o]);
-        original.insert([s, p, o]);
-    }
+        let mut terms = Terms::default();
 
-    // Seed: the rule set's ground facts (imported RDF + ground frames).
-    for (s, p, o) in &rules.facts {
-        let s = terms.intern(s.clone());
-        let p = terms.intern(p.clone());
-        let o = terms.intern(o.clone());
-        seed_fact(&mut edb, &terms, [s, p, o]);
-    }
-
-    // Translate every rule into engine clauses, interning constants as they are met.
-    let mut clauses: Vec<DlClause> = Vec::new();
-    for rule in &rules.rules {
-        clauses.extend(translate_rule(rule, &mut terms)?);
-    }
-
-    // The fixpoint is `purrdf-datalog`'s. The stop signal is polled at its round
-    // boundaries; `Stopped` out means there is no partial fixpoint to hand back.
-    let executable = compile(clauses).map_err(evaluate_error)?;
-    let evaluation = evaluate_guarded(
-        &executable,
-        edb,
-        &NoGuards,
-        options,
-        stop.map(|signal| &**signal),
-    )
-    .map_err(evaluate_error)?;
-
-    // Emit: original quads (all graphs) + every seeded/derived fact that is not an
-    // original default-graph triple, in a deterministic order.
-    let mut b = RdfDatasetBuilder::new();
-    // The original quads are copied verbatim, preserving blank-node scopes, so a derived
-    // fact naming one of the input's blank nodes lands on the SAME term the copy carries —
-    // `push_dataset` would have re-scoped the input and split the two apart.
-    copy_into(&mut b, ds)?;
-    // Sort the model by its interned term ids to get the deterministic first-seen
-    // emission order.
-    let mut ordered: Vec<[u32; 3]> = evaluation
-        .facts()
-        .facts_sorted()
-        .iter()
-        .map(|fact| {
-            let id = |surface: &str| {
-                terms
-                    .id_of_surface(surface)
-                    .expect("the evaluator mints no terms, so every surface was interned")
-            };
-            [id(&fact.subject), id(&fact.predicate), id(&fact.object)]
-        })
-        .collect();
-    ordered.sort_unstable();
-    for t in ordered {
-        if original.contains(&t) {
-            continue;
+        // Seed: the source dataset's default-graph triples, in dataset order. A quad outside
+        // it is not a premise, and the boundary below is where the run says so.
+        let mut named_graph = false;
+        let mut edb = RelationStore::new();
+        let mut original: FastSet<[u32; 3]> = FastSet::default();
+        for q in ds.quads() {
+            if q.g.is_some() {
+                named_graph = true;
+                continue; // entailment operates over the default graph
+            }
+            let s = terms.intern(ds.term_value(q.s)?);
+            let p = terms.intern(ds.term_value(q.p)?);
+            let o = terms.intern(ds.term_value(q.o)?);
+            seed_fact(&mut edb, &terms, [s, p, o]);
+            original.insert([s, p, o]);
         }
-        let s = intern_into(&mut b, terms.value(t[0]));
-        let p = intern_into(&mut b, terms.value(t[1]));
-        let o = intern_into(&mut b, terms.value(t[2]));
-        b.push_quad(s, p, o, None);
-    }
-    let closure = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
-    Ok((closure, rif_report(named_graph, evaluation.budget())))
+
+        // Seed: the rule set's ground facts (imported RDF + ground frames).
+        for (s, p, o) in &rules.facts {
+            let s = terms.intern(s.clone());
+            let p = terms.intern(p.clone());
+            let o = terms.intern(o.clone());
+            seed_fact(&mut edb, &terms, [s, p, o]);
+        }
+
+        // Translate every rule into engine clauses, interning constants as they are met.
+        let mut clauses: Vec<DlClause> = Vec::new();
+        for rule in &rules.rules {
+            clauses.extend(translate_rule(rule, &mut terms)?);
+        }
+
+        // The fixpoint is `purrdf-datalog`'s. The stop signal is polled at its round
+        // boundaries; `Stopped` out means there is no partial fixpoint to hand back.
+        let executable = compile(clauses).map_err(evaluate_error)?;
+        let evaluation = evaluate_guarded(
+            &executable,
+            edb,
+            &NoGuards,
+            options,
+            stop.map(|signal| &**signal),
+        )
+        .map_err(evaluate_error)?;
+
+        // Emit: original quads (all graphs) + every seeded/derived fact that is not an
+        // original default-graph triple, in a deterministic order.
+        let mut b = RdfDatasetBuilder::new();
+        // The original quads are copied verbatim, preserving blank-node scopes, so a derived
+        // fact naming one of the input's blank nodes lands on the SAME term the copy carries —
+        // `push_dataset` would have re-scoped the input and split the two apart.
+        copy_into(&mut b, ds)?;
+        // Sort the model by its interned term ids to get the deterministic first-seen
+        // emission order.
+        let mut ordered: Vec<[u32; 3]> = evaluation
+            .facts()
+            .facts_sorted()
+            .iter()
+            .map(|fact| {
+                let id = |surface: &str| {
+                    terms
+                        .id_of_surface(surface)
+                        .expect("the evaluator mints no terms, so every surface was interned")
+                };
+                [id(&fact.subject), id(&fact.predicate), id(&fact.object)]
+            })
+            .collect();
+        ordered.sort_unstable();
+        for t in ordered {
+            if original.contains(&t) {
+                continue;
+            }
+            let s = intern_into(&mut b, terms.value(t[0]));
+            let p = intern_into(&mut b, terms.value(t[1]));
+            let o = intern_into(&mut b, terms.value(t[2]));
+            b.push_quad(s, p, o, None);
+        }
+        let closure = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+        Ok((closure, rif_report(named_graph, evaluation.budget())))
+    })
+    .map_err(EntailError::source_read)?
 }
 
 /// Assemble the report for a RIF run whose fixpoint consumed `budget`.

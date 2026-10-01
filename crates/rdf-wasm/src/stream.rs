@@ -38,7 +38,7 @@ pub struct Sink {
     /// Largest opened protocol scope, preserving the core blank-node ordinal identity.
     opened_scope: u32,
     /// The next protocol-local [`EventTermId`] to mint (drive-global, monotonic).
-    next_id: u32,
+    next_id: Option<u64>,
 }
 
 impl Default for Sink {
@@ -48,16 +48,18 @@ impl Default for Sink {
             ids: FastMap::default(),
             triple_ids: FastMap::default(),
             opened_scope: 0,
-            next_id: 0,
+            next_id: Some(0),
         }
     }
 }
 
 impl Sink {
-    fn mint(&mut self) -> EventTermId {
-        let id = EventTermId(self.next_id);
-        self.next_id += 1;
-        id
+    fn mint(&mut self) -> Result<EventTermId, String> {
+        let next = self
+            .next_id
+            .ok_or_else(|| purrdf_events::EventError::IdSpaceExhausted.to_string())?;
+        self.next_id = next.checked_add(1);
+        Ok(EventTermId(next))
     }
 
     /// Declare a term (deduplicated by value) and return its protocol id, emitting any
@@ -79,7 +81,7 @@ impl Sink {
                 if let Some(id) = sink.triple_ids.get(&(s, p, o)) {
                     return Ok(*id);
                 }
-                let id = sink.mint();
+                let id = sink.mint()?;
                 let _ = sink
                     .sink_mut()?
                     .term(id, EventTerm::Triple(EventTriple { s, p, o }))
@@ -101,7 +103,7 @@ impl Sink {
                 self.opened_scope = self.sink_mut()?.open_scope().map_err(|e| e.to_string())?.0;
             }
         }
-        let id = self.mint();
+        let id = self.mint()?;
         let event = match term {
             TermValue::Triple { .. } => unreachable!("a triple term is emitted from its parts"),
             TermValue::Iri(iri) => EventTerm::Iri(iri),
@@ -175,7 +177,7 @@ impl Sink {
         let dataset = sink
             .into_dataset()
             .ok_or_else(|| JsError::new("the sink produced no dataset"))?;
-        Ok(Dataset::from_frozen(dataset))
+        Dataset::from_frozen(dataset)
     }
 }
 
@@ -219,7 +221,7 @@ mod tests {
         sink.push_inner(&triple_quad("https://e/s", "https://e/p", "https://e/o2"))
             .unwrap();
         // s, p, o1, o2 → 4 distinct term ids (s and p reused on the second push).
-        assert_eq!(sink.next_id, 4);
+        assert_eq!(sink.next_id, Some(4));
         let ds = sink.finish().unwrap();
         assert_eq!(ds.size(), 2);
     }
@@ -347,7 +349,7 @@ mod term_walk_tests {
         if let Some(id) = sink.triple_ids.get(&(s, p, o)) {
             return Ok(*id);
         }
-        let id = sink.mint();
+        let id = sink.mint()?;
         let _ = sink
             .sink_mut()?
             .term(id, EventTerm::Triple(EventTriple { s, p, o }))
@@ -404,6 +406,23 @@ mod term_walk_tests {
             assert_eq!(found.next_id, expected.next_id, "seed {seed}");
             assert_eq!(found.ids, expected.ids, "seed {seed}");
             assert_eq!(found.triple_ids, expected.triple_ids, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn event_ids_cross_u32_and_refuse_terminal_exhaustion_without_reuse() {
+        let mut sink = Sink {
+            next_id: Some(u64::from(u32::MAX) + 1),
+            ..Sink::default()
+        };
+        assert_eq!(sink.mint().unwrap(), EventTermId(u64::from(u32::MAX) + 1));
+        sink.next_id = Some(u64::MAX);
+        assert_eq!(sink.mint().unwrap(), EventTermId(u64::MAX));
+        for _ in 0..2 {
+            assert_eq!(
+                sink.mint().unwrap_err(),
+                purrdf_events::EventError::IdSpaceExhausted.to_string()
+            );
         }
     }
 }

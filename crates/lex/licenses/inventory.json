@@ -1,0 +1,57 @@
+{
+  "components": [
+    {
+      "id": "libyaml-emitter",
+      "license": "MIT",
+      "notices": [
+        "third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt",
+        "third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt"
+      ],
+      "paths": [
+        "crates/lex/src/yaml/write.rs"
+      ],
+      "provenance": [
+        "crates/lex/PROVENANCE.md"
+      ],
+      "scope": "emitter style/layout decisions reproduced from unsafe-libyaml 0.2.11; retained MIT permission notice",
+      "source": "https://github.com/dtolnay/unsafe-libyaml/tree/0.2.11"
+    },
+    {
+      "id": "unicode",
+      "license": "Unicode-3.0",
+      "notices": [
+        "third-party/unicode/0-Unicode-3.0.txt"
+      ],
+      "paths": [
+        "crates/lex/src/unicode_tables.rs",
+        "crates/iri/src/idna_tables.rs",
+        "crates/rdf-core/src/xsd_regex/blocks.rs",
+        "crates/text/src/unicode_tables.rs",
+        "crates/jsonschema/src/ecma/property_tables.rs",
+        "crates/jsonschema/src/ecma/unicode_ranges.rs",
+        "crates/iri/unicode/**",
+        "crates/rdf-core/vendor/unicode/**"
+      ],
+      "provenance": [
+        "crates/iri/unicode/PROVENANCE.md",
+        "LICENSING.md"
+      ],
+      "scope": "generated and vendored Unicode data; terms apply in addition to the first-party grant",
+      "source": "https://www.unicode.org/Public/17.0.0/ucd/"
+    }
+  ],
+  "files": {
+    "CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+    "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+    "NOTICE.txt": "70f8dee00a88276fc16f37f7d64fcb57966a60a55fbbe28cb6fe4427711cd8ba",
+    "third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
+    "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
+  },
+  "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0",
+  "profile": "purrdf-lex",
+  "schema": 1
+}

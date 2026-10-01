@@ -396,7 +396,7 @@ pub struct ProjectionLift {
 ///
 /// Returns a typed configuration, model, package, serialization, integrity, or
 /// resource-limit failure. `profile` must exactly match the tagged configuration.
-pub fn project_archive<D: DatasetView + Sync>(
+pub fn project_archive<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     view: &D,
     profile: ProjectionProfile,
     config: &ProjectionConfig,

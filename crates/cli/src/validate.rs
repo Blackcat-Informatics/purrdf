@@ -796,7 +796,7 @@ fn emit(
 /// graph it links with `sh:shapesGraph` (SHACL 1.2 Core section 6.4) joins the import table
 /// as a link, so the engine resolves it through the same `--import IRI=FILE` pairs an
 /// `owl:imports` resolves through and unions it into the shapes graph — or refuses it by name.
-fn load_shapes<D: DatasetView>(
+fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     options: &ValidateOptions<'_>,
     path: &str,
     format: SourceFormat,
@@ -968,7 +968,7 @@ impl<'a> ShapesPlan<'a> {
     /// take a graph in, so each link must be one it already holds —
     /// [`check_data_graph_links`](purrdf::shapes::imports::check_data_graph_links), with the
     /// data graph's own IRIs as anchors — or the run is refused naming the link.
-    fn load<D: DatasetView>(
+    fn load<D: DatasetView<ReadError = std::convert::Infallible>>(
         &self,
         options: &ValidateOptions<'_>,
         data: &D,

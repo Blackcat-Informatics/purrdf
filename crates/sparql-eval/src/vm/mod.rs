@@ -285,7 +285,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
         ctx: &mut EvalCtx<'_, D>,
     ) -> Result<Option<bool>, EvalError> {
         match self.term(row, schema, ctx)? {
-            Some(term) => Ok(helpers::ebv_term(ctx, term)),
+            Some(term) => Ok(helpers::ebv_term(ctx, term)?),
             None => Ok(None),
         }
     }
@@ -318,7 +318,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     let term = match consts[k] {
                         ConstCell::Read(term) => term,
                         ConstCell::Unread => {
-                            let term = helpers::intern_leaf(ctx, program.consts[k].value());
+                            let term = helpers::intern_leaf(ctx, program.consts[k].value())?;
                             consts[k] = ConstCell::Read(term);
                             term
                         }
@@ -330,11 +330,15 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 }
                 Op::Bound(slot) => {
                     let bound = slots[slot as usize].and_then(|c| row[c]).is_some();
-                    stack.push(Val::Term(Some(helpers::intern_boolean(ctx, bound))));
+                    stack.push(Val::Term(Some(helpers::intern_boolean(ctx, bound)?)));
                 }
                 Op::EbvOf => {
                     let term = pop_term(stack)?;
-                    stack.push(Val::Ebv(term.and_then(|t| helpers::ebv_term(ctx, t))));
+                    stack.push(Val::Ebv(
+                        term.map(|t| helpers::ebv_term(ctx, t))
+                            .transpose()?
+                            .flatten(),
+                    ));
                 }
                 Op::Kleene { or, n } => {
                     let start = stack.len().checked_sub(n as usize).ok_or_else(underflow)?;
@@ -349,29 +353,35 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                             helpers::kleene_and(value, operand)
                         };
                     }
-                    stack.push(Val::Term(value.map(|b| helpers::intern_boolean(ctx, b))));
+                    stack.push(Val::Term(
+                        value.map(|b| helpers::intern_boolean(ctx, b)).transpose()?,
+                    ));
                 }
                 Op::Not => {
                     let value = pop_ebv(stack)?;
-                    stack.push(Val::Term(value.map(|b| helpers::intern_boolean(ctx, !b))));
+                    stack.push(Val::Term(
+                        value
+                            .map(|b| helpers::intern_boolean(ctx, !b))
+                            .transpose()?,
+                    ));
                 }
                 Op::Equal => {
                     let b = pop_term(stack)?;
                     let a = pop_term(stack)?;
-                    stack.push(Val::Term(helpers::equal_terms(ctx, a, b)));
+                    stack.push(Val::Term(helpers::equal_terms(ctx, a, b)?));
                 }
                 Op::SameTerm => {
                     let b = pop_term(stack)?;
                     let a = pop_term(stack)?;
                     stack.push(Val::Term(match (a, b) {
-                        (Some(x), Some(y)) => Some(helpers::intern_boolean(ctx, x == y)),
+                        (Some(x), Some(y)) => Some(helpers::intern_boolean(ctx, x == y)?),
                         _ => None,
                     }));
                 }
                 Op::Cmp(cmp) => {
                     let b = pop_term(stack)?;
                     let a = pop_term(stack)?;
-                    stack.push(Val::Term(compare(ctx, cmp, a, b)));
+                    stack.push(Val::Term(compare(ctx, cmp, a, b)?));
                 }
                 Op::Branch { on_false, end } => match pop_ebv(stack)? {
                     Some(true) => {}
@@ -396,7 +406,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                         pc = end as usize;
                     }
                     Some(target) => {
-                        let value = helpers::value_of(ctx, target);
+                        let value = helpers::value_of(ctx, target)?;
                         stack.push(Val::In {
                             target,
                             value,
@@ -420,7 +430,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                             false
                         }
                         Some(candidate) => {
-                            match helpers::in_candidate(ctx, *target, value, candidate) {
+                            match helpers::in_candidate(ctx, *target, value, candidate)? {
                                 Some(true) => true,
                                 Some(false) => false,
                                 None => {
@@ -432,7 +442,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     };
                     if matched {
                         stack.pop();
-                        stack.push(Val::Term(Some(helpers::intern_boolean(ctx, true))));
+                        stack.push(Val::Term(Some(helpers::intern_boolean(ctx, true)?)));
                         pc = end as usize;
                     }
                 }
@@ -443,14 +453,14 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(if saw_error {
                         None
                     } else {
-                        Some(helpers::intern_boolean(ctx, false))
+                        Some(helpers::intern_boolean(ctx, false)?)
                     }));
                 }
                 Op::Arith(operator) => {
                     let right = pop_term(stack)?;
                     let left = pop_term(stack)?;
                     stack.push(Val::Term(match (left, right) {
-                        (Some(a), Some(b)) => helpers::arithmetic_step(ctx, operator, a, b),
+                        (Some(a), Some(b)) => helpers::arithmetic_step(ctx, operator, a, b)?,
                         _ => None,
                     }));
                 }
@@ -460,7 +470,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                         ctx,
                         operand,
                         purrdf_xsd::numeric_unary_plus,
-                    )));
+                    )?));
                 }
                 Op::UnaryMinus => {
                     let operand = pop_term(stack)?;
@@ -468,7 +478,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                         ctx,
                         operand,
                         purrdf_xsd::value_unary_minus,
-                    )));
+                    )?));
                 }
                 Op::Exists(site) => {
                     let pattern = exists.get(site as usize).copied().ok_or_else(|| {
@@ -501,16 +511,27 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 }
                 Op::Triple { intern } => {
                     let object = match stack.pop() {
-                        Some(Val::Term(term)) => term.map(|t| helpers::value_of(ctx, t)),
+                        Some(Val::Term(term)) => {
+                            term.map(|t| helpers::value_of(ctx, t)).transpose()?
+                        }
                         Some(Val::Value(value)) => value,
                         Some(_) => return Err(mistyped("a term or a triple term value")),
                         None => return Err(underflow()),
                     };
-                    let predicate = pop_term(stack)?.map(|t| helpers::value_of(ctx, t));
-                    let subject = pop_term(stack)?.map(|t| helpers::value_of(ctx, t));
+                    let predicate = pop_term(stack)?
+                        .map(|t| helpers::value_of(ctx, t))
+                        .transpose()?;
+                    let subject = pop_term(stack)?
+                        .map(|t| helpers::value_of(ctx, t))
+                        .transpose()?;
                     let value = helpers::triple_value(subject, predicate, object);
                     stack.push(if intern {
-                        Val::Term(value.and_then(|value| helpers::intern(ctx, value)))
+                        Val::Term(
+                            value
+                                .map(|value| helpers::intern(ctx, value))
+                                .transpose()?
+                                .flatten(),
+                        )
                     } else {
                         Val::Value(value)
                     });
@@ -522,20 +543,26 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 Op::ToStrArg => {
                     let term = pop_term(stack)?;
                     stack.push(Val::Str(
-                        term.and_then(|t| helpers::string_arg_of_term(ctx, t)),
+                        term.map(|t| helpers::string_arg_of_term(ctx, t))
+                            .transpose()?
+                            .flatten(),
                     ));
                 }
                 Op::ToStrLexical => {
                     let term = pop_term(stack)?;
                     stack.push(Val::Str(
-                        term.and_then(|t| helpers::str_lexical_term(ctx, t))
+                        term.map(|t| helpers::str_lexical_term(ctx, t))
+                            .transpose()?
+                            .flatten()
                             .map(|s| (s, None)),
                     ));
                 }
                 Op::ToLangLexical => {
                     let term = pop_term(stack)?;
                     stack.push(Val::Str(
-                        term.and_then(|t| helpers::lang_lexical_term(ctx, t))
+                        term.map(|t| helpers::lang_lexical_term(ctx, t))
+                            .transpose()?
+                            .flatten()
                             .map(|s| (s, None)),
                     ));
                 }
@@ -550,7 +577,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                                 StrPred::StrStarts => h.starts_with(n),
                                 StrPred::StrEnds => h.ends_with(n),
                             };
-                            Some(helpers::intern_boolean(ctx, holds))
+                            Some(helpers::intern_boolean(ctx, holds)?)
                         }
                         _ => None,
                     };
@@ -567,7 +594,9 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                                 RegexSlot::Linked(compiled) => compiled.clone(),
                                 RegexSlot::PerRow => helpers::cached_regex(ctx, &pattern.0, flags),
                             };
-                            compiled.map(|re| helpers::intern_boolean(ctx, re.is_match(&text.0)))
+                            compiled
+                                .map(|re| helpers::intern_boolean(ctx, re.is_match(&text.0)))
+                                .transpose()?
                         }
                         _ => None,
                     };
@@ -580,7 +609,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                         (Some(tag), Some(range)) => Some(helpers::intern_boolean(
                             ctx,
                             helpers::lang_matches(&tag.0, &range.0),
-                        )),
+                        )?),
                         _ => None,
                     };
                     stack.push(Val::Term(value));
@@ -603,7 +632,7 @@ fn compare<D: DatasetView + Sync>(
     cmp: Cmp,
     a: Option<SolutionTerm<D::Id>>,
     b: Option<SolutionTerm<D::Id>>,
-) -> Option<SolutionTerm<D::Id>> {
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     use crate::cdt_fn::CdtRelation;
     use std::cmp::Ordering;
     match cmp {
@@ -659,7 +688,7 @@ fn resolve<D: DatasetView + Sync>(
     match suspend {
         Suspend::Exists(pattern) => {
             let found = helpers::exists(pattern, row, schema, ctx)?;
-            Ok(Some(helpers::intern_boolean(ctx, found)))
+            Ok(Some(helpers::intern_boolean(ctx, found)?))
         }
         Suspend::SparqlUdf {
             func,
@@ -673,7 +702,10 @@ fn resolve<D: DatasetView + Sync>(
                 ));
             };
             let result = crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
-            Ok(result.and_then(|value| helpers::intern(ctx, value)))
+            Ok(result
+                .map(|value| helpers::intern(ctx, value))
+                .transpose()?
+                .flatten())
         }
     }
 }
@@ -695,7 +727,7 @@ fn pop_values<D: DatasetView + Sync>(
         let Val::Term(term) = entry else {
             return Err(mistyped("a term"));
         };
-        vals.push(term.map(|t| helpers::value_of(ctx, t)));
+        vals.push(term.map(|t| helpers::value_of(ctx, t)).transpose()?);
     }
     Ok(())
 }

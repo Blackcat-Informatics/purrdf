@@ -384,6 +384,7 @@ name = "purrdf-python"
 deps = [
     "purrdf",
     "purrdf-core",
+    "purrdf-columnar",
     "purrdf-gts",
     "purrdf-shapes",
     "purrdf-shex",

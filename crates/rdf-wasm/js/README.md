@@ -700,6 +700,9 @@ applies and asks nothing — await the first, then send the next. Each update re
 snapshot and is applied only if the dataset was not mutated while it ran; otherwise it
 rejects with the same code and applies nothing. `dataset.id` identifies a dataset within the
 wasm instance, and `dataset.generation` counts the mutations it has seen.
+Both properties are exact JavaScript `bigint` values. Compare generations with
+`0n`, `1n`, and other bigint literals; use `id.toString()` when storing an identity
+in JSON. Converting either property to `number` can lose precision above `2^53`.
 `configureAsync({ maxConcurrentJobs })` bounds how many jobs may be in flight (16 by
 default); a twin started beyond the bound rejects.
 
