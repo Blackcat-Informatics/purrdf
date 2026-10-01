@@ -2223,9 +2223,15 @@ test("refusal pair: an evaluation failure is a 500 with the engine's code and wo
 
 test("a federated query runs end to end through a service binding", async () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const remote = Dataset.parse(
+    `<${EX}o1> <${EX}q> "x1" .
+<${EX}o2> <${EX}q> "x2" .
+<${EX}other> <${EX}q> "unjoined" .`,
+    "ntriples",
+  );
   const binding = recordingFetch(async (_url, init) => {
-    assert.equal(init.body, `SELECT * WHERE { ?o <${EX}q> ?x . }`, "exactly the SERVICE pattern");
-    return srjResponse();
+    assert.equal(init.body, `SELECT * WHERE { ?o ^(^<${EX}q>) ?x . }`, "exactly the protected SERVICE pattern");
+    return srjResponse(remote.query(init.body));
   });
   const response = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
     engine: new QueryEngine(),

@@ -45,17 +45,17 @@ fn query(shape: &str, terms: usize) -> String {
                 .collect::<Vec<_>>()
                 .join(" || ")
         ),
-        "sequence" | "alternative" => format!(
+        "sequence" | "alternative" | "linear_sequence" => format!(
             "SELECT ?s WHERE {{ ?s {} ?v }}",
             (0..terms)
-                .map(|k| match k % 4 {
-                    0 => format!("<{EX}p{}>", k % 30),
-                    1 => format!("^<{EX}p{}>", k % 30),
-                    2 => format!("<{EX}p{}>*", k % 30),
+                .map(|k| match (shape, k % 4) {
+                    (_, 0) | ("linear_sequence", 2) => format!("<{EX}p{}>", k % 30),
+                    (_, 1) | ("linear_sequence", _) => format!("^<{EX}p{}>", k % 30),
+                    (_, 2) => format!("<{EX}p{}>*", k % 30),
                     _ => format!("!(<{EX}p{}>|^<{EX}q>)", k % 30),
                 })
                 .collect::<Vec<_>>()
-                .join(if shape == "sequence" { "/" } else { "|" })
+                .join(if shape == "alternative" { "|" } else { "/" })
         ),
         _ => format!(
             "SELECT ?s WHERE {{ ?s <{EX}p> ?v BIND(?v{} AS ?r) }}",
@@ -71,7 +71,8 @@ fn query(shape: &str, terms: usize) -> String {
 
 /// For a `UNION` chain (each arm a group with a triple and a `FILTER`), a `||` chain,
 /// an arithmetic chain mixing all four operators, and property-path `/` and `|`
-/// chains mixing plain, inverse, modified and negated steps, the allocations and the bytes
+/// chains mixing plain, inverse, modified and negated steps, plus a wholly linear
+/// sequence lowered to triples, the allocations and the bytes
 /// requested for terms 4 000 to 8 000 are twice those for terms 2 000 to 4 000, to
 /// within the handful of reallocations a doubling vector makes — so no term costs
 /// more because terms came before it. Measured: 21 allocations an arm, 8 an `||`
@@ -87,7 +88,14 @@ fn query(shape: &str, terms: usize) -> String {
 /// chain are collected once, after its last arm.
 #[test]
 fn a_chain_s_parse_costs_the_same_per_term_at_every_length() {
-    for shape in ["union", "or", "sum", "sequence", "alternative"] {
+    for shape in [
+        "union",
+        "or",
+        "sum",
+        "sequence",
+        "alternative",
+        "linear_sequence",
+    ] {
         let [small, middle, large] =
             [2_000, 4_000, 8_000].map(|terms| parse_cost(&query(shape, terms)));
         let first = middle.allocations - small.allocations;

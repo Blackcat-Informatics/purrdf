@@ -53,6 +53,7 @@ use crate::algebra::{
     OrderExpression, PropertyFunctionCall, PropertyPathExpression,
 };
 use crate::ast::{GroundTerm, Literal, NamedNodePattern, TermPattern, TriplePattern, Variable};
+use crate::parser::ParserOptions;
 use crate::walk::{Flow, NodeRef, Visit, walk_pre_post};
 use crate::worklist::WorkList;
 use purrdf_lex::literal_escape::{self, Carrier};
@@ -71,6 +72,13 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 ///
 /// This is the entry point SERVICE federation uses to forward a sub-pattern to a
 /// remote endpoint. The result is a syntactically complete, re-parseable query.
+///
+/// Named data predicates in BGPs render as `^(^<iri>)`, the identity of two
+/// inversions. This keeps them distinct from property-function calls under any
+/// parser configuration, including a predicate lowered from a linear path whose
+/// IRI a registry also claims. Actual property-function calls keep their plain
+/// IRIs, and quoted triple-term predicates keep their ordinary term syntax. Use
+/// [`pattern_to_select_query_with_options`] for compact text under known options.
 ///
 /// For an ORDINARY graph pattern (the common case: `inner` is a WHERE-body element
 /// with no `SELECT`-expression/aggregate machinery of its own — a BGP, a join, a
@@ -116,6 +124,47 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 /// ```
 #[must_use]
 pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
+    select_query(inner, PredicateRendering::Independent)
+}
+
+/// Render `inner` as a complete `SELECT` query under the supplied parser options.
+///
+/// This has the same pattern and solution-modifier behavior as
+/// [`pattern_to_select_query`]. A named BGP data predicate renders as a plain IRI
+/// unless [`ParserOptions::property_fn_namespaces`] or
+/// [`ParserOptions::property_fn_iris`] claims it; a claimed data predicate instead
+/// renders as `^(^<iri>)` so it cannot re-parse as a relation call. Calls themselves
+/// retain their plain IRIs. Re-parse with the same options to preserve that
+/// distinction. The extension-function namespace options do not change rendering:
+/// each parsed function keeps its own original IRI.
+#[must_use]
+pub fn pattern_to_select_query_with_options(
+    inner: &GraphPattern,
+    options: &ParserOptions,
+) -> String {
+    select_query(inner, PredicateRendering::Configured(options))
+}
+
+/// How BGP data predicates stay distinct from relation calls on re-parse.
+#[derive(Clone, Copy)]
+enum PredicateRendering<'a> {
+    /// Protect every named data predicate independently of a receiver's registry.
+    Independent,
+    /// Protect only the data predicates this receiver's configuration claims.
+    Configured(&'a ParserOptions),
+}
+
+impl PredicateRendering<'_> {
+    fn protect(self, iri: &str) -> bool {
+        match self {
+            Self::Independent => true,
+            Self::Configured(options) => options.is_property_fn(iri),
+        }
+    }
+}
+
+/// The shared complete-query renderer; the predicate mode affects BGPs alone.
+fn select_query(inner: &GraphPattern, predicates: PredicateRendering<'_>) -> String {
     let mut s = String::new();
     if needs_subselect_reconstruction(inner) {
         // `inner` IS a bare (no `Project` anywhere above it) modifier chain —
@@ -133,10 +182,10 @@ pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
         // `SELECT *` over an aggregate query, which SPARQL does not admit, and let
         // an aggregate call vanish behind a dangling reference to its synthetic
         // output variable.
-        emit(&mut s, Item::Subselect(inner));
+        emit(&mut s, Item::Subselect(inner), predicates);
     } else {
         s.push_str("SELECT * WHERE ");
-        emit(&mut s, Item::BracedGroup(inner));
+        emit(&mut s, Item::BracedGroup(inner), predicates);
     }
     s
 }
@@ -151,13 +200,13 @@ pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
 /// outer `Project` has been peeled from a top-level `SELECT`/subselect — an UPDATE
 /// WHERE clause never carries one).
 pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
-    emit(s, Item::GroupBody(p));
+    emit(s, Item::GroupBody(p), PredicateRendering::Independent);
 }
 
 /// Render a property path in its SPARQL surface syntax — the text of
 /// [`PropertyPathExpression`]'s `Display`.
 pub(crate) fn fmt_path(s: &mut String, path: &PropertyPathExpression) {
-    emit(s, Item::Path(path));
+    emit(s, Item::Path(path), PredicateRendering::Independent);
 }
 
 /// Whether `p`, with no `Project` above it, is a bare modifier-chain shape the
@@ -506,6 +555,8 @@ enum Item<'a> {
     Var(&'a Variable),
     /// An IRI or a variable in predicate, `GRAPH` or `SERVICE` position.
     Named(&'a NamedNodePattern),
+    /// A BGP data predicate, protected from property-function recognition.
+    BgpPredicate(&'a NamedNodePattern),
     /// A `LIMIT`/`OFFSET` count, preceded by its keyword.
     Count(&'static str, usize),
     /// A pattern as the body of a `{ … }` group; a sub-`SELECT` renders as a braced
@@ -572,11 +623,11 @@ enum Item<'a> {
 }
 
 /// Render `first` onto `s`, and everything it pushes, until the work list is empty.
-fn emit(s: &mut String, first: Item<'_>) {
+fn emit(s: &mut String, first: Item<'_>, predicates: PredicateRendering<'_>) {
     let mut stack = Items::with(first);
     while let Some(item) = stack.pop() {
         let queued = stack.len();
-        render(s, item, &mut stack);
+        render(s, item, &mut stack, predicates);
         stack.reverse_top(stack.len() - queued);
     }
 }
@@ -587,7 +638,12 @@ fn emit(s: &mut String, first: Item<'_>) {
     clippy::too_many_lines,
     reason = "one arm per work-list entry, each a transcription of its grammar"
 )]
-fn render<'a>(s: &mut String, item: Item<'a>, next: &mut Items<'a>) {
+fn render<'a>(
+    s: &mut String,
+    item: Item<'a>,
+    next: &mut Items<'a>,
+    predicates: PredicateRendering<'_>,
+) {
     match item {
         Item::Str(text) | Item::Raw(text) => s.push_str(text),
         Item::Literal(l) => fmt_literal(s, l),
@@ -606,6 +662,17 @@ fn render<'a>(s: &mut String, item: Item<'a>, next: &mut Items<'a>) {
             s.push_str(v.as_str());
         }
         Item::Named(n) => fmt_named_node_pattern(s, n),
+        Item::BgpPredicate(n) => {
+            if let NamedNodePattern::NamedNode(iri) = n
+                && predicates.protect(iri.as_str())
+            {
+                s.push_str("^(^");
+                write_iri(iri.as_str(), s);
+                s.push(')');
+            } else {
+                fmt_named_node_pattern(s, n);
+            }
+        }
         Item::Count(keyword, n) => {
             let _ = write!(s, "{keyword}{n}");
         }
@@ -663,7 +730,7 @@ fn render<'a>(s: &mut String, item: Item<'a>, next: &mut Items<'a>) {
             TermPattern::Triple(t) => {
                 s.push_str(TRIPLE_TERM_OPEN);
                 s.push(' ');
-                triple_items(t, next);
+                triple_items(t, next, Item::Named(&t.predicate));
                 next.extend([Item::Char(' '), Item::Str(TRIPLE_TERM_CLOSE)]);
             }
             leaf => fmt_leaf_term(s, leaf),
@@ -720,12 +787,13 @@ fn render<'a>(s: &mut String, item: Item<'a>, next: &mut Items<'a>) {
     }
 }
 
-/// Queue `s p o` of a pattern triple term's triple (between `<<( ` and ` )>>`).
-fn triple_items<'a>(t: &'a TriplePattern, next: &mut Items<'a>) {
+/// Queue `s p o`, with a data predicate for a BGP or a plain predicate inside a
+/// quoted triple term (between `<<( ` and ` )>>`).
+fn triple_items<'a>(t: &'a TriplePattern, next: &mut Items<'a>, predicate: Item<'a>) {
     next.extend([
         Item::Term(&t.subject),
         Item::Char(' '),
-        Item::Named(&t.predicate),
+        predicate,
         Item::Char(' '),
         Item::Term(&t.object),
     ]);
@@ -743,7 +811,7 @@ fn group_body<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
                 if i > 0 {
                     next.push(Item::Char(' '));
                 }
-                triple_items(tp, next);
+                triple_items(tp, next, Item::BgpPredicate(&tp.predicate));
                 next.push(Item::Str(" ."));
             }
         }
@@ -1754,7 +1822,7 @@ mod tests {
 
     /// Render one aggregate call on its own.
     fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
-        emit(s, Item::Aggregate(agg));
+        emit(s, Item::Aggregate(agg), PredicateRendering::Independent);
     }
     use crate::algebra::AggregateExpressionError;
     use crate::parser::{ParserOptions, SparqlParser};

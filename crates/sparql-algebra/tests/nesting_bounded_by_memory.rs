@@ -389,7 +389,7 @@ fn families() -> Vec<Family> {
             text: |n| {
                 format!(
                     "SELECT * WHERE {{ ?s {} ?o }}",
-                    wrapped("^(", "<http://example.org/innermost>", ")", n)
+                    wrapped("^(", "<http://example.org/innermost>+", ")", n)
                 )
             },
             marker: "Reverse(",
@@ -591,6 +591,103 @@ fn families() -> Vec<Family> {
             occurrences: |n| n,
         },
     ]
+}
+
+/// A wholly linear path is lowered without consuming the thread's stack, even
+/// when its syntax is nested. Every edge survives a long sequence, and a hundred
+/// thousand inversions cancel by parity instead of leaving recursive path nodes.
+#[test]
+fn linear_paths_a_hundred_thousand_deep_lower_on_a_small_stack() {
+    purrdf_stack::on_stack(SMALL_STACK, || {
+        for inversions in [LEVELS, LEVELS + 1] {
+            let text = format!(
+                "SELECT * WHERE {{ ?s {} ?o }}",
+                wrapped("^(", "<http://example.org/innermost>", ")", inversions)
+            );
+            let Query::Select { pattern, .. } = SparqlParser::new()
+                .parse_query(&text)
+                .expect("a nested linear inverse parses")
+            else {
+                panic!("a SELECT");
+            };
+            let GraphPattern::Project { inner, .. } = pattern else {
+                panic!("the projection");
+            };
+            let GraphPattern::Bgp { patterns } = inner.into_inner() else {
+                panic!("inversions lower into one data triple");
+            };
+            assert_eq!(patterns.len(), 1);
+            let names = if inversions % 2 == 0 { ["s", "o"] } else { ["o", "s"] };
+            for (term, name) in [(&patterns[0].subject, names[0]), (&patterns[0].object, names[1])] {
+                assert!(matches!(term, purrdf_sparql_algebra::TermPattern::Variable(v) if v.as_str() == name));
+            }
+        }
+        let sequence = (0..LEVELS)
+            .map(|i| format!("<http://example.org/p{i}>"))
+            .collect::<Vec<_>>()
+            .join("/");
+        let Query::Select { pattern, .. } = SparqlParser::new()
+            .parse_query(&format!("SELECT * WHERE {{ ?s {sequence} ?o }}"))
+            .expect("a flat linear sequence parses")
+        else {
+            panic!("a SELECT");
+        };
+        let GraphPattern::Project { inner, variables } = pattern else {
+            panic!("the projection");
+        };
+        assert_eq!(variables.len(), 2, "every join point stays hidden");
+        let GraphPattern::Bgp { patterns } = inner.into_inner() else {
+            panic!("the entire sequence is one BGP");
+        };
+        assert_eq!(patterns.len(), LEVELS);
+        for (i, triple) in patterns.iter().enumerate() {
+            assert!(matches!(&triple.predicate,
+                purrdf_sparql_algebra::NamedNodePattern::NamedNode(p)
+                if p.as_str() == format!("http://example.org/p{i}")));
+            if let Some(next) = patterns.get(i + 1) {
+                assert_eq!(triple.object, next.subject, "edge {i} stays connected");
+            }
+        }
+    })
+    .expect("spawn a small-stack thread");
+}
+
+/// A right-nested sequence lowers every edge without recursion, just as a flat
+/// sequence does, and keeps the anonymous join points outside the projection.
+#[test]
+fn a_linear_sequence_a_hundred_thousand_levels_deep_stays_connected() {
+    purrdf_stack::on_stack(SMALL_STACK, || {
+        let sequence = wrapped(
+            "<http://example.org/p>/(",
+            "<http://example.org/innermost>",
+            ")",
+            LEVELS,
+        );
+        let Query::Select { pattern, .. } = SparqlParser::new()
+            .parse_query(&format!("SELECT * WHERE {{ ?s {sequence} ?o }}"))
+            .expect("a deeply nested linear sequence parses")
+        else {
+            panic!("a SELECT");
+        };
+        let GraphPattern::Project { inner, variables } = pattern else {
+            panic!("the projection");
+        };
+        assert_eq!(variables.len(), 2, "every join point stays hidden");
+        let GraphPattern::Bgp { patterns } = inner.into_inner() else {
+            panic!("the entire nested sequence is one BGP");
+        };
+        assert_eq!(patterns.len(), LEVELS + 1);
+        for (i, triple) in patterns.iter().enumerate() {
+            let expected = if i == LEVELS { "innermost" } else { "p" };
+            assert!(matches!(&triple.predicate,
+                purrdf_sparql_algebra::NamedNodePattern::NamedNode(p)
+                if p.as_str() == format!("http://example.org/{expected}")));
+            if let Some(next) = patterns.get(i + 1) {
+                assert_eq!(triple.object, next.subject, "edge {i} stays connected");
+            }
+        }
+    })
+    .expect("spawn a small-stack thread");
 }
 
 /// Every construct of the grammar parses a hundred thousand levels deep on a 128 KiB
