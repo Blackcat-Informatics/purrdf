@@ -15,13 +15,14 @@
 //! JS-layer concern.
 
 use purrdf::ir::{Nested, try_fold_nested};
-use purrdf::{DatasetSink, RdfTerm};
+use purrdf::{DatasetSink, TermValue};
 use purrdf_core::FastMap;
 use purrdf_events::{EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId};
 use wasm_bindgen::prelude::*;
 
+use crate::convert::quad_to_quad_values;
 use crate::dataset::Dataset;
-use crate::term::{Quad, TermInner, XSD_STRING, canonicalize_literal};
+use crate::term::Quad;
 
 /// An RDF/JS `Sink` — a streaming consumer that interns pushed quads through the
 /// `purrdf-events` protocol and freezes them at `finish()`.
@@ -30,8 +31,12 @@ use crate::term::{Quad, TermInner, XSD_STRING, canonicalize_literal};
 pub struct Sink {
     /// `None` after `finish()` (the protocol sink is consumed to produce the dataset).
     inner: Option<DatasetSink>,
-    /// Dedup: a distinct term value is declared once and its protocol id reused.
-    ids: FastMap<RdfTerm, EventTermId>,
+    /// Leaf values are declared once and their protocol ids reused.
+    ids: FastMap<TermValue, EventTermId>,
+    /// Triple identities are their canonical component ids, without copied suffix trees.
+    triple_ids: FastMap<(EventTermId, EventTermId, EventTermId), EventTermId>,
+    /// Largest opened protocol scope, preserving the core blank-node ordinal identity.
+    opened_scope: u32,
     /// The next protocol-local [`EventTermId`] to mint (drive-global, monotonic).
     next_id: u32,
 }
@@ -41,6 +46,8 @@ impl Default for Sink {
         Self {
             inner: Some(DatasetSink::new()),
             ids: FastMap::default(),
+            triple_ids: FastMap::default(),
+            opened_scope: 0,
             next_id: 0,
         }
     }
@@ -58,44 +65,26 @@ impl Sink {
     ///
     /// A triple term is emitted over [`try_fold_nested`]'s work list: its subject, its
     /// predicate IRI and its object, each fully before the next, then the triple
-    /// itself. Every term is looked up in the memo when it is reached and recorded
-    /// there once its own id is minted.
-    fn emit_term(&mut self, term: &RdfTerm) -> Result<EventTermId, String> {
-        /// One node of a term's nesting: a term, or a triple term's predicate IRI.
-        #[derive(Clone, Copy)]
-        enum Node<'t> {
-            Term(&'t RdfTerm),
-            Predicate(&'t str),
-        }
+    /// itself. Leaves are memoized by value, triples by their canonical component ids;
+    /// a nested chain therefore retains one fixed-size key per triple.
+    fn emit_term(&mut self, term: &TermValue) -> Result<EventTermId, String> {
         try_fold_nested(
-            Node::Term(term),
+            term,
             self,
-            |sink, node| match node {
-                Node::Term(term @ RdfTerm::Triple(triple)) => Ok(match sink.ids.get(term) {
-                    Some(id) => Nested::Leaf(*id),
-                    None => Nested::Triple(
-                        Node::Term(&triple.subject),
-                        Node::Predicate(&triple.predicate),
-                        Node::Term(&triple.object),
-                    ),
-                }),
-                Node::Term(term) => sink.emit_leaf(term).map(Nested::Leaf),
-                Node::Predicate(iri) => sink
-                    .emit_leaf(&RdfTerm::Iri(iri.to_owned()))
-                    .map(Nested::Leaf),
+            |sink, term| match term {
+                TermValue::Triple { s, p, o } => Ok(Nested::Triple(&**s, &**p, &**o)),
+                _ => sink.emit_leaf(term).map(Nested::Leaf),
             },
-            |sink, node, s, p, o| {
-                let Node::Term(term) = node else {
-                    unreachable!("only a term nests components")
-                };
+            |sink, _, s, p, o| {
+                if let Some(id) = sink.triple_ids.get(&(s, p, o)) {
+                    return Ok(*id);
+                }
                 let id = sink.mint();
-                // ControlFlow is ignored: DatasetSink is an accumulator that never
-                // signals Break (cancellation is a source/driver concern, not a sink).
                 let _ = sink
                     .sink_mut()?
                     .term(id, EventTerm::Triple(EventTriple { s, p, o }))
                     .map_err(|e| e.to_string())?;
-                sink.ids.insert(term.clone(), id);
+                sink.triple_ids.insert((s, p, o), id);
                 Ok(id)
             },
         )
@@ -103,54 +92,39 @@ impl Sink {
 
     /// Declare a term that is not a triple term (deduplicated by value) and return its
     /// protocol id.
-    fn emit_leaf(&mut self, term: &RdfTerm) -> Result<EventTermId, String> {
+    fn emit_leaf(&mut self, term: &TermValue) -> Result<EventTermId, String> {
         if let Some(id) = self.ids.get(term) {
             return Ok(*id);
         }
-        let id = match term {
-            RdfTerm::Triple(_) => unreachable!("a triple term is emitted from its parts"),
-            RdfTerm::Iri(iri) => {
-                let id = self.mint();
-                let _ = self
-                    .sink_mut()?
-                    .term(id, EventTerm::Iri(iri))
-                    .map_err(|e| e.to_string())?;
-                id
+        if let TermValue::Blank { scope, .. } = term {
+            while self.opened_scope < scope.0 {
+                self.opened_scope = self.sink_mut()?.open_scope().map_err(|e| e.to_string())?.0;
             }
-            RdfTerm::BlankNode(label) => {
-                let id = self.mint();
-                let _ = self
-                    .sink_mut()?
-                    .term(
-                        id,
-                        EventTerm::Blank {
-                            label,
-                            scope: ScopeId::DEFAULT,
-                        },
-                    )
-                    .map_err(|e| e.to_string())?;
-                id
-            }
-            RdfTerm::Literal(lit) => {
-                let canonical = canonicalize_literal(lit.clone());
-                let datatype = canonical.datatype.as_deref().unwrap_or(XSD_STRING);
-                let direction = canonical.direction;
-                let id = self.mint();
-                let _ = self
-                    .sink_mut()?
-                    .term(
-                        id,
-                        EventTerm::Literal {
-                            lexical: &canonical.lexical_form,
-                            datatype,
-                            language: canonical.language.as_deref(),
-                            direction,
-                        },
-                    )
-                    .map_err(|e| e.to_string())?;
-                id
-            }
+        }
+        let id = self.mint();
+        let event = match term {
+            TermValue::Triple { .. } => unreachable!("a triple term is emitted from its parts"),
+            TermValue::Iri(iri) => EventTerm::Iri(iri),
+            TermValue::Blank { label, scope } => EventTerm::Blank {
+                label,
+                scope: ScopeId(scope.0),
+            },
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => EventTerm::Literal {
+                lexical: lexical_form,
+                datatype,
+                language: language.as_deref(),
+                direction: *direction,
+            },
         };
+        let _ = self
+            .sink_mut()?
+            .term(id, event)
+            .map_err(|e| e.to_string())?;
         self.ids.insert(term.clone(), id);
         Ok(id)
     }
@@ -162,29 +136,11 @@ impl Sink {
     }
 
     fn push_inner(&mut self, quad: &Quad) -> Result<(), String> {
-        let subject = quad.subject.to_rdf_term()?;
-        let predicate = match &quad.predicate.inner {
-            TermInner::Named(iri) => RdfTerm::Iri(iri.clone()),
-            _ => return Err("a quad predicate must be a NamedNode".to_owned()),
-        };
-        let object = quad.object.to_rdf_term()?;
-        let graph = match &quad.graph.inner {
-            TermInner::DefaultGraph => None,
-            TermInner::Named(_) | TermInner::Blank(_) => Some(quad.graph.to_rdf_term()?),
-            _ => {
-                return Err(
-                    "a quad graph must be a NamedNode, BlankNode, or DefaultGraph".to_owned(),
-                );
-            }
-        };
-
-        let s = self.emit_term(&subject)?;
-        let p = self.emit_term(&predicate)?;
-        let o = self.emit_term(&object)?;
-        let g = match &graph {
-            Some(g) => Some(self.emit_term(g)?),
-            None => None,
-        };
+        let values = quad_to_quad_values(quad)?;
+        let s = self.emit_term(&values.s)?;
+        let p = self.emit_term(&values.p)?;
+        let o = self.emit_term(&values.o)?;
+        let g = values.g.as_ref().map(|g| self.emit_term(g)).transpose()?;
         let _ = self
             .sink_mut()?
             .quad(EventQuad { s, p, o, g })
@@ -227,6 +183,8 @@ impl Sink {
 mod tests {
     use super::*;
     use crate::term::Term;
+    use crate::term::TermInner;
+    use purrdf::RdfTerm;
 
     fn named(iri: &str) -> Term {
         Term::from_inner(TermInner::Named(iri.to_owned()))
@@ -276,7 +234,7 @@ mod tests {
             "https://e/p",
             RdfTerm::iri("https://e/o"),
         );
-        let quoted = Term::from_inner(TermInner::Quoted(Box::new(inner)));
+        let quoted = Term::from_rdf_term(&RdfTerm::Triple(Box::new(inner)));
         let q = Quad::from_parts(
             named("https://e/stmt"),
             named("https://e/asserts"),
@@ -287,6 +245,70 @@ mod tests {
         sink.push_inner(&q).unwrap();
         let ds = sink.finish().unwrap();
         assert_eq!(ds.size(), 1);
+    }
+
+    #[test]
+    fn deep_triples_stream_with_one_fixed_size_key_per_level() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let depth = 20_000;
+                let mut value = TermValue::iri("https://e/end");
+                for _ in 0..depth {
+                    value = TermValue::Triple {
+                        s: purrdf::TermBox::new(TermValue::iri("https://e/s")),
+                        p: purrdf::TermBox::new(TermValue::iri("https://e/p")),
+                        o: purrdf::TermBox::new(value),
+                    };
+                }
+                let object =
+                    Term::from_value(value, crate::convert::BlankScopeMode::Keep).expect("valid");
+                let quad = Quad::from_parts(
+                    named("https://e/outer"),
+                    named("https://e/p"),
+                    object,
+                    Term::from_inner(TermInner::DefaultGraph),
+                );
+                let mut sink = Sink::new();
+                sink.push_inner(&quad).expect("deep terms stream");
+                assert_eq!(sink.ids.len(), 4, "only fixed-size leaves are owned keys");
+                assert_eq!(sink.triple_ids.len(), depth);
+                let ids = sink.next_id;
+                sink.push_inner(&quad).expect("repeated deep term streams");
+                assert_eq!(sink.next_id, ids, "all component identities reused");
+                let mut raw = sink.inner.take().expect("not finished");
+                let error = raw.finish().expect_err("deep terms are refused at freeze");
+                assert!(matches!(error, purrdf_events::EventError::Message(_)));
+                assert!(
+                    error.to_string().contains("rdf-ir-triple-nesting-limit"),
+                    "{error}"
+                );
+            })
+            .expect("thread")
+            .join()
+            .expect("no stack overflow");
+    }
+
+    #[test]
+    fn scoped_blanks_stream_with_their_original_identity() {
+        let values = purrdf::ir::QuadValues {
+            s: TermValue::Blank {
+                label: "b".to_owned(),
+                scope: purrdf::BlankScope(3),
+            },
+            p: TermValue::iri("https://e/p"),
+            o: TermValue::Blank {
+                label: "b".to_owned(),
+                scope: purrdf::BlankScope(1),
+            },
+            g: None,
+        };
+        let quad = crate::convert::quad_values_to_quad(&values).expect("scoped values");
+        let mut sink = Sink::new();
+        sink.push_inner(&quad).expect("scope declarations");
+        let dataset = sink.finish().expect("finishes");
+        let found = dataset.quads().expect("egress");
+        assert_eq!(quad_to_quad_values(&found[0]).expect("lowers"), values);
     }
 
     #[test]
@@ -313,21 +335,24 @@ mod term_walk_tests {
     use super::Sink;
 
     fn reference(sink: &mut Sink, term: &RdfTerm) -> Result<EventTermId, String> {
-        if let Some(id) = sink.ids.get(term) {
+        if let Some(id) = sink.ids.get(&TermValue::from_rdf_term(term)) {
             return Ok(*id);
         }
         let RdfTerm::Triple(triple) = term else {
-            return sink.emit_leaf(term);
+            return sink.emit_leaf(&TermValue::from_rdf_term(term));
         };
         let s = reference(sink, &triple.subject)?;
         let p = reference(sink, &RdfTerm::Iri(triple.predicate.clone()))?;
         let o = reference(sink, &triple.object)?;
+        if let Some(id) = sink.triple_ids.get(&(s, p, o)) {
+            return Ok(*id);
+        }
         let id = sink.mint();
         let _ = sink
             .sink_mut()?
             .term(id, EventTerm::Triple(EventTriple { s, p, o }))
             .map_err(|e| e.to_string())?;
-        sink.ids.insert(term.clone(), id);
+        sink.triple_ids.insert((s, p, o), id);
         Ok(id)
     }
 
@@ -371,13 +396,14 @@ mod term_walk_tests {
                     purrdf_core::term_fixture::TermShape::IriPredicates,
                 ));
                 assert_eq!(
-                    found.emit_term(&term),
+                    found.emit_term(&TermValue::from_rdf_term(&term)),
                     reference(&mut expected, &term),
                     "seed {seed}"
                 );
             }
             assert_eq!(found.next_id, expected.next_id, "seed {seed}");
             assert_eq!(found.ids, expected.ids, "seed {seed}");
+            assert_eq!(found.triple_ids, expected.triple_ids, "seed {seed}");
         }
     }
 }

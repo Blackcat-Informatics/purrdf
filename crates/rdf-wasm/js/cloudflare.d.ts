@@ -92,6 +92,8 @@ export function createFetchLoadResolver(options?: FetchLoadResolverOptions): Asy
 
 /** The ceilings every request runs under. `deadlineMs` is required. */
 export interface EndpointGovernors {
+  /** Remove resource caps and accounting; deadlineMs remains mandatory and active. */
+  readonly noCeiling?: boolean;
   readonly deadlineMs: GovernorCeiling;
   readonly fuel?: GovernorCeiling | null;
   /** Bounds query answers; not applied to an update, which has none. */

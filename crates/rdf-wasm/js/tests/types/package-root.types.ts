@@ -535,3 +535,16 @@ void appliedEvidence;
 void datasetAsync;
 void datasetId;
 void datasetGeneration;
+
+// Result aliases and the governed mode are available through each typed twin.
+engine.queryRaw(dataset, "SELECT * WHERE {}", { format: "sparql-json" });
+engine.queryRawAsync(dataset, "SELECT * WHERE {}", { format: "sparql-xml" });
+engine.queryGoverned(dataset, "SELECT * WHERE {}", { noCeiling: true });
+engine.queryGovernedAsync(dataset, "SELECT * WHERE {}", { noCeiling: false });
+engine.queryEntailmentGoverned(dataset, "SELECT * WHERE {}", "rdfs", { noCeiling: true });
+engine.queryEntailmentGovernedAsync(dataset, "SELECT * WHERE {}", "rdfs", { noCeiling: true });
+engine.updateGoverned(dataset, "INSERT DATA {}", { noCeiling: true });
+engine.updateGovernedAsync(dataset, "INSERT DATA {}", { noCeiling: true });
+engine.queryGovernedNegotiatedAsync(dataset, "SELECT * WHERE {}", { noCeiling: true });
+// @ts-expect-error noCeiling is a boolean decision.
+engine.queryGoverned(dataset, "SELECT * WHERE {}", { noCeiling: "true" });

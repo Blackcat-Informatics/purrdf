@@ -209,15 +209,28 @@ ownership, and all limits. Complete examples are in
   `CONSTRUCT` as an empty document. Naming a single-graph syntax for such a result
   throws, listing the graphs and the quad-capable alternatives, rather than returning
   bytes that omit exactly what the query asked for.
+  Results names accept `json`, `srj`, `sparql-json`, `xml`, `sparql-xml`, `csv`,
+  `tsv`, and their media types (`application/sparql-results+json`,
+  `application/sparql-results+xml`, `text/csv`, `text/tab-separated-values`).
+  All format-taking raw query APIs ignore surrounding whitespace and ASCII case.
 - `QueryEngine.blankScope` — how a blank node's scope crosses to JS in the engine's typed
   results: `"keep"` (the default) hands a scoped blank over as its scope envelope, so two
   blank nodes that share a label in different scopes stay two nodes; `"merge"` drops the
   scope, so they are one node (lossy by declaration). Any other value throws.
+  Kept scope labels are deterministic: inserting the returned terms into a new
+  dataset, serializing and parsing preserves the same blank identity, including
+  blank nodes inside quoted triple terms.
 - `QueryEngine.queryGoverned(dataset, sparql, options?)` /
   `updateGoverned(dataset, sparql, options?)` — the same evaluator under caller-supplied
   execution governors: `fuel`, `deadlineMs`, `maxAnswers`, `maxIntermediateCells`,
   `maxScratchBytes`, `maxRemoteRequests`, and a `CancellationToken`. Every ceiling is
   inclusive, and `0` is a valid ceiling that trips on the first charged unit of work.
+  Omitted resource caps use the engine's `METERED` baseline: every dimension is
+  accounted for without a reachable cap. Set `noCeiling: true` to remove resource
+  caps and accounting explicitly. It refuses any simultaneous resource cap;
+  `deadlineMs`, cancellation and asynchronous `signal` still work. `false` keeps
+  the metered baseline. This boolean is accepted by every governed twin, including
+  entailment and negotiated asynchronous queries; ungoverned calls refuse it.
   **A trip is a returned outcome, never a throw**: read `isComplete`, then `result`, or
   `tripped` with `partial` — where `partial.certainty` states what the rows in hand
   certify (`"certain"` = a lower bound, safe to admit; `"at-most"` = an upper bound;
@@ -657,8 +670,8 @@ A job counts the evaluator's governor polls and gives the event loop one turn ev
 the clock, decides when to yield. Every yield is one `setTimeout(…, 0)` task, on every
 host — Node, a browser, a Cloudflare Worker alike. A timer task queues behind the tasks
 already waiting, so other requests, timers and the fetch responses other jobs await all
-run between a job's turns. `globalThis.setTimeout` is bound once, when the module loads;
-a host without it has no asynchronous lane, and `hasAsyncQueries()` says so. Only
+run between a job's turns. `globalThis.setTimeout` and `globalThis.clearTimeout`
+are bound once, when the module loads; a host without either has no asynchronous lane, and `hasAsyncQueries()` says so. Only
 evaluation yields (an entailment closure included). Freezing the dataset before the job and serializing
 the result after are linear passes that run to completion. `evidence.async` reports
 what each phase cost (`freezeMs`, `evaluateMs`, `serializeMs`).
@@ -917,6 +930,29 @@ passes them (`resolveService`, `resolveLoad`), or through the Cloudflare adapter
 `fetch`-based handlers. For the container transport (GTS), native APIs, and the
 rest of the toolkit, see the
 [main repository](https://github.com/Blackcat-Informatics/purrdf).
+
+## Conformance and host integration
+
+The package's frozen lexical replay tests verify escape prefixes and every UCHAR
+scalar through Turtle literals, JSON string bodies and every
+UTF-16 code unit/surrogate pair through JSON-LD literals, and the unreserved
+percent-encoding corpus through SPARQL `ENCODE_FOR_URI`, including every Unicode
+plane digest. The capability inventory accounts for every frozen lexical file.
+The package exposes no primitive for byte search,
+JSON Pointer tokens, Unicode normalization/combining classes or the other percent
+laws; their primitive corpora run in the Rust lexical conformance suite.
+JavaScript host imports are supplied by the generated wasm-bindgen glue:
+`Reflect.get` comes from the shared binding host module and `Date.now` from the
+shared evaluator host module. The package root and Worker adapter both use that
+glue. Throwing option getters become typed refusals, and deadline tests exercise
+the imported clock.
+
+JSON record options reject repeated members and arrays where objects are required.
+Visualization records report `visualization options: <reason> at <JSON pointer>`;
+SERVICE profile records report `service profile: <reason> at <JSON pointer>`.
+Nested pointers identify the exact record member; a root refusal uses the empty
+pointer and omits the `at` suffix. Header pairs remain ordered arrays and may
+repeat names deliberately.
 
 ## Supply chain
 

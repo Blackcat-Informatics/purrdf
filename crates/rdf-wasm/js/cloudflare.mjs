@@ -35,6 +35,7 @@ import { isPoisoned } from "./pkg/purrdf_jspi.mjs";
 const CACHE_ORIGIN = "https://purrdf-service-cache.invalid/";
 
 const GOVERNOR_KEYS = [
+  "noCeiling",
   "fuel",
   "deadlineMs",
   "maxAnswers",

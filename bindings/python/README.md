@@ -819,7 +819,9 @@ Python values with
 `json.loads(document, parse_int=int, parse_float=decimal.Decimal)` for exact
 integers and decimals; Python's default `json.loads` instead converts fractional
 and exponent lexemes to binary64 `float`. Neither Python decoding policy changes the emitted document or recovers digits
-already rounded by a codec. RDF literal values remain lexical strings, including numeric literals.
+already rounded by a codec. RDF literal values remain lexical strings, including numeric literals. In expanded
+JSON-LD output, an `rdf:JSON` literal has a string `@value` containing its JSON
+lexical form; decode that string separately to obtain its Python object.
 Structured report/provenance APIs documented as dictionaries return dictionaries.
 The GTS fold view's `python_value` is a typed value conversion: integer cells are
 Python `int`, and IEEE binary64 cells are Python `float`.

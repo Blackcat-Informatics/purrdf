@@ -108,17 +108,15 @@ fn merge_blank_scopes(value: TermValue) -> TermValue {
 
 /// Lower a JS [`Quad`] to the engine's [`QuadValues`] insert/query key.
 pub(crate) fn quad_to_quad_values(quad: &Quad) -> Result<QuadValues, String> {
-    let s = TermValue::from_rdf_term(&quad.subject.to_rdf_term()?);
+    let s = quad.subject.to_value()?;
     let p = match &quad.predicate.inner {
         TermInner::Named(iri) => TermValue::Iri(iri.clone()),
         _ => return Err("a quad predicate must be a NamedNode".to_owned()),
     };
-    let o = TermValue::from_rdf_term(&quad.object.to_rdf_term()?);
+    let o = quad.object.to_value()?;
     let g = match &quad.graph.inner {
         TermInner::DefaultGraph => None,
-        TermInner::Named(_) | TermInner::Blank(_) => {
-            Some(TermValue::from_rdf_term(&quad.graph.to_rdf_term()?))
-        }
+        TermInner::Named(_) | TermInner::Blank(_) => Some(quad.graph.to_value()?),
         _ => return Err("a quad graph must be a NamedNode, BlankNode, or DefaultGraph".to_owned()),
     };
     Ok(QuadValues { s, p, o, g })
@@ -126,15 +124,15 @@ pub(crate) fn quad_to_quad_values(quad: &Quad) -> Result<QuadValues, String> {
 
 /// Lift an engine [`QuadValues`] back to a JS [`Quad`].
 pub(crate) fn quad_values_to_quad(values: &QuadValues) -> Result<Quad, String> {
-    let subject = Term::from_rdf_term(&values.s.to_rdf_term().map_err(|e| e.to_string())?);
+    let subject = Term::from_value(values.s.clone(), BlankScopeMode::Keep)?;
     let predicate = match &values.p {
         TermValue::Iri(iri) => Term::from_inner(TermInner::Named(iri.clone())),
         _ => return Err("a quad predicate must be an IRI".to_owned()),
     };
-    let object = Term::from_rdf_term(&values.o.to_rdf_term().map_err(|e| e.to_string())?);
+    let object = Term::from_value(values.o.clone(), BlankScopeMode::Keep)?;
     let graph = match &values.g {
         None => Term::from_inner(TermInner::DefaultGraph),
-        Some(g) => Term::from_rdf_term(&g.to_rdf_term().map_err(|e| e.to_string())?),
+        Some(g) => Term::from_value(g.clone(), BlankScopeMode::Keep)?,
     };
     Ok(Quad::from_parts(subject, predicate, object, graph))
 }

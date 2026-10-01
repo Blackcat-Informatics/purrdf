@@ -41,9 +41,12 @@ export type QueryGraphFormat =
   | "application/trig"
   | "application/rdf+xml"
   | "application/ld+json";
+/** Results aliases are case-insensitive at runtime and ignore surrounding whitespace. */
 export type QueryResultsFormat =
   | "json"
   | "srj"
+  | "sparql-json"
+  | "sparql-xml"
   | "xml"
   | "csv"
   | "tsv"
@@ -58,7 +61,8 @@ export type QueryRawFormat = QueryGraphFormat | QueryResultsFormat;
  * boundary type is `bigint`; a `number` (or an integral numeric string) is coerced for
  * you. Every ceiling is INCLUSIVE — consumption equal to it is admitted — and `0` is a
  * valid ceiling that trips on the first charged unit of work. Omit the key (or pass
- * `null`/`undefined`) to decline the dimension; a negative value is refused.
+ * `null`/`undefined`) to leave the dimension metered without a reachable ceiling.
+ * A negative value is refused.
  */
 export type GovernorCeiling = number | bigint | string;
 
@@ -70,6 +74,11 @@ export type GovernorCeiling = number | bigint | string;
  * `queryRaw`, `explainQuery`) throws rather than running with no ceiling at all.
  */
 export interface GovernorOptions {
+  /**
+   * Remove resource ceilings and accounting explicitly; cannot accompany a resource cap.
+   * Deadlines and cancellation remain active.
+   */
+  readonly noCeiling?: boolean;
   /** Abstract execution steps, priced by the engine's charge schedule. */
   readonly fuel?: GovernorCeiling | null;
   /**
@@ -1714,7 +1723,7 @@ export interface AsyncJobError extends PurrdfError {
 
 /**
  * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
- * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`, which every job
+ * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`/`clearTimeout`, which every job
  * yields to the event loop through, and the loaded module has a stack region to give each
  * job (its shadow stack is laid out as the asynchronous lane assumes). Where it is
  * `false`, every asynchronous twin rejects with the reason before touching wasm; the

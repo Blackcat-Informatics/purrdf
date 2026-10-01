@@ -94,10 +94,7 @@ fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
     match term {
         None => Ok(None),
         Some(t) if matches!(t.inner, TermInner::Variable(_)) => Ok(None),
-        Some(t) => {
-            let rdf = t.to_rdf_term().map_err(|e| JsError::new(&e))?;
-            Ok(Some(TermValue::from_rdf_term(&rdf)))
-        }
+        Some(t) => t.to_value().map(Some).map_err(|e| JsError::new(&e)),
     }
 }
 
@@ -822,9 +819,7 @@ impl Dataset {
         // (`Any`), like an omitted argument — never resolved as a named graph.
         let named_graph = match &graph {
             Some(t) if !matches!(t.inner, TermInner::DefaultGraph | TermInner::Variable(_)) => {
-                Some(TermValue::from_rdf_term(
-                    &t.to_rdf_term().map_err(|e| JsError::new(&e))?,
-                ))
+                Some(t.to_value().map_err(|e| JsError::new(&e))?)
             }
             _ => None,
         };

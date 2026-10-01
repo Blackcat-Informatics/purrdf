@@ -192,6 +192,7 @@ function governorCeiling(value, name) {
 // exact failure a governor must not have, and this is the only layer that can see the key,
 // so the ungoverned normalizer refuses them by name instead of dropping them.
 const GOVERNOR_OPTION_KEYS = [
+  "noCeiling",
   "fuel",
   "deadlineMs",
   "maxAnswers",
@@ -281,7 +282,11 @@ function normalizeGovernedOptions(options) {
   if (typeof options !== "object") {
     throw new TypeError("query options must be an object when supplied");
   }
+  if (options.noCeiling !== undefined && typeof options.noCeiling !== "boolean") {
+    throw new TypeError("query option noCeiling must be a boolean when supplied");
+  }
   return {
+    noCeiling: options.noCeiling,
     base: options.base ?? undefined,
     aggregateNamespace: normalizeAggregateNamespace(options.aggregateNamespace),
     fuel: governorCeiling(options.fuel, "fuel"),
@@ -769,7 +774,15 @@ function splitAsyncOptions(options) {
   }
   const rest = {};
   for (const key of Object.keys(options)) {
-    if (!PACKAGE_OPTION_KEYS.includes(key)) rest[key] = options[key];
+    if (!PACKAGE_OPTION_KEYS.includes(key)) {
+      try {
+        rest[key] = options[key];
+      } catch {
+        const error = new TypeError(`query option ${key} could not be read`);
+        error.code = "purrdf-wasm-options";
+        throw error;
+      }
+    }
   }
   const signal = optionalSignal(options.signal);
   const host = {
@@ -1018,7 +1031,7 @@ export const shaclProductValidateToSarifRebuildExpectingAsync = shaclTwin(
 
 /**
  * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
- * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`, which every
+ * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`/`clearTimeout`, which every
  * job yields to the event loop through. Where it is `false`, every asynchronous twin
  * rejects with the reason before touching wasm, and the synchronous API is unaffected.
  */
@@ -1227,6 +1240,7 @@ export async function ready(wasmBytesOrUrl) {
           o.maxScratchBytes,
           o.maxRemoteRequests,
           o.cancel,
+          o.noCeiling,
         ),
       );
     };
@@ -1258,6 +1272,7 @@ export async function ready(wasmBytesOrUrl) {
           o.maxScratchBytes,
           o.maxRemoteRequests,
           o.cancel,
+          o.noCeiling,
         ),
       );
     };
@@ -1280,6 +1295,7 @@ export async function ready(wasmBytesOrUrl) {
           o.maxScratchBytes,
           o.maxRemoteRequests,
           o.cancel,
+          o.noCeiling,
         ),
       );
     };

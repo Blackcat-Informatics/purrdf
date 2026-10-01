@@ -96,7 +96,7 @@ export const NO_JSPI_MESSAGE =
 
 const NO_YIELD_MESSAGE =
   "asynchronous queries yield to the event loop through setTimeout, and this JavaScript " +
-  "environment provides no globalThis.setTimeout; the synchronous API is unaffected";
+  "environment must provide globalThis.setTimeout and globalThis.clearTimeout; the synchronous API is unaffected";
 
 const NOT_INSTALLED_MESSAGE =
   "the asynchronous runtime is not installed; await ready() before any asynchronous call";
@@ -155,6 +155,7 @@ const encoder = new TextEncoder();
 // this module loads; a host without one has no asynchronous lane (`hasAsyncQueries()` is
 // `false`, and every asynchronous call refuses with `NO_YIELD_MESSAGE`).
 const setTimeoutImpl = typeof globalThis.setTimeout === "function" ? globalThis.setTimeout : null;
+const clearTimeoutImpl = typeof globalThis.clearTimeout === "function" ? globalThis.clearTimeout : null;
 
 /** One turn of the event loop: resolves from a `setTimeout(…, 0)` task. */
 function yieldOnce() {
@@ -260,11 +261,11 @@ export function installAsync(exports, protocol) {
 }
 
 /**
- * Whether this engine can run asynchronous jobs: JSPI and `setTimeout` exist, and the
+ * Whether this engine can run asynchronous jobs: JSPI and the timer functions exist, and the
  * installed module has a stack region to give each job.
  */
 export function hasAsyncQueries() {
-  return HAS_JSPI && setTimeoutImpl !== null && laneRefusal === null;
+  return HAS_JSPI && setTimeoutImpl !== null && clearTimeoutImpl !== null && laneRefusal === null;
 }
 
 /**
@@ -275,7 +276,7 @@ export function hasAsyncQueries() {
  */
 export function assertAsyncQueries() {
   if (!HAS_JSPI) throw new Error(NO_JSPI_MESSAGE);
-  if (setTimeoutImpl === null) throw new Error(NO_YIELD_MESSAGE);
+  if (setTimeoutImpl === null || clearTimeoutImpl === null) throw new Error(NO_YIELD_MESSAGE);
   if (installed === null) throw new Error(NOT_INSTALLED_MESSAGE);
   assertNotPoisoned();
   if (laneRefusal !== null) {
@@ -482,11 +483,15 @@ const EXPIRED = Symbol("expired");
  * promise that resolves to `EXPIRED` when it fires.
  */
 function expiry(effect) {
-  const signal = AbortSignal.timeout(effect.abandonAfterMs);
+  const controller = new AbortController();
+  let timer;
   const promise = new Promise((resolve) => {
-    signal.addEventListener("abort", () => resolve(EXPIRED), { once: true });
+    timer = setTimeoutImpl(() => {
+      controller.abort(abortReason("the host effect's abandonment instant expired", "TimeoutError"));
+      resolve(EXPIRED);
+    }, effect.abandonAfterMs);
   });
-  return { signal, promise };
+  return { signal: controller.signal, promise, dispose: () => clearTimeoutImpl(timer) };
 }
 
 // ---------------------------------------------------------------------------
@@ -544,20 +549,24 @@ async function awaitExchange(record, effect, entry) {
   const seq = effect.seq;
   const { job } = record;
   const expired = expiry(effect);
-  const winner = await Promise.race([entry.promise, record.stop.promise, expired.promise]);
-  let status;
-  if (winner === SETTLED) {
-    status = job.settledStatus(seq);
-  } else if (winner === STOPPED) {
-    status = abandon(record, seq);
-  } else {
-    status = job.expireEffect(seq);
+  try {
+    const winner = await Promise.race([entry.promise, record.stop.promise, expired.promise]);
+    let status;
+    if (winner === SETTLED) {
+      status = job.settledStatus(seq);
+    } else if (winner === STOPPED) {
+      status = abandon(record, seq);
+    } else {
+      status = job.expireEffect(seq);
+    }
+    if (!entry.settled && !installed.AsyncJob.exchangeIsOpen(effect.exchangeId)) {
+      exchanges.delete(effect.exchangeId);
+      entry.controller.abort(abortReason("every job waiting on this request was stopped", "AbortError"));
+    }
+    return status;
+  } finally {
+    expired.dispose();
   }
-  if (!entry.settled && !installed.AsyncJob.exchangeIsOpen(effect.exchangeId)) {
-    exchanges.delete(effect.exchangeId);
-    entry.controller.abort(abortReason("every job waiting on this request was stopped", "AbortError"));
-  }
-  return status;
 }
 
 const SETTLED = Symbol("settled");
@@ -636,40 +645,44 @@ async function answerLoad(record, effect) {
   const request = loadRequest(effect);
   const { iri } = request;
   const expired = expiry(effect);
-  const signal = AbortSignal.any([record.controller.signal, expired.signal]);
-  const pending = invokeHost(
-    "resolveLoad",
-    () => resolveLoad(request, { signal }),
-    (value) => normalizeLoad(value, iri, signal),
-  );
-  const settled = await Promise.race([pending, record.stop.promise, expired.promise]);
-  const { job } = record;
-  if (settled === STOPPED) return abandon(record, seq);
-  if (settled === EXPIRED) return job.expireEffect(seq);
-  switch (settled.type) {
-    case "document":
-      return delivered(record, seq, job.deliverGraph(seq, settled.bytes, settled.mediaType, settled.base));
-    case "dataset": {
-      let status;
-      try {
-        status = job.deliverGraphDataset(seq, settled.dataset);
-      } catch {
-        // Not a `Dataset` of this package: the handler's answer is not one the protocol
-        // defines, which is the invocation's fault.
-        status = job.deliverFailure(
-          seq,
-          "fault",
-          `resolveLoad returned an unrecognized value (${kindOf(settled.dataset)}) for ${iri}`,
-        );
+  try {
+    const signal = AbortSignal.any([record.controller.signal, expired.signal]);
+    const pending = invokeHost(
+      "resolveLoad",
+      () => resolveLoad(request, { signal }),
+      (value) => normalizeLoad(value, iri, signal),
+    );
+    const settled = await Promise.race([pending, record.stop.promise, expired.promise]);
+    const { job } = record;
+    if (settled === STOPPED) return abandon(record, seq);
+    if (settled === EXPIRED) return job.expireEffect(seq);
+    switch (settled.type) {
+      case "document":
+        return delivered(record, seq, job.deliverGraph(seq, settled.bytes, settled.mediaType, settled.base));
+      case "dataset": {
+        let status;
+        try {
+          status = job.deliverGraphDataset(seq, settled.dataset);
+        } catch {
+          // Not a `Dataset` of this package: the handler's answer is not one the protocol
+          // defines, which is the invocation's fault.
+          status = job.deliverFailure(
+            seq,
+            "fault",
+            `resolveLoad returned an unrecognized value (${kindOf(settled.dataset)}) for ${iri}`,
+          );
+        }
+        return delivered(record, seq, status);
       }
-      return delivered(record, seq, status);
+      case "redirect":
+        return delivered(record, seq, job.deliverRedirect(seq, settled.location));
+      case "failure":
+        return delivered(record, seq, job.deliverFailure(seq, settled.kind, settled.message));
+      default:
+        return delivered(record, seq, job.deliverFailure(seq, "fault", settled.message));
     }
-    case "redirect":
-      return delivered(record, seq, job.deliverRedirect(seq, settled.location));
-    case "failure":
-      return delivered(record, seq, job.deliverFailure(seq, settled.kind, settled.message));
-    default:
-      return delivered(record, seq, job.deliverFailure(seq, "fault", settled.message));
+  } finally {
+    expired.dispose();
   }
 }
 
