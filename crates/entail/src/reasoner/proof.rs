@@ -394,9 +394,9 @@ pub enum ClaimSubject {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClaimBasis {
-    /// Every one of these runs closed every branch, which ESTABLISHES the claim: the claim's
-    /// negation has no model. Several runs for a claim that decomposes — an equivalence is two
-    /// subsumptions.
+    /// Every one of these runs closed every branch. For a consequence, its negation has
+    /// no model, establishing it; for consistency or class satisfiability, its own
+    /// tableau has no model, refuting it. Several runs can decide a decomposed claim.
     ClosedRefutation {
         /// The runs, into [`ServiceProof::runs`].
         runs: Vec<usize>,
@@ -469,20 +469,31 @@ impl Claim {
         &self.basis
     }
 
-    /// Whether this basis ESTABLISHES the claim, rather than refuting or withholding it.
+    /// The signed judgement this basis makes about its subject.
     ///
-    /// The one place a service's answer and its proof term are compared, so it is a function of
-    /// the basis alone: there is no separate "holds" field for a basis to disagree with.
+    /// Closing the ontology's own tableau refutes consistency or class satisfiability;
+    /// closing a tableau for a negated consequence establishes that consequence. The
+    /// subject supplies this polarity, already present in every version-2 wire term.
+    #[must_use]
+    pub const fn verdict(&self) -> Verdict {
+        match self.basis {
+            ClaimBasis::ClosedRefutation { .. } => match self.subject {
+                ClaimSubject::Consistent | ClaimSubject::ClassSatisfiable { .. } => Verdict::False,
+                _ => Verdict::True,
+            },
+            ClaimBasis::CounterModel { .. } => Verdict::False,
+            ClaimBasis::Undecided { .. } | ClaimBasis::NotDecided => Verdict::Unknown,
+            ClaimBasis::ExhibitedModel { .. }
+            | ClaimBasis::Saturated
+            | ClaimBasis::Reflexive
+            | ClaimBasis::Syntactic => Verdict::True,
+        }
+    }
+
+    /// Whether the signed judgement establishes the positive subject.
     #[must_use]
     pub const fn is_established(&self) -> bool {
-        matches!(
-            self.basis,
-            ClaimBasis::ClosedRefutation { .. }
-                | ClaimBasis::ExhibitedModel { .. }
-                | ClaimBasis::Saturated
-                | ClaimBasis::Reflexive
-                | ClaimBasis::Syntactic
-        )
+        self.verdict().is_true()
     }
 }
 
@@ -916,6 +927,34 @@ impl ServiceProof {
             });
         }
         Ok(())
+    }
+
+    /// Check a three-valued answer against the exact subject and signed judgement.
+    ///
+    /// Unlike [`Self::covers`], this distinguishes a proved negative from an undecided
+    /// answer. Call after [`Self::verify`] to check the judgement's underlying evidence.
+    /// The encoding is unchanged: legacy terms already record subject and basis, so their
+    /// original bytes and content identities remain valid.
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::AnswerNotCovered`] for a different subject, verdict or claim count.
+    pub fn covers_verdict(
+        &self,
+        subject: &ClaimSubject,
+        verdict: Verdict,
+    ) -> Result<(), DlProofError> {
+        if let [claim] = self.claims.as_slice()
+            && claim.subject() == subject
+            && claim.verdict() == verdict
+        {
+            return Ok(());
+        }
+        Err(DlProofError::AnswerNotCovered {
+            detail: format!(
+                "the proof's signed judgement does not report {subject:?} as {verdict:?}"
+            ),
+        })
     }
 
     /// VERIFY every run and every claim against the consumer's own ontology.
@@ -1524,9 +1563,8 @@ pub fn instance_claims(class: &TermValue, individuals: &[TermValue]) -> Vec<Clai
 /// The claims a boolean answer reports about `subject`.
 ///
 /// A [`Verdict::True`] reports the claim; [`Verdict::False`] and [`Verdict::Unknown`] report
-/// NOTHING, which is the whole reason a DL service answers three-valued: "not established" and
-/// "established false" are both the absence of a claim, and the certificate beside the answer
-/// is what tells them apart.
+/// no positive claim. Use [`ServiceProof::covers_verdict`] to distinguish a refuted subject
+/// from an undecided one when checking the complete three-valued answer.
 #[must_use]
 pub fn verdict_claims(subject: &ClaimSubject, answer: Verdict) -> Vec<ClaimSubject> {
     if answer.is_true() {
@@ -2415,6 +2453,63 @@ mod tests {
             .expect(RECORDED)
             .covers(&instance_claims(&animal, answer.answer()))
             .expect("the proof establishes exactly the individuals the answer returns");
+    }
+
+    /// Existing subject/basis encodings distinguish negative and undecided judgements.
+    #[test]
+    fn signed_judgements_preserve_wire_terms_and_refuse_subject_substitution() {
+        let subjects = [
+            ClaimSubject::Consistent,
+            ClaimSubject::ClassSatisfiable {
+                class: TermValue::iri(EX_CAT),
+            },
+            ClaimSubject::Axiom {
+                axiom: Box::new(subclass_axiom()),
+            },
+        ];
+        for subject in subjects {
+            let model_claim = matches!(
+                subject,
+                ClaimSubject::Consistent | ClaimSubject::ClassSatisfiable { .. }
+            );
+            let closed = Claim::new(
+                subject.clone(),
+                ClaimBasis::ClosedRefutation { runs: vec![0] },
+            );
+            assert_eq!(
+                closed.verdict(),
+                if model_claim {
+                    Verdict::False
+                } else {
+                    Verdict::True
+                }
+            );
+            assert_eq!(closed.is_established(), !model_claim);
+            let undecided = Claim::new(subject, ClaimBasis::NotDecided);
+            assert_eq!(undecided.verdict(), Verdict::Unknown);
+        }
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let proof = answer.proof().expect(RECORDED);
+        let bytes = proof.encode();
+        let decoded = ServiceProof::decode(&bytes).expect("existing format decodes");
+        assert_eq!(
+            decoded.encode(),
+            bytes,
+            "the repair does not change wire identity"
+        );
+        decoded
+            .covers_verdict(&ClaimSubject::Consistent, Verdict::True)
+            .expect("same judgement");
+        decoded
+            .covers_verdict(
+                &ClaimSubject::ClassSatisfiable {
+                    class: TermValue::iri(EX_CAT),
+                },
+                Verdict::True,
+            )
+            .expect_err("a true judgement about another subject is not covered");
     }
 
     /// A BOOLEAN answer binds through [`verdict_claims`]: a `True` reports its claim, and a

@@ -533,6 +533,33 @@ fn a_proof_this_command_produced_checks_through_this_command() {
     assert!(text.contains("\nanswer checked 1\n"), "{text}");
 }
 
+/// A closed tableau proves the negative verdict and round-trips through the CLI.
+#[test]
+fn an_inconsistency_proof_checks_through_the_command() {
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
+    let path = write_file(
+        &dir.path().join(""),
+        "inconsistent.ttl",
+        "@prefix ex: <http://example.org/> . @prefix owl: <http://www.w3.org/2002/07/owl#> . ex:Cat owl:disjointWith ex:Dog . ex:tom a ex:Cat, ex:Dog .",
+    );
+    let produced = run(&["consistency", "--proof", "--from", "turtle", &path]);
+    assert_eq!(code(&produced), 0, "{}", stderr(&produced));
+    let text = stdout(&produced);
+    assert!(text.starts_with("consistency false\n"), "{text}");
+    let at = text.find("purrdf-dl-proof 1\n").expect("recorded proof");
+    let proof = write_file(&dir.path().join(""), "proof.txt", &text[at..]);
+    let checked = run(&[
+        "consistency",
+        "--check-proof",
+        &proof,
+        "--from",
+        "turtle",
+        &path,
+    ]);
+    assert_eq!(code(&checked), 0, "{}", stderr(&checked));
+    assert!(stdout(&checked).contains("\nanswer checked 0\n"));
+}
+
 /// A proof for a DIFFERENT ontology is refused, and the refusal is a non-zero exit.
 #[test]
 fn a_proof_for_another_ontology_is_refused_by_the_command() {

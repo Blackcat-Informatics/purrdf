@@ -4271,9 +4271,8 @@ fn answer_verdict(answer: &str, keyword: &str) -> Result<Verdict, String> {
 /// establishes that those claims are the ones the answer beside the proof actually states. A
 /// genuine proof of some OTHER answer verifies perfectly and is caught here.
 ///
-/// A three-valued `false` or `unknown` reports NO claim, which is the whole reason the DL
-/// services answer three-valued: "not established" and "established false" are both the
-/// absence of a claim.
+/// A three-valued `false` or `unknown` reports no POSITIVE claim. The separate signed
+/// judgement check binds those answers to refutation or undecided evidence respectively.
 fn answer_claims(
     service: Service,
     argument: &str,
@@ -4505,6 +4504,39 @@ pub fn check_dl_proof(
         let claims = answer_claims(asked, argument, answer)?;
         term.covers(&claims)
             .map_err(|error| format!("the proof does not cover the answer beside it: {error}"))?;
+        let judgement = match asked {
+            Service::Consistency => Some((ClaimSubject::Consistent, "consistency")),
+            Service::ClassSatisfiability => Some((
+                ClaimSubject::ClassSatisfiable {
+                    class: parse_one_term(argument)?,
+                },
+                "class-satisfiability",
+            )),
+            Service::AxiomEntailment => Some((
+                ClaimSubject::Axiom {
+                    axiom: Box::new(parse_axiom(argument)?),
+                },
+                "entails",
+            )),
+            _ => None,
+        };
+        if let Some((subject, keyword)) = judgement {
+            let verdict = answer_verdict(answer, keyword)?;
+            let mut expected = format!("{keyword} {}\n", verdict_name(verdict));
+            match &subject {
+                ClaimSubject::ClassSatisfiable { class } => {
+                    let _ = writeln!(expected, "term {}", emit(class));
+                }
+                ClaimSubject::Axiom { axiom } => write_axiom(axiom, &mut expected),
+                _ => {}
+            }
+            if answer.trim() != expected.trim() {
+                return Err("the proof does not cover the answer beside it: the answer describes a different subject or grammar".to_owned());
+            }
+            term.covers_verdict(&subject, verdict).map_err(|error| {
+                format!("the proof does not cover the answer beside it: {error}")
+            })?;
+        }
         Some(claims.len())
     };
 
@@ -8406,6 +8438,114 @@ mod proof_tests {
         )
         .expect_err("a stopping receipt beside a decided certificate");
         assert!(refusal.contains("does not check"), "{refusal}");
+    }
+
+    /// Every scalar judgement checks, and exchanging any two verdicts is refused.
+    #[test]
+    fn scalar_proofs_bind_all_three_verdicts() {
+        let inconsistent = concat!(
+            "<http://example.org/Cat> <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/Dog> .\n",
+            "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n",
+            "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Dog> .\n",
+        );
+        let not_entailed = "<http://example.org/Animal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Cat> .";
+        let cases = [
+            (TAXONOMY, "consistency", "", "consistency", "true", 0),
+            (inconsistent, "consistency", "", "consistency", "false", 0),
+            (TAXONOMY, "consistency", "", "consistency", "unknown", 1),
+            (
+                TAXONOMY,
+                "class-satisfiability",
+                "<http://example.org/Cat>",
+                "class-satisfiability",
+                "true",
+                0,
+            ),
+            (
+                TAXONOMY,
+                "class-satisfiability",
+                "<http://www.w3.org/2002/07/owl#Nothing>",
+                "class-satisfiability",
+                "false",
+                0,
+            ),
+            (
+                TAXONOMY,
+                "class-satisfiability",
+                "<http://example.org/Cat>",
+                "class-satisfiability",
+                "unknown",
+                1,
+            ),
+            (TAXONOMY, "entails", AXIOM, "entails", "true", 0),
+            (TAXONOMY, "entails", not_entailed, "entails", "false", 0),
+            (TAXONOMY, "entails", AXIOM, "entails", "unknown", 1),
+        ];
+        for (ontology, service, argument, keyword, verdict, rounds) in cases {
+            let proved = prove_to_string(ontology, service, argument, rounds, 0)
+                .unwrap_or_else(|error| panic!("{service} {verdict}: {error}"));
+            let expected = format!("{keyword} {verdict}\n");
+            assert!(
+                proved.answer().starts_with(&expected),
+                "{service}: {}",
+                proved.answer()
+            );
+            check_dl_proof(
+                ontology,
+                service,
+                argument,
+                proved.answer(),
+                proved.certificate(),
+                proved.proof_document(),
+            )
+            .unwrap_or_else(|error| panic!("{service} {verdict}: {error}"));
+            // The unchanged wire format carries enough evidence to recover polarity.
+            assert!(proved.proof_document().starts_with("purrdf-dl-proof 1\n"));
+            for forged in ["true", "false", "unknown"] {
+                if forged == verdict {
+                    continue;
+                }
+                let answer =
+                    proved
+                        .answer()
+                        .replacen(&expected, &format!("{keyword} {forged}\n"), 1);
+                let refusal = check_dl_proof(
+                    ontology,
+                    service,
+                    argument,
+                    &answer,
+                    proved.certificate(),
+                    proved.proof_document(),
+                )
+                .expect_err("a signed judgement cannot change verdict");
+                assert!(
+                    refusal.contains("does not cover"),
+                    "{service} {verdict} -> {forged}: {refusal}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_answer_subjects_cannot_be_substituted() {
+        for (service, argument) in [
+            ("class-satisfiability", "<http://example.org/Cat>"),
+            ("entails", AXIOM),
+        ] {
+            let proved = prove_to_string(TAXONOMY, service, argument, 0, 0).expect("decides");
+            let forged = proved
+                .answer()
+                .replace("http://example.org/Cat", "http://example.org/Fish");
+            check_dl_proof(
+                TAXONOMY,
+                service,
+                argument,
+                &forged,
+                proved.certificate(),
+                proved.proof_document(),
+            )
+            .expect_err("the echoed subject is part of the answer binding");
+        }
     }
 
     /// A proof is byte-identical run to run, which is what makes the committed artifact a
