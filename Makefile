@@ -926,19 +926,34 @@ wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throug
 # published ESM package — the exact tree the Pages deploy ships at /playground. The app
 # is zero-dependency vanilla ESM; "assembly" is just a copy, no bundler.
 PLAYGROUND_OUT := $(CARGO_TARGET_DIR)/playground
-playground: wasm-pkg ## Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/playground (serve it to preview).
+playground: ## Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/playground (serve it to preview).
 	@# Ship exactly the app shell + a FRESH copy of the published package. The
 	@# smoke/ Node tests and any local docs/playground/purrdf/ preview copy are
 	@# deliberately NOT shipped — the package is (re)built here from source.
-	@rm -rf "$(PLAYGROUND_OUT)"
-	@mkdir -p "$(PLAYGROUND_OUT)/purrdf"
+	@# Bind runtime notices to this build, including a cached registered compiler
+	@# output. Capture before the sequential build and refuse a changed compiler.
+	@compiler=$$(mktemp); after=$$(mktemp); \
+		trap 'rm -f "$$compiler" "$$after"' EXIT; \
+		python3 scripts/package-licenses.py --compiler-record "$$compiler" && \
+		$(MAKE) wasm-pkg && \
+		python3 scripts/package-licenses.py --compiler-record "$$after" && \
+		cmp "$$after" "$$compiler" && \
+		rm -rf "$(PLAYGROUND_OUT)" && \
+		mkdir -p "$(PLAYGROUND_OUT)/purrdf" && \
+		cp "$$compiler" "$(PLAYGROUND_OUT)/purrdf/build-compiler.txt"
+	python3 scripts/fetch-locked-deps.py
+	python3 scripts/package-licenses.py --profile npm --check
 	@cp docs/playground/index.html docs/playground/app.mjs docs/playground/engine.worker.mjs \
 		docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
 		docs/playground/manifest.webmanifest \
 		"$(PLAYGROUND_OUT)/"
 	@cp -R docs/playground/examples "$(PLAYGROUND_OUT)/examples"
-	@cp crates/rdf-wasm/js/index.mjs "$(PLAYGROUND_OUT)/purrdf/index.mjs"
+	@cp crates/rdf-wasm/js/index.mjs crates/rdf-wasm/js/package.json "$(PLAYGROUND_OUT)/purrdf/"
 	@cp -R crates/rdf-wasm/js/pkg "$(PLAYGROUND_OUT)/purrdf/pkg"
+	@cp -R crates/rdf-wasm/js/licenses "$(PLAYGROUND_OUT)/purrdf/licenses"
+	python3 scripts/package-licenses.py --runtime-dir "$(PLAYGROUND_OUT)/purrdf/licenses/runtime"
+	python3 scripts/package-licenses.py --profile npm --audit-directory "$(PLAYGROUND_OUT)" \
+		--recipient-root purrdf --receipt "$(CARGO_TARGET_DIR)/license-evidence-playground.json"
 	@echo "OK: console assembled at $(PLAYGROUND_OUT)"
 	@echo "    preview: (cd $(PLAYGROUND_OUT) && python3 -m http.server 8080) then open http://localhost:8080/"
 

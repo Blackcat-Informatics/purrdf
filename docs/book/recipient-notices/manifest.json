@@ -1,0 +1,617 @@
+{
+  "SPDX-FileCopyrightText": "2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>",
+  "SPDX-License-Identifier": "CC-BY-4.0",
+  "assets": [
+    {
+      "licenses": [
+        "MPL-2.0",
+        "MIT"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "ayu-highlight-3fdfc3ac.css",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/css/ayu-highlight.css",
+      "source_form": "sources/mdbook/css/ayu-highlight.css.txt",
+      "source_sha256": "3fdfc3ac5e435e0cef96dafee74da487e4846ffce4dff5973bb45d68b678dd7f",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0",
+        "MIT"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "css/chrome-fc474251.css",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/css/chrome.css",
+      "source_form": "sources/mdbook/css/chrome.css.txt",
+      "source_sha256": "fc47425146e5c2dc8649d8f6c6c35b739a9e922c80ad39830f345d14117683f3",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "css/general-0392ca55.css",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/css/general.css",
+      "source_form": "sources/mdbook/css/general.css.txt",
+      "source_sha256": "0392ca55a514793599ddcea21adac1f0e52f2c861e16976a351746d62594ab94",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0",
+        "MIT"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "highlight-493f70e1.css",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/css/highlight.css",
+      "source_form": "sources/mdbook/css/highlight.css.txt",
+      "source_sha256": "493f70e1527d895653b5ac7157abba8e2c656e43698da93b6c1997e2855a5059",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "css/print-9e4910d8.css",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/css/print.css",
+      "source_form": "sources/mdbook/css/print.css.txt",
+      "source_sha256": "9e4910d8eb508863172430c60d49fd3b442e9e7f5963a18cd1d655c386ffeae9",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0",
+        "MIT"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "tomorrow-night-4c0ae647.css",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/css/tomorrow-night.css",
+      "source_form": "sources/mdbook/css/tomorrow-night.css.txt",
+      "source_sha256": "4c0ae647a06ef1699806fb9b4b6d0ef72de026708c6e8581362641c9298cb5f7",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "css/variables-8adf115d.css",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/css/variables.css",
+      "source_form": "sources/mdbook/css/variables.css.txt",
+      "source_sha256": "8adf115df892369c90b830767c4651a9e058b79273e219935f7c8a96c6eab9c0",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/OPEN-SANS-LICENSE.txt",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/OPEN-SANS-LICENSE.txt",
+      "source_form": "sources/mdbook/fonts/OPEN-SANS-LICENSE.txt.txt",
+      "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "template": false
+    },
+    {
+      "licenses": [
+        "OFL-1.1"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/SOURCE-CODE-PRO-LICENSE.txt",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/SOURCE-CODE-PRO-LICENSE.txt",
+      "source_form": "sources/mdbook/fonts/SOURCE-CODE-PRO-LICENSE.txt.txt",
+      "source_sha256": "d1e6d465a83ba1a3be52db6484868cf5812ae9bbf91abdad3900ba0165afcf93",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0",
+        "Apache-2.0",
+        "OFL-1.1"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/fonts-9644e21d.css",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/fonts.css",
+      "source_form": "sources/mdbook/fonts/fonts.css.txt",
+      "source_sha256": "9644e21dc7bdb7fd7f7461f9e5c190cc14de0ea2d295afa7e7f26818207f3ef1",
+      "template": true
+    },
+    {
+      "licenses": [
+        "MPL-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "book-c22b7243.js",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/js/book.js",
+      "source_form": "sources/mdbook/js/book.js.txt",
+      "source_sha256": "c22b72430f9c9d4552180bc4be2f31180318e1a5204fb293f3a9de86bae07d6d",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MIT"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "clipboard-1626706a.min.js",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/js/clipboard.min.js",
+      "source_form": "sources/mdbook/js/clipboard.min.js.txt",
+      "source_sha256": "1626706afc88d95ebe1173b553ec732c6dc82a576989315fdf5e7779af738a44",
+      "template": false
+    },
+    {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "highlight-abc7f01d.js",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/js/highlight.js",
+      "source_form": "sources/mdbook/js/highlight.js.txt",
+      "source_sha256": "abc7f01d0ce8c64e4ba9e131d651e48ae1a567b2a1254fea8aab03502288de58",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MIT"
+      ],
+      "locales": [
+        ""
+      ],
+      "name": "elasticlunr-ef4e11c1.min.js",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/searcher/elasticlunr.min.js",
+      "source_form": "sources/mdbook/searcher/elasticlunr.min.js.txt",
+      "source_sha256": "ef4e11c157b1e2e89782d30bd726f2d5ff7834ea5e26ad02474325f8b1f126c9",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MIT"
+      ],
+      "locales": [
+        ""
+      ],
+      "name": "mark-09e88c2c.min.js",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/searcher/mark.min.js",
+      "source_form": "sources/mdbook/searcher/mark.min.js.txt",
+      "source_sha256": "09e88c2cfaf23ea8a37b5681433eafea97033af632ecc948c8c1ee9944647743",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0"
+      ],
+      "locales": [
+        ""
+      ],
+      "name": "searcher-09f2665d.js",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/searcher/searcher.js",
+      "source_form": "sources/mdbook/searcher/searcher.js.txt",
+      "source_sha256": "09f2665dfa08d32e774006cdb3a7b2c1184f13f6e4a66f2e4ee3a65ed396b197",
+      "template": true
+    },
+    {
+      "licenses": [
+        "MPL-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "favicon-8114d1fc.png",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/images/favicon.png",
+      "source_form": "sources/mdbook/images/favicon.png.txt",
+      "source_sha256": "8114d1fc74f4b5621ad9afde7746ed9cf7e420be317a6e29023d2298d58aa15b",
+      "template": false
+    },
+    {
+      "licenses": [
+        "MPL-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "favicon-de23e50b.svg",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/images/favicon.svg",
+      "source_form": "sources/mdbook/images/favicon.svg.txt",
+      "source_sha256": "de23e50b1c4dd6e052b3e21d444fcd4b13568b3840ac3c99d9be4e9263c0ef59",
+      "template": false
+    },
+    {
+      "generated_source": true,
+      "licenses": [
+        "MPL-2.0",
+        "CC-BY-4.0"
+      ],
+      "locales": [
+        ""
+      ],
+      "pattern": "searchindex-????????.js",
+      "source": "https://github.com/rust-lang/mdBook/tree/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html"
+    },
+    {
+      "generated_source": true,
+      "licenses": [
+        "MPL-2.0",
+        "CC-BY-4.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "pattern": "toc-????????.js",
+      "source": "https://github.com/rust-lang/mdBook/tree/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html"
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-300-7736aa35.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-300.woff2",
+      "source_sha256": "7736aa3596c468515c3209f2f9d68cfae96d94c05689bcc11a5dce426a6ee2e8",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-300italic-2c7b95c0.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-300italic.woff2",
+      "source_sha256": "2c7b95c08df0d228caec6d4bfed06da0f7ab6b76ea5cc3f75b5c6ae416bc571b",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-600-486c6759.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-600.woff2",
+      "source_sha256": "486c67592731a0b36a89dba1fd0b97aeb73f236bbf60dbf28d7c6b5723c07989",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-600italic-1a3e8659.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-600italic.woff2",
+      "source_sha256": "1a3e865977024f444834a75a1b33b89b93134c93007ae3d6e14f24e6c88d8dfb",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-700-c22fe8c7.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-700.woff2",
+      "source_sha256": "c22fe8c70c36f1d862903b772eaed864d3a8fa849473c9caff224fdb852428e4",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-700italic-238ae959.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-700italic.woff2",
+      "source_sha256": "238ae9593944112bee8dd65f8ebc5f3d3862160a8a245fbe1ee3150bc9a2fd81",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-800-3d2c812a.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-800.woff2",
+      "source_sha256": "3d2c812adf74deb36fead3ff8469800d3c0b23eb2c858ae49310291f89490146",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-800italic-ba1521ec.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-800italic.woff2",
+      "source_sha256": "ba1521ec219db9bc5bfec0e3e7a897369d98b30d4e853ee4aa525322784428b8",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-italic-6c9463f7.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-italic.woff2",
+      "source_sha256": "6c9463f7096c0b9d610e095ed248ac1e8a8da7e92d17e9be544f3baced7b62b2",
+      "template": false
+    },
+    {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/open-sans-v17-all-charsets-regular-2e3b1d34.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/open-sans-v17-all-charsets-regular.woff2",
+      "source_sha256": "2e3b1d34ac67763ab50652da19305d4b3694c6b6e6bf35f4b98411ce4af646d2",
+      "template": false
+    },
+    {
+      "licenses": [
+        "OFL-1.1"
+      ],
+      "locales": [
+        "",
+        "zh-Hans"
+      ],
+      "name": "fonts/source-code-pro-v11-all-charsets-500-2bdd9410.woff2",
+      "source": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/crates/mdbook-html/front-end/fonts/source-code-pro-v11-all-charsets-500.woff2",
+      "source_sha256": "2bdd9410b0141db3cbbf4cfc3818cc6fad279e8e63940940e06cd6af76ccbfcf",
+      "template": false
+    }
+  ],
+  "files": {
+    "CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "MPL-2.0.txt": "af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e",
+    "atelier-linked-MIT.txt": "aa282d56e1638356851dac9e26fdd8e5992c4c88f8de804b521accf4f0fae3d9",
+    "ayu-MIT.txt": "28db4b39f27ff95b36c7bc4a84364d36c8ed24a8886efbe5d9c8b88fdb206a45",
+    "base16-MIT.txt": "7f56fcf24df1178b329a99b5160f7fd23dcdd75b0b633e468db2917e6ff061ca",
+    "clipboard-MIT.txt": "a798e7b5fa604117d52d607e05f1cbac3b2fa5da087837f412a1a3c866b4b748",
+    "elasticlunr-MIT.txt": "7aa22f48b4ec3cf73b82c976d5476d3fa5232757bb1c06b7388a2dc520696763",
+    "highlight-BSD-3-Clause.txt": "6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490",
+    "jmblog-MIT.txt": "7b87e9498f5ac5f9519d03982b63c9a8f5b5fb57cb903d1f3d92b8ae474898c9",
+    "mark-MIT.txt": "402936bcc8f1b6947750eb9193183d7d0c4dbca3c0ba06398571d94ee85c24be",
+    "octicons-full-MIT.txt": "da259c8bd0de62713ccdcf88910aebca810644f98c2c912bad814fc79ea778df",
+    "octicons-original-notice.txt": "671429afb006b516cdb22dcf476c85b6a4653bbcc4f7206146d246aee715a3c3",
+    "sources/mdbook/css/ayu-highlight.css.txt": "3fdfc3ac5e435e0cef96dafee74da487e4846ffce4dff5973bb45d68b678dd7f",
+    "sources/mdbook/css/chrome.css.txt": "fc47425146e5c2dc8649d8f6c6c35b739a9e922c80ad39830f345d14117683f3",
+    "sources/mdbook/css/general.css.txt": "0392ca55a514793599ddcea21adac1f0e52f2c861e16976a351746d62594ab94",
+    "sources/mdbook/css/highlight.css.txt": "493f70e1527d895653b5ac7157abba8e2c656e43698da93b6c1997e2855a5059",
+    "sources/mdbook/css/print.css.txt": "9e4910d8eb508863172430c60d49fd3b442e9e7f5963a18cd1d655c386ffeae9",
+    "sources/mdbook/css/tomorrow-night.css.txt": "4c0ae647a06ef1699806fb9b4b6d0ef72de026708c6e8581362641c9298cb5f7",
+    "sources/mdbook/css/variables.css.txt": "8adf115df892369c90b830767c4651a9e058b79273e219935f7c8a96c6eab9c0",
+    "sources/mdbook/fonts/OPEN-SANS-LICENSE.txt.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "sources/mdbook/fonts/SOURCE-CODE-PRO-LICENSE.txt.txt": "d1e6d465a83ba1a3be52db6484868cf5812ae9bbf91abdad3900ba0165afcf93",
+    "sources/mdbook/fonts/fonts.css.txt": "9644e21dc7bdb7fd7f7461f9e5c190cc14de0ea2d295afa7e7f26818207f3ef1",
+    "sources/mdbook/images/favicon.png.txt": "8114d1fc74f4b5621ad9afde7746ed9cf7e420be317a6e29023d2298d58aa15b",
+    "sources/mdbook/images/favicon.svg.txt": "de23e50b1c4dd6e052b3e21d444fcd4b13568b3840ac3c99d9be4e9263c0ef59",
+    "sources/mdbook/js/book.js.txt": "c22b72430f9c9d4552180bc4be2f31180318e1a5204fb293f3a9de86bae07d6d",
+    "sources/mdbook/js/clipboard.min.js.txt": "1626706afc88d95ebe1173b553ec732c6dc82a576989315fdf5e7779af738a44",
+    "sources/mdbook/js/highlight.js.txt": "abc7f01d0ce8c64e4ba9e131d651e48ae1a567b2a1254fea8aab03502288de58",
+    "sources/mdbook/searcher/elasticlunr.min.js.txt": "ef4e11c157b1e2e89782d30bd726f2d5ff7834ea5e26ad02474325f8b1f126c9",
+    "sources/mdbook/searcher/mark.min.js.txt": "09e88c2cfaf23ea8a37b5681433eafea97033af632ecc948c8c1ee9944647743",
+    "sources/mdbook/searcher/searcher.js.txt": "09f2665dfa08d32e774006cdb3a7b2c1184f13f6e4a66f2e4ee3a65ed396b197",
+    "sources/mdbook/templates/index.hbs.txt": "bf8b6b7cc5c1e44b03ab0392297705a220b569b601286e0ad538cca6d56717f1",
+    "sources/mdbook/templates/toc.html.hbs.txt": "b8f2aa8f58af5054c9dff15b301ac31cf70c23da3dc92a27c912019df512bcb0",
+    "sources/mdbook/templates/toc.js.hbs.txt": "64ff628684df470e9a33af32ad7d44c74c9a6b132cf6ed7eea5691dc4c941c57",
+    "tomorrow-MIT.txt": "a9773fd575f48ea3648b54eeaf09d1512a9f0c7c20d284dc3f8295bd92123bf9"
+  },
+  "limitations": [
+    "Theme sources without declared versions are pinned official-current license snapshots. mdBook retains derivation attribution; this does not establish an exact historical theme import commit.",
+    "Clipboard2.0.4 and Octicons2.0.0 declare MIT in their pinned source; the same full MIT conditions are retained alongside original copyrights rather than relabeling a newer fulltext as the historical blob.",
+    "The linked Atelier MIT grant is rendered from the pinned official MIT-site template and Bram author declaration with the historical2013 copyright; it is explicitly a rendering, not an upstream blob."
+  ],
+  "mdbook_source": "https://github.com/rust-lang/mdBook/tree/0ea415897758ea9b2904ed47ba9cb4901f9eb089",
+  "mdbook_version": "0.5.3",
+  "referenced_grants": {
+    "atelier": {
+      "author_git_blob_sha1": "d4f2834b908073773bd0440d9980ffe29b24b978",
+      "linked_grant_url": "https://atelierbram.mit-license.org",
+      "rendered_sha256": "aa282d56e1638356851dac9e26fdd8e5992c4c88f8de804b521accf4f0fae3d9",
+      "rendering": "MIT paragraphs from exact linked template, author from pinned user declaration,2013 copyright from exact pinned source README; whitespace normalized; derived rendering explicitly distinct from raw upstream blob",
+      "template_commit": "73ebb8ca1e2280883e92498e18fcdb1c633c226c",
+      "template_git_blob_sha1": "a3eda69a75e6716d336d5f918aa5da345cc43602",
+      "template_repository": "remy/mit-license"
+    },
+    "clipboard": {
+      "historical_version": "2.0.4",
+      "linked_grant_url": "http://zenorocha.mit-license.org/",
+      "tag_commit": "d17eca050e705ae4932fd1be3e96abe38bd3397c"
+    },
+    "octicons": {
+      "code_grant": "MIT",
+      "font_grant": "OFL1.1 applies onlyfontfiles; copied clipboard image is code/image not font",
+      "historical_copyright": "(c)2012-2014 GitHub",
+      "instruction": "Retain exact historical copyright/declaration with full MIT conditions; current fulltext provenance is distinct from historical tagged short declaration.",
+      "tag_commit": "de0f0e9b5e1ad0db16b1b17551b8b5bf0e849554",
+      "version": "2.0.0"
+    }
+  },
+  "schema": 1,
+  "scope": "Docs-only recipient texts and preferred source forms for the pinned mdBook frontend. These terms do not alter the PurRDF SDK grant. Generated source assets additionally contain first-party book content under CC-BY-4.0.",
+  "upstream_grants": [
+    {
+      "commit": "47100dab61cf6dc6184954cdf14ad55cc2540d4f",
+      "git_blob_sha1": "f8825123e42da480b423caac6489373a8c2d30f5",
+      "name": "elasticlunr",
+      "path": "LICENSE",
+      "repo": "weixsong/elasticlunr.js",
+      "sha256": "7aa22f48b4ec3cf73b82c976d5476d3fa5232757bb1c06b7388a2dc520696763",
+      "source_url": "https://github.com/weixsong/elasticlunr.js/blob/47100dab61cf6dc6184954cdf14ad55cc2540d4f/LICENSE"
+    },
+    {
+      "commit": "025b51ad151cbe0b75bf27e8b29fbc5bd5552cb9",
+      "git_blob_sha1": "80f366d78c7f86393bd2d4f050d3ed4282a01f1c",
+      "name": "mark",
+      "path": "LICENSE",
+      "repo": "julkue/mark.js",
+      "sha256": "402936bcc8f1b6947750eb9193183d7d0c4dbca3c0ba06398571d94ee85c24be",
+      "source_url": "https://github.com/julkue/mark.js/blob/025b51ad151cbe0b75bf27e8b29fbc5bd5552cb9/LICENSE"
+    },
+    {
+      "commit": "93fd0d7335e2b8b94dd122dc2898db8c86343257",
+      "git_blob_sha1": "2250cc7eca9bfe58df2f7e0b5db32e00baadfad3",
+      "name": "highlight",
+      "path": "LICENSE",
+      "repo": "highlightjs/highlight.js",
+      "sha256": "6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490",
+      "source_url": "https://github.com/highlightjs/highlight.js/blob/93fd0d7335e2b8b94dd122dc2898db8c86343257/LICENSE"
+    },
+    {
+      "commit": "de0f0e9b5e1ad0db16b1b17551b8b5bf0e849554",
+      "git_blob_sha1": "05ab2c897aa7dddd4d8ad9a2e058d96fc1c3c25b",
+      "name": "octicons",
+      "path": "LICENSE.txt",
+      "repo": "primer/octicons",
+      "sha256": "671429afb006b516cdb22dcf476c85b6a4653bbcc4f7206146d246aee715a3c3",
+      "source_url": "https://github.com/primer/octicons/blob/de0f0e9b5e1ad0db16b1b17551b8b5bf0e849554/LICENSE.txt"
+    },
+    {
+      "commit": "dfd51d1a1d85e7561ba4e06c90ab685c0d131c74",
+      "git_blob_sha1": "80fa9b2b8515b571e50be59afa51f1836e056bce",
+      "name": "ayu",
+      "path": "LICENSE",
+      "repo": "dempfi/ayu",
+      "sha256": "28db4b39f27ff95b36c7bc4a84364d36c8ed24a8886efbe5d9c8b88fdb206a45",
+      "source_url": "https://github.com/dempfi/ayu/blob/dfd51d1a1d85e7561ba4e06c90ab685c0d131c74/LICENSE"
+    },
+    {
+      "commit": "ccf6666d888198d341b26b3a99d0bc96500ad503",
+      "git_blob_sha1": "0e689d0a004eb37155ef430fe615a6e27209d30f",
+      "name": "tomorrow",
+      "path": "LICENSE.md",
+      "repo": "chriskempson/tomorrow-theme",
+      "sha256": "a9773fd575f48ea3648b54eeaf09d1512a9f0c7c20d284dc3f8295bd92123bf9",
+      "source_url": "https://github.com/chriskempson/tomorrow-theme/blob/ccf6666d888198d341b26b3a99d0bc96500ad503/LICENSE.md"
+    },
+    {
+      "commit": "b9a7644b8f14791b0c270430c5952f34b053ae06",
+      "git_blob_sha1": "38f3d71dc5cbcb55b7d38da7de6ebff86dcb6dd2",
+      "name": "jmblog",
+      "path": "LICENSE.md",
+      "repo": "jmblog/color-themes-for-highlightjs",
+      "sha256": "7b87e9498f5ac5f9519d03982b63c9a8f5b5fb57cb903d1f3d92b8ae474898c9",
+      "source_url": "https://github.com/jmblog/color-themes-for-highlightjs/blob/b9a7644b8f14791b0c270430c5952f34b053ae06/LICENSE.md"
+    },
+    {
+      "commit": "d17eca050e705ae4932fd1be3e96abe38bd3397c",
+      "git_blob_sha1": "76692ff9efb40c8fef30122fc52ab4d3f608609f",
+      "name": "clipboard",
+      "path": "readme.md",
+      "repo": "zenorocha/clipboard.js",
+      "sha256": "fda7091f0422d3aaaee570cef87817ec2ba20b6403d6455f5ec2204015f224a5",
+      "source_url": "https://github.com/zenorocha/clipboard.js/blob/d17eca050e705ae4932fd1be3e96abe38bd3397c/readme.md"
+    },
+    {
+      "commit": "ef25fb02ab335db88bdcafefaae97ceac91986c5",
+      "git_blob_sha1": "76c1a80d4b023709c7943322ddca15d5cdf94ab0",
+      "name": "atelier",
+      "path": "README.md",
+      "repo": "atelierbram/syntax-highlighting",
+      "sha256": "93381395f80231812b892a16f355bfe56a9d87f5742eb5d310787a44a8b1e121",
+      "source_url": "https://github.com/atelierbram/syntax-highlighting/blob/ef25fb02ab335db88bdcafefaae97ceac91986c5/README.md"
+    },
+    {
+      "commit": "39fb23df970d4d6190d000271dec260250986012",
+      "git_blob_sha1": "33d142060d987f1ead6a9ec4dd29bb3b0d6c1497",
+      "name": "base16",
+      "path": "LICENSE.md",
+      "repo": "chriskempson/base16",
+      "sha256": "7f56fcf24df1178b329a99b5160f7fd23dcdd75b0b633e468db2917e6ff061ca",
+      "source_url": "https://github.com/chriskempson/base16/blob/39fb23df970d4d6190d000271dec260250986012/LICENSE.md"
+    },
+    {
+      "commit": "90af1f14984832de34e94b2d530043fbcf85eb7f",
+      "git_blob_sha1": "aa1fa80ed83cf856fb31c22ba56557c42ca84488",
+      "name": "octicons",
+      "path": "LICENSE",
+      "repo": "primer/octicons",
+      "sha256": "da259c8bd0de62713ccdcf88910aebca810644f98c2c912bad814fc79ea778df",
+      "source_url": "https://github.com/primer/octicons/blob/90af1f14984832de34e94b2d530043fbcf85eb7f/LICENSE"
+    },
+    {
+      "commit": "0ea415897758ea9b2904ed47ba9cb4901f9eb089",
+      "git_blob_sha1": "be2cc4dfb609fb6c38f6365ec345bded3350dd63",
+      "name": "mdbook",
+      "path": "LICENSE",
+      "repo": "rust-lang/mdBook",
+      "sha256": "af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e",
+      "source_url": "https://github.com/rust-lang/mdBook/blob/0ea415897758ea9b2904ed47ba9cb4901f9eb089/LICENSE"
+    },
+    {
+      "commit": "899378dee9681dcf4cb3d702c23a3f3cd9f473d8",
+      "git_blob_sha1": "01cdf07995958973288ed64bf5d232066d5d5563",
+      "name": "clipboard-current",
+      "path": "LICENSE",
+      "repo": "zenorocha/clipboard.js",
+      "sha256": "a798e7b5fa604117d52d607e05f1cbac3b2fa5da087837f412a1a3c866b4b748",
+      "source_url": "https://github.com/zenorocha/clipboard.js/blob/899378dee9681dcf4cb3d702c23a3f3cd9f473d8/LICENSE"
+    }
+  ]
+}

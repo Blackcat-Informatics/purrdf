@@ -7,6 +7,17 @@ on:
     paths:
       - "docs/book/**"
       - "docs/playground/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "LICENSE*"
+      - "LICENSES/**"
+      - "**/PROVENANCE.md"
+      - "license-inventory.toml"
+      - "licenses/**"
+      - "**/licenses/**"
+      - "scripts/package-licenses.py"
+      - "scripts/fetch-locked-deps.py"
+      - "bindings/python/purrdf_build_backend.py"
       - "crates/rdf-wasm/**"
       # The zh-Hans gate renders the book and runs these over the rendering.
       - "crates/sparql-algebra/**"
@@ -93,8 +104,9 @@ jobs:
       - name: Build the zh-Hans book into the Pages artifact at /zh-Hans
         run: make book-zh
 
-      # The RDF-1.2 console is a static surface built from the SAME wasm the npm
-      # release publishes; it ships as a /playground subpath of the single Pages
+      # The RDF-1.2 console uses the same source and SDK as npm. Docs uses
+      # nightly and releases use stable; each carries its own compiler notices.
+      # It ships as a /playground subpath of the single Pages
       # artifact (GitHub Pages allows only one deployment, already owned here).
 
       - name: Set up Node
@@ -123,6 +135,20 @@ jobs:
         run: |
           rm -rf docs/book/book/playground
           cp -R target/playground docs/book/book/playground
+
+      - name: Audit full Pages recipient notices after the console fold
+        run: |
+          python3 scripts/package-licenses.py --docs-dir docs/book/book
+          python3 scripts/package-licenses.py --profile npm --audit-directory docs/book/book \
+            --recipient-root playground/purrdf --with-docs-assets --receipt license-evidence-pages.json
+
+      - name: Retain console and Pages license evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: license-evidence-pages
+          path: |
+            target/license-evidence-playground.json
+            license-evidence-pages.json
 
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'

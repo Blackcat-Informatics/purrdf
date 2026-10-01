@@ -14,16 +14,23 @@ from __future__ import annotations
 
 import argparse
 import email.parser
+import fnmatch
 import gzip
 import hashlib
 import importlib.util
 import io
 import json
+import os
+import re
+import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import tomllib
 
@@ -32,6 +39,76 @@ FIRST_PARTY = "MIT OR Apache-2.0 OR MulanPSL-2.0"
 FIRST_TEXTS = ("LICENSE-MIT", "LICENSE-APACHE", "LICENSE-MULAN")
 LEGAL_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "AUTHORS")
 IGNORED_PARTS = {"tests", "examples", "benches", "testdata", ".github"}
+COMPILER_ENV = (
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTC",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+)
+
+
+def native_launcher(command: str) -> None:
+    executable = shutil.which(command)
+    if not executable:
+        raise ValueError(f"Docs compiler capture requires {command}")
+    with Path(executable).resolve().open("rb") as binary:
+        magic = binary.read(4)
+    if magic not in (
+        b"\x7fELF",
+        b"\xcf\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+    ) and not magic.startswith(b"MZ"):
+        raise ValueError(
+            f"Docs compiler capture refuses an unverified {command} launch script"
+        )
+
+
+def compiler_identity() -> bytes:
+    """Refuse compiler redirection before identifying a Docs Cargo build.
+
+    The assembly command supplies no Cargo --config overrides. Inspect only
+    compiler-selection inputs; no environment or unrelated configuration is
+    printed. Arbitrary launch scripts and Cargo configuration includes cannot
+    be certified by a later standalone rustc stamp, so this path refuses them.
+    """
+    if any(os.environ.get(name) for name in COMPILER_ENV):
+        raise ValueError(
+            "Docs compiler capture refuses compiler/wrapper environment overrides"
+        )
+    for command in ("cargo", "rustc"):
+        native_launcher(command)
+    directories = [ROOT, *ROOT.parents]
+    config_dirs = [directory / ".cargo" for directory in directories]
+    config_dirs.append(Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")))
+    for directory in config_dirs:
+        for name in ("config", "config.toml"):
+            path = directory / name
+            if not path.exists():
+                continue
+            config = tomllib.loads(path.read_text())
+            build = config.get("build", {})
+            environment = config.get("env", {})
+            if (
+                "include" in config
+                or build.get("rustc")
+                or any(
+                    build.get(key) and os.environ.get(variable) != ""
+                    for key, variable in (
+                        ("rustc-wrapper", "RUSTC_WRAPPER"),
+                        ("rustc-workspace-wrapper", "RUSTC_WORKSPACE_WRAPPER"),
+                    )
+                )
+                or any(environment.get(key) for key in COMPILER_ENV)
+            ):
+                raise ValueError(
+                    "Docs compiler capture refuses Cargo compiler redirection"
+                )
+    result = subprocess.run(["rustc", "-vV"], capture_output=True, check=True)
+    if not result.stdout.startswith(b"rustc ") or b"commit-hash: " not in result.stdout:
+        raise ValueError("Docs compiler capture received no identified Rust compiler")
+    return result.stdout
 
 
 def digest(data: bytes) -> str:
@@ -354,6 +431,10 @@ def archive_files(path: Path) -> dict[str, bytes]:
                     stream = archive.extractfile(member)
                     assert stream is not None
                     result[member.name] = stream.read()
+    return validate_members(path, result)
+
+
+def validate_members(path: Path, result: dict[str, bytes]) -> dict[str, bytes]:
     for name in result:
         pure = PurePosixPath(name)
         if pure.is_absolute() or ".." in pure.parts:
@@ -378,8 +459,35 @@ def archive_files(path: Path) -> dict[str, bytes]:
     return result
 
 
+def directory_files(path: Path) -> dict[str, bytes]:
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError(f"{path}: recipient directory must be a real directory")
+    result = {}
+    for entry in sorted(path.rglob("*")):
+        mode = entry.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise ValueError(
+                f"{path}: directory symlink is not license evidence: {entry}"
+            )
+        if stat.S_ISREG(mode):
+            result[entry.relative_to(path).as_posix()] = entry.read_bytes()
+        elif not stat.S_ISDIR(mode):
+            raise ValueError(f"{path}: non-regular recipient payload: {entry}")
+    return validate_members(path, result)
+
+
 def audit(path: Path, profile: str, expected: dict[str, bytes]) -> dict:
-    contents = archive_files(path)
+    result = audit_payload(path, profile, expected, archive_files(path))
+    return {**result, "sha256": digest(path.read_bytes())}
+
+
+def audit_payload(
+    path: Path,
+    profile: str,
+    expected: dict[str, bytes],
+    contents: dict[str, bytes],
+    recipient_root: str = "package",
+) -> dict:
     problems = []
     bundle_roots = []
     for member, value in contents.items():
@@ -540,7 +648,10 @@ def audit(path: Path, profile: str, expected: dict[str, bytes]) -> dict:
         if declared["License-Expression"] != expression:
             raise ValueError(f"{path}: wrong Python distribution license expression")
     elif profile == "npm":
-        declared = json.loads(contents["package/package.json"])
+        metadata_path = f"{recipient_root}/package.json"
+        if metadata_path not in contents:
+            raise ValueError(f"{path}: missing npm recipient package metadata")
+        declared = json.loads(contents[metadata_path])
         if (
             declared["name"] != "@blackcatinformatics/purrdf"
             or declared["version"] != version
@@ -577,12 +688,602 @@ def audit(path: Path, profile: str, expected: dict[str, bytes]) -> dict:
             raise ValueError(f"{path}: missing C library payload")
     return {
         "artifact": path.name,
-        "sha256": digest(path.read_bytes()),
         "profile": profile,
         "notice_files": len(expected),
         "runtime_notice_files": len(runtime),
         "status": "passed",
     }
+
+
+def audit_directory(
+    path: Path, recipient_root: str, expected: dict[str, bytes]
+) -> dict:
+    relative = PurePosixPath(recipient_root)
+    if (
+        not relative.parts
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or relative.as_posix() != recipient_root
+    ):
+        raise ValueError("directory recipient root must be a canonical relative path")
+    contents = directory_files(path)
+    prefix = recipient_root + "/"
+    npm = ROOT / "crates/rdf-wasm/js"
+    code = ["package.json", "index.mjs"] + [
+        "pkg/" + name
+        for name in (
+            "purrdf_jspi.mjs",
+            "purrdf_wasm.js",
+            "purrdf_wasm.d.ts",
+            "purrdf_wasm_bg.wasm",
+            "purrdf_wasm_bg.wasm.d.ts",
+        )
+    ]
+    payload_hashes = {}
+    for name in code:
+        source = (npm / name).read_bytes()
+        if contents.get(prefix + name) != source:
+            raise ValueError(
+                f"{path}: missing/stale assembled module input {prefix}{name}"
+            )
+        payload_hashes[name] = digest(source)
+    shell_root = relative.parent
+    shell = ROOT / "docs/playground"
+    for name in (
+        "index.html",
+        "app.mjs",
+        "engine.worker.mjs",
+        "sarif.mjs",
+        "style.css",
+        "sw.mjs",
+        "manifest.webmanifest",
+        "examples/gallery.mjs",
+    ):
+        member = (shell_root / name).as_posix()
+        source = (shell / name).read_bytes()
+        if contents.get(member) != source:
+            raise ValueError(f"{path}: missing/stale assembled shell input {member}")
+        payload_hashes[member] = digest(source)
+    wasm = contents[prefix + "pkg/purrdf_wasm_bg.wasm"]
+    if not wasm.startswith(b"\x00asm\x01\x00\x00\x00"):
+        raise ValueError(f"{path}: assembled module is not WebAssembly")
+    compiler = contents.get(prefix + "build-compiler.txt")
+    runtime = python_backend().runtime_bundle()
+    actual_compiler = json.loads(runtime["inventory.json"])["compiler"].encode()
+    if compiler != actual_compiler:
+        raise ValueError(f"{path}: assembled module/compiler notice identity differs")
+    receipt = audit_payload(path, "npm", expected, contents, recipient_root)
+    hashes = {name: digest(value) for name, value in sorted(contents.items())}
+    return {
+        **receipt,
+        "artifact_type": "assembled-directory",
+        "recipient_root": recipient_root,
+        "sha256": digest(json.dumps(hashes, sort_keys=True).encode()),
+        "payload_files": len(contents),
+        "payload_hashes": hashes,
+        "module_input_hashes": payload_hashes,
+        "compiler": actual_compiler.decode(),
+        "compiler_record_sha256": digest(compiler),
+    }
+
+
+def docs_bundle(path: Path) -> dict[str, bytes]:
+    """Docs-only asset grants; release profiles do not load these resources."""
+    resources = ROOT / "docs/book/recipient-notices"
+    resource_contents = directory_files(resources)
+    specification = resource_contents.get("manifest.json")
+    if specification is None:
+        raise ValueError("missing Docs asset grant specification")
+    declared = json.loads(specification)
+    if declared.get("schema") != 1 or declared.get("mdbook_version") != "0.5.3":
+        raise ValueError("unsupported Docs asset grant specification")
+    files = {}
+    for name, sha256 in declared["files"].items():
+        validate_members(resources, {name: b""})
+        if name not in resource_contents:
+            raise ValueError("Docs recipient evidence must be a regular source file")
+        value = resource_contents[name]
+        if digest(value) != sha256:
+            raise ValueError(f"changed pinned Docs grant/source form {name}")
+        files[name] = value
+    contents = directory_files(path)
+    assets = {}
+    resource_names = {}
+    for item in declared["assets"]:
+        if "name" in item:
+            resource_names[re.sub(r"-[a-f0-9]{8}(?=\.)", "", item["name"])] = item[
+                "name"
+            ]
+    for item in declared["assets"]:
+        pattern = item.get("name", item.get("pattern"))
+        for locale in item["locales"]:
+            prefix = locale + "/" if locale else ""
+            matches = [
+                name
+                for name in contents
+                if name.startswith(prefix)
+                and fnmatch.fnmatchcase(name.removeprefix(prefix), pattern)
+            ]
+            if len(matches) != 1:
+                raise ValueError(f"Docs asset missing or duplicated: {prefix}{pattern}")
+            name = matches[0]
+            value = contents[name]
+            if item.get("generated_source"):
+                if (
+                    not re.fullmatch(
+                        r"(?:zh-Hans/)?(?:searchindex|toc)-[a-f0-9]{8}\.js", name
+                    )
+                    or digest(value)[:8] not in name
+                ):
+                    raise ValueError(f"invalid generated Docs source identity {name}")
+                resource_names[
+                    re.sub(r"-[a-f0-9]{8}(?=\.)", "", name.removeprefix(prefix))
+                ] = name.removeprefix(prefix)
+            elif not item.get("template") and digest(value) != item["source_sha256"]:
+                raise ValueError(f"changed pinned Docs asset {name}")
+            assets[name] = {
+                "sha256": digest(value),
+                "licenses": item["licenses"],
+                "source": item["source"],
+            }
+    for item in declared["assets"]:
+        if not item.get("template"):
+            continue
+        for locale in item["locales"]:
+            prefix = locale + "/" if locale else ""
+            source = files[item["source_form"]].decode()
+
+            resource_prefix = "../" if item["name"].startswith("fonts/") else ""
+
+            def expand(match, resource_prefix=resource_prefix):
+                name = match.group(1)
+                if name not in resource_names:
+                    raise ValueError(f"unbound Docs resource expansion {name}")
+                return resource_prefix + resource_names[name]
+
+            value = re.sub(r'\{\{ resource "([^"]+)" \}\}', expand, source).encode()
+            if contents[prefix + item["name"]] != value:
+                raise ValueError(
+                    f"changed generated Docs source expansion {prefix}{item['name']}"
+                )
+    for name, value in contents.items():
+        if name.startswith(("playground/", "recipient-notices/")):
+            continue
+        if (
+            Path(name).suffix in {".js", ".css", ".woff2", ".woff"}
+            and name not in assets
+        ):
+            raise ValueError(f"uninventoried Docs frontend asset {name}")
+        if name.endswith(".html"):
+            assets[name] = {
+                "sha256": digest(value),
+                "licenses": ["MPL-2.0", "CC-BY-4.0"],
+                "source": declared["mdbook_source"],
+            }
+    if not {"index.html", "zh-Hans/index.html"}.issubset(contents):
+        raise ValueError("Docs notice capture requires both rendered books")
+    files["provenance.json"] = specification
+    files["NOTICE.txt"] = (
+        "PurRDF Book recipient notices\n============================\n\n"
+        + declared["scope"]
+        + "\n\n"
+        + "The complete controlling texts and original copyrights accompany this notice.\n"
+        + "The JavaScript, CSS and generated navigation/search data are shipped in readable source form.\n"
+        + "Original mdBook source forms/templates accompany them in sources/mdbook/.\n"
+        + "The rendered HTML contains first-party book text and the MPL-covered mdBook template;\n"
+        + "the original template is retained and book sources are available at\n"
+        + "https://github.com/Blackcat-Informatics/purrdf/tree/main/docs/book.\n"
+        + "Original upstream mdBook sources: "
+        + declared["mdbook_source"]
+        + "\n\n"
+        + "No third-party material is relicensed under the PurRDF SDK grant.\n"
+        + "The console's own complete notices are at ../../playground/purrdf/licenses/NOTICE.txt.\n\n"
+        + "\n".join(declared["limitations"])
+        + "\n\n"
+        + "\n".join(
+            f"{item['name']}: {item['source_url']}"
+            for item in declared["upstream_grants"]
+        )
+        + "\n"
+    ).encode()
+    files["inventory.json"] = (
+        json.dumps(
+            {
+                "schema": 1,
+                "profile": "docs",
+                "mdbook_version": declared["mdbook_version"],
+                "scope": declared["scope"],
+                "assets": dict(sorted(assets.items())),
+                "files": {name: digest(value) for name, value in sorted(files.items())},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    return files
+
+
+def audit_pages(path: Path, recipient_root: str, expected: dict[str, bytes]) -> dict:
+    receipt = audit_directory(path, recipient_root, expected)
+    docs = audit_payload(path, "docs", docs_bundle(path), directory_files(path))
+    return {
+        **receipt,
+        "docs_notice_files": docs["notice_files"],
+        "docs_status": docs["status"],
+    }
+
+
+def docs_self_test() -> None:
+    """Pure fixtures do not require Docs resources in source-only audit capsules."""
+    with tempfile.TemporaryDirectory(prefix="purrdf-docs-notices-") as raw:
+        root = Path(raw)
+        source = root / "source"
+        resources = source / "docs/book/recipient-notices"
+        resources.mkdir(parents=True)
+        (source / "Cargo.toml").write_text('[workspace.package]\nversion="3.0.0"\n')
+        font = b"fixture font source"
+        font_name = "fonts/font-" + digest(font)[:8] + ".woff2"
+        style = b"url('{{ resource \"fonts/font.woff2\" }}');\n"
+        style_name = "fonts/fonts-" + digest(style)[:8] + ".css"
+        code = b"fixture unminified mdBook source"
+        code_name = "book-" + digest(code)[:8] + ".js"
+        grant = b"full controlling fixture text"
+        files = {"MPL-2.0.txt": grant, "source.css.txt": style}
+        for name, value in files.items():
+            (resources / name).write_bytes(value)
+        spec = {
+            "schema": 1,
+            "mdbook_version": "0.5.3",
+            "mdbook_source": "https://example.org/mdbook",
+            "scope": "fixture scope",
+            "limitations": [],
+            "upstream_grants": [],
+            "files": {name: digest(value) for name, value in files.items()},
+            "assets": [
+                {
+                    "name": font_name,
+                    "source_sha256": digest(font),
+                    "licenses": ["OFL-1.1"],
+                    "source": "https://example.org/font",
+                    "locales": ["", "zh-Hans"],
+                },
+                {
+                    "name": code_name,
+                    "source_sha256": digest(code),
+                    "licenses": ["MPL-2.0"],
+                    "source": "https://example.org/code",
+                    "locales": ["", "zh-Hans"],
+                },
+                {
+                    "name": style_name,
+                    "source_sha256": digest(style),
+                    "source_form": "source.css.txt",
+                    "template": True,
+                    "licenses": ["MPL-2.0"],
+                    "source": "https://example.org/css",
+                    "locales": ["", "zh-Hans"],
+                },
+            ],
+        }
+        (resources / "manifest.json").write_text(json.dumps(spec))
+        book = root / "book"
+        book.mkdir()
+        for locale in ("", "zh-Hans/"):
+            for name, value in {
+                font_name: font,
+                code_name: code,
+                style_name: style.replace(
+                    b'{{ resource "fonts/font.woff2" }}', ("../" + font_name).encode()
+                ),
+                "index.html": b"fixture first-party book",
+            }.items():
+                path = book / (locale + name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(value)
+        with patch.dict(globals(), ROOT=source):
+            expected = docs_bundle(book)
+            if expected != docs_bundle(book):
+                raise ValueError("self-test: Docs notice capture is nondeterministic")
+            destination = book / "recipient-notices/licenses"
+            materialize(destination, expected, True)
+            audit_payload(book, "docs", expected, directory_files(book))
+            for member in (
+                "MPL-2.0.txt",
+                "source.css.txt",
+                "provenance.json",
+                "inventory.json",
+            ):
+                path = destination / member
+                retained = path.read_bytes()
+                path.unlink()
+                try:
+                    audit_payload(book, "docs", expected, directory_files(book))
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError(
+                        "self-test: incomplete Docs grant/source form accepted"
+                    )
+                path.write_bytes(retained)
+            for member in (font_name, code_name, style_name, "zh-Hans/" + font_name):
+                path = book / member
+                retained = path.read_bytes()
+                path.write_bytes(retained + b"altered")
+                try:
+                    docs_bundle(book)
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError(
+                        "self-test: changed pinned/generated Docs source accepted"
+                    )
+                path.write_bytes(retained)
+            unknown = book / "unknown.js"
+            unknown.write_bytes(b"undeclared foreign code")
+            try:
+                docs_bundle(book)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("self-test: unknown Docs frontend asset accepted")
+            unknown.unlink()
+            (book / "zh-Hans/index.html").unlink()
+            try:
+                docs_bundle(book)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("self-test: missing rendered locale accepted")
+            (book / "zh-Hans/index.html").write_bytes(b"fixture first-party book")
+            (resources / "MPL-2.0.txt").write_bytes(b"altered upstream grant")
+            try:
+                docs_bundle(book)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("self-test: changed pinned grant text accepted")
+            (resources / "MPL-2.0.txt").write_bytes(grant)
+            (resources / "linked-sources").symlink_to(
+                resources, target_is_directory=True
+            )
+            try:
+                docs_bundle(book)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("self-test: symlinked Docs source directory accepted")
+            (resources / "linked-sources").unlink()
+            original = resources.with_name("original-notices")
+            resources.rename(original)
+            resources.symlink_to(original, target_is_directory=True)
+            try:
+                docs_bundle(book)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("self-test: symlinked Docs evidence root accepted")
+            resources.unlink()
+            original.rename(resources)
+    print(
+        "Docs artifact self-test: full grants/source forms and deterministic resource expansions accepted; missing/corrupt texts/sources, altered static/generated/font assets, unknown assets and missing locale refused"
+    )
+
+
+def directory_self_test() -> None:
+    """Exercise real directory audit boundaries without compiling a module."""
+    with tempfile.TemporaryDirectory(prefix="purrdf-recipient-directory-") as raw:
+        root = Path(raw)
+        source = root / "source"
+        source.mkdir()
+        (source / "Cargo.toml").write_text('[workspace.package]\nversion="3.0.0"\n')
+        npm = source / "crates/rdf-wasm/js"
+        npm.mkdir(parents=True)
+        compiler = b"rustc fixture\ncommit-hash: fixture\n"
+        runtime = {
+            "COPYRIGHT-library.html": b"runtime full report",
+            "licenses/MIT.txt": b"runtime full terms",
+        }
+        runtime["inventory.json"] = json.dumps(
+            {
+                "compiler": compiler.decode(),
+                "files": {name: digest(value) for name, value in runtime.items()},
+            }
+        ).encode()
+        expected = {
+            "LICENSE-MIT": b"complete base terms",
+            "inventory.json": b'{"profile":"npm"}',
+        }
+        code = {
+            "package.json": b'{"name":"@blackcatinformatics/purrdf","version":"3.0.0","license":"MIT OR Apache-2.0 OR MulanPSL-2.0"}',
+            "index.mjs": b"fixture sdk",
+            "pkg/purrdf_jspi.mjs": b"fixture jspi",
+            "pkg/purrdf_wasm.js": b"fixture glue",
+            "pkg/purrdf_wasm.d.ts": b"fixture types",
+            "pkg/purrdf_wasm_bg.wasm": b"\0asm\x01\0\0\0fixture",
+            "pkg/purrdf_wasm_bg.wasm.d.ts": b"fixture wasm types",
+        }
+        payload = {"purrdf/" + name: value for name, value in code.items()}
+        for name, value in code.items():
+            destination = npm / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(value)
+        shell = source / "docs/playground"
+        shell.mkdir(parents=True)
+        for name in (
+            "index.html",
+            "app.mjs",
+            "engine.worker.mjs",
+            "sarif.mjs",
+            "style.css",
+            "sw.mjs",
+            "manifest.webmanifest",
+            "examples/gallery.mjs",
+        ):
+            destination = shell / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"shell fixture " + name.encode())
+            payload[name] = destination.read_bytes()
+        payload["purrdf/build-compiler.txt"] = compiler
+        payload.update(
+            {"purrdf/licenses/" + name: value for name, value in expected.items()}
+        )
+        payload.update(
+            {
+                "purrdf/licenses/runtime/" + name: value
+                for name, value in runtime.items()
+            }
+        )
+        backend = SimpleNamespace(runtime_bundle=lambda: runtime)
+
+        def write_tree(path, values):
+            path.mkdir()
+            for name, value in values.items():
+                destination = path / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(value)
+
+        with (
+            patch.dict(globals(), ROOT=source),
+            patch.dict(globals(), python_backend=lambda: backend),
+        ):
+            valid = root / "valid"
+            write_tree(valid, payload)
+            first = audit_directory(valid, "purrdf", expected)
+            if first != audit_directory(valid, "purrdf", expected):
+                raise ValueError("self-test: directory evidence is nondeterministic")
+            pages = root / "pages"
+            write_tree(
+                pages, {"playground/" + name: value for name, value in payload.items()}
+            )
+            audit_directory(pages, "playground/purrdf", expected)
+            for index, (member, replacement) in enumerate(
+                (
+                    ("purrdf/licenses/LICENSE-MIT", None),
+                    ("purrdf/licenses/LICENSE-MIT", b"corrupt"),
+                    ("purrdf/licenses/runtime/COPYRIGHT-library.html", None),
+                    ("purrdf/licenses/runtime/licenses/MIT.txt", b"corrupt"),
+                    ("purrdf/package.json", None),
+                    (
+                        "purrdf/package.json",
+                        b'{"name":"@blackcatinformatics/purrdf","version":"3.0.0"}',
+                    ),
+                    (
+                        "purrdf/package.json",
+                        b'{"name":"@blackcatinformatics/purrdf","version":"2.0.2"}',
+                    ),
+                    ("purrdf/build-compiler.txt", b"other compiler"),
+                    ("purrdf/pkg/purrdf_wasm_bg.wasm", b"stale wasm"),
+                    ("app.mjs", b"stale shell"),
+                    (".stage/private.txt", b"private"),
+                )
+            ):
+                values = dict(payload)
+                if replacement is None:
+                    del values[member]
+                else:
+                    values[member] = replacement
+                path = root / f"refusal-{index}"
+                write_tree(path, values)
+                try:
+                    audit_directory(path, "purrdf", expected)
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError(f"self-test: directory accepted changed {member}")
+            (valid / "linked-notice").symlink_to(valid / "purrdf/licenses/LICENSE-MIT")
+            try:
+                audit_directory(valid, "purrdf", expected)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("self-test: directory accepted symlink evidence")
+            (valid / "linked-notice").unlink()
+            for relative in ("/purrdf", "../purrdf", "./purrdf", "purrdf/../purrdf"):
+                try:
+                    audit_directory(valid, relative, expected)
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError("self-test: unsafe recipient root accepted")
+        cargo = root / "cargo"
+        cargo.write_bytes(b"\x7fELFfixture")
+        home = root / "home"
+        home.mkdir()
+        config_dir = source / ".cargo"
+        config_dir.mkdir()
+        config = config_dir / "config.toml"
+        config.write_text('[build]\nrustc-wrapper="kache"\n')
+        environment = {name: "" for name in COMPILER_ENV}
+        environment["CARGO_HOME"] = str(home)
+        with (
+            patch.dict(globals(), ROOT=source),
+            patch.dict(os.environ, environment),
+            patch.object(Path, "home", return_value=home),
+            patch.object(shutil, "which", return_value=str(cargo)),
+            patch.object(
+                subprocess, "run", return_value=SimpleNamespace(stdout=compiler)
+            ),
+        ):
+            if compiler_identity() != compiler:
+                raise ValueError(
+                    "self-test: explicit empty compiler wrapper was not honored"
+                )
+            for name in COMPILER_ENV:
+                with patch.dict(os.environ, {name: "different-compiler"}):
+                    try:
+                        compiler_identity()
+                    except ValueError:
+                        pass
+                    else:
+                        raise ValueError(
+                            "self-test: compiler environment redirection accepted"
+                        )
+            os.environ.pop("RUSTC_WRAPPER")
+            try:
+                compiler_identity()
+            except ValueError:
+                pass
+            else:
+                raise ValueError(
+                    "self-test: configured wrapper without explicit reset accepted"
+                )
+            os.environ["RUSTC_WRAPPER"] = ""
+            for value in (
+                '[build]\nrustc="other"\n',
+                'include=["other.toml"]\n',
+                '[env]\nRUSTC="other"\n',
+            ):
+                config.write_text(value)
+                try:
+                    compiler_identity()
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError("self-test: Cargo compiler redirection accepted")
+            config.write_text("")
+            cargo.write_bytes(b"#!/bin/sh\n")
+            try:
+                compiler_identity()
+            except ValueError:
+                pass
+            else:
+                raise ValueError("self-test: unverified Cargo launcher accepted")
+            cargo.write_bytes(b"\x7fELFfixture")
+            rustc = root / "rustc"
+            rustc.write_bytes(b"#!/bin/sh\n")
+            with patch.object(
+                shutil, "which", side_effect=lambda name: str(root / name)
+            ):
+                try:
+                    compiler_identity()
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError("self-test: unverified rustc launcher accepted")
+    print(
+        "directory artifact self-test: console/Pages accepted deterministically; missing/corrupt base/runtime/metadata/compiler/module/shell, symlink/private/traversal and compiler redirection refused; explicit empty wrapper honored"
+    )
 
 
 def self_test() -> None:
@@ -713,6 +1414,8 @@ def self_test() -> None:
         (destination / "LICENSE-MIT").unlink()
         if not materialize(destination, expected, False):
             raise ValueError("self-test: deleted generated bundle accepted")
+    directory_self_test()
+    docs_self_test()
     print(
         "license artifact self-test: valid tar/wheel accepted; missing/altered source and runtime notices, stale bundles, private/acquired payloads and traversal refused; runtime capture byte-idempotent"
     )
@@ -725,6 +1428,17 @@ def main() -> int:
     action.add_argument("--check", action="store_true")
     action.add_argument("--audit", nargs="+", type=Path, metavar="ARCHIVE")
     action.add_argument("--self-test", action="store_true")
+    action.add_argument(
+        "--compiler-record",
+        type=Path,
+        help="capture an identified compiler after refusing Cargo compiler redirection",
+    )
+    action.add_argument("--audit-directory", nargs="+", type=Path, metavar="DIRECTORY")
+    action.add_argument(
+        "--docs-dir",
+        type=Path,
+        help="capture pinned mdBook frontend grants and source forms after rendering both books",
+    )
     action.add_argument(
         "--runtime-dir",
         type=Path,
@@ -739,11 +1453,33 @@ def main() -> int:
     parser.add_argument("--profile", help="explicit package profile for archive audits")
     parser.add_argument("--receipt", type=Path)
     parser.add_argument(
+        "--with-docs-assets",
+        action="store_true",
+        help="also audit the complete pinned mdBook frontend in a Pages tree",
+    )
+    parser.add_argument(
+        "--recipient-root",
+        help="relative npm recipient path inside an assembled playground or Pages tree",
+    )
+    parser.add_argument(
         "--require-cargo-set",
         action="store_true",
         help="require exactly all publishable Cargo archives",
     )
     args = parser.parse_args()
+    if args.compiler_record:
+        args.compiler_record.write_bytes(compiler_identity())
+        return 0
+    if args.docs_dir:
+        materialize(
+            args.docs_dir / "recipient-notices/licenses",
+            docs_bundle(args.docs_dir),
+            True,
+        )
+        print("Pinned mdBook recipient grants and source forms captured")
+        return 0
+    if args.with_docs_assets and not args.audit_directory:
+        parser.error("Docs asset audit requires --audit-directory")
     if args.runtime_dir:
         materialize(args.runtime_dir, python_backend().runtime_bundle(), True)
         print("Rust standard-library recipient notices captured")
@@ -768,7 +1504,16 @@ def main() -> int:
         name: bundle(name, details, meta, inherited)
         for name, details in selected.items()
     }
-    if args.audit:
+    if args.audit_directory:
+        if args.profile != "npm" or not args.recipient_root or args.require_cargo_set:
+            parser.error("directory audit requires --profile npm and --recipient-root")
+        receipts = [
+            (audit_pages if args.with_docs_assets else audit_directory)(
+                path, args.recipient_root, expected["npm"]
+            )
+            for path in args.audit_directory
+        ]
+    elif args.audit:
         receipts = []
         for path in args.audit:
             if args.profile:
@@ -803,6 +1548,7 @@ def main() -> int:
                     "Cargo archive set is incomplete or duplicated: "
                     + ", ".join(sorted(required - set(actual)))
                 )
+    if args.audit or args.audit_directory:
         report = (
             json.dumps({"schema": 1, "artifacts": receipts}, indent=2, sort_keys=True)
             + "\n"
