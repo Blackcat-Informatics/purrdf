@@ -385,6 +385,39 @@ mod tests {
         DIR_LANG_STRING as RDF_DIR_LANGSTRING, LANG_STRING as RDF_LANGSTRING,
     };
 
+    #[test]
+    fn a_million_nested_elements_are_refused_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let document = format!("{}{}", "<a>".repeat(1_000_000), "</a>".repeat(1_000_000));
+                let namespace = ProvenanceNamespace::new("ex", "https://example.org/provenance")
+                    .expect("valid namespace");
+                for refused in [
+                    from_xml(document.as_bytes()).map(|_| ()),
+                    from_xml_boolean(document.as_bytes()).map(|_| ()),
+                    provenance_from_xml(document.as_bytes(), &namespace).map(|_| ()),
+                ] {
+                    let Error::Format(message) = refused.expect_err("nesting exceeds XML budget")
+                    else {
+                        panic!("expected typed format refusal");
+                    };
+                    assert!(message.contains("element nesting exceeds the limit of 128"), "{message}");
+                }
+                let select = b"<sparql><head><variable name=\"x\"/></head><results><result><binding name=\"x\"><literal>ok</literal></binding></result></results></sparql>";
+                assert_eq!(from_xml(select).expect("shallow SELECT").rows.len(), 1);
+                let boolean = b"<sparql><head/><boolean>true</boolean></sparql>";
+                assert!(from_xml_boolean(boolean).expect("shallow ASK"));
+                assert_eq!(
+                    provenance_from_xml(boolean, &namespace).expect("shallow provenance"),
+                    ResultProvenance::default()
+                );
+            })
+            .expect("spawn small-stack thread")
+            .join()
+            .expect("typed errors rather than a stack overflow");
+    }
+
     /// A one-literal SELECT document whose literal content is `content`.
     fn srx_literal(content: &str) -> Vec<u8> {
         format!(
