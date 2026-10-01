@@ -46,7 +46,7 @@
 //!   and ISO-8859-1, and refusing any other encoding
 //!   ([`XmlErrorKind::UnsupportedEncoding`]) rather than misreading it.
 //! * **Conformance** — graded against the W3C XML Conformance Test Suite
-//!   (`crates/lex/tests/xmlconf.rs`, over `vectors/xmlconf`).
+//!   (`crates/lex/tests/xmlconf.rs`, over the checksum-verified local XML suite).
 //! * **No machine-stack recursion, and an explicit depth cap** — the reader
 //!   keeps its open elements and its entity expansions on heap stacks, and
 //!   refuses an element deeper than [`Options::max_depth`]

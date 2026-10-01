@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-"""Vendor the W3C XML Conformance Test Suite (xmlts20130923).
+"""Acquire the frozen XML conformance suite into the local target cache.
 
-Fetches the suite tarball from www.w3.org at a pinned URL, checks it against a
-pinned SHA-256, and writes the ``xmlconf/`` tree verbatim (regular files only,
-no path may leave the destination) into ``vectors/xmlconf/`` alongside a
-first-party ``PROVENANCE.md``. Deterministic and re-runnable: the output
-directory is fully replaced on every run. Re-vendoring is a deliberate edit to
-``URL`` and ``SHA256`` below, followed by this script and a regeneration of
-``scripts/conformance-frozen/vectors-xmlconf.sha256``.
-
-    python3 scripts/vendor-xmlconf.py
+The contributed suites keep their inherited terms. This repository redistributes
+no extracted test payload. The pinned upstream archive is downloaded by each
+consumer, checked by SHA-256, and every extracted payload is checked against the
+unchanged freeze manifest. An existing valid cache avoids network access.
 """
 
 from __future__ import annotations
@@ -20,6 +15,8 @@ import argparse
 import hashlib
 import io
 import shutil
+import os
+import tempfile
 import tarfile
 import urllib.request
 from pathlib import PurePosixPath
@@ -29,43 +26,20 @@ URL = "https://www.w3.org/XML/Test/xmlts20130923.tar.gz"
 SHA256 = "9b61db9f5dbffa545f4b8d78422167083a8568c59bd1129f94138f936cf6fc1f"
 TOP = "xmlconf"
 
-PROVENANCE = f"""<!--
-SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-SPDX-License-Identifier: CC-BY-4.0
--->
+def expected_files() -> dict[str, str]:
+    manifest = Path(__file__).resolve().parent / "conformance-frozen/vectors-xmlconf.sha256"
+    return {name: digest for digest, name in (
+        line.split("  ", 1) for line in manifest.read_text().splitlines() if line.strip()
+    )}
 
-# Vendored W3C XML Conformance Test Suite
 
-Frozen copy of the W3C XML Conformance Test Suite, version 2013-09-23
-(`xmlts20130923`), vendored for `crates/lex/tests/xmlconf.rs`, which grades
-`purrdf_lex::xml` against it. **Do not hand-edit**: the freeze is enforced by
-`scripts/check-corpus-frozen.py` against
-`scripts/conformance-frozen/vectors-xmlconf.sha256`, and the tree is
-regenerated only by `python3 scripts/vendor-xmlconf.py`.
-
-## Source
-
-- Upstream: <https://www.w3.org/XML/Test/>
-- Retrieval: `{URL}`
-- Tarball SHA-256: `{SHA256}`
-- The tarball's `xmlconf/` tree is written verbatim (3386 files; the tarball's
-  own layout, file bytes and names are unchanged; only the archive's owner and
-  permission bits are dropped).
-- Licence: the suite is a collection of contributed sub-suites (James Clark's
-  XMLTEST, Sun Microsystems, OASIS/NIST, IBM, Fuji Xerox, the University of
-  Edinburgh), each under the terms stated in its own directory (for example
-  `xmltest/readme.html`) and the W3C test-suite licence at
-  <https://www.w3.org/Consortium/Legal/2008/04-testsuite-copyright.html>. The
-  files are redistributed here unmodified and are test data only: no crate
-  compiles any of it in.
-
-## Contents
-
-`xmlconf.xml` is the master manifest (`TESTSUITE`, one `TESTCASES` per
-sub-suite, each `TEST` naming its document by `URI` with the attributes
-`TYPE`, `VERSION`, `EDITION`, `ENTITIES`, `NAMESPACE`, `RECOMMENDATION` and
-`OUTPUT`). `testcases.dtd` describes those attributes.
-"""
+def verify_cache(output: Path) -> bool:
+    expected = expected_files()
+    actual = {p.relative_to(output).as_posix(): p for p in output.rglob("*") if p.is_file()}
+    return actual.keys() == expected.keys() and all(
+        hashlib.sha256(actual[name].read_bytes()).hexdigest() == digest
+        for name, digest in expected.items()
+    )
 
 
 def fetch() -> bytes:
@@ -79,39 +53,64 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(__file__).resolve().parent.parent / "vectors" / "xmlconf",
-        help="destination directory (default: vectors/xmlconf at the repo root)",
+        default=Path(__file__).resolve().parent.parent / "target" / "conformance" / "xmlconf",
+        help="private local destination (default: target/conformance/xmlconf)",
     )
     args = parser.parse_args()
 
-    data = fetch()
+    output = args.output.resolve()
+    root = Path(__file__).resolve().parent.parent
+    allowed = [root / "target"]
+    if os.environ.get("CARGO_TARGET_DIR"):
+        allowed.append(Path(os.environ["CARGO_TARGET_DIR"]).resolve())
+    if not any(output.is_relative_to(path.resolve()) and output != path.resolve() for path in allowed):
+        raise SystemExit("XML conformance payloads may be acquired only beneath the local target cache")
+    if verify_cache(output):
+        print(f"verified {len(expected_files())} frozen XML files in {output}")
+        return
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    archive = output.parent / ".xmlts20130923.tar.gz"
+    data = archive.read_bytes() if archive.is_file() else fetch()
     got = hashlib.sha256(data).hexdigest()
     if got != SHA256:
         raise SystemExit(f"{URL}: SHA-256 {got}, pinned {SHA256}")
+    archive.write_bytes(data)
 
-    files: dict[str, bytes] = {}
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
-        for member in tar.getmembers():
-            path = PurePosixPath(member.name)
-            if member.isdir():
-                continue
-            if not member.isreg():
-                raise SystemExit(f"{member.name}: not a regular file")
-            if path.is_absolute() or ".." in path.parts or path.parts[0] != TOP:
-                raise SystemExit(f"{member.name}: outside {TOP}/")
-            handle = tar.extractfile(member)
-            assert handle is not None
-            files["/".join(path.parts[1:])] = handle.read()
-
-    output = args.output
-    if output.exists():
-        shutil.rmtree(output)
-    for rel, body in sorted(files.items()):
-        target = output / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(body)
-    (output / "PROVENANCE.md").write_text(PROVENANCE, encoding="utf-8", newline="\n")
-    print(f"vendored {len(files)} file(s) from {URL} into {output}")
+    expected = expected_files()
+    with tempfile.TemporaryDirectory(prefix=".xmlconf-acquire-", dir=output.parent) as scratch:
+        stage = Path(scratch) / "xmlconf"
+        stage.mkdir()
+        seen = set()
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            for member in tar:
+                path = PurePosixPath(member.name)
+                if member.isdir():
+                    continue
+                if not member.isreg():
+                    raise SystemExit(f"{member.name}: not a regular file")
+                if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != TOP:
+                    raise SystemExit(f"{member.name}: outside {TOP}/")
+                rel = PurePosixPath(*path.parts[1:]).as_posix()
+                if rel in seen or rel not in expected:
+                    raise SystemExit(f"{member.name}: duplicate or unfrozen payload")
+                seen.add(rel)
+                handle = tar.extractfile(member)
+                assert handle is not None
+                body = handle.read()
+                if hashlib.sha256(body).hexdigest() != expected[rel]:
+                    raise SystemExit(f"{member.name}: frozen payload differs")
+                target = stage / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(body)
+        if seen != expected.keys():
+            raise SystemExit(f"upstream archive is missing {sorted(expected.keys() - seen)}")
+        if not verify_cache(stage):
+            raise SystemExit("extracted cache does not match the complete frozen corpus")
+        if output.exists():
+            shutil.rmtree(output)
+        stage.replace(output)
+    print(f"acquired and verified {len(expected)} file(s) from {URL} into {output}")
 
 
 if __name__ == "__main__":
