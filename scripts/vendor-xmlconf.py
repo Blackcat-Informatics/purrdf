@@ -12,6 +12,7 @@ unchanged freeze manifest. An existing valid cache avoids network access.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import io
 import shutil
@@ -42,6 +43,48 @@ def verify_cache(output: Path) -> bool:
     )
 
 
+@contextmanager
+def cache_lock(path: Path):
+    """OS-owned lock released on process exit, shared by harness and freeze gate."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def atomic_archive(path: Path, data: bytes) -> None:
+    with tempfile.NamedTemporaryFile(prefix=".xmlconf-archive-", dir=path.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def fetch() -> bytes:
     request = urllib.request.Request(URL, headers={"User-Agent": "purrdf-vendor-xmlconf"})
     with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - pinned https host
@@ -65,6 +108,11 @@ def main() -> None:
         allowed.append(Path(os.environ["CARGO_TARGET_DIR"]).resolve())
     if not any(output.is_relative_to(path.resolve()) and output != path.resolve() for path in allowed):
         raise SystemExit("XML conformance payloads may be acquired only beneath the local target cache")
+    with cache_lock(output.parent / ".xmlconf-acquisition.lock"):
+        acquire(output)
+
+
+def acquire(output: Path) -> None:
     if verify_cache(output):
         print(f"verified {len(expected_files())} frozen XML files in {output}")
         return
@@ -75,7 +123,7 @@ def main() -> None:
     got = hashlib.sha256(data).hexdigest()
     if got != SHA256:
         raise SystemExit(f"{URL}: SHA-256 {got}, pinned {SHA256}")
-    archive.write_bytes(data)
+    atomic_archive(archive, data)
 
     expected = expected_files()
     with tempfile.TemporaryDirectory(prefix=".xmlconf-acquire-", dir=output.parent) as scratch:
