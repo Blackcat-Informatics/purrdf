@@ -1442,7 +1442,7 @@ def multiplier_scan(name: str, text: str) -> list[str]:
 def current_changelog(text: str, version: str) -> tuple[str, str]:
     """Select canonical release notes; ambiguous Markdown structures fail closed."""
     # Markdown permits several spaces/tabs after the hashes and up to three
-    # leading spaces. Inspect every H2 so a noncanonical leading candidate
+    # leading spaces. Inspect every second-level heading so a noncanonical candidate
     # cannot be silently skipped in favour of a later release heading.
     headings = list(re.finditer(r"^ {0,3}##(?:[ \t]+([^\n]*))?$", text, re.MULTILINE))
     labels = []
@@ -1469,7 +1469,7 @@ def current_changelog(text: str, version: str) -> tuple[str, str]:
         raise GateError("CHANGELOG.md has an indented release boundary; claim scan refused")
     end = boundary.start() if boundary is not None else len(text)
     # This gate consumes the project's ATX release-note format, not arbitrary
-    # Markdown. Fences (including nested/list examples) and Setext H2 structures
+    # Markdown. Fences (including nested/list examples) and Setext second-level headings
     # could disguise a release boundary. Refuse them before selecting any body,
     # rather than letting an apparent later release silently hide a claim.
     candidate_region = text[:end]
@@ -1478,7 +1478,7 @@ def current_changelog(text: str, version: str) -> tuple[str, str]:
     if re.search(r"^ {0,3}(?:-+|=+)[ \t]*\r?$", candidate_region, re.MULTILINE):
         raise GateError("CHANGELOG.md candidate uses unsupported Setext/underline Markdown; claim scan refused")
     # Accept the project's single-line opening legal headers. No other comment
-    # or raw HTML block is a supported release-note container: its apparent H2
+    # or raw HTML block is a supported container: its apparent second-level heading
     # could be literal content instead of a real release boundary. Container
     # prefixes are included so a list/blockquote cannot hide the same block.
     legal_prefix = []
@@ -2243,7 +2243,7 @@ def self_test() -> int:
     for literal_heading in ("    ## [2.0.2]", "\t## [2.0.2]", "> ## [2.0.2]"):
         candidate = f"## [3.0.0]\n\n{literal_heading}\n\n3× faster\n## [2.0.2]\nold\n"
         expect(bool(multiplier_scan("t", current_changelog(candidate, "3.0.0")[1])), "an indented-code/blockquote heading cannot hide the candidate claim")
-    # CommonMark HTML block classes 1--7 all admit literal H2-looking lines.
+    # CommonMark HTML block classes 1--7 admit literal second-level heading lines.
     # The canonical-format gate must refuse each start before truncating notes.
     for opening, closing in (
         ("<pre>", "</pre>"), ("<script>", "</script>"),
