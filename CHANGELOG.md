@@ -6,6 +6,26 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [3.0.1] - 2026-10-02
+
+### Fixed
+
+- **SHACL-SPARQL:** pre-bound focus nodes now constrain every nested triple and
+  path pattern, including the right arm of `OPTIONAL`. Missing-property
+  constraints of the form `OPTIONAL { $this <predicate> ?value }
+  FILTER (!BOUND(?value))` report the focus nodes that lack the property.
+  Blank and quoted focus identities remain exact, and prepared executions
+  refresh their bindings when the focus changes.
+- **SHACL data views:** `ShaclDatasetView::named_graph(source, graph)` reads one
+  named graph as the default graph through the source's native indexes,
+  without copying quads or building a second index. Other source graphs stay
+  invisible to Core validation, class membership and SHACL-SPARQL. RDF 1.2
+  statement metadata and graph isolation survive shape-only term supplements.
+- **Rust publishing:** dependent crates wait for their exact, unyanked versions
+  to become visible in Cargo's sparse registry index. GitHub Release assets are
+  attached and verified in a draft before publication makes them immutable.
+  Resumed published releases verify their retained assets without altering them.
+
 ## [3.0.0] - 2026-10-01
 
 ### Breaking Changes

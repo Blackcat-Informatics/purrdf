@@ -31,6 +31,8 @@ Other version locations:
 * ``bindings/python/uv.lock``            — the editable ``purrdf`` package pin
 * ``CITATION.cff``                       — ``version`` (and ``date-released``,
                                            stamped to today's release date)
+* Every committed ``Cargo.lock``        — local path-package versions, including
+                                           independently resolved test consumers
 
 Edits are line-scoped so file formatting and comments are preserved (only the
 version value changes). Deps that inherit via ``version.workspace = true`` and
@@ -47,7 +49,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import UTC, datetime
 from pathlib import Path
 
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
@@ -215,7 +217,7 @@ def set_citation_cff(root: Path, version: str) -> None:
     form CFF uses.
     """
     path = root / "CITATION.cff"
-    today = date.today().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     set_version = set_date = False
     for i, line in enumerate(lines):
@@ -286,13 +288,29 @@ def main(argv: list[str]) -> int:
     # 4. Citation metadata (cited version + release date; pinned by the gate).
     set_citation_cff(root, version)
 
+    # Refresh local package identities in every committed resolution. Independent
+    # consumers inherit the bumped workspace packages too; their old lock entries
+    # otherwise make every subsequent --locked gate fail. Offline metadata keeps
+    # existing registry selections while resolving the changed local versions.
+    locks = subprocess.check_output(
+        ["git", "ls-files", "-z", "--", "Cargo.lock", "**/Cargo.lock"], cwd=root
+    )
+    for name in locks.split(b"\0"):
+        if name:
+            manifest = root / Path(name.decode()).parent / "Cargo.toml"
+            subprocess.run(
+                ["cargo", "metadata", "--offline", "--format-version", "1",
+                 "--manifest-path", str(manifest)],
+                cwd=root, check=True, stdout=subprocess.DEVNULL,
+            )
+
     print(
         f"set version {version} across crates.io/PyPI/npm "
         f"(+{pins} internal path-dep pins); verifying coherence…"
     )
     # Prove the sources now agree (and the publish list stays complete).
     return subprocess.run(
-        [sys.executable, str(root / "scripts" / "check-versions.py")], cwd=root
+        [sys.executable, str(root / "scripts" / "check-versions.py")], cwd=root, check=False
     ).returncode
 
 
