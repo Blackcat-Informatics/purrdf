@@ -15,3 +15,5 @@ jobs:
           repository: 'blackcat-informatics/purrdf' # Replace with your target Gitee path
           username: ${{ secrets.GITEE_USERNAME }}
           password: ${{ secrets.GITEE_PASSWORD }}
+          tags: true
+          branches: main
