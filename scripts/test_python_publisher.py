@@ -531,28 +531,67 @@ class PublisherTests(unittest.TestCase):
                 self.assertEqual(transport.uploads, [])
 
     def test_cli_failure_sanitizes_external_exception(self):
+        for mode in ("check", "publish"):
+            with (
+                self.subTest(mode=mode),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "publish-python",
+                        mode,
+                        "--project",
+                        "purrdf",
+                        "--version",
+                        "3.0.0",
+                        "--dist-dir",
+                        str(self.directory),
+                    ],
+                ),
+                mock.patch.object(
+                    publisher,
+                    "run",
+                    side_effect=ValueError("test-only-sensitive-marker"),
+                ),
+                contextlib.redirect_stderr(io.StringIO()) as output,
+            ):
+                self.assertEqual(publisher.main(), 1)
+            self.assertNotIn("test-only-sensitive-marker", output.getvalue())
+            if mode == "check":
+                self.assertIn(
+                    "nonpublishing validation (ValueError)", output.getvalue()
+                )
+            else:
+                self.assertEqual(
+                    output.getvalue(),
+                    "Python publisher refused the request; no success receipt was written.\n",
+                )
+
+    def test_real_invalid_metadata_check_reports_only_approved_class(self):
+        directory = self.root / "invalid-metadata"
+        distributions(
+            directory,
+            content=metadata().replace(
+                b"License-Expression: MIT",
+                b"License-Expression: test-only-sensitive-marker",
+            ),
+        )
         with (
-            mock.patch.object(
-                sys,
-                "argv",
-                [
-                    "publish-python",
-                    "check",
-                    "--project",
-                    "purrdf",
-                    "--version",
-                    "3.0.0",
-                    "--dist-dir",
-                    str(self.directory),
-                ],
+            self.assertRaisesRegex(
+                publisher.PublisherError,
+                r"^distribution metadata parsing failed \(InvalidDistribution\)$",
             ),
-            mock.patch.object(
-                publisher, "run", side_effect=ValueError("test-only-sensitive-marker")
-            ),
-            contextlib.redirect_stderr(io.StringIO()) as output,
+            mock.patch.object(publisher, "publish") as upload,
         ):
-            self.assertEqual(publisher.main(), 1)
-        self.assertNotIn("test-only-sensitive-marker", output.getvalue())
+            publisher.run("check", "purrdf", "3.0.0", directory)
+        upload.assert_not_called()
+
+    def test_check_diagnostic_rejects_arbitrary_exception_class_names(self):
+        secret_class = type("test-only-sensitive-marker", (ValueError,), {})
+        self.assertEqual(
+            publisher.check_exception_kind(secret_class("test-only-sensitive-marker")),
+            "unclassified external exception",
+        )
 
 
 if __name__ == "__main__":

@@ -85,10 +85,10 @@ jobs:
               sys.exit(1)
           PY
 
-      - name: Prepare reviewed GitHub Release summary before publication
+      - name: Validate reviewed GitHub Release summary before publication
         env:
           VERSION: ${{ github.ref_name }}
-        run: python3 scripts/check-release-notes.py --version "${VERSION#rust-v}" --output target/release-notes.md
+        run: python3 scripts/check-release-notes.py --version "${VERSION#rust-v}"
 
       # THE POINT OF NO RETURN IS THE PUBLISH LOOP, AND IT IS NOT ATOMIC.
       # `cargo publish` runs once per crate, in dependency order, and cannot be undone.

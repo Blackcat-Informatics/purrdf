@@ -128,7 +128,21 @@ class Artifact:
         return self.path.with_name(self.path.name + ".publish.attestation")
 
 
-def preflight(project, version, dist_dir):
+def check_exception_kind(error):
+    """Name approved check-only exception classes without rendering their data."""
+    from twine.exceptions import InvalidDistribution
+
+    # Exact types prevent arbitrary subclasses from supplying a diagnostic name.
+    return {
+        InvalidDistribution: "InvalidDistribution",
+        ValueError: "ValueError",
+        KeyError: "KeyError",
+        UnicodeDecodeError: "UnicodeDecodeError",
+        OSError: "OSError",
+    }.get(type(error), "unclassified external exception")
+
+
+def preflight(project, version, dist_dir, *, check_diagnostics=False):
     """Validate all metadata and immutable subjects before any identity requests."""
     from packaging.utils import (
         canonicalize_name,
@@ -160,7 +174,15 @@ def preflight(project, version, dist_dir):
             raise PublisherError(
                 "distribution filename differs from the release identity"
             )
-        package = PackageFile.from_filename(str(path), None)
+        try:
+            package = PackageFile.from_filename(str(path), None)
+        except Exception as error:
+            if check_diagnostics:
+                raise PublisherError(
+                    "distribution metadata parsing failed "
+                    f"({check_exception_kind(error)})"
+                ) from None
+            raise
         if canonicalize_name(package.metadata["name"]) != project:
             raise PublisherError("distribution metadata names another project")
         if Version(package.metadata["version"]) != expected:
@@ -289,7 +311,7 @@ def publish(artifacts, version):
 
 def run(mode, project, version, dist_dir, receipt=None):
     toolchain = tooling()
-    artifacts = preflight(project, version, dist_dir)
+    artifacts = preflight(project, version, dist_dir, check_diagnostics=mode == "check")
     if mode == "publish":
         publish(artifacts, version)
     result = {
@@ -340,13 +362,20 @@ def main():
     except PublisherError as error:
         print(f"Python publisher refused: {error}", file=sys.stderr)
         return 1
-    except Exception:  # noqa: BLE001 - external errors can contain identity tokens.
+    except Exception as error:  # noqa: BLE001 - external errors can contain tokens.
         # Third-party exceptions can contain token/response details. Never put
         # those on stdout, stderr or an Actions summary in this adapter.
-        print(
-            "Python publisher refused the request; no success receipt was written.",
-            file=sys.stderr,
-        )
+        if args.mode == "check":
+            print(
+                "Python distribution check failed during nonpublishing validation "
+                f"({check_exception_kind(error)}); no success receipt was written.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Python publisher refused the request; no success receipt was written.",
+                file=sys.stderr,
+            )
         return 1
     print(json.dumps(result, sort_keys=True))
     return 0
