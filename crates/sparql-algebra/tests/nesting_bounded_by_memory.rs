@@ -380,7 +380,7 @@ fn families() -> Vec<Family> {
                     )
                 )
             },
-            marker: "Alternative(",
+            marker: "Union {",
             occurrences: |n| n,
         },
         Family {

@@ -2743,7 +2743,14 @@ impl BlockSink {
     /// Assemble the block: the data triples as a `Bgp`, each property-function
     /// call laterally joined onto everything written before it, then the
     /// property-path nodes joined on.
-    fn into_pattern(self) -> GraphPattern {
+    fn into_pattern(mut self) -> GraphPattern {
+        if self
+            .paths
+            .iter()
+            .any(|path| !matches!(path, GraphPattern::Path { .. }))
+        {
+            self.promote_path_blanks();
+        }
         let mut triples = self.triples.into_iter();
         let mut taken = 0usize;
         let mut g = GraphPattern::Bgp { patterns: vec![] };
@@ -2766,10 +2773,80 @@ impl BlockSink {
         }
         g
     }
+
+    /// A lowered alternative splits one source triples block into multiple BGPs.
+    /// Preserve that block's blank identities before those new UNION boundaries
+    /// acquire their own scopes. A source UNION has separate BlockSinks, so its
+    /// arm-local blanks are never joined by this translation.
+    fn promote_path_blanks(&mut self) {
+        let mut labels = std::collections::BTreeMap::new();
+        let mut pending = Vec::new();
+        let mut patterns: Vec<_> = self
+            .paths
+            .iter_mut()
+            .filter(|path| !matches!(path, GraphPattern::Path { .. }))
+            .collect();
+        while let Some(pattern) = patterns.pop() {
+            match pattern {
+                GraphPattern::Bgp { patterns: triples } => {
+                    for triple in triples {
+                        pending.extend([&mut triple.subject, &mut triple.object]);
+                    }
+                }
+                GraphPattern::Join { left, right } => patterns.extend([&mut **left, &mut **right]),
+                GraphPattern::Union { arms } => patterns.extend(arms.iter_mut()),
+                _ => unreachable!("a translated path contains only BGP, Join and Union"),
+            }
+        }
+        Self::promote_terms(pending, &mut labels, true);
+        let mut pending = Vec::new();
+        for triple in &mut self.triples {
+            pending.extend([&mut triple.subject, &mut triple.object]);
+        }
+        for (_, call) in &mut self.prop_fns {
+            pending.extend(call.subject_args.iter_mut().chain(&mut call.object_args));
+        }
+        for path in &mut self.paths {
+            if let GraphPattern::Path {
+                subject, object, ..
+            } = path
+            {
+                pending.extend([subject, object]);
+            }
+        }
+        Self::promote_terms(pending, &mut labels, false);
+    }
+
+    /// Rename the selected source labels, descending into quoted endpoints too.
+    fn promote_terms(
+        mut pending: Vec<&mut TermPattern>,
+        labels: &mut std::collections::BTreeMap<String, Variable>,
+        discover: bool,
+    ) {
+        while let Some(term) = pending.pop() {
+            match term {
+                TermPattern::BlankNode(blank) => {
+                    if discover && !labels.contains_key(blank.as_str()) {
+                        labels
+                            .entry(blank.as_str().to_owned())
+                            .or_insert_with(|| Variable::hidden_blank(blank.as_str()));
+                    }
+                    if let Some(variable) = labels.get(blank.as_str()) {
+                        *term = TermPattern::Variable(variable.clone());
+                    }
+                }
+                TermPattern::Triple(triple) => {
+                    let triple = &mut **triple;
+                    pending.extend([&mut triple.subject, &mut triple.object]);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
-/// The triples grammar being read: a graph pattern admits paths and lowers linear
-/// ones, while a template retains paths for its existing syntax rejection.
+/// A graph pattern lowers predicate-only paths; a template retains paths for its
+/// syntax rejection.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TripleContext {
     Pattern,
@@ -2880,7 +2957,7 @@ fn block_has_property_function(p: &GraphPattern) -> bool {
 }
 
 /// If a property path is length-1 (a single predicate), return it as a triple
-/// predicate; complex paths return `None` (they become `GraphPattern::Path`).
+/// predicate; complex paths return `None` (they undergo whole-path translation).
 fn simple_predicate(path: &PropertyPathExpression) -> Option<NamedNodePattern> {
     match path {
         PropertyPathExpression::NamedNode(n) => Some(NamedNodePattern::NamedNode(n.clone())),
@@ -2922,7 +2999,7 @@ impl VarScope {
     /// Record `v` as in scope; a no-op if it already is (first-appearance
     /// order is preserved, so a later re-mention never moves it).
     fn note(&mut self, v: &Variable) {
-        if self.seen.insert(v.clone()) {
+        if !v.is_hidden() && self.seen.insert(v.clone()) {
             self.order.push(v.clone());
         }
     }
@@ -3037,12 +3114,12 @@ impl ExistsScopes {
 }
 
 /// Collect the in-scope variables of a pattern in first-appearance order
-/// (used for `SELECT *` projection). `pub(crate)`: `crate::serialize` also
-/// needs this, to recover every variable a bare (`Project`-less) modifier
-/// chain's remaining WHERE body still makes visible when reconstructing a
-/// `SELECT` clause that has no real `Project` to read a variable list from
-/// (see `fmt_subselect`'s `no_project_vars`).
-pub(crate) fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
+/// (used for `SELECT *` projection). Non-distinguished translation identities
+/// are omitted; projection and grouping boundaries expose only their outputs.
+/// Serializers and callers share this scope census rather than infer visibility
+/// from every variable mentioned by an expression or a nested pattern.
+#[must_use]
+pub fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
     let mut scope = VarScope::default();
     collect_vars(p, &mut scope);
     scope.into_vec()

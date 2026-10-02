@@ -16,8 +16,10 @@
 //!   [`crate::algebra::PropertyPathExpression`]'s `Display`: it needs no more
 //!   machine stack for a taller tree.
 //! * **Round-trips** with the parser: `parse(pattern_to_select_query(p))`
-//!   reproduces `p` for every [`GraphPattern`]/[`Expression`] variant the parser
-//!   emits, INCLUDING an aggregate/`GROUP BY` chain with its own outer `Project`
+//!   reproduces ordinary algebra for every [`GraphPattern`]/[`Expression`]
+//!   variant the parser emits. Non-distinguished match identities receive fresh
+//!   legal names; the carrier preserves the visible schema and solution bag.
+//!   This includes an aggregate/`GROUP BY` chain with its own outer `Project`
 //!   already peeled away (the shape [`pattern_to_select_query`]'s own doctest
 //!   takes, and the shape a whole aggregate query is once a caller — federation or
 //!   otherwise — has stripped the query's top `SELECT` scaffold to reach the WHERE
@@ -33,7 +35,7 @@
 //!   sequence the parser rebuilds itself, and a sub-`SELECT` is never braced
 //!   twice. Such a brace is one the source text needed too, so the text
 //!   forwarded for a body the parser admitted is admitted again, and re-parses to
-//!   the same tree.
+//!   the same tree, modulo the hygienic names of non-distinguished witnesses.
 //! * Solution-modifier nodes (`Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy`/
 //!   `Group`) re-materialize as a braced **sub-`SELECT`** `{ SELECT ... }`, the
 //!   shape the parser produces for an inline subquery; an aggregate's own
@@ -84,6 +86,11 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 /// with no `SELECT`-expression/aggregate machinery of its own — a BGP, a join, a
 /// filter, …) the rendering is the literal `SELECT * WHERE { … }` template the
 /// module docs describe.
+/// Non-distinguished translation witnesses instead receive fresh legal carrier
+/// names and an explicit visible projection. A zero-column body uses a fresh
+/// constant unit column; the SERVICE adapter restores its source zero-column
+/// schema while keeping every row. A root `Project` renders its own SELECT,
+/// preserving the explicit projection on repeated complete-carrier round trips.
 ///
 /// For `inner` reaching a [`GraphPattern::Group`] through a leading chain of
 /// `SELECT`-expression (`Extend`) / `HAVING` (`Filter`) nodes with **no** `Project`
@@ -122,9 +129,23 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 /// // The rendering is complete and re-parseable.
 /// assert!(parser.parse_query(&rendered).is_ok());
 /// ```
+///
+/// # Panics
+/// Panics when compiler-built algebra explicitly observes a non-distinguished
+/// match witness. Use [`try_pattern_to_select_query`] for a typed refusal.
 #[must_use]
 pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
-    select_query(inner, PredicateRendering::Independent)
+    try_pattern_to_select_query(inner)
+        .expect("query carrier requires valid non-distinguished identities")
+}
+
+/// Render a complete independent carrier, refusing invalid hidden observations.
+///
+/// # Errors
+/// Returns the source identity-contract error without emitting changed semantics.
+pub fn try_pattern_to_select_query(inner: &GraphPattern) -> crate::Result<String> {
+    inner.validate_hidden_variables()?;
+    Ok(select_query(inner, PredicateRendering::Independent))
 }
 
 /// Render `inner` as a complete `SELECT` query under the supplied parser options.
@@ -137,12 +158,29 @@ pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
 /// retain their plain IRIs. Re-parse with the same options to preserve that
 /// distinction. The extension-function namespace options do not change rendering:
 /// each parsed function keeps its own original IRI.
+///
+/// # Panics
+/// Panics for invalid non-distinguished observers. The checked counterpart is
+/// [`try_pattern_to_select_query_with_options`].
 #[must_use]
 pub fn pattern_to_select_query_with_options(
     inner: &GraphPattern,
     options: &ParserOptions,
 ) -> String {
-    select_query(inner, PredicateRendering::Configured(options))
+    try_pattern_to_select_query_with_options(inner, options)
+        .expect("query carrier requires valid non-distinguished identities")
+}
+
+/// Render a configured carrier with a typed non-distinguished-identity check.
+///
+/// # Errors
+/// Refuses explicit hidden projection, grouping, output or expression references.
+pub fn try_pattern_to_select_query_with_options(
+    inner: &GraphPattern,
+    options: &ParserOptions,
+) -> crate::Result<String> {
+    inner.validate_hidden_variables()?;
+    Ok(select_query(inner, PredicateRendering::Configured(options)))
 }
 
 /// How BGP data predicates stay distinct from relation calls on re-parse.
@@ -163,11 +201,94 @@ impl PredicateRendering<'_> {
     }
 }
 
+/// Fresh legal carrier names for canonical non-distinguished identities. Ordinary
+/// variables retain their exact names, including references appearing only in an
+/// expression or an inner projection. No reserved identity is ever emitted.
+#[derive(Default)]
+struct VariableNames(std::collections::BTreeMap<Variable, String>);
+
+impl VariableNames {
+    fn for_pattern(
+        pattern: &GraphPattern,
+        reserve: impl FnOnce(&mut dyn FnMut(&Variable)),
+    ) -> Self {
+        let has_hidden = !walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+            if visit == Visit::Enter {
+                let mut found = false;
+                node.for_each_variable(|variable| found |= variable.is_hidden());
+                if found {
+                    return Flow::Stop;
+                }
+            }
+            Flow::Descend
+        });
+        if !has_hidden {
+            return Self::default();
+        }
+        let mut ordinary = std::collections::BTreeSet::new();
+        let mut hidden = std::collections::BTreeSet::new();
+        walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+            if visit == Visit::Enter {
+                node.for_each_variable(|variable| {
+                    if variable.is_hidden() {
+                        hidden.insert(variable.clone());
+                    } else {
+                        ordinary.insert(variable.as_str().to_owned());
+                    }
+                });
+            }
+            Flow::Descend
+        });
+        reserve(&mut |variable| {
+            ordinary.insert(variable.as_str().to_owned());
+        });
+        let mut prefix = String::from("__purrdf_hidden_");
+        while ordinary.iter().any(|name| name.starts_with(&prefix)) {
+            prefix.insert(0, '_');
+        }
+        Self(
+            hidden
+                .into_iter()
+                .enumerate()
+                .map(|(index, variable)| (variable, format!("{prefix}{index}")))
+                .collect(),
+        )
+    }
+
+    fn name<'a>(&'a self, variable: &'a Variable) -> &'a str {
+        self.0
+            .get(variable)
+            .map_or_else(|| variable.as_str(), String::as_str)
+    }
+
+    fn unit_name(&self) -> String {
+        format!(
+            "{}unit",
+            self.0
+                .values()
+                .next()
+                .expect("a hidden identity has an alias")
+        )
+    }
+
+    fn projection(&self, s: &mut String, pattern: &GraphPattern) {
+        let variables = crate::parser::visible_variables(pattern);
+        for variable in &variables {
+            let _ = write!(s, "?{} ", self.name(variable));
+        }
+        if variables.is_empty() {
+            let _ = write!(s, "(1 AS ?{}) ", self.unit_name());
+        }
+    }
+}
+
 /// The shared complete-query renderer; the predicate mode affects BGPs alone.
 fn select_query(inner: &GraphPattern, predicates: PredicateRendering<'_>) -> String {
+    let names = VariableNames::for_pattern(inner, |_| {});
     let mut s = String::new();
-    if needs_subselect_reconstruction(inner) {
-        // `inner` IS a bare (no `Project` anywhere above it) modifier chain —
+    if matches!(inner, GraphPattern::Project { .. }) || needs_subselect_reconstruction(inner) {
+        // A root Project carries its own explicit SELECT. Otherwise `inner` is a
+        // bare modifier chain (no Project above it) —
         // a `SELECT`-expression/`HAVING` chain reaching a `Group`, OR a
         // `Slice`/`Distinct`/`Reduced`/`OrderBy`/`Extend` sitting at the very
         // top with nothing above it — the shape the parser's algebra takes
@@ -182,10 +303,16 @@ fn select_query(inner: &GraphPattern, predicates: PredicateRendering<'_>) -> Str
         // `SELECT *` over an aggregate query, which SPARQL does not admit, and let
         // an aggregate call vanish behind a dangling reference to its synthetic
         // output variable.
-        emit(&mut s, Item::Subselect(inner), predicates);
+        emit(&mut s, Item::Subselect(inner), predicates, &names);
     } else {
-        s.push_str("SELECT * WHERE ");
-        emit(&mut s, Item::BracedGroup(inner), predicates);
+        if names.0.is_empty() {
+            s.push_str("SELECT * WHERE ");
+        } else {
+            s.push_str("SELECT ");
+            names.projection(&mut s, inner);
+            s.push_str("WHERE ");
+        }
+        emit(&mut s, Item::BracedGroup(inner), predicates, &names);
     }
     s
 }
@@ -199,14 +326,31 @@ fn select_query(inner: &GraphPattern, predicates: PredicateRendering<'_>) -> Str
 /// [`needs_subselect_reconstruction`] exists to catch, which only arises once an
 /// outer `Project` has been peeled from a top-level `SELECT`/subselect — an UPDATE
 /// WHERE clause never carries one).
-pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
-    emit(s, Item::GroupBody(p), PredicateRendering::Independent);
+pub(crate) fn fmt_group_body(
+    s: &mut String,
+    p: &GraphPattern,
+    reserve: impl FnOnce(&mut dyn FnMut(&Variable)),
+) -> core::fmt::Result {
+    p.validate_hidden_variables()
+        .map_err(|_| core::fmt::Error)?;
+    emit(
+        s,
+        Item::GroupBody(p),
+        PredicateRendering::Independent,
+        &VariableNames::for_pattern(p, reserve),
+    );
+    Ok(())
 }
 
 /// Render a property path in its SPARQL surface syntax — the text of
 /// [`PropertyPathExpression`]'s `Display`.
 pub(crate) fn fmt_path(s: &mut String, path: &PropertyPathExpression) {
-    emit(s, Item::Path(path), PredicateRendering::Independent);
+    emit(
+        s,
+        Item::Path(path),
+        PredicateRendering::Independent,
+        &VariableNames::default(),
+    );
 }
 
 /// Whether `p`, with no `Project` above it, is a bare modifier-chain shape the
@@ -590,6 +734,9 @@ enum Item<'a> {
     /// A solution-modifier chain, peeled and rendered as `SELECT [DISTINCT|REDUCED]
     /// <vars|*> WHERE { <body> } [GROUP BY] [HAVING] [ORDER BY] [LIMIT] [OFFSET]`.
     Subselect(&'a GraphPattern),
+    /// A bag-preserving projection of all observable columns, before a remote
+    /// `COUNT(DISTINCT *)` can see the legal aliases of hidden witnesses.
+    VisibleBody(&'a GraphPattern),
     /// A `FILTER`'s constraint: an `EXISTS` or `NOT EXISTS` bare, as the built-in
     /// call the grammar lets a constraint be, and anything else bracketted — the
     /// source text of a nest of `FILTER NOT EXISTS { … }` has no bracket at any
@@ -623,11 +770,16 @@ enum Item<'a> {
 }
 
 /// Render `first` onto `s`, and everything it pushes, until the work list is empty.
-fn emit(s: &mut String, first: Item<'_>, predicates: PredicateRendering<'_>) {
+fn emit(
+    s: &mut String,
+    first: Item<'_>,
+    predicates: PredicateRendering<'_>,
+    names: &VariableNames,
+) {
     let mut stack = Items::with(first);
     while let Some(item) = stack.pop() {
         let queued = stack.len();
-        render(s, item, &mut stack, predicates);
+        render(s, item, &mut stack, predicates, names);
         stack.reverse_top(stack.len() - queued);
     }
 }
@@ -643,6 +795,7 @@ fn render<'a>(
     item: Item<'a>,
     next: &mut Items<'a>,
     predicates: PredicateRendering<'_>,
+    names: &VariableNames,
 ) {
     match item {
         Item::Str(text) | Item::Raw(text) => s.push_str(text),
@@ -659,9 +812,9 @@ fn render<'a>(
         Item::Char(c) => s.push(c),
         Item::Var(v) => {
             s.push('?');
-            s.push_str(v.as_str());
+            s.push_str(names.name(v));
         }
-        Item::Named(n) => fmt_named_node_pattern(s, n),
+        Item::Named(n) => fmt_named_node_pattern(s, n, names),
         Item::BgpPredicate(n) => {
             if let NamedNodePattern::NamedNode(iri) = n
                 && predicates.protect(iri.as_str())
@@ -670,13 +823,13 @@ fn render<'a>(
                 write_iri(iri.as_str(), s);
                 s.push(')');
             } else {
-                fmt_named_node_pattern(s, n);
+                fmt_named_node_pattern(s, n, names);
             }
         }
         Item::Count(keyword, n) => {
             let _ = write!(s, "{keyword}{n}");
         }
-        Item::GroupBody(p) => group_body(s, p, next),
+        Item::GroupBody(p) => group_body(s, p, next, names),
         Item::BracedGroup(p) => {
             if is_subselect_node(p) {
                 next.push(Item::GroupBody(p));
@@ -700,7 +853,13 @@ fn render<'a>(
                 next.push(Item::GroupBody(p));
             }
         }
-        Item::Subselect(p) => subselect(s, p, next),
+        Item::Subselect(p) => subselect(s, p, next, names),
+        Item::VisibleBody(p) => {
+            s.push_str("{ SELECT ");
+            names.projection(s, p);
+            s.push_str("WHERE ");
+            next.extend([Item::BracedGroup(p), Item::Str(" }")]);
+        }
         Item::Constraint(expr) => {
             let bare = match expr {
                 Expression::Exists(_) => true,
@@ -724,7 +883,7 @@ fn render<'a>(
                 next.push(Item::ExprBare(e, group));
             }
         }
-        Item::ExprBare(e, group) => expr_bare(s, e, group, next),
+        Item::ExprBare(e, group) => expr_bare(s, e, group, next, names),
         Item::Aggregate(agg) => aggregate(s, agg, next),
         Item::Term(term) => match term {
             TermPattern::Triple(t) => {
@@ -733,7 +892,7 @@ fn render<'a>(
                 triple_items(t, next, Item::Named(&t.predicate));
                 next.extend([Item::Char(' '), Item::Str(TRIPLE_TERM_CLOSE)]);
             }
-            leaf => fmt_leaf_term(s, leaf),
+            leaf => fmt_leaf_term(s, leaf, names),
         },
         Item::Ground(term) => match term {
             GroundTerm::NamedNode(n) => {
@@ -800,7 +959,12 @@ fn triple_items<'a>(t: &'a TriplePattern, next: &mut Items<'a>, predicate: Item<
 }
 
 /// Render a pattern as the body of a group (see [`Item::GroupBody`]).
-fn group_body<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
+fn group_body<'a>(
+    s: &mut String,
+    p: &'a GraphPattern,
+    next: &mut Items<'a>,
+    names: &VariableNames,
+) {
     if is_subselect_node(p) {
         next.extend([Item::Str("{ "), Item::Subselect(p), Item::Str(" }")]);
         return;
@@ -908,7 +1072,7 @@ fn group_body<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
         }
         GraphPattern::Graph { name, inner } => {
             s.push_str("GRAPH ");
-            fmt_named_node_pattern(s, name);
+            fmt_named_node_pattern(s, name, names);
             s.push(' ');
             next.push(Item::BracedGroup(inner));
         }
@@ -960,14 +1124,14 @@ fn group_body<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
             if *silent {
                 s.push_str("SILENT ");
             }
-            fmt_named_node_pattern(s, name);
+            fmt_named_node_pattern(s, name, names);
             s.push(' ');
             next.push(Item::BracedGroup(inner));
         }
         GraphPattern::Values {
             variables,
             bindings,
-        } => values(s, variables, bindings, next),
+        } => values(s, variables, bindings, next, names),
         // Sub-select nodes are rendered by the `is_subselect_node` branch above.
         GraphPattern::Project { .. }
         | GraphPattern::Distinct { .. }
@@ -1015,6 +1179,7 @@ fn values<'a>(
     variables: &'a [Variable],
     bindings: &'a [Vec<Option<GroundTerm>>],
     next: &mut Items<'a>,
+    names: &VariableNames,
 ) {
     s.push_str("VALUES (");
     for (i, v) in variables.iter().enumerate() {
@@ -1022,7 +1187,7 @@ fn values<'a>(
             s.push(' ');
         }
         s.push('?');
-        s.push_str(v.as_str());
+        s.push_str(names.name(v));
     }
     s.push_str(") {");
     for row in bindings {
@@ -1044,7 +1209,7 @@ fn values<'a>(
 /// Peel the solution-modifier chain (outermost → innermost) and render
 /// `SELECT [DISTINCT|REDUCED] <vars|*> WHERE { <body> } [GROUP BY] [HAVING]
 /// [ORDER BY] [LIMIT] [OFFSET]`.
-fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
+fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, names: &VariableNames) {
     // Peel outer modifiers, recording each, until we reach the WHERE body.
     let mut cur = p;
     let mut distinct = false;
@@ -1173,6 +1338,7 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
         Some((vars, _)) if !vars.is_empty() => Some(vars.to_vec()),
         Some(_) => None,
         None if !select_exprs.is_empty() => Some(crate::parser::visible_variables(cur)),
+        None if !names.0.is_empty() => Some(crate::parser::visible_variables(cur)),
         None => None,
     };
     // Skip any var whose binding will be emitted via `(expr AS ?v)`; emitting
@@ -1192,13 +1358,17 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
                 s.push(' ');
             }
             s.push('?');
-            s.push_str(v.as_str());
+            s.push_str(names.name(v));
             emitted = true;
         }
         emitted
     };
     let plain_emitted = match project {
         None => match &no_project_vars {
+            Some(vars) if vars.is_empty() && select_exprs.is_empty() => {
+                let _ = write!(s, "(1 AS ?{})", names.unit_name());
+                false
+            }
             Some(vars) => emit_filtered_vars(s, vars),
             // `no_project_vars` is `None` in two shapes: an ordinary,
             // non-aggregating body with no `Extend` chain at all (`*` is
@@ -1214,7 +1384,11 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
             None => false,
         },
         Some(vars) if vars.is_empty() && select_exprs.is_empty() => {
-            s.push('*');
+            if names.0.is_empty() {
+                s.push('*');
+            } else {
+                let _ = write!(s, "(1 AS ?{})", names.unit_name());
+            }
             false
         }
         Some(vars) => emit_filtered_vars(s, vars),
@@ -1237,7 +1411,17 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
         ]);
     }
 
-    next.extend([Item::Str(" WHERE "), Item::BracedGroup(cur)]);
+    let hides_distinct_witnesses = !names.0.is_empty()
+        && group.is_some_and(|(_, aggregates)| {
+            aggregates
+                .iter()
+                .any(|(_, aggregate)| aggregate.distinct && aggregate.args().is_empty())
+        });
+    if hides_distinct_witnesses {
+        next.extend([Item::Str(" WHERE "), Item::VisibleBody(cur)]);
+    } else {
+        next.extend([Item::Str(" WHERE "), Item::BracedGroup(cur)]);
+    }
 
     if let Some((vars, _)) = group {
         // An implicit single group (aggregates with no GROUP BY) has no clause.
@@ -1315,6 +1499,7 @@ fn expr_bare<'a>(
     e: &'a Expression,
     group: Option<GroupSpec<'a>>,
     next: &mut Items<'a>,
+    names: &VariableNames,
 ) {
     if let Expression::Variable(v) = e
         && let Some((_, aggs)) = group
@@ -1331,10 +1516,10 @@ fn expr_bare<'a>(
         Expression::Literal(l) => fmt_literal(s, l),
         Expression::Variable(v) => {
             s.push('?');
-            s.push_str(v.as_str());
+            s.push_str(names.name(v));
         }
         Expression::Bound(v) => {
-            let _ = write!(s, "BOUND(?{})", v.as_str());
+            let _ = write!(s, "BOUND(?{})", names.name(v));
         }
         // Written as the flat `a OP b OP c …` the parser folds back into one node
         // with the same operands. The first operand may be any expression of the
@@ -1668,7 +1853,7 @@ fn path_chain<'a>(
 }
 
 /// Emit a leaf query-pattern term (any but a quoted triple term).
-fn fmt_leaf_term(s: &mut String, t: &TermPattern) {
+fn fmt_leaf_term(s: &mut String, t: &TermPattern, names: &VariableNames) {
     match t {
         TermPattern::NamedNode(n) => {
             write_iri(n.as_str(), s);
@@ -1677,21 +1862,21 @@ fn fmt_leaf_term(s: &mut String, t: &TermPattern) {
         TermPattern::Literal(l) => fmt_literal(s, l),
         TermPattern::Variable(v) => {
             s.push('?');
-            s.push_str(v.as_str());
+            s.push_str(names.name(v));
         }
         TermPattern::Triple(_) => unreachable!("a quoted triple term is queued, not a leaf"),
     }
 }
 
 /// Emit an IRI-or-variable (predicate / `GRAPH`/`SERVICE` name position).
-fn fmt_named_node_pattern(s: &mut String, n: &NamedNodePattern) {
+fn fmt_named_node_pattern(s: &mut String, n: &NamedNodePattern, names: &VariableNames) {
     match n {
         NamedNodePattern::NamedNode(node) => {
             write_iri(node.as_str(), s);
         }
         NamedNodePattern::Variable(v) => {
             s.push('?');
-            s.push_str(v.as_str());
+            s.push_str(names.name(v));
         }
     }
 }
@@ -1822,7 +2007,12 @@ mod tests {
 
     /// Render one aggregate call on its own.
     fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
-        emit(s, Item::Aggregate(agg), PredicateRendering::Independent);
+        emit(
+            s,
+            Item::Aggregate(agg),
+            PredicateRendering::Independent,
+            &VariableNames::default(),
+        );
     }
     use crate::algebra::AggregateExpressionError;
     use crate::parser::{ParserOptions, SparqlParser};
@@ -1864,7 +2054,11 @@ mod tests {
             Query::Select { pattern, .. } => pattern,
             other => panic!("expected SELECT, got {other:?}"),
         };
-        let reparsed_body = where_body(&reparsed);
+        let reparsed_body = if matches!(body, GraphPattern::Project { .. }) {
+            reparsed
+        } else {
+            where_body(&reparsed)
+        };
         assert_eq!(
             reparsed_body, body,
             "round-trip mismatch for `{query}`\n serialized: {text}"
@@ -2213,7 +2407,7 @@ mod tests {
     fn produces_complete_select() {
         let p = pattern_of("SELECT * WHERE { ?s <http://ex/p> ?o }");
         let text = pattern_to_select_query(&p);
-        assert!(text.starts_with("SELECT * WHERE {"), "got: {text}");
+        assert!(text.starts_with("SELECT ?s ?o WHERE {"), "got: {text}");
         assert!(text.contains("<http://ex/p>"), "got: {text}");
     }
 

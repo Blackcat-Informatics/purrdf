@@ -118,6 +118,8 @@ impl core::fmt::Debug for BlankNode {
     }
 }
 
+const HIDDEN_VAR_PREFIX: &str = "\u{0}bgp";
+
 /// A query variable (without the leading `?`/`$`).
 ///
 /// `Ord`/`PartialOrd` (lexicographic on the name) are derived so a scope-tracking
@@ -148,6 +150,35 @@ purrdf_lex::constructors! {
 }
 
 impl Variable {
+    /// A non-distinguished variable introduced by algebra translation. Its reserved
+    /// identity cannot be written in SPARQL text, so it never collides with a caller
+    /// variable. Serializers assign it a fresh legal name and omit it from projections.
+    /// These identities belong to match positions and internal match `VALUES`, not
+    /// expression references or explicit projection, grouping and output names;
+    /// [`Query::validate`](crate::Query::validate) refuses those observations.
+    pub fn hidden(name: impl AsRef<str>) -> Self {
+        Self::new(format!("{HIDDEN_VAR_PREFIX}{}", name.as_ref()))
+    }
+
+    /// Whether this is a non-distinguished translation variable.
+    pub fn is_hidden(&self) -> bool {
+        self.name.starts_with(HIDDEN_VAR_PREFIX)
+    }
+
+    /// Preserve a source BGP's blank identity across its translated path pieces.
+    /// This differs from an ordinary hidden witness: a later piece of that same
+    /// BGP may still carry the original blank label and must join on this identity.
+    pub fn hidden_blank(label: &str) -> Self {
+        Self::hidden(format!("blank:{label}"))
+    }
+
+    /// The original source blank label, when this variable carries that identity.
+    pub fn source_blank_label(&self) -> Option<&str> {
+        self.name
+            .strip_prefix(HIDDEN_VAR_PREFIX)?
+            .strip_prefix("blank:")
+    }
+
     /// The variable name (without the sigil).
     pub fn as_str(&self) -> &str {
         &self.name
@@ -156,7 +187,11 @@ impl Variable {
 
 impl core::fmt::Debug for Variable {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "?{}", self.name)
+        if self.is_hidden() {
+            write!(f, "?\\0{}", &self.name[1..])
+        } else {
+            write!(f, "?{}", self.name)
+        }
     }
 }
 
