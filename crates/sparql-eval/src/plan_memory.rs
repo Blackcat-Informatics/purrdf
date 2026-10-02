@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 /// Bytes are each plan's conservative payload charge at admission, counted once regardless of
 /// `Arc` clones. They exclude cache keys, allocator overhead and shared tracker
 /// storage. Shared strings are charged per occurrence, as in algebra accounting.
-/// Public caller mutation cannot be intercepted: use
-/// [`crate::PreparedQuery::retained_size_bytes`] to inspect that plan's current
-/// payload. These counters never claim to measure arbitrary caller mutations or RSS.
+/// [`crate::PreparedQuery::retained_size_bytes`] restates each immutable plan's
+/// admitted payload, including any retained source-column layout. These counters
+/// exclude later numbered-tree storage and never claim to measure RSS.
 /// Public totals saturate at `usize::MAX`; accounting and subtraction remain exact.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlanMemoryStats {

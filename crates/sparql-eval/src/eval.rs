@@ -2432,6 +2432,92 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_evaluated_with(pattern, ctx, |ctx| eval_node(pattern, ctx))
+}
+
+/// A binding bag produced inside one certified pure positive region. Only this
+/// module can construct it; arbitrary VALUES/BIND rows cannot enter the native
+/// seeded kernel. A join transfers its producer bag; UNION lends that one owned
+/// bag to its arms until their scoped workers have returned.
+pub(crate) struct PositiveInput<'a, I: ViewTermId> {
+    storage: std::borrow::Cow<'a, SolutionSeq<I>>,
+}
+
+impl<I: ViewTermId> PositiveInput<'_, I> {
+    pub(crate) fn rows(&self) -> &SolutionSeq<I> {
+        self.storage.as_ref()
+    }
+
+    pub(crate) fn borrowed(&self) -> PositiveInput<'_, I> {
+        PositiveInput {
+            storage: std::borrow::Cow::Borrowed(self.rows()),
+        }
+    }
+
+    pub(crate) fn into_sequence(self) -> SolutionSeq<I> {
+        self.storage.into_owned()
+    }
+
+    pub(crate) fn into_rows(self) -> Vec<crate::solution::Solution<I>> {
+        self.into_sequence().rows
+    }
+}
+
+pub(crate) fn positive_input<I: ViewTermId>(
+    plan: &crate::bgp::PositivePlan,
+    producer: &GraphPattern,
+    rows: SolutionSeq<I>,
+) -> Result<PositiveInput<'static, I>, EvalError> {
+    if !plan.contains(producer)
+        || rows
+            .rows
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|term| !matches!(term, SolutionTerm::Existing(_)))
+    {
+        return Err(EvalError::internal(
+            "a native join seed was not produced by its pure positive plan",
+        ));
+    }
+    Ok(PositiveInput {
+        storage: std::borrow::Cow::Owned(rows),
+    })
+}
+
+/// Seeded positive execution passes through the same node-entry, stop, charge,
+/// allocation and certificate law as ordinary execution. No AST is substituted.
+pub(crate) fn eval_positive_evaluated<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    input: Option<PositiveInput<'_, D::Id>>,
+    plan: &crate::bgp::PositivePlan,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if !plan.contains(pattern) {
+        return Err(EvalError::internal(
+            "a seeded relation is outside its positive plan",
+        ));
+    }
+    eval_evaluated_with(pattern, ctx, |ctx| match pattern {
+        GraphPattern::Bgp { patterns } => {
+            let order = input.is_none().then(|| plan.unit_order(pattern)).flatten();
+            crate::bgp::eval_bgp_seeded(patterns, input, order, ctx).map(Evaluated::Complete)
+        }
+        GraphPattern::Join { left, right } => {
+            crate::binop::eval_positive_join(pattern, left, right, input, plan, ctx)
+        }
+        GraphPattern::Union { arms } => {
+            crate::binop::eval_positive_union(pattern, arms, input, plan, ctx)
+        }
+        _ => unreachable!("positive plan contains only BGP, Join and Union"),
+    })
+}
+
+fn eval_evaluated_with<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+    evaluate: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     if ctx.dataset.storage_live_budget().is_some()
         && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
     {
@@ -2454,7 +2540,7 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     if let Some(error) = ctx.dataset.read_error() {
         return Err(EvalError::source_read(error));
     }
-    let evaluated = eval_evaluated_inner(pattern, ctx);
+    let evaluated = eval_evaluated_inner_with(pattern, ctx, evaluate);
     if local_cap {
         ctx.cap_pushdown = None;
     }
@@ -2492,16 +2578,17 @@ const fn pattern_construct(pattern: &GraphPattern) -> &'static str {
 }
 
 /// The evaluator recursion after any local semantic-Slice ceiling has been installed.
-fn eval_evaluated_inner<D: DatasetView + Sync>(
+fn eval_evaluated_inner_with<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
+    evaluate: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     // The ordinary hot path has no stop source, counters, certificate ledger, or producer
     // ceiling. Dispatch directly: no node-address cursor, atomic probe, output re-wrap, or
     // terminal checkpoint is useful when nothing can truncate. `UNBOUNDED` takes this
     // path too; its fixed UDF recursion guard remains enforced inside `child_for_user_fn`.
     if !ctx.governors_are_engaged() && ctx.ledger.is_none() && ctx.cap_pushdown.is_none() {
-        return eval_node(pattern, ctx);
+        return evaluate(ctx);
     }
 
     // Operator-granularity stop observation, before any of this node's work begins.
@@ -2530,7 +2617,7 @@ fn eval_evaluated_inner<D: DatasetView + Sync>(
             tripped,
         )));
     }
-    let evaluated = match eval_node(pattern, ctx) {
+    let evaluated = match evaluate(ctx) {
         Ok(evaluated) => evaluated,
         Err(error) => {
             ctx.leave_node(restore);
@@ -3059,14 +3146,18 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
             }
             Step::Union => {
                 let right = schemas.pop().expect("the right operand's schema");
-                let left = schemas.pop().expect("the left operand's schema");
-                schemas.push(left.union(&right));
+                let mut left = schemas.pop().expect("the left operand's schema");
+                left.append(&right);
+                schemas.push(left);
             }
             Step::UnionArms(count) => {
                 let first = schemas.len() - count;
                 let union = schemas
                     .drain(first..)
-                    .fold(VarSchema::default(), |schema, arm| schema.union(&arm));
+                    .fold(VarSchema::default(), |mut schema, arm| {
+                        schema.append(&arm);
+                        schema
+                    });
                 schemas.push(union);
             }
         }
@@ -3113,26 +3204,41 @@ pub fn eval<D: DatasetView + Sync>(
         ));
     }
     crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
+    let source_pattern = pattern;
     // Raw algebra has not passed admission, which is where a blank node label shared
     // by two pieces of one basic graph pattern is made the one variable it is — so
     // that is done here, and the renamed column is dropped from the bag handed back.
     // See `crate::blank_scope`.
     let joined = crate::blank_scope::join_shared_blanks(pattern);
     let pattern = joined.as_ref().unwrap_or(pattern);
+    let normalized = crate::join_plan::normalize(pattern);
+    let pattern = normalized.as_ref().unwrap_or(pattern);
+    let source_schema =
+        (joined.is_some() || normalized.is_some()).then(|| syntactic_schema(source_pattern));
     let tree = crate::plan::Tree::build(pattern);
+    let previous_plan = ctx.plan.take();
     ctx.install_plan(&tree);
-    eval_evaluated(pattern, ctx)?
-        .into_complete()
-        .map(crate::blank_scope::without_joined_blanks)
-        .map_err(|truncation| {
-            EvalError::internal(format!(
-                "a governor tripped on an evaluation entry point that can only return a \
+    let result = (|| {
+        eval_evaluated(pattern, ctx)?
+            .into_complete()
+            .map(|rows| {
+                crate::blank_scope::without_joined_blanks(match source_schema.as_ref() {
+                    Some(schema) => rows.reorder_like(schema),
+                    None => rows,
+                })
+            })
+            .map_err(|truncation| {
+                EvalError::internal(format!(
+                    "a governor tripped on an evaluation entry point that can only return a \
                  complete bag; run a bounding governor configuration through \
                  `NativeSparqlEngine::query_governed`, which returns the certified partial \
                  answers: {}",
-                truncation.describe()
-            ))
-        })
+                    truncation.describe()
+                ))
+            })
+    })();
+    ctx.plan = previous_plan;
+    result
 }
 
 /// The result of evaluating a top-level query form — the internal counterpart of
@@ -3500,7 +3606,35 @@ pub fn evaluate_query<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, EvalError> {
     query.validate_hidden_variables()?;
-    evaluate_query_over(query, None, ctx)
+    let source_query = query;
+    let joined = crate::blank_scope::join_shared_blanks_in_query(query);
+    let query = joined.as_ref().unwrap_or(query);
+    let normalized = crate::join_plan::normalize_query(query);
+    let query = normalized.as_ref().unwrap_or(query);
+    let source_schema = if joined.is_some() || normalized.is_some() {
+        match source_query {
+            Query::Select { pattern, .. } => Some(Arc::new(VarSchema::from_vars(
+                syntactic_schema(pattern)
+                    .vars()
+                    .iter()
+                    .filter(|variable| !crate::blank_scope::is_joined_blank(variable))
+                    .cloned(),
+            ))),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let previous_plan = ctx.plan.take();
+    let result =
+        evaluate_query_over(query, None, ctx).map(|outcome| match (outcome, source_schema) {
+            (Outcome::Solutions(rows), Some(schema)) => {
+                Outcome::Solutions(rows.reorder_like(&schema))
+            }
+            (outcome, _) => outcome,
+        });
+    ctx.plan = previous_plan;
+    result
 }
 
 /// [`evaluate_query`], numbering `query` through `kept` when its owner keeps a plan

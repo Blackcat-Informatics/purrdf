@@ -101,6 +101,7 @@ mod fallible;
 mod governed;
 pub mod governor;
 pub mod interned;
+mod join_plan;
 /// Nearest-neighbour retrieval over a PURREMB embedding space, reachable from SPARQL
 /// through the property-function seam under caller-supplied IRIs.
 pub mod knn;

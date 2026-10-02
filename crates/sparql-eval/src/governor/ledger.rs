@@ -137,8 +137,9 @@ pub struct PlanEstimate {
     /// The estimated size of the largest intermediate stage along the chosen join order,
     /// in rows. This is the quantity admission control refuses against.
     pub peak_rows: u64,
-    /// The width of the BGP's output, in columns — the multiplier that turns a row
-    /// estimate into the cell-denominated
+    /// The physical BGP working width, including local blank slots and incoming
+    /// columns; a composite estimate uses its combined logical width. This is the
+    /// multiplier that turns a row estimate into the cell-denominated
     /// [`ResourceDimension::IntermediateCells`](purrdf_core::ResourceDimension::IntermediateCells)
     /// ceiling.
     pub columns: u64,
