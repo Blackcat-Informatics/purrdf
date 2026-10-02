@@ -1,0 +1,61 @@
+{
+  "pull_request": 378,
+  "publication_issue": 375,
+  "head": "dd6ceee579f8369f1b597c3b38ae0ca5ae7f1bf3",
+  "base": "5660cc18b221ef23def198c067cec0b495e72bdd",
+  "summary_sha256": "2fc749651e77cdd2158a5786210cff8a3ebd9efae1310ff2f3d89a7c162dbf87",
+  "summary_bytes": 2245,
+  "full_changelog_unchanged": true,
+  "focused_runtime": {
+    "synchronous_admitted": 202,
+    "async_admitted": 202,
+    "typed_refusal": 203,
+    "region_bytes": 1048576,
+    "margin_bytes": 65536,
+    "assertions_unchanged": true
+  },
+  "local_checks": {
+    "native_async_passes": 74,
+    "engine_passes": 94,
+    "gate_parity_checks": 70,
+    "rendering_gates": 6,
+    "pages": 33,
+    "sparql_fences": 24,
+    "translated_units": 2865,
+    "normal_hooks": "passed"
+  },
+  "hosted_checks": {
+    "head": "dd6ceee579f8369f1b597c3b38ae0ca5ae7f1bf3",
+    "ci": {
+      "run": 36978861928,
+      "successful_jobs": 42,
+      "conclusion": "success"
+    },
+    "docs": {
+      "run": 36978861975,
+      "conclusion": "success",
+      "build": "success",
+      "pr_deploy": "skipped"
+    },
+    "codeql": {
+      "run": 36978856740,
+      "successful_jobs": 5,
+      "conclusion": "success"
+    }
+  },
+  "publication": "not started",
+  "native_context_inlining_policy": "unchanged; context barriers are wasm32-only",
+  "fresh_shipping_files_byte_identical": 5,
+  "deferral_scan": {
+    "added_line_matches": 0,
+    "public_comment_false_positives": 1,
+    "genuine_deferrals": 0
+  },
+  "base_sync": "Already up to date; no conflicts",
+  "head_tree": "a428d0a9093f6fdf0e476d367f4476f72012d2f4",
+  "review_disposition": {
+    "empty_changelog_section_advisory": "Maintainer directed no change and release",
+    "actual_current_section_nonempty": true,
+    "independent_pre_tag_nonempty_guard": true
+  }
+}
