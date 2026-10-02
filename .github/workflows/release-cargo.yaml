@@ -31,6 +31,8 @@ permissions:
 # nightly channel no matter what the install step says.
 env:
   RUSTUP_TOOLCHAIN: stable
+  # The publication wait checks this exact registry transport before dependents.
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   publish:
@@ -217,8 +219,9 @@ jobs:
       # logic that decides what is published can be dry-run and self-tested
       # locally against a mock registry. Every record and its publishing lock
       # must exist before this lane starts. Per crate, in publish order:
-      # already published -> skip (re-runs resume); otherwise cargo publish
-      # --locked, VERIFIED, then wait until crates.io serves the version.
+      # already published -> wait for its index entry, then skip (re-runs resume);
+      # otherwise cargo publish --locked, VERIFIED, then wait until both the
+      # crates.io API and Cargo sparse index serve the exact unyanked version.
       #
       # Verification resolves the packaged crate's whole graph, dev-dependencies
       # included, which is resolvable because every packaged dependency is
@@ -258,7 +261,7 @@ jobs:
           echo "::error::The publisher did not confirm the complete release set. No GitHub Release will be created; inspect the publication and registry preflight results before rerunning."
           exit 1
 
-      - name: Publish GitHub Release with reviewed summary
+      - name: Verify C assets on a draft, then publish the immutable GitHub Release
         if: steps.publish.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -266,24 +269,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          version="${VERSION#rust-v}"
-          python3 scripts/check-release-notes.py --version "$version" --output target/release-notes.md
-
-          # Rerun-safe: create the release once, update its notes on re-runs.
-          if gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release edit "$VERSION" --title "PurRDF ${version}" --notes-file target/release-notes.md
-          else
-            gh release create "$VERSION" --verify-tag --title "PurRDF ${version}" --notes-file target/release-notes.md
-          fi
-
-      - name: Attach the C bundle and artifact license evidence to the GitHub release
-        if: steps.publish.outputs.complete == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          version="${VERSION#rust-v}"
-          sdk="target/dist/purrdf-capi-${version}-x86_64-unknown-linux-gnu"
-          python3 scripts/check-release-notes.py --version "$version" --checksum-output target/dist/SHA256SUMS
-          gh release upload "$VERSION" "${sdk}.tar.gz" "${sdk}.license-receipt.json" target/license-evidence-cargo.json target/dist/SHA256SUMS --clobber
+          # Publishing locks assets. The helper creates/reuses a draft, uploads
+          # all four assets, downloads and verifies every byte, then publishes.
+          # Existing immutable releases are verified read-only against their
+          # retained checksums, without comparing a different rebuild.
+          python3 scripts/publish-github-release.py --version "${VERSION#rust-v}" \
+            --repository "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"

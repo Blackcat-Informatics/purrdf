@@ -162,16 +162,22 @@ private_dep_guard() {
 }
 
 wait_for_crate_version() {
-  local crate="$1" state
+  local crate="$1" state checksum
   for _ in $(seq 1 30); do
     state="$(version_state "$crate")"
     registry_or_die "$state"
     if [[ "$state" == "present" ]]; then
-      return 0
+      checksum="$(crates_io_version_checksum "$crate" "$VERSION")" || return 1
+      state="$(crates_io_index_state "$crate" "$VERSION" "$checksum" "$user_agent")"
+      registry_or_die "$state"
+      if [[ "$state" == "present" ]]; then
+        return 0
+      fi
     fi
+    echo "Waiting for crates.io API and Cargo index: ${crate} ${VERSION}" >&2
     sleep 10
   done
-  echo "Timed out waiting for crates.io to expose ${crate} ${VERSION}" >&2
+  echo "Timed out waiting for crates.io API and Cargo index to expose ${crate} ${VERSION}" >&2
   exit 1
 }
 
@@ -199,6 +205,11 @@ run_loop() {
     state="$(version_state "$crate")"
     registry_or_die "$state"
     if [[ "$state" == "present" ]]; then
+      # A previous attempt may have uploaded this version before its index
+      # propagated. A resume must prove it resolvable before publishing users.
+      if [[ "$mode" == "publish" ]]; then
+        wait_for_crate_version "$crate"
+      fi
       echo "${crate} ${VERSION} already exists on crates.io; skipping"
       continue
     fi
@@ -247,9 +258,6 @@ EOF
       # ledger crate the token step created — or this loop stopped above.
       cargo publish -p "$crate" --locked
       wait_for_crate_version "$crate"
-      # Give the registry index a short propagation window before publishing
-      # dependents that name the freshly-published version.
-      sleep 15
     fi
     published+=("$crate")
   done
@@ -626,6 +634,110 @@ PY
     echo "  ok      mock registry cannot authorize functional publication"
   else
     echo "  FAILED  mock registry publication guard"
+    failures=$((failures + 1))
+  fi
+
+  # The API can serve a version while Cargo's index still serves its previous
+  # contents. Exercise the real wait and resume loop, with no wall-clock waits
+  # and a shell cargo double that can never upload a package.
+  index_fixture() {
+    printf '200\n{"name":"%s","vers":"%s","cksum":"%s","yanked":false}\n' \
+      "$1" "$VERSION" "$2" > "${mock}/index@$1"
+  }
+  version_fixture() {
+    printf '200\n{"version":{"crate":"%s","num":"%s","checksum":"%s","yanked":false}}\n' \
+      "$1" "$VERSION" "$2" > "${mock}/$1@$VERSION"
+  }
+  local checksum
+  checksum="$(printf '%064d' 0)"
+  mock="${tmp}/index-tests"; mkdir -p "$mock"
+  index_wait_case() {
+    local PURRDF_CRATES_IO_MOCK="$mock" delay="$1"
+    export PURRDF_CRATES_IO_MOCK
+    sleep() {
+      if [[ "$delay" == "delayed" ]]; then
+        index_fixture "${crates[0]}" "$checksum"
+      fi
+    }
+    wait_for_crate_version "${crates[0]}"
+  }
+  version_fixture "${crates[0]}" "$checksum"
+  status=0
+  out="$(index_wait_case delayed 2>&1)" || status=$?
+  if [[ "$status" -eq 0 ]] && grep -qF "Waiting for crates.io API and Cargo index" <<<"$out"; then
+    echo "  ok      API-first propagation waits for the actual Cargo index"
+  else
+    echo "  FAILED  API-first propagation wait"
+    failures=$((failures + 1))
+  fi
+  rm -f "${mock}/index@${crates[0]}"
+  status=0
+  out="$(index_wait_case missing 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]] && grep -qF "Timed out waiting for crates.io API and Cargo index" <<<"$out"; then
+    echo "  ok      an API-only version times out instead of authorizing a dependent"
+  else
+    echo "  FAILED  API-only timeout"
+    failures=$((failures + 1))
+  fi
+  local invalid
+  for invalid in \
+    'not JSON' \
+    '{}' \
+    '{"name":"different","vers":"VERSION","cksum":"CHECKSUM","yanked":false}' \
+    '{"name":"CRATE","vers":"VERSION","cksum":"CHECKSUM","yanked":true}' \
+    '{"name":"CRATE","vers":"VERSION","cksum":"wrong","yanked":false}' \
+    $'{"name":"CRATE","vers":"VERSION","cksum":"CHECKSUM","yanked":false}\n{"name":"CRATE","vers":"VERSION","cksum":"CHECKSUM","yanked":false}'; do
+    invalid="${invalid//VERSION/$VERSION}"
+    invalid="${invalid//CHECKSUM/$checksum}"
+    invalid="${invalid//CRATE/${crates[0]}}"
+    printf '200\n%s\n' "$invalid" > "${mock}/index@${crates[0]}"
+    status=0
+    out="$(index_wait_case missing 2>&1)" || status=$?
+    if [[ "$status" -ne 0 ]] && grep -qF "invalid Cargo index" <<<"$out"; then
+      echo "  ok      malformed, mismatched or yanked Cargo index refused"
+    else
+      echo "  FAILED  invalid Cargo index admitted: $invalid"
+      failures=$((failures + 1))
+    fi
+  done
+  printf '200\n{"version":{"crate":"%s","num":"%s","checksum":"%s","yanked":true}}\n' \
+    "${crates[0]}" "$VERSION" "$checksum" > "${mock}/${crates[0]}@$VERSION"
+  status=0
+  out="$(index_wait_case missing 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]] && grep -qF "invalid crates.io identity" <<<"$out"; then
+    echo "  ok      yanked API identity refused"
+  else
+    echo "  FAILED  yanked API identity admitted"
+    failures=$((failures + 1))
+  fi
+
+  # A skipped upload must still wait. The log order proves no dependent cargo
+  # invocation occurs until the predecessor has appeared in the sparse index.
+  version_fixture "${crates[0]}" "$checksum"
+  rm -f "${mock}/index@${crates[0]}"
+  status=0
+  resume_case() {
+    local PURRDF_CRATES_IO_MOCK="$mock" mode="publish"
+    local -a crates=("${crates[0]}" "${crates[2]}") ledger=()
+    export PURRDF_CRATES_IO_MOCK
+    sleep() {
+      echo "INDEX READY ${crates[0]}"
+      index_fixture "${crates[0]}" "$checksum"
+    }
+    cargo() {
+      [[ "$1" == "publish" && "$2" == "-p" && "$4" == "--locked" ]] || return 1
+      echo "MOCK PUBLISH $3"
+      version_fixture "$3" "$checksum"
+      index_fixture "$3" "$checksum"
+    }
+    run_loop
+  }
+  out="$(resume_case 2>&1)" || status=$?
+  if [[ "$status" -eq 0 ]] && \
+    [[ "$out" == *"INDEX READY ${crates[0]}"*"MOCK PUBLISH ${crates[2]}"*"COMPLETE:"* ]]; then
+    echo "  ok      resumed uploads wait for skipped predecessors before publishing users"
+  else
+    echo "  FAILED  resume propagation order: $out"
     failures=$((failures + 1))
   fi
 

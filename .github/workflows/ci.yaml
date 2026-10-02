@@ -227,6 +227,9 @@ jobs:
       - name: Check exact npm tarball publication guards (offline)
         run: python3 scripts/publish-npm.py --self-test
 
+      - name: Check draft publication and immutable release verification (offline)
+        run: python3 scripts/publish-github-release.py --self-test
+
       - name: Check isolated empty bootstrap verification and registry refusals (offline)
         run: bash scripts/bootstrap-crates-io.sh --self-test
 
