@@ -5266,8 +5266,8 @@ mod tests {
     /// The sub-`SELECT` is a separate scope, so the single-row `VALUES` seed the
     /// rewrite also injects cannot correlate with the inner `?g`: it binds an outer
     /// variable of the same name, compatible with every inner row. Only the SHACL
-    /// lane's expression-position walk reaches inside, which is divergence 1 in
-    /// `crate::enf`'s module doc.
+    /// lane's full walk reaches inside, replacing an IRI graph name or restricting
+    /// an unwritable name with a local `VALUES` join.
     ///
     /// The second operand is what keeps the seed OUTSIDE. `map_core_pattern`
     /// descends every single-child solution modifier, `Project` included, so a query
@@ -5279,9 +5279,10 @@ mod tests {
     const GRAPH_NAME_QUERY: &str = "SELECT ?o WHERE { ?a <http://ex/q> ?b . \
          { SELECT ?o WHERE { GRAPH ?g { ?s <http://ex/p> ?o } } } }";
 
-    /// [`GRAPH_NAME_QUERY`] with `?g` pre-bound to `value`, on the SHACL lane (the
-    /// only lane that rewrites a `GRAPH` name at all).
-    fn graph_name_answer(value: TermValue) -> Vec<String> {
+    /// [`GRAPH_NAME_QUERY`] with `?g` pre-bound to `value` on the requested lane.
+    /// Ordinary bindings stop at the sub-`SELECT`'s hidden column; SHACL bindings
+    /// constrain the inner `GRAPH` too.
+    fn graph_name_answer(value: TermValue, prebinding: ShaclPrebinding) -> Vec<String> {
         let ds = graph_name_ds();
         let engine = NativeSparqlEngine::new();
         let result = engine
@@ -5293,7 +5294,7 @@ mod tests {
                     substitutions: &[("g".to_owned(), value)],
                 },
                 QueryOptions {
-                    prebinding: ShaclPrebinding::Applied,
+                    prebinding,
                     ..QueryOptions::EMPTY
                 },
             )
@@ -5315,7 +5316,10 @@ mod tests {
     /// `:y` would mean it was substituted with the wrong graph.
     #[test]
     fn a_graph_name_pre_bound_to_an_iri_is_substituted_and_answers_that_graph() {
-        let got = graph_name_answer(TermValue::Iri("http://ex/g1".to_owned()));
+        let got = graph_name_answer(
+            TermValue::Iri("http://ex/g1".to_owned()),
+            ShaclPrebinding::Applied,
+        );
         assert_eq!(
             got.len(),
             1,
@@ -5330,35 +5334,39 @@ mod tests {
         );
     }
 
-    /// **A `GRAPH` name pre-bound to a LITERAL is still refused.**
+    /// **A literal is never converted to an IRI graph name by its lexical form.**
     ///
-    /// The REFUSED half of the same pair. A graph is named by an IRI, so a literal
-    /// has no business in this position: it rides the `VALUES` seed, where no named
-    /// graph is compatible with it, and the answer is empty.
+    /// The REFUSED half of the same pair. A literal names no graph. The ordinary
+    /// lane's outer `VALUES` seed cannot constrain the hidden inner `?g`, so both
+    /// graphs remain. The SHACL lane adds a local `VALUES` restriction, incompatible
+    /// with every graph name, so its answer is empty.
     ///
     /// The literal's lexical form is deliberately `:g2`'s IRI, which is what makes
     /// this test able to fail for the reason it states. Had the refusal been widened
     /// to admit a literal by its lexical form, the query would name `:g2` and answer
-    /// `:y` — a DIFFERENT, non-empty answer — rather than staying empty the way a
-    /// literal that merely fails to match any graph does. Without that choice, "the
-    /// literal was refused" and "the literal was substituted and matched nothing"
-    /// would be the same observation.
+    /// `:y` on the SHACL lane, instead of its empty answer. This distinguishes an
+    /// actual literal binding from an erroneous conversion to an IRI constant.
     #[test]
     fn a_graph_name_pre_bound_to_a_literal_is_still_refused() {
-        let got = graph_name_answer(TermValue::typed_literal(
-            "http://ex/g2",
-            "http://www.w3.org/2001/XMLSchema#string",
-        ));
+        let value =
+            TermValue::typed_literal("http://ex/g2", "http://www.w3.org/2001/XMLSchema#string");
+        let got = graph_name_answer(value.clone(), ShaclPrebinding::None);
         assert_eq!(
             got.len(),
             2,
-            "a literal names no graph, so the inner GRAPH stays a variable and \
-             enumerates BOTH of them: {got:?}"
+            "ordinary binding cannot reach the hidden inner graph variable, so \
+             BOTH graphs remain: {got:?}"
         );
         assert!(
             got.iter().any(|row| row.contains("http://ex/x"))
                 && got.iter().any(|row| row.contains("http://ex/y")),
             "both graphs' objects must survive: {got:?}"
+        );
+        let shacl = graph_name_answer(value, ShaclPrebinding::Applied);
+        assert!(
+            shacl.is_empty(),
+            "the SHACL binding reaches the inner GRAPH, where a literal names no \
+             graph: {shacl:?}"
         );
     }
 
