@@ -1,0 +1,19 @@
+name: Sync to Gitee
+
+on:
+  push:
+    branches:
+      - main  # Change to master if your default branch is master
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror to Gitee
+        uses: jikkai/sync-gitee@v1
+        with:
+          repository: 'blackcat-informatics/purrdf' # Replace with your target Gitee path
+          username: ${{ secrets.GITEE_USERNAME }}
+          password: ${{ secrets.GITEE_PASSWORD }}
+          tags: true
+          branches: main
