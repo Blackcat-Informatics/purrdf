@@ -50,28 +50,17 @@
 //!
 //! # Method
 //!
-//! [`pattern_to_select_query`]'s own established contract (see its
-//! `serialize.rs` module tests' `where_body`/`assert_roundtrip` helpers) is
-//! over a query's WHERE-body pattern, not the whole [`Query`]: it always
-//! renders `SELECT * WHERE { … }` (or an aggregate chain's own complete
-//! `SELECT`), so a query's OWN top-level form (`ASK`/`CONSTRUCT`/`DESCRIBE`
-//! vs `SELECT`) and an EXPLICIT (non-`*`) projection list are, BY THAT
-//! FUNCTION'S DESIGN, not what it reproduces — its driving use case is
-//! `SERVICE` federation forwarding a WHERE-body fragment, which always wants
-//! `*`. This sweep tests exactly what the function promises: parse the
-//! corpus text, strip one outer `Project` if present (the `SELECT` scaffold;
-//! `ASK`/`CONSTRUCT`/`DESCRIBE` carry none), serialize the body, re-parse
-//! (always as a fresh `SELECT`), strip its outer `Project` the same way, and
-//! compare.
+//! The sweep serializes a query's WHERE body as a complete SELECT carrier.
+//! An outer source projection is removed once; a body that itself begins with
+//! Project keeps that projection in the carrier. Both parsed bodies are compared
+//! as complete typed algebra, including constants, expression roles and outputs.
 //!
-//! The one permitted modulo is [`normalize_join_assoc`]: `Join` is
-//! associative (`serialize.rs`'s own class-fix left it deliberately
-//! unbraced, stating the round-trip contract is semantics-preserved, not
-//! tree-identical, exactly where semantics do not require tree identity), so
-//! a `Join` spine may re-associate across a serialize/re-parse round trip
-//! without that being a defect. `normalize_join_assoc` left-linearizes every
-//! `Join` spine in both trees before comparing; nothing else is normalized —
-//! any OTHER structural disagreement is a real one.
+//! Join spines are left-associated before comparison. Non-distinguished match
+//! identities receive legal carrier names through a bijective alpha map derived
+//! from corresponding typed variable positions. Ordinary names remain exact, and
+//! aliases that collide, merge identities or split one identity are refused.
+//! The carrier's visible projection must match the source scope in exact order.
+//! Neither corpus ceilings nor xfail accounting permit another disagreement.
 //!
 //! # Corpus items that do not even parse
 //!
@@ -103,7 +92,11 @@
 mod patterns;
 
 use patterns::where_body;
-use purrdf_sparql_algebra::Child;
+use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, walk_pre_post};
+use purrdf_sparql_algebra::{
+    Child, Expression, NamedNodePattern, OrderExpression, TermPattern, TriplePattern, Variable,
+};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use purrdf_sparql_algebra::{
@@ -208,19 +201,21 @@ fn collect_doc_examples(dir: &Path) -> Vec<(String, String)> {
     out
 }
 
-/// Left-linearize every `Join` spine in `p` — the ONE permitted modulo this
-/// sweep's equality check allows (see this file's module doc). Every other
+/// Left-linearize Join spines and apply the checked hidden-only alpha map.
+/// Every other
 /// [`GraphPattern`] variant is reconstructed with its children normalized
 /// the same way and every non-pattern field carried through unchanged; the
 /// match is exhaustive (no wildcard arm), so a future algebra variant is a
 /// compile error here until this function is taught its shape, not a
 /// silently-unnormalized blind spot.
-fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
+fn normalize_join_assoc(p: &GraphPattern, aliases: &BTreeMap<Variable, Variable>) -> GraphPattern {
     match p {
         GraphPattern::Join { .. } => {
             let mut leaves = Vec::new();
             flatten_join(p, &mut leaves);
-            let mut normalized = leaves.into_iter().map(normalize_join_assoc);
+            let mut normalized = leaves
+                .into_iter()
+                .map(|node| normalize_join_assoc(node, aliases));
             let first = normalized
                 .next()
                 .expect("a Join node flattens to at least two leaves");
@@ -230,50 +225,61 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             })
         }
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
-            patterns: patterns.clone(),
+            patterns: patterns
+                .iter()
+                .map(|triple| alpha_triple(triple, aliases))
+                .collect(),
         },
         GraphPattern::Path {
             subject,
             path,
             object,
         } => GraphPattern::Path {
-            subject: subject.clone(),
+            subject: alpha_term(subject, aliases),
             path: path.clone(),
-            object: object.clone(),
+            object: alpha_term(object, aliases),
         },
-        GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
+        GraphPattern::PropertyFunction(call) => {
+            let mut call = call.clone();
+            for term in call.subject_args.iter_mut().chain(&mut call.object_args) {
+                *term = alpha_term(term, aliases);
+            }
+            GraphPattern::PropertyFunction(call)
+        }
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => GraphPattern::LeftJoin {
-            left: Child::new(normalize_join_assoc(left)),
-            right: Child::new(normalize_join_assoc(right)),
-            expression: expression.clone(),
+            left: Child::new(normalize_join_assoc(left, aliases)),
+            right: Child::new(normalize_join_assoc(right, aliases)),
+            expression: expression
+                .as_ref()
+                .map(|expr| alpha_expression(expr, aliases)),
         },
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Child::new(normalize_join_assoc(left)),
-            right: Child::new(normalize_join_assoc(right)),
+            left: Child::new(normalize_join_assoc(left, aliases)),
+            right: Child::new(normalize_join_assoc(right, aliases)),
         },
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr: expr.clone(),
-            inner: Child::new(normalize_join_assoc(inner)),
+            expr: alpha_expression(expr, aliases),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
         },
         GraphPattern::Union { arms } => GraphPattern::Union {
-            arms: arms.clone().map(|arm| normalize_join_assoc(&arm)),
+            arms: arms.clone().map(|arm| normalize_join_assoc(&arm, aliases)),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
-            name: name.clone(),
-            inner: Child::new(normalize_join_assoc(inner)),
+            name: alpha_named(name, aliases),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
         },
         GraphPattern::Extend {
             inner,
             variable,
             expression,
         } => GraphPattern::Extend {
-            inner: Child::new(normalize_join_assoc(inner)),
-            variable: variable.clone(),
-            expression: expression.clone(),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
+            variable: alpha_variable(variable, aliases),
+            expression: alpha_expression(expression, aliases),
         },
         GraphPattern::Unfold {
             inner,
@@ -281,51 +287,60 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             element,
             companion,
         } => GraphPattern::Unfold {
-            inner: Child::new(normalize_join_assoc(inner)),
-            expression: expression.clone(),
-            element: element.clone(),
-            companion: companion.clone(),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
+            expression: alpha_expression(expression, aliases),
+            element: alpha_variable(element, aliases),
+            companion: companion.as_ref().map(|v| alpha_variable(v, aliases)),
         },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Child::new(normalize_join_assoc(left)),
-            right: Child::new(normalize_join_assoc(right)),
+            left: Child::new(normalize_join_assoc(left, aliases)),
+            right: Child::new(normalize_join_assoc(right, aliases)),
         },
         GraphPattern::Service {
             name,
             inner,
             silent,
         } => GraphPattern::Service {
-            name: name.clone(),
-            inner: Child::new(normalize_join_assoc(inner)),
+            name: alpha_named(name, aliases),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
             silent: *silent,
         },
         GraphPattern::Values {
             variables,
             bindings,
         } => GraphPattern::Values {
-            variables: variables.clone(),
+            variables: variables
+                .iter()
+                .map(|v| alpha_variable(v, aliases))
+                .collect(),
             bindings: bindings.clone(),
         },
         GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Child::new(normalize_join_assoc(inner)),
-            expression: expression.clone(),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
+            expression: expression
+                .iter()
+                .map(|order| alpha_order(order, aliases))
+                .collect(),
         },
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: Child::new(normalize_join_assoc(inner)),
-            variables: variables.clone(),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
+            variables: variables
+                .iter()
+                .map(|v| alpha_variable(v, aliases))
+                .collect(),
         },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Child::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
         },
         GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Child::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
         },
         GraphPattern::Slice {
             inner,
             start,
             length,
         } => GraphPattern::Slice {
-            inner: Child::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
             start: *start,
             length: *length,
         },
@@ -334,11 +349,189 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             variables,
             aggregates,
         } => GraphPattern::Group {
-            inner: Child::new(normalize_join_assoc(inner)),
-            variables: variables.clone(),
-            aggregates: aggregates.clone(),
+            inner: Child::new(normalize_join_assoc(inner, aliases)),
+            variables: variables
+                .iter()
+                .map(|v| alpha_variable(v, aliases))
+                .collect(),
+            aggregates: aggregates
+                .iter()
+                .map(|(v, aggregate)| {
+                    (
+                        alpha_variable(v, aliases),
+                        purrdf_sparql_algebra::AggregateExpression::new(
+                            aggregate.function().clone(),
+                            aggregate
+                                .args()
+                                .iter()
+                                .map(|expr| alpha_expression(expr, aliases))
+                                .collect(),
+                            aggregate.scalarvals().to_vec(),
+                            aggregate
+                                .order_by()
+                                .iter()
+                                .map(|order| alpha_order(order, aliases))
+                                .collect(),
+                            aggregate.distinct,
+                        )
+                        .expect("renaming match identities retains aggregate structure"),
+                    )
+                })
+                .collect(),
         },
     }
+}
+
+fn alpha_variable(variable: &Variable, aliases: &BTreeMap<Variable, Variable>) -> Variable {
+    aliases.get(variable).unwrap_or(variable).clone()
+}
+
+fn alpha_named(
+    name: &NamedNodePattern,
+    aliases: &BTreeMap<Variable, Variable>,
+) -> NamedNodePattern {
+    match name {
+        NamedNodePattern::Variable(v) => NamedNodePattern::Variable(alpha_variable(v, aliases)),
+        NamedNodePattern::NamedNode(_) => name.clone(),
+    }
+}
+
+fn alpha_triple(triple: &TriplePattern, aliases: &BTreeMap<Variable, Variable>) -> TriplePattern {
+    TriplePattern {
+        subject: alpha_term(&triple.subject, aliases),
+        predicate: alpha_named(&triple.predicate, aliases),
+        object: alpha_term(&triple.object, aliases),
+    }
+}
+
+fn alpha_term(term: &TermPattern, aliases: &BTreeMap<Variable, Variable>) -> TermPattern {
+    match term {
+        TermPattern::Variable(v) => TermPattern::Variable(alpha_variable(v, aliases)),
+        TermPattern::Triple(triple) => {
+            TermPattern::Triple(Child::new(alpha_triple(triple, aliases)))
+        }
+        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+            term.clone()
+        }
+    }
+}
+
+fn alpha_order(order: &OrderExpression, aliases: &BTreeMap<Variable, Variable>) -> OrderExpression {
+    match order {
+        OrderExpression::Asc(expr) => OrderExpression::Asc(alpha_expression(expr, aliases)),
+        OrderExpression::Desc(expr) => OrderExpression::Desc(alpha_expression(expr, aliases)),
+    }
+}
+
+/// A typed oracle, not a Debug-text replacement: every constant, output role and
+/// expression is retained, while EXISTS match witnesses receive the same mapping.
+fn alpha_expression(value: &Expression, aliases: &BTreeMap<Variable, Variable>) -> Expression {
+    let child = |expr: &Expression| Child::new(alpha_expression(expr, aliases));
+    match value {
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Variable(_)
+        | Expression::Bound(_) => value.clone(),
+        Expression::Exists(inner) => {
+            Expression::Exists(Child::new(normalize_join_assoc(inner, aliases)))
+        }
+        Expression::Or(operands) => Expression::Or(
+            operands
+                .clone()
+                .map(|expr| alpha_expression(&expr, aliases)),
+        ),
+        Expression::And(operands) => Expression::And(
+            operands
+                .clone()
+                .map(|expr| alpha_expression(&expr, aliases)),
+        ),
+        Expression::Equal(a, b) => Expression::Equal(child(a), child(b)),
+        Expression::SameTerm(a, b) => Expression::SameTerm(child(a), child(b)),
+        Expression::Greater(a, b) => Expression::Greater(child(a), child(b)),
+        Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(child(a), child(b)),
+        Expression::Less(a, b) => Expression::Less(child(a), child(b)),
+        Expression::LessOrEqual(a, b) => Expression::LessOrEqual(child(a), child(b)),
+        Expression::Arithmetic(first, steps) => Expression::Arithmetic(
+            child(first),
+            steps
+                .clone()
+                .map(|(op, expr)| (op, alpha_expression(&expr, aliases))),
+        ),
+        Expression::UnaryPlus(expr) => Expression::UnaryPlus(child(expr)),
+        Expression::UnaryMinus(expr) => Expression::UnaryMinus(child(expr)),
+        Expression::Not(expr) => Expression::Not(child(expr)),
+        Expression::In(expr, args) => Expression::In(
+            child(expr),
+            args.iter()
+                .map(|expr| alpha_expression(expr, aliases))
+                .collect(),
+        ),
+        Expression::If(a, b, c) => Expression::If(child(a), child(b), child(c)),
+        Expression::Coalesce(args) => Expression::Coalesce(
+            args.iter()
+                .map(|expr| alpha_expression(expr, aliases))
+                .collect(),
+        ),
+        Expression::FunctionCall(function, args) => Expression::FunctionCall(
+            function.clone(),
+            args.iter()
+                .map(|expr| alpha_expression(expr, aliases))
+                .collect(),
+        ),
+    }
+}
+
+fn variable_occurrences(pattern: &GraphPattern) -> Vec<Variable> {
+    let mut variables = Vec::new();
+    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+        if visit == Visit::Enter {
+            node.for_each_variable(|variable| variables.push(variable.clone()));
+        }
+        Flow::Descend
+    });
+    variables
+}
+
+/// Derive aliases from corresponding typed variable positions, requiring a
+/// bijection and exact ordinary names. No renderer naming algorithm is repeated.
+fn hidden_aliases(
+    original: &GraphPattern,
+    reparsed: &GraphPattern,
+    reserved: &BTreeSet<Variable>,
+) -> Result<BTreeMap<Variable, Variable>, String> {
+    let source = variable_occurrences(original);
+    let target = variable_occurrences(reparsed);
+    if source.len() != target.len() {
+        return Err("the carrier changed the number of variable occurrences".to_owned());
+    }
+    let ordinary: BTreeSet<_> = source
+        .iter()
+        .filter(|v| !v.is_hidden())
+        .chain(reserved)
+        .collect();
+    let mut aliases = BTreeMap::new();
+    let mut reverse = BTreeMap::new();
+    for (from, to) in source.iter().zip(target) {
+        if !from.is_hidden() {
+            if *from != to {
+                return Err("the carrier renamed an ordinary variable".to_owned());
+            }
+            continue;
+        }
+        if to.is_hidden() || ordinary.contains(&to) {
+            return Err("a hidden carrier alias collides with a source variable".to_owned());
+        }
+        if aliases
+            .insert(from.clone(), to.clone())
+            .is_some_and(|old| old != to)
+            || reverse
+                .insert(to, from.clone())
+                .is_some_and(|old| old != *from)
+        {
+            return Err("hidden carrier aliases are not bijective".to_owned());
+        }
+    }
+    Ok(aliases)
 }
 
 fn flatten_join<'a>(p: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
@@ -351,8 +544,10 @@ fn flatten_join<'a>(p: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
     }
 }
 
-/// Parse `text`, strip its outer `Project`, serialize, re-parse, strip again,
-/// and compare modulo [`normalize_join_assoc`]. `Ok(())` on success;
+/// Strip one source projection, serialize its body, and compare the complete
+/// re-parsed body modulo Join association and bijective hidden-only names.
+/// Preserve a body-level projection and check the carrier's visible schema.
+/// `Ok(())` on success;
 /// `Err` describes the mismatch. Panics only on an internal contract
 /// violation (`pattern_to_select_query`'s own re-parse yielding something
 /// other than `Query::Select`, which its own doc guarantees never happens).
@@ -369,9 +564,23 @@ fn roundtrip(original: &Query) -> Result<(), String> {
     else {
         panic!("pattern_to_select_query's own contract is a re-parseable SELECT; got {reparsed:?}");
     };
-    let reparsed_body = where_body(reparsed_pattern);
-    let original_norm = normalize_join_assoc(&body);
-    let reparsed_norm = normalize_join_assoc(&reparsed_body);
+    let reparsed_body = if matches!(body, GraphPattern::Project { .. }) {
+        reparsed_pattern.clone()
+    } else {
+        where_body(reparsed_pattern)
+    };
+    let original_norm = normalize_join_assoc(&body, &BTreeMap::new());
+    let reparsed_norm = normalize_join_assoc(&reparsed_body, &BTreeMap::new());
+    let aliases = hidden_aliases(&original_norm, &reparsed_norm, &BTreeSet::new())?;
+    if !aliases.is_empty() && !matches!(body, GraphPattern::Project { .. }) {
+        let GraphPattern::Project { variables, .. } = reparsed_pattern else {
+            return Err("the hidden carrier lacks its visible projection".to_owned());
+        };
+        if *variables != purrdf_sparql_algebra::parser::visible_variables(&body) {
+            return Err("the carrier changed the visible schema or its order".to_owned());
+        }
+    }
+    let original_norm = normalize_join_assoc(&body, &aliases);
     if original_norm != reparsed_norm {
         return Err(format!(
             "round-trip mismatch (modulo Join re-association)\n  text: {text}\n  \
@@ -388,7 +597,10 @@ fn roundtrip(original: &Query) -> Result<(), String> {
 /// returned unchanged. The match is exhaustive (no wildcard arm), matching
 /// [`normalize_join_assoc`]'s own discipline: a future enum variant is a
 /// compile error here until this function is taught its shape.
-fn normalize_update_op(op: &GraphUpdateOperation) -> GraphUpdateOperation {
+fn normalize_update_op(
+    op: &GraphUpdateOperation,
+    aliases: &BTreeMap<Variable, Variable>,
+) -> GraphUpdateOperation {
     match op {
         GraphUpdateOperation::InsertData { data } => {
             GraphUpdateOperation::InsertData { data: data.clone() }
@@ -407,7 +619,7 @@ fn normalize_update_op(op: &GraphUpdateOperation) -> GraphUpdateOperation {
             insert: insert.clone(),
             with: with.clone(),
             using: using.clone(),
-            pattern: Box::new(normalize_join_assoc(pattern)),
+            pattern: Box::new(normalize_join_assoc(pattern, aliases)),
         },
         GraphUpdateOperation::Load {
             silent,
@@ -461,12 +673,74 @@ fn normalize_update_op(op: &GraphUpdateOperation) -> GraphUpdateOperation {
 }
 
 /// Normalize every operation of `u` by [`normalize_update_op`].
-fn normalize_update(u: &Update) -> Update {
+fn normalize_update(u: &Update, aliases: &[BTreeMap<Variable, Variable>]) -> Update {
     Update {
-        operations: u.operations.iter().map(normalize_update_op).collect(),
+        operations: u
+            .operations
+            .iter()
+            .zip(aliases)
+            .map(|(operation, names)| normalize_update_op(operation, names))
+            .collect(),
         base_iri: u.base_iri.clone(),
         version: u.version.clone(),
     }
+}
+
+/// Reserve every template variable, including a predicate or quoted slot that is
+/// absent from WHERE. The public shared variable walk keeps this oracle typed.
+fn template_variables(operation: &GraphUpdateOperation) -> BTreeSet<Variable> {
+    let (first, second): (&[_], &[_]) = match operation {
+        GraphUpdateOperation::InsertData { data } | GraphUpdateOperation::DeleteData { data } => {
+            (data, &[])
+        }
+        GraphUpdateOperation::DeleteInsert { delete, insert, .. } => (delete, insert),
+        GraphUpdateOperation::Load { .. }
+        | GraphUpdateOperation::Clear { .. }
+        | GraphUpdateOperation::Drop { .. }
+        | GraphUpdateOperation::Create { .. }
+        | GraphUpdateOperation::Add { .. }
+        | GraphUpdateOperation::Move { .. }
+        | GraphUpdateOperation::Copy { .. } => (&[], &[]),
+    };
+    let mut variables = BTreeSet::new();
+    for quad in first.iter().chain(second) {
+        walk_pre_post(NodeRef::Triple(&quad.triple), |visit, node| {
+            if visit == Visit::Enter {
+                node.for_each_variable(|variable| {
+                    variables.insert(variable.clone());
+                });
+            }
+            Flow::Descend
+        });
+        if let Some(NamedNodePattern::Variable(variable)) = &quad.graph {
+            variables.insert(variable.clone());
+        }
+    }
+    variables
+}
+
+fn update_aliases(
+    original: &Update,
+    reparsed: &Update,
+) -> Result<Vec<BTreeMap<Variable, Variable>>, String> {
+    if original.operations.len() != reparsed.operations.len() {
+        return Err("the carrier changed the number of update operations".to_owned());
+    }
+    let mut aliases = Vec::new();
+    for (source, target) in original.operations.iter().zip(&reparsed.operations) {
+        aliases.push(match (source, target) {
+            (
+                GraphUpdateOperation::DeleteInsert { pattern: a, .. },
+                GraphUpdateOperation::DeleteInsert { pattern: b, .. },
+            ) => hidden_aliases(
+                &normalize_join_assoc(a, &BTreeMap::new()),
+                &normalize_join_assoc(b, &BTreeMap::new()),
+                &template_variables(source),
+            )?,
+            _ => BTreeMap::new(),
+        });
+    }
+    Ok(aliases)
 }
 
 /// Parse `text` as an Update, `Display` it, re-parse, and compare modulo
@@ -477,8 +751,10 @@ fn roundtrip_update(original: &Update) -> Result<(), String> {
     let reparsed = SparqlParser::new()
         .parse_update(&text)
         .map_err(|e| format!("re-parse of the serialized update failed: {e}\n  text: {text}"))?;
-    let original_norm = normalize_update(original);
-    let reparsed_norm = normalize_update(&reparsed);
+    let aliases = update_aliases(original, &reparsed)?;
+    let original_norm = normalize_update(original, &aliases);
+    let reparsed_norm =
+        normalize_update(&reparsed, &vec![BTreeMap::new(); reparsed.operations.len()]);
     if original_norm != reparsed_norm {
         return Err(format!(
             "round-trip mismatch (modulo Join re-association)\n  text: {text}\n  \
@@ -749,4 +1025,87 @@ fn corpus_round_trips_through_the_serializer() {
         failures.len(),
         failures.join("\n\n")
     );
+}
+
+#[test]
+fn hidden_alpha_oracle_refuses_collisions_splits_merges_and_ordinary_renames() {
+    let original = GraphPattern::Bgp {
+        patterns: vec![
+            TriplePattern {
+                subject: TermPattern::Variable(Variable::hidden("a")),
+                predicate: NamedNodePattern::NamedNode(patterns::example("p")),
+                object: TermPattern::Variable(Variable::hidden("b")),
+            },
+            TriplePattern {
+                subject: TermPattern::Variable(Variable::hidden("a")),
+                predicate: NamedNodePattern::NamedNode(patterns::example("q")),
+                object: TermPattern::Variable(Variable::new("caller")),
+            },
+        ],
+    };
+    let expected = normalize_join_assoc(
+        &original,
+        &BTreeMap::from([
+            (Variable::hidden("a"), Variable::new("alpha")),
+            (Variable::hidden("b"), Variable::new("beta")),
+        ]),
+    );
+    let aliases = hidden_aliases(&original, &expected, &BTreeSet::new())
+        .expect("bijective hidden-only aliases");
+    assert_eq!(normalize_join_assoc(&original, &aliases), expected);
+    for case in 0..4 {
+        let mut bad = expected.clone();
+        let GraphPattern::Bgp { patterns } = &mut bad else {
+            panic!("BGP");
+        };
+        match case {
+            0 => patterns[0].subject = TermPattern::Variable(Variable::new("caller")),
+            1 => patterns[0].object = TermPattern::Variable(Variable::new("alpha")),
+            2 => patterns[1].subject = TermPattern::Variable(Variable::new("other")),
+            3 => patterns[1].object = TermPattern::Variable(Variable::new("other")),
+            _ => unreachable!(),
+        }
+        assert!(
+            hidden_aliases(&original, &bad, &BTreeSet::new()).is_err(),
+            "case {case}"
+        );
+    }
+    let mut changed_constant = expected;
+    let GraphPattern::Bgp { patterns } = &mut changed_constant else {
+        panic!("BGP");
+    };
+    patterns[0].predicate = NamedNodePattern::NamedNode(patterns::example("different"));
+    let aliases = hidden_aliases(&original, &changed_constant, &BTreeSet::new())
+        .expect("names alone still biject");
+    assert_ne!(normalize_join_assoc(&original, &aliases), changed_constant);
+}
+
+#[test]
+fn update_carrier_aliases_reserve_template_only_variables_in_every_slot() {
+    let parser = SparqlParser::new();
+    for template in [
+        "?__purrdf_hidden_0 <http://example.org/new> ?o",
+        "?o ?__purrdf_hidden_0 <http://example.org/new>",
+        "<<( ?__purrdf_hidden_0 <http://example.org/new> ?o )>> <http://example.org/marked> true",
+        "<<( ?o ?__purrdf_hidden_0 <http://example.org/new> )>> <http://example.org/marked> true",
+        "<<( ?o <http://example.org/new> ?__purrdf_hidden_0 )>> <http://example.org/marked> true",
+        "GRAPH ?__purrdf_hidden_0 { ?o <http://example.org/marked> true }",
+    ] {
+        for keyword in ["INSERT", "DELETE"] {
+            let source = parser.parse_update(&format!(
+                "{keyword} {{ {template} }} WHERE {{ ?s (<http://example.org/p>|<http://example.org/q>)/<http://example.org/r> ?o }}"
+            )).expect("an update template and alternative parse");
+            roundtrip_update(&source)
+                .expect("all output variables stay exact and hidden aliases stay fresh");
+            let text = source.to_string();
+            assert!(text.contains("?___purrdf_hidden_0"), "{text}");
+            let captured = parser
+                .parse_update(&text.replace("?___purrdf_hidden_0", "?__purrdf_hidden_0"))
+                .expect("a syntactically legal carrier that captures an unbound template name");
+            assert!(
+                update_aliases(&source, &captured).is_err(),
+                "template-only capture is refused"
+            );
+        }
+    }
 }

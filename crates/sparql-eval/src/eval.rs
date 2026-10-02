@@ -3104,6 +3104,7 @@ pub fn eval<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
+    pattern.validate_hidden_variables()?;
     if ctx.dataset.storage_live_budget().is_some()
         && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
     {
@@ -3498,6 +3499,7 @@ pub fn evaluate_query<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, EvalError> {
+    query.validate_hidden_variables()?;
     evaluate_query_over(query, None, ctx)
 }
 

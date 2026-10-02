@@ -263,7 +263,7 @@ fn a_ten_thousand_arm_union_round_trips_flat() {
     assert_eq!(text.matches(" UNION ").count(), 9_999);
 }
 
-/// A linear path forwards as flat triples, and an alternative as its flat chain.
+/// A linear path forwards as flat triples, and an alternative as flat UNION arms.
 /// Ten thousand steps and a mixed chain of inverse, modified and negated steps
 /// re-parse to the same normalized algebra in both rendering modes.
 #[test]
@@ -279,11 +279,10 @@ fn a_ten_thousand_step_path_round_trips_flat() {
             0,
             "a flat {op} chain needs no bracket"
         );
-        if op == "/" {
-            assert_eq!(text.matches(" .").count(), 10_000);
-        } else {
-            assert_eq!(text.matches(&format!(">{op}<")).count(), 9_999);
+        if op == "|" {
+            assert_eq!(text.matches(" UNION ").count(), 9_999);
         }
+        assert_eq!(text.matches(" .").count(), 10_000);
     }
     let mixed = (0..2_000)
         .map(|i| match i % 5 {

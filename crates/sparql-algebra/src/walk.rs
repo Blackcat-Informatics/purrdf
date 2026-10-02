@@ -16,7 +16,7 @@
 
 use crate::algebra::{AggregateExpression, Expression, GraphPattern, OrderExpression};
 use crate::algebra::{Function, PropertyPathExpression};
-use crate::ast::{GroundTerm, TermPattern, TriplePattern};
+use crate::ast::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 use crate::worklist::WorkList;
 
 /// A borrowed node of the algebra tree, of any of its recursive kinds.
@@ -48,6 +48,94 @@ pub enum NodeRef<'a> {
 }
 
 impl NodeRef<'_> {
+    /// Visit the variable leaves this node owns directly. Recursive children are
+    /// visited separately by the shared walk, so a complete variable census stays
+    /// stack safe and includes bindings, graph names and expression-only references.
+    pub fn for_each_variable(self, mut visit: impl FnMut(&Variable)) {
+        let named = |name: &NamedNodePattern, visit: &mut dyn FnMut(&Variable)| {
+            if let NamedNodePattern::Variable(variable) = name {
+                visit(variable);
+            }
+        };
+        match self {
+            Self::Pattern(pattern) => match pattern {
+                GraphPattern::Graph { name, .. } | GraphPattern::Service { name, .. } => {
+                    named(name, &mut visit);
+                }
+                GraphPattern::Extend { variable, .. } => visit(variable),
+                GraphPattern::Unfold {
+                    element, companion, ..
+                } => {
+                    visit(element);
+                    if let Some(variable) = companion {
+                        visit(variable);
+                    }
+                }
+                GraphPattern::Values { variables, .. }
+                | GraphPattern::Project { variables, .. } => {
+                    variables.iter().for_each(&mut visit);
+                }
+                GraphPattern::Group {
+                    variables,
+                    aggregates,
+                    ..
+                } => {
+                    variables.iter().for_each(&mut visit);
+                    for (variable, _) in aggregates {
+                        visit(variable);
+                    }
+                }
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Join { .. }
+                | GraphPattern::Lateral { .. }
+                | GraphPattern::Minus { .. }
+                | GraphPattern::Union { .. }
+                | GraphPattern::LeftJoin { .. }
+                | GraphPattern::Filter { .. }
+                | GraphPattern::OrderBy { .. }
+                | GraphPattern::Distinct { .. }
+                | GraphPattern::Reduced { .. }
+                | GraphPattern::Slice { .. }
+                | GraphPattern::PropertyFunction(_) => {}
+            },
+            Self::Expr(Expression::Variable(variable) | Expression::Bound(variable))
+            | Self::Term(TermPattern::Variable(variable)) => visit(variable),
+            Self::Triple(triple) => named(&triple.predicate, &mut visit),
+            Self::Expr(
+                Expression::NamedNode(_)
+                | Expression::Literal(_)
+                | Expression::Or(_)
+                | Expression::And(_)
+                | Expression::Coalesce(_)
+                | Expression::Arithmetic(..)
+                | Expression::Equal(..)
+                | Expression::SameTerm(..)
+                | Expression::Greater(..)
+                | Expression::GreaterOrEqual(..)
+                | Expression::Less(..)
+                | Expression::LessOrEqual(..)
+                | Expression::Not(_)
+                | Expression::UnaryPlus(_)
+                | Expression::UnaryMinus(_)
+                | Expression::In(..)
+                | Expression::If(..)
+                | Expression::FunctionCall(..)
+                | Expression::Exists(_),
+            )
+            | Self::Term(
+                TermPattern::NamedNode(_)
+                | TermPattern::BlankNode(_)
+                | TermPattern::Literal(_)
+                | TermPattern::Triple(_),
+            )
+            | Self::Path(_)
+            | Self::Ground(_)
+            | Self::Order(_)
+            | Self::Aggregate(_) => {}
+        }
+    }
+
     /// Call `visit` with each child of this node, in the order the node's fields are
     /// declared.
     ///

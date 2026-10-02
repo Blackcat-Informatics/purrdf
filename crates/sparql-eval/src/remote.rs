@@ -1022,7 +1022,7 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     // the sanitized copy. The copy and the serialization each run over a work list, so
     // a body nested to any depth is forwarded on constant machine stack.
     let sanitized = sanitize_forwarded_body(inner);
-    let query_text = purrdf_sparql_algebra::pattern_to_select_query(&sanitized);
+    let query_text = purrdf_sparql_algebra::try_pattern_to_select_query(&sanitized)?;
     // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
     // else is in a position to poll.
     let stop = ctx.stop_signal().map(Arc::clone);
@@ -1045,7 +1045,22 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     // would ever poll it.
     let post_return_trip = ctx.stop_check();
     let error = match response {
-        Ok(resolved) => {
+        Ok(mut resolved) => {
+            // SPARQL SELECT needs a projection item, so a carrier for a body with
+            // no observable variables uses a fresh constant unit column. Restore
+            // the source body's zero-column schema, keeping its bag one row for
+            // one row. An endpoint's extra columns cannot become caller bindings.
+            let schema = crate::eval::syntactic_schema(inner);
+            if schema
+                .vars()
+                .iter()
+                .all(crate::blank_scope::is_joined_blank)
+            {
+                resolved.variables.clear();
+                for row in &mut resolved.rows {
+                    row.clear();
+                }
+            }
             if let Some(tripped) = post_return_trip {
                 let schema = Arc::new(VarSchema::from_vars(resolved.variables));
                 return Ok(Invocation::Answered(Evaluated::Truncated(

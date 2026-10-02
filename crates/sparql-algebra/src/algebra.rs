@@ -461,6 +461,9 @@ impl core::fmt::Display for QueryDataset {
 impl core::fmt::Display for Update {
     /// Serialize an Update request: its operations joined by `;`.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for operation in &self.operations {
+            operation.validate_hidden_outputs()?;
+        }
         if let Some(base) = &self.base_iri {
             write!(f, "BASE <{}> ", base.as_str())?;
         }
@@ -571,6 +574,35 @@ fn fmt_quad_pattern_body(quads: &[QuadPattern]) -> String {
     out.trim_end().to_owned()
 }
 
+impl GraphUpdateOperation {
+    /// Refuse hidden output identities before writing any part of a carrier.
+    fn validate_hidden_outputs(&self) -> core::fmt::Result {
+        let validate_template = |template: &[QuadPattern]| -> core::fmt::Result {
+            for quad in template {
+                crate::validate::check_quad_output(quad).map_err(|_| core::fmt::Error)?;
+            }
+            Ok(())
+        };
+        match self {
+            Self::InsertData { data } | Self::DeleteData { data } => validate_template(data)?,
+            Self::DeleteInsert {
+                delete,
+                insert,
+                pattern,
+                ..
+            } => {
+                validate_template(delete)?;
+                validate_template(insert)?;
+                pattern
+                    .validate_hidden_variables()
+                    .map_err(|_| core::fmt::Error)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 impl core::fmt::Display for GraphUpdateOperation {
     /// Serialize one update operation to SPARQL Update surface syntax.
     ///
@@ -587,6 +619,7 @@ impl core::fmt::Display for GraphUpdateOperation {
     /// [`crate::parser::SparqlParser::parse_update`]: `parse_update(op.to_string())`
     /// reproduces `op` for every variant of this enum.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.validate_hidden_outputs()?;
         match self {
             Self::InsertData { data } => {
                 write!(f, "INSERT DATA {{ {} }}", fmt_quad_pattern_body(data))
@@ -626,7 +659,11 @@ impl core::fmt::Display for GraphUpdateOperation {
                     write!(f, "{u} ")?;
                 }
                 let mut body = String::new();
-                crate::serialize::fmt_group_body(&mut body, pattern);
+                crate::serialize::fmt_group_body(&mut body, pattern, |note| {
+                    for quad in delete.iter().chain(insert) {
+                        crate::validate::for_each_quad_variable(quad, &mut *note);
+                    }
+                })?;
                 write!(f, "WHERE {{ {body} }}")
             }
             Self::Load {

@@ -28,7 +28,7 @@ use super::{
     simple_predicate,
 };
 
-/// One predicate edge of a wholly linear path, oriented relative to its endpoints.
+/// One predicate edge, oriented relative to its endpoints.
 #[derive(Clone, Copy)]
 struct PathEdge<'a> {
     predicate: &'a NamedNode,
@@ -51,16 +51,25 @@ impl PathEdge<'_> {
     }
 }
 
-/// Compile the path to an ordered word of oriented predicate edges, or reject the
-/// whole word. Inversion is an involution and reverses composition: `^(p/q)` walks
-/// `^q` then `^p`. No parser counter or block is touched before eligibility is known.
-fn linear_path(path: &PropertyPathExpression) -> Option<Vec<PathEdge<'_>>> {
+/// The complete path consists of predicate edges, with or without alternatives.
+enum PredicatePath<'a> {
+    Linear(Vec<PathEdge<'a>>),
+    Branching,
+}
+
+/// Certify the whole path before touching parser counters or blocks. Keep the
+/// existing ordered-edge fast path for a linear word. Inversion is an involution
+/// and reverses composition: `^(p/q)` walks `^q` then `^p`.
+fn predicate_path(path: &PropertyPathExpression) -> Option<PredicatePath<'_>> {
     let mut pending = WorkList::<_, 16>::with((path, false));
     let mut edges = Vec::new();
+    let mut branching = false;
     while let Some((path, inverse)) = pending.pop() {
         match path {
             PropertyPathExpression::NamedNode(predicate) => {
-                edges.push(PathEdge { predicate, inverse });
+                if !branching {
+                    edges.push(PathEdge { predicate, inverse });
+                }
             }
             PropertyPathExpression::Reverse(inner) => pending.push((inner, !inverse)),
             PropertyPathExpression::Sequence(elements) => {
@@ -70,8 +79,12 @@ fn linear_path(path: &PropertyPathExpression) -> Option<Vec<PathEdge<'_>>> {
                     pending.reverse_top(pending.len() - queued);
                 }
             }
-            PropertyPathExpression::Alternative(_)
-            | PropertyPathExpression::ZeroOrMore(_)
+            PropertyPathExpression::Alternative(elements) => {
+                branching = true;
+                edges.clear();
+                pending.extend(elements.iter().map(|element| (element, inverse)));
+            }
+            PropertyPathExpression::ZeroOrMore(_)
             | PropertyPathExpression::OneOrMore(_)
             | PropertyPathExpression::ZeroOrOne(_)
             | PropertyPathExpression::NegatedPropertySet(_)
@@ -79,7 +92,18 @@ fn linear_path(path: &PropertyPathExpression) -> Option<Vec<PathEdge<'_>>> {
             | PropertyPathExpression::Wildcard { .. } => return None,
         }
     }
-    Some(edges)
+    Some(if branching {
+        PredicatePath::Branching
+    } else {
+        PredicatePath::Linear(edges)
+    })
+}
+
+/// One step of the certified predicate path's relational translation.
+enum PathTranslation<'a> {
+    Path(&'a PropertyPathExpression, bool, TermPattern, TermPattern),
+    Sequence(usize),
+    Alternative(usize),
 }
 
 /// A predicate-object list in progress: its subject and the verb whose objects are
@@ -472,17 +496,22 @@ impl Parser<'_, '_> {
                         self.annotations(state, base, None, frames, sink)
                     }
                     Verb::Path(path) => {
-                        let edges = (sink.context == TripleContext::Pattern)
-                            .then(|| linear_path(path))
+                        let translation = (sink.context == TripleContext::Pattern)
+                            .then(|| predicate_path(path))
                             .flatten();
-                        if let Some(edges) = edges {
-                            self.push_linear_path(subject, &edges, object, &mut sink.triples);
-                        } else {
-                            sink.paths.push(GraphPattern::Path {
+                        match translation {
+                            Some(PredicatePath::Linear(edges)) => {
+                                self.push_linear_path(subject, &edges, object, &mut sink.triples);
+                            }
+                            Some(PredicatePath::Branching) => {
+                                sink.paths
+                                    .push(self.translate_predicate_path(path, subject, object));
+                            }
+                            None => sink.paths.push(GraphPattern::Path {
                                 subject,
                                 path: path.clone(),
                                 object,
-                            });
+                            }),
                         }
                         self.continue_objects(state, frames, sink)
                     }
@@ -585,6 +614,78 @@ impl Parser<'_, '_> {
             current = next;
         }
         triples.push(last.triple(current, object));
+    }
+
+    /// Translate a certified predicate-only path as compact joins and bag unions
+    /// (§18.2.2.4). A sequence introduces one hidden witness at each join point;
+    /// alternatives share endpoints, retain repeated arms, and are never expanded
+    /// into a Cartesian product of branches. All work and drop walks stay iterative.
+    fn translate_predicate_path(
+        &mut self,
+        path: &PropertyPathExpression,
+        subject: TermPattern,
+        object: TermPattern,
+    ) -> GraphPattern {
+        let mut pending =
+            WorkList::<_, 16>::with(PathTranslation::Path(path, false, subject, object));
+        let mut results = Vec::new();
+        while let Some(step) = pending.pop() {
+            match step {
+                PathTranslation::Path(path, inverse, subject, object) => match path {
+                    PropertyPathExpression::NamedNode(predicate) => {
+                        results.push(GraphPattern::Bgp {
+                            patterns: vec![PathEdge { predicate, inverse }.triple(subject, object)],
+                        });
+                    }
+                    PropertyPathExpression::Reverse(inner) => {
+                        pending.push(PathTranslation::Path(inner, !inverse, subject, object));
+                    }
+                    PropertyPathExpression::Sequence(elements) => {
+                        pending.push(PathTranslation::Sequence(elements.len()));
+                        let first = pending.len();
+                        let mut current = subject;
+                        for index in 0..elements.len() {
+                            let next = if index + 1 == elements.len() {
+                                object.clone()
+                            } else {
+                                TermPattern::BlankNode(self.fresh_anon())
+                            };
+                            let element = &elements[if inverse {
+                                elements.len() - index - 1
+                            } else {
+                                index
+                            }];
+                            pending.push(PathTranslation::Path(
+                                element,
+                                inverse,
+                                current,
+                                next.clone(),
+                            ));
+                            current = next;
+                        }
+                        pending.reverse_top(pending.len() - first);
+                    }
+                    PropertyPathExpression::Alternative(elements) => {
+                        pending.push(PathTranslation::Alternative(elements.len()));
+                        pending.extend(elements.iter().rev().map(|element| {
+                            PathTranslation::Path(element, inverse, subject.clone(), object.clone())
+                        }));
+                    }
+                    _ => unreachable!("the whole path was certified before translation"),
+                },
+                PathTranslation::Sequence(count) | PathTranslation::Alternative(count) => {
+                    let parts = results.split_off(results.len() - count);
+                    let alternative = matches!(step, PathTranslation::Alternative(_));
+                    let result = parts.into_iter().reduce(if alternative {
+                        GraphPattern::union
+                    } else {
+                        super::join
+                    });
+                    results.push(result.expect("a path chain has at least two elements"));
+                }
+            }
+        }
+        results.pop().expect("the path has a predicate leaf")
     }
 
     // ── property paths (§18.1.7 / §9) ────────────────────────────────────────
