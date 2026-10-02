@@ -1,0 +1,17 @@
+{
+  "pr": 379,
+  "issue": 375,
+  "head": "52df684184de67697361d5eacee3008bedd31c6a",
+  "base": "a63d3d573ebca7a0e7a78dd74ef03cfb856c7184",
+  "changed_paths": [
+    ".github/workflows/release-cargo.yaml",
+    ".github/workflows/release-pypi.yaml",
+    "scripts/publish-python.py",
+    "scripts/test_python_publisher.py"
+  ],
+  "local_checks": "normal hook, 18 publisher tests, Ruff, actionlint, actual stable1.99 causal test, retained distributions, independent security review PASS",
+  "runtime_source": "unchanged",
+  "advisory_checker": "unchanged by maintainer instruction",
+  "new_hosted_checks": "running; not claimed passed",
+  "functional_publication": "not yet performed"
+}
