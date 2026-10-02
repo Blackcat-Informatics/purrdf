@@ -1690,18 +1690,18 @@ fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<S
     let quad_offends = |quad: &RdfQuad| {
         mentions(&quad.subject)
             || mentions(&quad.object)
-            || quad.graph_name.as_ref().is_some_and(&mentions)
+            || quad.graph_name.as_ref().is_some_and(mentions)
     };
     let reifier_offends = |reifier: &purrdf_rdf::RdfReifier| {
         mentions(&reifier.reifier)
             || mentions(&reifier.statement.subject)
             || mentions(&reifier.statement.object)
-            || reifier.graph.as_ref().is_some_and(&mentions)
+            || reifier.graph.as_ref().is_some_and(mentions)
     };
     let annotation_offends = |annotation: &purrdf_rdf::RdfAnnotation| {
         mentions(&annotation.reifier)
             || mentions(&annotation.object)
-            || annotation.graph.as_ref().is_some_and(&mentions)
+            || annotation.graph.as_ref().is_some_and(mentions)
     };
     let offends = graph.owned_quads().any(|quad| quad_offends(&quad))
         || graph.owned_reifiers().any(|r| reifier_offends(&r))
