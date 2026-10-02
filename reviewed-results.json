@@ -1,0 +1,12 @@
+{
+  "issue": 375,
+  "head": "f9446efd76d8c13a2599f36b1a2e6ba858e565c8",
+  "base": "040acf33bed71a147f3bdc1224d45028bbcc5564",
+  "changed_paths": [
+    "scripts/build-capi-bundle.py"
+  ],
+  "validation": "four capture tests, Ruff, diff, normal hook PASS; independent source GO",
+  "runtime_source": "unchanged",
+  "python_npm_tags": "remain at published040acf33",
+  "cargo_publication": "pending"
+}
