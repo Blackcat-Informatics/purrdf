@@ -20,9 +20,10 @@
 //!
 //! The design note states the soundness premise: the pushdown's boundary is *"a
 //! function of the query and the names of the pre-bound variables, both constant
-//! across focus nodes."* That is true of the boundary — [`crate::substitute`]'s
+//! across focus nodes."* That is true of the ordinary pushdown boundary — its
 //! descent stops at an `OPTIONAL`'s and a `MINUS`'s right arm by matching on the
-//! `GraphPattern` variant, never on a value — but it is NOT the whole story about
+//! `GraphPattern` variant, never on a value. SHACL completes leaves in every arm,
+//! and both lanes are keyed separately. Neither boundary is the whole story about
 //! which cells exist, and the difference is already live in the crate:
 //! `term_pattern_from_ground` refuses a [`GroundTerm::BlankNode`], because a blank in
 //! a pattern is an anonymous variable rather than a request to match that blank. So a
@@ -152,7 +153,7 @@ enum Cell<'a> {
     Ground(&'a mut Option<GroundTerm>),
     /// An expression node, which the SHACL lane replaces wholesale.
     Expr(&'a mut Expression),
-    /// A `GRAPH` or `SERVICE` name.
+    /// A predicate or a `GRAPH`/`SERVICE` name.
     GraphName(&'a mut NamedNodePattern),
 }
 
@@ -303,9 +304,8 @@ fn walk_query(query: &mut Query, visit: &mut dyn FnMut(u32, Cell<'_>)) -> u32 {
 ///
 /// The arms of [`visit_own_cells`] and [`for_each_child_slot`] together mirror
 /// `crate::substitute::substitute_in_graph_pattern`'s arms one for one, plus the term
-/// positions of the three leaves that walk does not enter because the PUSHDOWN half of
-/// the rewrite owns them (`Bgp`, `Path`) and the cells of a `VALUES` block, which is
-/// where the seed's row lives.
+/// positions of the matched leaves (`Bgp`, `Path`), including their predicates,
+/// and the cells of a `VALUES` block, where query and leaf-local seeds live.
 ///
 /// # How the walk moves through the tree
 ///
@@ -496,9 +496,9 @@ fn visit_own_cells(
         GraphPattern::Bgp { patterns } => {
             for triple in patterns.iter_mut() {
                 walk_term(&mut triple.subject, index, visit);
-                // The predicate is a `NamedNodePattern` that neither half of the
-                // rewrite writes: the pushdown visits subject and object only, and
-                // the expression walk does not enter a `Bgp` at all.
+                let here = *index;
+                *index += 1;
+                visit(here, Cell::GraphName(&mut triple.predicate));
                 walk_term(&mut triple.object, index, visit);
             }
         }
@@ -695,24 +695,34 @@ fn count_star() -> AggregateExpression {
 
 /// [`walk_query`]'s term-position walk.
 ///
-/// A quoted triple's own subject and object are positions too — the pushdown descends
-/// into them — so they are numbered as well, subject first, each with everything
-/// nested in it before the other. Its predicate is not: neither half of the rewrite
-/// writes there. The term is visited BEFORE its nesting is read, so what is descended
-/// into is the term as the visitor left it. The walk keeps its own work list, so a
-/// deeper nesting needs no more machine stack.
+/// A quoted triple's subject, predicate and object are positions too. The term is
+/// visited before its nesting is read, so descent sees the term the visitor left.
+/// The work list keeps every depth off the machine stack.
 fn walk_term(term: &mut TermPattern, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
-    let mut pending: purrdf_core::SmallVec<[&mut TermPattern; 8]> = purrdf_core::smallvec![term];
-    while let Some(term) = pending.pop() {
+    enum Position<'a> {
+        Term(&'a mut TermPattern),
+        Predicate(&'a mut NamedNodePattern),
+    }
+    let mut pending: purrdf_core::SmallVec<[Position<'_>; 8]> =
+        purrdf_core::smallvec![Position::Term(term)];
+    while let Some(position) = pending.pop() {
         let here = *index;
         *index += 1;
-        visit(here, Cell::Term(&mut *term));
-        if let TermPattern::Triple(triple) = term {
-            let TriplePattern {
-                subject, object, ..
-            } = &mut **triple;
-            pending.push(object);
-            pending.push(subject);
+        match position {
+            Position::Term(term) => {
+                visit(here, Cell::Term(&mut *term));
+                if let TermPattern::Triple(triple) = term {
+                    let TriplePattern {
+                        subject,
+                        predicate,
+                        object,
+                    } = &mut **triple;
+                    pending.push(Position::Term(object));
+                    pending.push(Position::Predicate(predicate));
+                    pending.push(Position::Term(subject));
+                }
+            }
+            Position::Predicate(predicate) => visit(here, Cell::GraphName(predicate)),
         }
     }
 }
@@ -1058,6 +1068,9 @@ mod iterative_walk_tests {
             GraphPattern::Bgp { patterns } => {
                 for triple in patterns.iter_mut() {
                     walk_term_ref(&mut triple.subject, index, visit);
+                    let here = *index;
+                    *index += 1;
+                    visit(here, Cell::GraphName(&mut triple.predicate));
                     walk_term_ref(&mut triple.object, index, visit);
                 }
             }
@@ -1188,6 +1201,9 @@ mod iterative_walk_tests {
         visit(here, Cell::Term(term));
         if let TermPattern::Triple(triple) = term {
             walk_term_ref(&mut triple.subject, index, visit);
+            let here = *index;
+            *index += 1;
+            visit(here, Cell::GraphName(&mut triple.predicate));
             walk_term_ref(&mut triple.object, index, visit);
         }
     }
@@ -1694,7 +1710,7 @@ mod iterative_walk_tests {
                 base_iri: None,
                 version: None,
             };
-            let expected = u32::try_from(DEPTH + 1 + 2).expect("fits");
+            let expected = u32::try_from(DEPTH + 1 + 3).expect("fits");
 
             let mut seen = 0_u32;
             let counted = walk_query(&mut query, &mut |index, _| {
