@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use crate::json_model::{Object as Map, Value, json};
-use purrdf::loss::LossLedger;
+use purrdf_rdf::loss::LossLedger;
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{
     PydanticClassConfig, PydanticConfig, PydanticModuleConfig, PydanticPackage,

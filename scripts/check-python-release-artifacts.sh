@@ -9,11 +9,13 @@ version="$(python3 -c "import tomllib; print(tomllib.load(open('bindings/python/
 python3 scripts/package-licenses.py --profile python --check
 python3 scripts/package-licenses.py --profile python-rdflib --check
 python3 bindings/python/purrdf_build_backend.py --self-test
-output="$repo/target/python-release-candidate"
+parent="$repo/target/python-release-candidate"
+mkdir -p "$parent"
+output="$(mktemp -d "$parent/attempt.XXXXXX")"
+printf 'Python release candidate: %s\n' "$output"
 main_output="$output/purrdf"
 shadow_output="$output/purrdf-rdflib"
 mkdir -p "$main_output" "$shadow_output"
-find "$main_output" "$shadow_output" -maxdepth 1 -type f \( -name '*.whl' -o -name '*.tar.gz' \) -delete
 RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}" uv build --no-create-gitignore --sdist --project bindings/python --out-dir "$main_output"
 RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}" uv build --no-create-gitignore --wheel "$main_output"/purrdf-[0-9]*.tar.gz --out-dir "$main_output" \
   --config-setting 'maturin.build-args=--compatibility manylinux_2_34'

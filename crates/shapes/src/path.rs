@@ -3,7 +3,7 @@
 
 //! SHACL property path evaluation.
 //!
-//! Evaluates a [`Path`] against a frozen [`::purrdf::RdfDataset`], returning the set of
+//! Evaluates a [`Path`] against a frozen [`::purrdf_rdf::RdfDataset`], returning the set of
 //! value nodes reachable from a given focus node. All six SHACL §2.3.1 path forms
 //! are supported: predicate, inverse, sequence, alternative, and the three closure
 //! paths (`zeroOrMore`, `oneOrMore`, `zeroOrOne`). Pattern lookups are ID-native
@@ -37,7 +37,7 @@
 
 use crate::data_view::ShaclRead;
 
-use ::purrdf::{IdSet, IdVec, TermId, smallvec};
+use ::purrdf_rdf::{IdSet, IdVec, TermId, smallvec};
 
 use crate::data::{GraphFilter, quads_for_pattern_ids, resolve_id};
 use crate::plan::{DatasetBinding, LoweredPath, lower_standalone_path};
@@ -162,8 +162,10 @@ impl FrontierDedup {
         if accumulated.len() < Self::LINEAR_MAX {
             return !linear_contains(accumulated, id);
         }
-        let mut set: IdSet =
-            IdSet::with_capacity_and_hasher(accumulated.len() * 2, ::purrdf::FastHasher::default());
+        let mut set: IdSet = IdSet::with_capacity_and_hasher(
+            accumulated.len() * 2,
+            ::purrdf_rdf::FastHasher::default(),
+        );
         set.extend(accumulated.iter().copied());
         let fresh = set.insert(id);
         self.hashed = Some(set);
@@ -515,7 +517,7 @@ pub(crate) fn invert(path: &Path) -> Path {
 mod tests {
     use std::sync::Arc;
 
-    use ::purrdf::RdfDataset;
+    use ::purrdf_rdf::RdfDataset;
 
     use super::*;
     use crate::term::Literal;
@@ -923,7 +925,7 @@ mod tests {
             }
             let mut set: IdSet = IdSet::with_capacity_and_hasher(
                 accumulated.len() * 2,
-                ::purrdf::FastHasher::default(),
+                ::purrdf_rdf::FastHasher::default(),
             );
             set.extend(accumulated.iter().copied());
             let fresh = set.insert(id);

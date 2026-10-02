@@ -38,7 +38,7 @@ use std::sync::Arc;
 use crate::data::{GraphFilter, native_quads};
 use crate::model::rdf;
 use crate::term::Term;
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 
 use super::{
     W3cCase, file_iri, iri_to_path, list_items, manifest_includes, mf, object, objects,

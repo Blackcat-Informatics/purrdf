@@ -160,24 +160,47 @@ pub(crate) fn plan_query(
     parameters: &DetHashSet<Variable>,
     reach: ShaclPrebinding,
 ) -> Result<Option<Query>, PlanError> {
+    plan_query_with(query, relations, agg_registry, parameters, reach, true)
+}
+
+/// Immutable prepared plans retain their positive topology. Registry and promised
+/// parameter feasibility still run, without normalizing an already admitted tree.
+pub(crate) fn recheck_query(
+    query: &Query,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>,
+    reach: ShaclPrebinding,
+) -> Result<Option<Query>, PlanError> {
+    plan_query_with(query, relations, agg_registry, parameters, reach, false)
+}
+
+fn plan_query_with(
+    query: &Query,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>,
+    reach: ShaclPrebinding,
+    normalize_positive: bool,
+) -> Result<Option<Query>, PlanError> {
     let pattern = match query {
         Query::Select { pattern, .. }
         | Query::Ask { pattern, .. }
         | Query::Construct { pattern, .. }
         | Query::Describe { pattern, .. } => pattern,
     };
-    let Some(planned) = plan_where_pattern(pattern, relations, agg_registry, parameters, reach)?
+    let Some(planned) = plan_where_pattern_with(
+        pattern,
+        relations,
+        agg_registry,
+        parameters,
+        reach,
+        normalize_positive,
+    )?
     else {
         return Ok(None);
     };
-    let mut planned_query = query.clone();
-    match &mut planned_query {
-        Query::Select { pattern, .. }
-        | Query::Ask { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. } => *pattern = planned,
-    }
-    Ok(Some(planned_query))
+    Ok(Some(crate::blank_scope::query_with_pattern(query, planned)))
 }
 
 /// [`plan_query`] on a standalone [`GraphPattern`] rather than a full [`Query`] — the
@@ -215,6 +238,17 @@ pub(crate) fn plan_where_pattern(
     parameters: &DetHashSet<Variable>,
     reach: ShaclPrebinding,
 ) -> Result<Option<GraphPattern>, PlanError> {
+    plan_where_pattern_with(pattern, relations, agg_registry, parameters, reach, true)
+}
+
+fn plan_where_pattern_with(
+    pattern: &GraphPattern,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>,
+    reach: ShaclPrebinding,
+    normalize_positive: bool,
+) -> Result<Option<GraphPattern>, PlanError> {
     // A blank node label written in two pieces of one basic graph pattern — a
     // triple and a call, a triple and a path, two calls — is one variable across
     // them. Settled first, and for every pattern whether or not it carries a call,
@@ -222,12 +256,16 @@ pub(crate) fn plan_where_pattern(
     // shared blank a sibling binds IS bound. See `crate::blank_scope`.
     let joined = crate::blank_scope::join_shared_blanks(pattern);
     let pattern = joined.as_ref().unwrap_or(pattern);
+    let normalized = normalize_positive
+        .then(|| crate::join_plan::normalize(pattern))
+        .flatten();
+    let pattern = normalized.as_ref().unwrap_or(pattern);
     // Either hazard alone must still run the walk: a query with a `Custom`
     // aggregate and no property-function call would otherwise skip this pass
     // entirely on the property-function-only check, and its admission (below,
     // as the planner enters the aggregate) would never happen.
     if !crate::property_fn_eval::pattern_needs_admission(pattern) {
-        return Ok(joined);
+        return Ok(normalized.or(joined));
     }
     // The plan is measured against the evaluator's depth envelope before any of it is
     // copied or an admitted call chain is traversed; one that does not fit is refused,

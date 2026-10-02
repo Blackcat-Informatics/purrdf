@@ -227,7 +227,7 @@
 //! [`ParseConfiguration`]: ProductDimension::ParseConfiguration
 //! [`IncludedGraphs`]: ProductDimension::IncludedGraphs
 
-use ::purrdf::PackDigest;
+use ::purrdf_rdf::PackDigest;
 use purrdf_core::ContentDigest;
 use purrdf_core::artifact::identity::{Identity, IdentityMismatch};
 use purrdf_core::ir::pack::bits::write_varint;
@@ -1064,7 +1064,7 @@ fn fix_for(dimension: ProductDimension) -> &'static str {
 mod tests {
     use std::sync::Arc;
 
-    use ::purrdf::{PackDigest, RdfDataset, TermValue};
+    use ::purrdf_rdf::{PackDigest, RdfDataset, TermValue};
     use purrdf_sparql_eval::{
         AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
         CustomAggregate, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,

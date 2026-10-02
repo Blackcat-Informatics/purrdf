@@ -19,8 +19,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ::purrdf::{ParseOptions, parse_dataset_with};
-use ::purrdf::{RdfDataset, RdfDatasetBuilder};
+use ::purrdf_rdf::{ParseOptions, parse_dataset_with};
+use ::purrdf_rdf::{RdfDataset, RdfDatasetBuilder};
 
 use crate::imports::ShapesImports;
 use crate::shapes::{self, Shapes};

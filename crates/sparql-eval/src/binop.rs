@@ -64,6 +64,30 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    let positive = ctx.positive_region(node).unwrap_or(false);
+    if positive
+        && let Some(plan) = crate::bgp::PositivePlan::build(
+            ctx.dataset,
+            &ctx.active_dataset,
+            ctx.active_graph,
+            node,
+        )?
+    {
+        return eval_positive_join(node, left, right, None, &plan, ctx).map(|evaluated| {
+            match evaluated {
+                Evaluated::Complete(rows) => {
+                    Evaluated::Complete(rows.reorder_like(plan.root_schema()))
+                }
+                Evaluated::Truncated(truncation) => {
+                    let (rows, certificate) = truncation.split();
+                    Evaluated::Truncated(Truncation::new(
+                        rows.reorder_like(plan.root_schema()),
+                        certificate,
+                    ))
+                }
+            }
+        });
+    }
     let mut lift = Lift::at(node);
     // A join is commutative, so a variable-endpoint `SERVICE` in the LEFT operand whose
     // endpoint the right operand binds (`{ SERVICE ?e { … } ?s ex:endpoint ?e }`) is
@@ -107,6 +131,57 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
         return Ok(lift.withheld());
     };
     Ok(lift.finish(hash_join(&l, &r, ctx)))
+}
+
+/// Execute one physical positive join. Disjoint unit-driven children keep the
+/// factor-once hash join. A seeded second child's result already contains the
+/// first child's bindings; another join would square driver multiplicities.
+pub(crate) fn eval_positive_join<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    input: Option<crate::eval::PositiveInput<'_, D::Id>>,
+    plan: &crate::bgp::PositivePlan,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let independent = input.is_none() && plan.children_disjoint(node);
+    let driver_left = plan.driver_left(node);
+    let (driver, driven, first, second) = if driver_left {
+        (left, right, 0, 1)
+    } else {
+        (right, left, 1, 0)
+    };
+    let Some(rows) = lift.absorb(
+        first,
+        crate::eval::eval_positive_evaluated(driver, input, plan, ctx)?,
+    ) else {
+        return Ok(lift.withheld());
+    };
+    if lift.is_truncated() {
+        return Ok(lift.finish(SolutionSeq::empty(rows.schema)));
+    }
+    if independent {
+        let Some(other) = lift.absorb(
+            second,
+            crate::eval::eval_positive_evaluated(driven, None, plan, ctx)?,
+        ) else {
+            return Ok(lift.withheld());
+        };
+        return Ok(lift.finish(hash_join(&rows, &other, ctx)));
+    }
+    let Some(joined) = lift.absorb(
+        second,
+        crate::eval::eval_positive_evaluated(
+            driven,
+            Some(crate::eval::positive_input(plan, driver, rows)?),
+            plan,
+            ctx,
+        )?,
+    ) else {
+        return Ok(lift.withheld());
+    };
+    Ok(lift.finish(joined))
 }
 
 /// Evaluate a graph pattern for ONE outer row μ, substituted in — the single seam
@@ -554,6 +629,26 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     arms: &[GraphPattern],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_union_with(node, arms, None, None, ctx)
+}
+
+pub(crate) fn eval_positive_union<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    arms: &[GraphPattern],
+    input: Option<crate::eval::PositiveInput<'_, D::Id>>,
+    plan: &crate::bgp::PositivePlan,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_union_with(node, arms, input, Some(plan), ctx)
+}
+
+fn eval_union_with<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    arms: &[GraphPattern],
+    input: Option<crate::eval::PositiveInput<'_, D::Id>>,
+    plan: Option<&crate::bgp::PositivePlan>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
     if arms.len() < 2
         || ctx.sequential_operation_required()
@@ -571,7 +666,18 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         let mut evaluated: purrdf_core::SmallVec<[SolutionSeq<D::Id>; 2]> =
             purrdf_core::SmallVec::with_capacity(arms.len());
         for (ordinal, arm) in arms.iter().enumerate() {
-            let Some(rows) = lift.absorb(ordinal, eval_evaluated(arm, ctx)?) else {
+            let Some(rows) = lift.absorb(
+                ordinal,
+                match plan {
+                    Some(plan) => crate::eval::eval_positive_evaluated(
+                        arm,
+                        input.as_ref().map(crate::eval::PositiveInput::borrowed),
+                        plan,
+                        ctx,
+                    )?,
+                    None => eval_evaluated(arm, ctx)?,
+                },
+            ) else {
                 return Ok(lift.withheld());
             };
             evaluated.push(rows);
@@ -582,6 +688,9 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
                 break;
             }
         }
+        // The arms have finished borrowing the producer. Release its owned bag
+        // before allocating the concatenated output.
+        drop(input);
         return Ok(lift.finish(concat_union(evaluated, ctx)));
     }
 
@@ -599,7 +708,10 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     // this closure.
     let eval_branch = |pattern: &GraphPattern| -> Result<UnionBranch<crate::parallel::MintedRow<D::Id>>, EvalError> {
         let mut child = ctx_ref.fork_for_worker();
-        let evaluated = eval_evaluated(pattern, &mut child)?;
+        let evaluated = match plan {
+            Some(plan) => crate::eval::eval_positive_evaluated(pattern, input.as_ref().map(crate::eval::PositiveInput::borrowed), plan, &mut child)?,
+            None => eval_evaluated(pattern, &mut child)?,
+        };
         let truncated = evaluated.is_truncated();
         // The arm's rows are materialized against the child's scratch either way; a
         // truncated arm's certificate rides back separately because the portable-row
@@ -631,6 +743,9 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         use rayon::prelude::*;
         arms.par_iter().map(eval_branch).collect()
     };
+    // Scoped workers have returned; their materialized rows no longer borrow
+    // the producer, which need not stay live during output assembly.
+    drop(input);
     // Errors reduce in source order, as the binary chain's `left?, right?` did at every
     // level: the first arm's error is the union's.
     let mut branches = results.into_iter().collect::<Result<Vec<_>, EvalError>>()?;

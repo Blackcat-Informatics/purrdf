@@ -306,6 +306,21 @@ pub struct Update {
 }
 
 impl Update {
+    /// Serialize this request, checking non-distinguished identities before
+    /// rendering any operation. Uses the same carrier as [`core::fmt::Display`].
+    ///
+    /// # Errors
+    /// Refuses hidden template outputs or explicit hidden observers in `WHERE`.
+    pub fn try_to_sparql(&self) -> crate::Result<String> {
+        checked_update_carrier(self, self.validate_hidden_outputs())
+    }
+
+    fn validate_hidden_outputs(&self) -> crate::Result<()> {
+        self.operations
+            .iter()
+            .try_for_each(GraphUpdateOperation::validate_hidden_outputs)
+    }
+
     /// The request's `VERSION` declaration, if the prologue declared one
     /// (last-wins across repeated declarations; see [`SparqlVersion`]).
     #[must_use]
@@ -460,7 +475,15 @@ impl core::fmt::Display for QueryDataset {
 
 impl core::fmt::Display for Update {
     /// Serialize an Update request: its operations joined by `;`.
+    ///
+    /// Refuses hidden template outputs and explicit hidden observers in `WHERE`
+    /// with [`core::fmt::Error`] before writing any bytes. Consequently,
+    /// [`ToString::to_string`] and `format!` panic for such hand-built algebra.
+    /// Use [`Self::try_to_sparql`] for a typed refusal. Parser-produced requests
+    /// satisfy this identity contract.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.validate_hidden_outputs()
+            .map_err(|_| core::fmt::Error)?;
         if let Some(base) = &self.base_iri {
             write!(f, "BASE <{}> ", base.as_str())?;
         }
@@ -571,8 +594,59 @@ fn fmt_quad_pattern_body(quads: &[QuadPattern]) -> String {
     out.trim_end().to_owned()
 }
 
+/// The shared checked update carrier, rendering only after identity admission.
+fn checked_update_carrier(
+    value: &impl core::fmt::Display,
+    admission: crate::Result<()>,
+) -> crate::Result<String> {
+    admission?;
+    Ok(value.to_string())
+}
+
+impl GraphUpdateOperation {
+    /// Serialize this operation, checking non-distinguished identities before
+    /// rendering. Uses the same carrier as [`core::fmt::Display`].
+    ///
+    /// # Errors
+    /// Refuses hidden template outputs or explicit hidden observers in `WHERE`.
+    pub fn try_to_sparql(&self) -> crate::Result<String> {
+        checked_update_carrier(self, self.validate_hidden_outputs())
+    }
+
+    /// Refuse hidden output identities before writing any part of a carrier.
+    fn validate_hidden_outputs(&self) -> crate::Result<()> {
+        let validate_template = |template: &[QuadPattern]| -> crate::Result<()> {
+            for quad in template {
+                crate::validate::check_quad_output(quad)?;
+            }
+            Ok(())
+        };
+        match self {
+            Self::InsertData { data } | Self::DeleteData { data } => validate_template(data)?,
+            Self::DeleteInsert {
+                delete,
+                insert,
+                pattern,
+                ..
+            } => {
+                validate_template(delete)?;
+                validate_template(insert)?;
+                pattern.validate_hidden_variables()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 impl core::fmt::Display for GraphUpdateOperation {
     /// Serialize one update operation to SPARQL Update surface syntax.
+    ///
+    /// Refuses hidden template outputs and explicit hidden observers in `WHERE`
+    /// with [`core::fmt::Error`] before writing any bytes. Consequently,
+    /// [`ToString::to_string`] and `format!` panic for such hand-built algebra.
+    /// Use [`Self::try_to_sparql`] for a typed refusal. Parser-produced operations
+    /// satisfy this identity contract.
     ///
     /// The `WHERE` clause of a [`Self::DeleteInsert`] is rendered through
     /// `crate::serialize::fmt_group_body` — the SAME group-graph-pattern
@@ -587,6 +661,8 @@ impl core::fmt::Display for GraphUpdateOperation {
     /// [`crate::parser::SparqlParser::parse_update`]: `parse_update(op.to_string())`
     /// reproduces `op` for every variant of this enum.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.validate_hidden_outputs()
+            .map_err(|_| core::fmt::Error)?;
         match self {
             Self::InsertData { data } => {
                 write!(f, "INSERT DATA {{ {} }}", fmt_quad_pattern_body(data))
@@ -626,7 +702,11 @@ impl core::fmt::Display for GraphUpdateOperation {
                     write!(f, "{u} ")?;
                 }
                 let mut body = String::new();
-                crate::serialize::fmt_group_body(&mut body, pattern);
+                crate::serialize::fmt_group_body(&mut body, pattern, |note| {
+                    for quad in delete.iter().chain(insert) {
+                        crate::validate::for_each_quad_variable(quad, &mut *note);
+                    }
+                })?;
                 write!(f, "WHERE {{ {body} }}")
             }
             Self::Load {

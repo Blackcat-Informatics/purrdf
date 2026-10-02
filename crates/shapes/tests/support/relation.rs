@@ -10,8 +10,8 @@
 
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
 use purrdf_core::{TermId, TermValue};
+use purrdf_rdf::RdfDataset;
 
 /// The dataset the N-Triples document `triples` reads as; a parse error fails
 /// the test with every message.

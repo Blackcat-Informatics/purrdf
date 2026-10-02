@@ -2801,24 +2801,24 @@ summary = "`solution::compatible` and `bgp::bind_row`, the solution-row join che
 
 [[site]]
 id = "eval.bgp-cost-planner"
-summary = "`bgp::cost_order_dp`, the f64 BGP cost planner"
+summary = "`bgp::cost_order_dp_from`, the shared f64 BGP cost planner"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_eval"
-  symbol = "purrdf_sparql_eval::bgp::cost_order_dp::<purrdf_core::ir::term::TermId>"
+  symbol = "purrdf_sparql_eval::bgp::cost_order_dp_from::<purrdf_core::ir::term::TermId>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
 id = "eval.bgp-join-probe"
-summary = "`bgp::eval_bgp`, the index-nested-loop join probe loop"
+summary = "`bgp::eval_bgp_seeded`, the shared index-nested-loop join probe loop"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_eval"
-  symbol = "purrdf_sparql_eval::bgp::eval_bgp::<purrdf_core::ir::dataset::RdfDataset>"
+  symbol = "purrdf_sparql_eval::bgp::eval_bgp_seeded::<purrdf_core::ir::dataset::RdfDataset>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

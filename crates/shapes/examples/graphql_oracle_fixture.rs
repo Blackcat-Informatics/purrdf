@@ -32,7 +32,7 @@ mod shacl_value_shapes;
 
 use json_model::{ToJson, Value, json};
 use json_text::read_sorted;
-use purrdf::loss::{check_ledger_complete, check_ledger_sound};
+use purrdf_rdf::loss::{check_ledger_complete, check_ledger_sound};
 use purrdf_shapes::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig, GraphqlPackage,
     SchemaImportConfig, emit_graphql, import_graphql_package,

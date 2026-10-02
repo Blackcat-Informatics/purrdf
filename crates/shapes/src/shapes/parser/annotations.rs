@@ -48,7 +48,7 @@
 //!   parser reads through a route that forgot to consult its annotations fails
 //!   loudly instead of validating as if the annotation were absent.
 
-use ::purrdf::{FastMap, TermId, TermRef};
+use ::purrdf_rdf::{FastMap, TermId, TermRef};
 use purrdf_core::SmallVec;
 
 use crate::data::{GraphFilter, native_quads};
@@ -75,7 +75,7 @@ pub(crate) struct AnnotationIndex {
 
 impl AnnotationIndex {
     /// Index the reifier and annotation side tables of `data`.
-    pub(crate) fn build(data: &::purrdf::RdfDataset) -> Self {
+    pub(crate) fn build(data: &::purrdf_rdf::RdfDataset) -> Self {
         let mut index = Self::default();
         for quad in data.reifier_quads() {
             let reifiers = index.reifiers.entry(quad.o).or_default();

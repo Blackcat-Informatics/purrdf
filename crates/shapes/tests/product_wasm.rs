@@ -139,7 +139,7 @@ fn the_committed_golden_restores_on_this_target() {
 mod shacl12_subset {
     use std::sync::Arc;
 
-    use purrdf::RdfDataset;
+    use purrdf_rdf::RdfDataset;
     use purrdf_shapes::data::{GraphFilter, native_quads};
     use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
     use purrdf_shapes::free_expression::{FreeExpression, evaluate};

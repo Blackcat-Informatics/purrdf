@@ -42,7 +42,7 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
 use purrdf_shapes::product::ShapesProfile;
 use purrdf_shapes::report::ValidationReport;

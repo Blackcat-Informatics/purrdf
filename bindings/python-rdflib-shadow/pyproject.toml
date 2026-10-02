@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "purrdf-rdflib"
-version = "3.0.0"
+version = "3.0.1"
 description = "Opt-in top-level `import rdflib` shadow that resolves to purrdf's rdflib compatibility surface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -22,7 +22,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Typing :: Typed",
 ]
-dependencies = ["purrdf==3.0.0"]
+dependencies = ["purrdf==3.0.1"]
 
 [project.urls]
 Homepage = "https://blackcatinformatics.ca/purrdf/"

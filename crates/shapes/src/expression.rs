@@ -102,7 +102,7 @@ use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{FastMap, FastSet, IdVec, TermId};
+use ::purrdf_rdf::{FastMap, FastSet, IdVec, TermId};
 
 use crate::data::ShaclData;
 use crate::data_view::ShaclRead as _;
@@ -2604,7 +2604,7 @@ fn aggregate(
 mod tests {
     use std::sync::Arc;
 
-    use ::purrdf::RdfDataset;
+    use ::purrdf_rdf::RdfDataset;
 
     use super::*;
 

@@ -30,7 +30,7 @@ use report::focus_nodes;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::function_resolution::FunctionBinding;
 use purrdf_shapes::report::ValidationReport;

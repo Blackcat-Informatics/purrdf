@@ -132,12 +132,12 @@ fn sample_literals() -> Vec<Literal> {
         Literal::new_directional_language_tagged_literal_unchecked(
             "مرحبا",
             "ar",
-            ::purrdf::RdfTextDirection::Rtl,
+            ::purrdf_rdf::RdfTextDirection::Rtl,
         ),
         Literal::new_directional_language_tagged_literal_unchecked(
             "hello",
             "en",
-            ::purrdf::RdfTextDirection::Ltr,
+            ::purrdf_rdf::RdfTextDirection::Ltr,
         ),
     ]
 }
@@ -1145,7 +1145,7 @@ fn literal_shapes_round_trip() {
     writer.literal(&Literal::new_directional_language_tagged_literal_unchecked(
         "value",
         "en",
-        ::purrdf::RdfTextDirection::Ltr,
+        ::purrdf_rdf::RdfTextDirection::Ltr,
     ));
     let bytes = writer.out;
     let mut reader = test_reader(&bytes);
@@ -1946,7 +1946,7 @@ fn the_decoded_shape_index_is_one_shared_handle() {
     let bytes = encode_ast_derived(&shapes).expect("encodes");
     let parts = decode_ast(&bytes).expect("decodes");
 
-    let mut handles: Vec<&Arc<OnceLock<::purrdf::FastMap<Term, Shape>>>> = Vec::new();
+    let mut handles: Vec<&Arc<OnceLock<::purrdf_rdf::FastMap<Term, Shape>>>> = Vec::new();
     for constraint in &parts.node_shapes[0].constraints {
         match constraint {
             Constraint::NodeByExpression { shapes, .. } => handles.push(shapes),
@@ -1978,7 +1978,7 @@ fn the_decoded_shape_index_is_one_shared_handle() {
     // Filling it once reaches every site, which is the whole point of sharing it.
     parts
         .shape_index
-        .set(::purrdf::FastMap::default())
+        .set(::purrdf_rdf::FastMap::default())
         .expect("the index fills once");
     for handle in &handles {
         assert!(handle.get().is_some());

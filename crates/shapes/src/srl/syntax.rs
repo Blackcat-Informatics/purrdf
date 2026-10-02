@@ -50,7 +50,7 @@
 //! In a rule body a blank node "behave[s] like variables"; in a rule head it is fresh per
 //! solution; in a data block it is a blank node of the data.
 
-use ::purrdf::RdfTextDirection;
+use ::purrdf_rdf::RdfTextDirection;
 use purrdf_core::FastMap;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, LineIndex, langtag};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize};

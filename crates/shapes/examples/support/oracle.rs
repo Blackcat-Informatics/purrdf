@@ -11,7 +11,7 @@
 
 use std::error::Error;
 
-use purrdf::loss::LossLedger;
+use purrdf_rdf::loss::LossLedger;
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{SchemaDatatypeMap, SchemaImportConfig};
 

@@ -11,7 +11,7 @@ use crate::data_view::{ShaclDatasetView, ShaclRead};
 use crate::footprint::Endpoint;
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
+use ::purrdf_rdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
 
 use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
 
@@ -123,11 +123,11 @@ fn subjects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
 }
 
 /// The distinct objects of `(?, pred, ?)` across all graphs:
-/// [`DatasetView::objects_of_predicate`](::purrdf::DatasetView::objects_of_predicate)
+/// [`DatasetView::objects_of_predicate`](::purrdf_rdf::DatasetView::objects_of_predicate)
 /// of the interned predicate, nothing when it is not interned.
 fn objects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
     resolve_pred(ds, pred).map_or_else(Vec::new, |pid| {
-        ::purrdf::DatasetView::objects_of_predicate(ds, pid, ::purrdf::GraphMatch::Any)
+        ::purrdf_rdf::DatasetView::objects_of_predicate(ds, pid, ::purrdf_rdf::GraphMatch::Any)
     })
 }
 
@@ -1043,7 +1043,7 @@ impl FocusNode {
         match self {
             Self::Interned(id) => matches!(
                 dataset.resolve_term(*id),
-                ::purrdf::TermRef::Iri(_) | ::purrdf::TermRef::Blank { .. }
+                ::purrdf_rdf::TermRef::Iri(_) | ::purrdf_rdf::TermRef::Blank { .. }
             ),
             Self::Foreign(term) => term.is_subject(),
         }
@@ -1690,7 +1690,7 @@ impl PreparedShapes {
             return self.bind_shared_dataset_with_shapes_graph(
                 data,
                 None,
-                ::purrdf::ir::ViewLimits::default(),
+                ::purrdf_rdf::ir::ViewLimits::default(),
             );
         }
         let view = Arc::new(ShaclDatasetView::project(data));
@@ -1722,11 +1722,11 @@ impl PreparedShapes {
         &self,
         data: Arc<RdfDataset>,
         shapes_graph_iri: Option<&str>,
-        limits: ::purrdf::ir::ViewLimits,
+        limits: ::purrdf_rdf::ir::ViewLimits,
     ) -> Result<PreparedValidator, ShapesError> {
         let core = Arc::new(ShaclDatasetView::project(Arc::clone(&data)));
         let (sparql, graph) = build_sparql_view(
-            ::purrdf::ir::CompositeSource::new(data),
+            ::purrdf_rdf::ir::CompositeSource::new(data),
             Arc::clone(&core),
             &self.shapes,
             shapes_graph_iri,
@@ -1748,13 +1748,13 @@ impl PreparedShapes {
     /// Refuses retention limits, invalid graph placement or failed targets.
     pub fn bind_delta_with_shapes_graph(
         &self,
-        data: Arc<::purrdf::ir::DeltaDatasetView>,
+        data: Arc<::purrdf_rdf::ir::DeltaDatasetView>,
         shapes_graph_iri: Option<&str>,
-        limits: ::purrdf::ir::ViewLimits,
+        limits: ::purrdf_rdf::ir::ViewLimits,
     ) -> Result<PreparedValidator, ShapesError> {
         let core = Arc::new(ShaclDatasetView::delta(Arc::clone(&data), true, limits)?);
         let (sparql, graph) = build_sparql_view(
-            ::purrdf::ir::CompositeSource::from_delta(data),
+            ::purrdf_rdf::ir::CompositeSource::from_delta(data),
             Arc::clone(&core),
             &self.shapes,
             shapes_graph_iri,
@@ -1811,7 +1811,7 @@ impl PreparedShapes {
 /// ```
 /// use std::sync::Arc;
 ///
-/// use purrdf::RdfDatasetBuilder;
+/// use purrdf_rdf::RdfDatasetBuilder;
 /// use purrdf_shapes::engine::{PreparedValidator, parse_shapes};
 /// use purrdf_shapes::term::NamedNode;
 ///
@@ -2185,8 +2185,10 @@ impl PreparedValidator {
         // on the distinct ids this loop admits, and an unhinted set filling to N
         // reallocates about log2(N) times — a growth term in the focus count,
         // which is the one thing the change path may not carry.
-        let mut seen: IdSet =
-            IdSet::with_capacity_and_hasher(focus_node_ids.len(), ::purrdf::FastHasher::default());
+        let mut seen: IdSet = IdSet::with_capacity_and_hasher(
+            focus_node_ids.len(),
+            ::purrdf_rdf::FastHasher::default(),
+        );
         let mut focus_nodes = FocusSet::with_capacity(&self.data, focus_node_ids.len());
         for &focus in focus_node_ids {
             if focus.dataset != dataset {
@@ -2298,7 +2300,7 @@ impl PreparedValidator {
     /// this crate rather than in a caller's data.
     pub fn affected_focus_node_ids(
         &self,
-        delta: &::purrdf::ir::DeltaDatasetView,
+        delta: &::purrdf_rdf::ir::DeltaDatasetView,
     ) -> Result<FocusExpansion, String> {
         let core = self.data.core_view();
         let bound = core.delta_source().ok_or_else(|| {
@@ -2348,7 +2350,7 @@ impl PreparedValidator {
         // The change set in THIS binding's id space, mapped once rather than once
         // per trigger: the trigger loop below rescans it for every read the shapes
         // graph performs.
-        let mut changed: Vec<::purrdf::QuadIds> = Vec::new();
+        let mut changed: Vec<::purrdf_rdf::QuadIds> = Vec::new();
         for quad in delta.changed_quads() {
             let ids = [quad.s, quad.p, quad.o].map(|id| core.local_delta_id(id));
             let [Some(s), Some(p), Some(o)] = ids else {
@@ -2358,7 +2360,7 @@ impl PreparedValidator {
                     core.term_count()
                 ));
             };
-            changed.push(::purrdf::QuadIds { s, p, o, g: None });
+            changed.push(::purrdf_rdf::QuadIds { s, p, o, g: None });
         }
         // The stamp every id this walk emits carries, read once. Dedup and the
         // ordering below stay in the bare id space — the stamp is the same value
@@ -2395,10 +2397,10 @@ impl PreparedValidator {
                     // `rdf:reifies` row whose object is NOT a triple term reifies
                     // nothing and is not this read — skipped, not guessed at.
                     Endpoint::ObjectTripleSubject => match core.resolve_term(quad.o) {
-                        ::purrdf::TermRef::Triple { s, .. } => s,
-                        ::purrdf::TermRef::Iri(_)
-                        | ::purrdf::TermRef::Blank { .. }
-                        | ::purrdf::TermRef::Literal { .. } => continue,
+                        ::purrdf_rdf::TermRef::Triple { s, .. } => s,
+                        ::purrdf_rdf::TermRef::Iri(_)
+                        | ::purrdf_rdf::TermRef::Blank { .. }
+                        | ::purrdf_rdf::TermRef::Literal { .. } => continue,
                     },
                 };
                 // The read described forwards, walked backwards. The reversal is
@@ -2490,9 +2492,11 @@ impl PreparedValidator {
         // Both sets are INPUT-sized, from the same slice, for the same reason the
         // id-native route's is.
         let mut seen_ids: IdSet =
-            IdSet::with_capacity_and_hasher(focus_nodes.len(), ::purrdf::FastHasher::default());
-        let mut seen_foreign: FastSet<Term> =
-            FastSet::with_capacity_and_hasher(focus_nodes.len(), ::purrdf::FastHasher::default());
+            IdSet::with_capacity_and_hasher(focus_nodes.len(), ::purrdf_rdf::FastHasher::default());
+        let mut seen_foreign: FastSet<Term> = FastSet::with_capacity_and_hasher(
+            focus_nodes.len(),
+            ::purrdf_rdf::FastHasher::default(),
+        );
         let mut normalized = FocusSet::with_capacity(&self.data, focus_nodes.len());
         for term in focus_nodes {
             if let Some(id) = resolve_id(self.data.core_view(), term) {
@@ -2569,8 +2573,10 @@ impl PreparedValidator {
 #[must_use]
 pub fn __prepared_class_membership_view(
     dataset: Arc<RdfDataset>,
-) -> impl ::purrdf::DatasetView<Id = TermId, ProbePlan = ::purrdf::ir::QuadProbePlan> + Clone + Send + Sync
-{
+) -> impl ::purrdf_rdf::DatasetView<Id = TermId, ProbePlan = ::purrdf_rdf::ir::QuadProbePlan>
++ Clone
++ Send
++ Sync {
     let view = crate::class_membership::ClassMembershipView::new(dataset);
     view.prepare();
     view
@@ -2823,7 +2829,7 @@ pub struct GovernedChangeValidation {
 /// validation failure (see [`validate_with`]).
 pub fn validate_change(
     validator: &PreparedValidator,
-    delta: &::purrdf::ir::DeltaDatasetView,
+    delta: &::purrdf_rdf::ir::DeltaDatasetView,
 ) -> Result<ChangeValidation, String> {
     let (scope, report) = change_pass(validator, delta)?;
     report.map(|report| ChangeValidation { report, scope })
@@ -2852,7 +2858,7 @@ pub fn validate_change(
 /// [`GovernedValidation::BudgetExhausted`] outcome, carried beside the scope.
 pub fn validate_change_with_governors(
     validator: &PreparedValidator,
-    delta: &::purrdf::ir::DeltaDatasetView,
+    delta: &::purrdf_rdf::ir::DeltaDatasetView,
     governors: &QueryGovernors,
 ) -> Result<GovernedChangeValidation, String> {
     let state = Arc::new(GovernorState::new(governors));
@@ -2884,7 +2890,7 @@ pub fn validate_change_with_governors(
 /// answer is a tripped budget rather than a report.
 fn change_pass(
     validator: &PreparedValidator,
-    delta: &::purrdf::ir::DeltaDatasetView,
+    delta: &::purrdf_rdf::ir::DeltaDatasetView,
 ) -> Result<(ChangeScope, Result<ValidationReport, String>), String> {
     let expansion = validator.affected_focus_node_ids(delta)?;
     Ok(match &expansion {
@@ -2940,8 +2946,8 @@ where
 /// shapes graph on both sides of the change; a changed link breaks that for every focus node.
 ///
 /// A graph that interns no `sh:shapesGraph` costs a term lookup per side.
-fn changes_a_shapes_graph_link(delta: &::purrdf::ir::DeltaDatasetView) -> bool {
-    let link = ::purrdf::TermValue::iri(crate::imports::SH_SHAPES_GRAPH_LINK);
+fn changes_a_shapes_graph_link(delta: &::purrdf_rdf::ir::DeltaDatasetView) -> bool {
+    let link = ::purrdf_rdf::TermValue::iri(crate::imports::SH_SHAPES_GRAPH_LINK);
     // The snapshot interns every term of its base and of its change: a snapshot that does
     // not intern `sh:shapesGraph` has no link on either side.
     let Some(predicate) = delta.term_id_by_value(&link).unwrap() else {
@@ -3058,10 +3064,10 @@ fn with_shapes_graph_subclasses(
         return Ok(None);
     };
     let mut supplement: Vec<(String, String)> = graph
-        .quads_for_pattern(None, Some(subclass_of), None, ::purrdf::GraphMatch::Any)
+        .quads_for_pattern(None, Some(subclass_of), None, ::purrdf_rdf::GraphMatch::Any)
         .filter_map(
             |quad| match (graph.term_value(quad.s), graph.term_value(quad.o)) {
-                (::purrdf::TermValue::Iri(child), ::purrdf::TermValue::Iri(parent)) => {
+                (::purrdf_rdf::TermValue::Iri(child), ::purrdf_rdf::TermValue::Iri(parent)) => {
                     Some((child, parent))
                 }
                 _ => None,
@@ -3097,7 +3103,7 @@ where
     validate_with_plan_and_focus_filter(data, shapes, &bound, &mut include_focus)
 }
 
-/// Validate a frozen [`::purrdf::RdfDataset`] against parsed SHACL shapes, IR-natively.
+/// Validate a frozen [`::purrdf_rdf::RdfDataset`] against parsed SHACL shapes, IR-natively.
 ///
 /// The generic engine reads pattern lookups DIRECTLY from a SHACL projection of
 /// the IR. Native and SHACL-SPARQL evaluation share a validation-scoped view
@@ -3190,21 +3196,21 @@ pub(crate) fn build_projected_data(
 ) -> Result<ShaclData, String> {
     let core = Arc::new(ShaclDatasetView::native(Arc::clone(&data)));
     let (sparql, graph) = build_sparql_view(
-        ::purrdf::ir::CompositeSource::new(data),
+        ::purrdf_rdf::ir::CompositeSource::new(data),
         Arc::clone(&core),
         shapes,
         override_graph,
-        ::purrdf::ir::ViewLimits::default(),
+        ::purrdf_rdf::ir::ViewLimits::default(),
     )?;
     Ok(ShaclData::from_views(core, sparql, graph))
 }
 
 fn build_sparql_view(
-    source: ::purrdf::ir::CompositeSource,
+    source: ::purrdf_rdf::ir::CompositeSource,
     core: Arc<ShaclDatasetView>,
     shapes: &Shapes,
     override_graph: Option<&str>,
-    limits: ::purrdf::ir::ViewLimits,
+    limits: ::purrdf_rdf::ir::ViewLimits,
 ) -> Result<(Arc<ShaclDatasetView>, Option<String>), String> {
     let graph_iri = override_graph
         .map(str::to_owned)
@@ -3212,15 +3218,15 @@ fn build_sparql_view(
     let Some(graph_iri) = graph_iri else {
         return Ok((core, None));
     };
-    let shapes_source = ::purrdf::ir::CompositeSource::new(Arc::clone(&shapes.shapes_dataset))
-        .with_graph_placement(::purrdf::ir::GraphPlacement::Named(
-            ::purrdf::TermValue::iri(&graph_iri),
+    let shapes_source = ::purrdf_rdf::ir::CompositeSource::new(Arc::clone(&shapes.shapes_dataset))
+        .with_graph_placement(::purrdf_rdf::ir::GraphPlacement::Named(
+            ::purrdf_rdf::TermValue::iri(&graph_iri),
         ));
     // Parsed shape constants and data bindings already carry their explicit blank
     // scopes. Preserve those identities when placing their records into graphs.
-    let composite = ::purrdf::ir::CompositeDatasetView::from_shared_sources(
+    let composite = ::purrdf_rdf::ir::CompositeDatasetView::from_shared_sources(
         vec![
-            source.with_graph_placement(::purrdf::ir::GraphPlacement::Default),
+            source.with_graph_placement(::purrdf_rdf::ir::GraphPlacement::Default),
             shapes_source,
         ],
         limits,
@@ -3263,14 +3269,14 @@ pub fn validate_projected_dataset_with_shapes_graph(
 /// every quad into the default graph and materializing reifier bindings as
 /// `rdf:reifies` triples and statement annotations as plain triples.
 pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
-    use ::purrdf::RdfDatasetBuilder;
+    use ::purrdf_rdf::RdfDatasetBuilder;
 
     let mut builder = RdfDatasetBuilder::new();
 
     // The base quads, then the reifier and annotation rows, in the one flat order
-    // `purrdf::flat_rdf_quads` gives them; FlattenToDefaultGraph drops each source
+    // `purrdf_rdf::flat_rdf_quads` gives them; FlattenToDefaultGraph drops each source
     // graph name.
-    for mut quad in ::purrdf::flat_rdf_quads(data) {
+    for mut quad in ::purrdf_rdf::flat_rdf_quads(data) {
         quad.graph_name = None;
         builder.push_owned_quad(&quad);
     }
@@ -3295,7 +3301,7 @@ pub(crate) fn shacl_dataset_from_dataset(data: &RdfDataset) -> Result<Arc<RdfDat
 ///
 /// A shapes graph is RDF, and a SHACL author writes `<PersonShape>` in it exactly as
 /// they would in any other Turtle document. `base` is therefore the same
-/// caller-supplied base (RFC-3986 §5.1.2) [`parse_dataset`](::purrdf::parse_dataset)
+/// caller-supplied base (RFC-3986 §5.1.2) [`parse_dataset`](::purrdf_rdf::parse_dataset)
 /// takes, threaded to the identical resolution layer — so a shapes document read
 /// through this boundary resolves byte-for-byte like the same document read through
 /// any other one.
@@ -3592,7 +3598,7 @@ pub fn validate_graphs_with_config(
     validate_dataset(data.as_ref(), &shapes)
 }
 
-/// Validate a frozen [`::purrdf::RdfDataset`] against a Turtle SHACL shapes graph, with
+/// Validate a frozen [`::purrdf_rdf::RdfDataset`] against a Turtle SHACL shapes graph, with
 /// the shapes graph's `owl:imports` table (see [`crate::imports`]).
 ///
 /// # Errors
@@ -4143,7 +4149,7 @@ mod tests {
 
     #[test]
     fn dataset_entrypoint_validates_gts_backed_graph() {
-        use ::purrdf::RdfDatasetBuilder;
+        use ::purrdf_rdf::RdfDatasetBuilder;
         let mut builder = RdfDatasetBuilder::new();
         let ids: Vec<_> = [
             "http://example.org/ns#a",
@@ -5346,9 +5352,9 @@ mod tests {
     impl purrdf_sparql_eval::AggregateAccumulator for AggSumAccumulator {
         fn step(
             &mut self,
-            args: &[::purrdf::TermValue],
+            args: &[::purrdf_rdf::TermValue],
         ) -> Result<(), purrdf_sparql_eval::EvalError> {
-            if let Some(::purrdf::TermValue::Literal { lexical_form, .. }) = args.first()
+            if let Some(::purrdf_rdf::TermValue::Literal { lexical_form, .. }) = args.first()
                 && let Ok(n) = lexical_form.parse::<i64>()
             {
                 self.total += n;
@@ -5360,7 +5366,7 @@ mod tests {
             &mut self,
             other: Box<dyn purrdf_sparql_eval::AggregateAccumulator>,
         ) -> Result<(), purrdf_sparql_eval::EvalError> {
-            if let Some(::purrdf::TermValue::Literal { lexical_form, .. }) = other.finish()?
+            if let Some(::purrdf_rdf::TermValue::Literal { lexical_form, .. }) = other.finish()?
                 && let Ok(n) = lexical_form.parse::<i64>()
             {
                 self.total += n;
@@ -5374,8 +5380,8 @@ mod tests {
 
         fn finish(
             self: Box<Self>,
-        ) -> Result<Option<::purrdf::TermValue>, purrdf_sparql_eval::EvalError> {
-            Ok(Some(::purrdf::TermValue::typed_literal(
+        ) -> Result<Option<::purrdf_rdf::TermValue>, purrdf_sparql_eval::EvalError> {
+            Ok(Some(::purrdf_rdf::TermValue::typed_literal(
                 self.total.to_string(),
                 "http://www.w3.org/2001/XMLSchema#integer",
             )))
@@ -5400,7 +5406,7 @@ mod tests {
         }
         fn init(
             &self,
-            _scalarvals: &[(String, ::purrdf::TermValue)],
+            _scalarvals: &[(String, ::purrdf_rdf::TermValue)],
         ) -> Box<dyn purrdf_sparql_eval::AggregateAccumulator> {
             Box::new(AggSumAccumulator { total: 0 })
         }
@@ -5787,13 +5793,13 @@ mod tests {
         ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
             let flagged = matches!(
                 args.get(0),
-                Some(::purrdf::TermValue::Literal { lexical_form, .. }) if lexical_form == "bad"
+                Some(::purrdf_rdf::TermValue::Literal { lexical_form, .. }) if lexical_form == "bad"
             );
             let rows = if flagged {
                 let subject = args.get(0).cloned().expect("the bound subject");
                 vec![vec![
                     subject,
-                    ::purrdf::TermValue::typed_literal(
+                    ::purrdf_rdf::TermValue::typed_literal(
                         "flagged",
                         "http://www.w3.org/2001/XMLSchema#string",
                     ),
@@ -6319,7 +6325,7 @@ mod tests {
     /// [`a_focus_id_from_another_binding_is_refused_and_its_own_is_accepted`]
     /// builds.
     fn focus_dataset_interning(locals: &[&str]) -> Arc<RdfDataset> {
-        let mut builder = ::purrdf::RdfDatasetBuilder::new();
+        let mut builder = ::purrdf_rdf::RdfDatasetBuilder::new();
         let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
         let class = builder.intern_iri("http://example.org/ns#Focus");
         for local in locals {
@@ -6337,7 +6343,7 @@ mod tests {
             .filter(|id| {
                 matches!(
                     data.core_view().resolve_term(*id),
-                    ::purrdf::TermRef::Iri(iri) if iri.contains("/ns#n")
+                    ::purrdf_rdf::TermRef::Iri(iri) if iri.contains("/ns#n")
                 )
             })
             .collect()
@@ -6590,7 +6596,7 @@ mod tests {
                 "{term}'s id from the other binding must be IN RANGE here, or the range check \
                  would be what rejected it rather than the provenance stamp"
             );
-            if let ::purrdf::TermRef::Iri(denoted) =
+            if let ::purrdf_rdf::TermRef::Iri(denoted) =
                 here.data.core_view().resolve_term(focus.term_id())
                 && NamedNode::new_unchecked(denoted).into_term() != *term
             {
@@ -6655,14 +6661,16 @@ mod tests {
     #[test]
     fn the_change_expansion_feeds_the_id_native_entry_point_unconverted() {
         let base = focus_dataset_interning(&DESCENDING_FOCUS_LOCALS);
-        let mut mutation = ::purrdf::MutableDataset::new(base);
+        let mut mutation = ::purrdf_rdf::MutableDataset::new(base);
         assert!(
-            ::purrdf::DatasetMut::insert(
+            ::purrdf_rdf::DatasetMut::insert(
                 &mut mutation,
-                ::purrdf::QuadValues {
-                    s: ::purrdf::TermValue::iri("http://example.org/ns#n10"),
-                    p: ::purrdf::TermValue::iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
-                    o: ::purrdf::TermValue::iri("http://example.org/ns#Focus"),
+                ::purrdf_rdf::QuadValues {
+                    s: ::purrdf_rdf::TermValue::iri("http://example.org/ns#n10"),
+                    p: ::purrdf_rdf::TermValue::iri(
+                        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                    ),
+                    o: ::purrdf_rdf::TermValue::iri("http://example.org/ns#Focus"),
                     g: None,
                 }
             )
@@ -6675,7 +6683,7 @@ mod tests {
             .bind_delta_with_shapes_graph(
                 Arc::clone(&snapshot),
                 None,
-                ::purrdf::ir::ViewLimits::default(),
+                ::purrdf_rdf::ir::ViewLimits::default(),
             )
             .expect("the delta binds");
 
@@ -6711,16 +6719,18 @@ mod tests {
     /// snapshot and the validator every change-path entry point below drives.
     fn change_fixture(
         shapes: Arc<Shapes>,
-    ) -> (Arc<::purrdf::ir::DeltaDatasetView>, PreparedValidator) {
+    ) -> (Arc<::purrdf_rdf::ir::DeltaDatasetView>, PreparedValidator) {
         let base = focus_dataset_interning(&DESCENDING_FOCUS_LOCALS);
-        let mut mutation = ::purrdf::MutableDataset::new(base);
+        let mut mutation = ::purrdf_rdf::MutableDataset::new(base);
         assert!(
-            ::purrdf::DatasetMut::insert(
+            ::purrdf_rdf::DatasetMut::insert(
                 &mut mutation,
-                ::purrdf::QuadValues {
-                    s: ::purrdf::TermValue::iri("http://example.org/ns#n10"),
-                    p: ::purrdf::TermValue::iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
-                    o: ::purrdf::TermValue::iri("http://example.org/ns#Focus"),
+                ::purrdf_rdf::QuadValues {
+                    s: ::purrdf_rdf::TermValue::iri("http://example.org/ns#n10"),
+                    p: ::purrdf_rdf::TermValue::iri(
+                        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                    ),
+                    o: ::purrdf_rdf::TermValue::iri("http://example.org/ns#Focus"),
                     g: None,
                 }
             )
@@ -6732,7 +6742,7 @@ mod tests {
             .bind_delta_with_shapes_graph(
                 Arc::clone(&snapshot),
                 None,
-                ::purrdf::ir::ViewLimits::default(),
+                ::purrdf_rdf::ir::ViewLimits::default(),
             )
             .expect("the delta binds");
         (snapshot, validator)

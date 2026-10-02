@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use ::purrdf::{RdfDataset, TermValue};
+use ::purrdf_rdf::{RdfDataset, TermValue};
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactView, Identity};
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, Arity, BindingPattern, CustomAggregate, EvalError,

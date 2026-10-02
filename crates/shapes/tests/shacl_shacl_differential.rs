@@ -42,7 +42,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, SerializeGraph, serialize_dataset};
+use purrdf_rdf::{RdfDataset, SerializeGraph, serialize_dataset};
 use purrdf_shapes::ShapesImports;
 use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
 use purrdf_shapes::lint::SHACL_SHACL_SUPERSEDED;
@@ -588,7 +588,7 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
         for (kind, text) in mutants(&input.dataset) {
             mutant_count += 1;
             *mutants_by_kind.entry(kind).or_insert(0) += 1;
-            let dataset = purrdf::parse_dataset(text.as_bytes(), "application/n-quads", None)
+            let dataset = purrdf_rdf::parse_dataset(text.as_bytes(), "application/n-quads", None)
                 .unwrap_or_else(|e| panic!("[{}] mutant {kind} does not parse: {e}", input.id));
             let mutant = Input {
                 id: format!("{} + {kind}", input.id),

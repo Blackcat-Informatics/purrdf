@@ -6,6 +6,42 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [3.0.1] - 2026-10-02
+
+### Fixed
+
+- **SHACL-SPARQL:** pre-bound focus nodes now constrain every nested triple and
+  path pattern, including the right arm of `OPTIONAL`. Missing-property
+  constraints of the form `OPTIONAL { $this <predicate> ?value }
+  FILTER (!BOUND(?value))` report the focus nodes that lack the property.
+  Blank and quoted focus identities remain exact, and prepared executions
+  refresh their bindings when the focus changes.
+- **SHACL data views:** `ShaclDatasetView::named_graph(source, graph)` reads one
+  named graph as the default graph through the source's native indexes,
+  without copying quads or building a second index. Other source graphs stay
+  invisible to Core validation, class membership and SHACL-SPARQL. RDF 1.2
+  statement metadata and graph isolation survive shape-only term supplements.
+- **SPARQL planning:** fixed-length paths containing alternatives use native
+  indexed joins. Connected basic graph patterns around `UNION` pass their
+  bindings into the selected join schedule instead of first materializing
+  independent tables. Duplicate solution bags, blank-label scope and visible
+  column order survive these rewrites; compiler-generated match witnesses stay
+  hidden when algebra is evaluated or rendered to a SPARQL carrier. Existing
+  query limits and operator scope boundaries still apply.
+- **Governed SPARQL:** when fuel runs out, unfinished basic graph pattern
+  matches are withheld instead of being returned as certain partial answers.
+- **Rust publishing:** dependent crates wait for their exact, unyanked versions
+  to become visible in Cargo's sparse registry index. GitHub Release assets are
+  attached and verified in a draft before publication makes them immutable.
+  Resumed published releases verify their retained assets without altering them.
+
+### Acknowledgements
+
+Thanks to [@dshchyhlinski](https://github.com/dshchyhlinski) for the excellent
+reports behind the SHACL and SPARQL fixes, including the minimal reproductions,
+passing controls, representative validation benchmarks and query permutations
+that exposed the planning problem.
+
 ## [3.0.0] - 2026-10-01
 
 ### Breaking Changes

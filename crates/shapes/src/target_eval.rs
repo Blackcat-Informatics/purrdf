@@ -51,7 +51,7 @@
 //! graph." The FOCUS NODE of that evaluation is the shape `s` itself, and the
 //! focus graph is the data graph; there are no variable bindings.
 
-use ::purrdf::{IdSet, TermId};
+use ::purrdf_rdf::{IdSet, TermId};
 
 use crate::constraints::conforms_with_id_depth;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};

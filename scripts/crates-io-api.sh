@@ -59,10 +59,19 @@ crates_io_user_agent() {
 # Populates CRATES_IO_STATUS and CRATES_IO_BODY. Never exits; the caller decides
 # what a status means. Transient statuses are retried here.
 crates_io_get() {
-  local path="$1"
-  local user_agent="$2"
+  crates_io_read "https://crates.io/api/v1/crates" "$1" "$2" "${1/\//@}"
+}
+
+# crates_io_read <base-url> <path> <user-agent> <mock-key>
+# The API and the sparse index share the same HTTP/retry/error law. A registry
+# API record can precede its index entry; only the latter lets Cargo resolve it.
+crates_io_read() {
+  local base="$1"
+  local path="$2"
+  local user_agent="$3"
+  local mock_key="$4"
   if [[ -n "${PURRDF_CRATES_IO_MOCK:-}" ]]; then
-    local fixture="${PURRDF_CRATES_IO_MOCK}/${path/\//@}"
+    local fixture="${PURRDF_CRATES_IO_MOCK}/${mock_key}"
     if [[ -f "$fixture" ]]; then
       CRATES_IO_STATUS="$(head -n 1 "$fixture")"
       tail -n +2 "$fixture" > "${CRATES_IO_BODY}"
@@ -76,7 +85,7 @@ crates_io_get() {
   for attempt in 1 2 3; do
     CRATES_IO_STATUS="$(curl -sS --max-time 30 -H "User-Agent: ${user_agent}" \
       -o "${CRATES_IO_BODY}" -w "%{http_code}" \
-      "https://crates.io/api/v1/crates/${path}" 2>/dev/null || echo "000")"
+      "${base}/${path}" 2>/dev/null)" || CRATES_IO_STATUS="000"
     case "${CRATES_IO_STATUS}" in
       000 | 429 | 5??)
         if [[ "$attempt" -lt 3 ]]; then
@@ -87,6 +96,82 @@ crates_io_get() {
     esac
     break
   done
+}
+
+# crates_io_index_state <crate> <version> <checksum> <user-agent>
+# Cargo's index format: https://doc.rust-lang.org/cargo/reference/registry-index.html
+# A present entry must be the exact unyanked package served by the API. A missing
+# entry is a propagation delay; malformed data, a yank or a digest mismatch is a
+# refusal. Mock index responses are stored as index@<crate>.
+crates_io_index_state() {
+  local crate="$1" version="$2" checksum="$3" path
+  case "${#crate}" in
+    1) path="1/${crate}" ;;
+    2) path="2/${crate}" ;;
+    3) path="3/${crate:0:1}/${crate}" ;;
+    *) path="${crate:0:2}/${crate:2:2}/${crate}" ;;
+  esac
+  crates_io_read "https://index.crates.io" "$path" "$4" "index@${crate}"
+  case "${CRATES_IO_STATUS}" in
+    404) echo "missing" ;;
+    200)
+      python3 - "${CRATES_IO_BODY}" "$crate" "$version" "$checksum" <<'PY'
+import json
+import sys
+
+path, crate, version, checksum = sys.argv[1:]
+try:
+    with open(path, encoding="utf-8") as source:
+        entries = [json.loads(line) for line in source if line.strip()]
+    if not entries or any(not isinstance(entry, dict) for entry in entries):
+        raise ValueError("empty or malformed index")
+    if any(entry.get("name") != crate for entry in entries):
+        raise ValueError("index names a different crate")
+    matches = [entry for entry in entries if entry.get("vers") == version]
+    if not matches:
+        print("missing")
+    elif len(matches) != 1:
+        raise ValueError("duplicate index version")
+    elif matches[0].get("yanked") is not False:
+        raise ValueError("index version is yanked or has no yank verdict")
+    elif matches[0].get("cksum") != checksum:
+        raise ValueError("index checksum differs from the registry API")
+    else:
+        print("present")
+except (OSError, ValueError, TypeError) as error:
+    print(f"error: invalid Cargo index for {crate} {version}: {error}")
+PY
+      ;;
+    *) echo "error: sparse index returned ${CRATES_IO_STATUS} for ${crate} ${version}" ;;
+  esac
+}
+
+# crates_io_version_checksum <crate> <version>
+# Read immediately after a present API verdict, before a sparse-index read
+# replaces the shared body. Existing dry-run fixtures need only an HTTP verdict;
+# functional publication always requires this complete, unyanked identity.
+crates_io_version_checksum() {
+  python3 - "${CRATES_IO_BODY}" "$1" "$2" <<'PY'
+import json
+import re
+import sys
+
+path, crate, version = sys.argv[1:]
+try:
+    with open(path, encoding="utf-8") as source:
+        entry = json.load(source)["version"]
+    checksum = entry["checksum"]
+    if entry["crate"] != crate or entry["num"] != version:
+        raise ValueError("API returned a different package")
+    if entry["yanked"] is not False:
+        raise ValueError("version is yanked or has no yank verdict")
+    if not isinstance(checksum, str) or not re.fullmatch("[0-9a-f]{64}", checksum):
+        raise ValueError("invalid package checksum")
+    print(checksum)
+except (OSError, ValueError, KeyError, TypeError) as error:
+    print(f"invalid crates.io identity for {crate} {version}: {error}", file=sys.stderr)
+    sys.exit(1)
+PY
 }
 
 # crates_io_record_state <crate> <user-agent>

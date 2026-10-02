@@ -125,7 +125,8 @@ fn a_non_linear_element_preserves_the_whole_path_without_minting_join_points() {
         "ex:p/ex:q+",
         "ex:p/ex:q?",
         "ex:p/ex:q{1,1}",
-        "ex:p/(ex:q|ex:r)",
+        "ex:p/(ex:q|ex:r*)",
+        "ex:p/(ex:q|ex:r?)",
         "ex:p/!(ex:q|^ex:r)",
         "^(ex:p/ex:q+)",
     ] {

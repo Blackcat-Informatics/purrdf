@@ -89,7 +89,7 @@ pub fn emit_jsonld_context(vocab: &SliceVocab) -> String {
     for (prefix, namespace) in &registry {
         source.insert(prefix.clone(), namespace.clone());
     }
-    let compiled = purrdf::native_codecs::jsonld::CompiledJsonLdContext::compile(
+    let compiled = purrdf_rdf::native_codecs::jsonld::CompiledJsonLdContext::compile(
         &purrdf_lex::json::Value::Object(source),
         None,
     )

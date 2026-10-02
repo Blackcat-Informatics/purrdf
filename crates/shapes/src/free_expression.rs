@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 
 use crate::data::{GraphFilter, native_quads};
 use crate::error::ShapesError;

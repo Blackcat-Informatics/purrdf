@@ -299,8 +299,8 @@ use std::sync::Arc;
 
 use measured::{assert_parallel_path_is_reachable, measure_lock, measure_min};
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_alloc_probe::CountingAllocator;
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_shapes::engine::{
     FocusId, GovernedValidation, PreparedShapes, PreparedValidator, parse_shapes,
 };
@@ -968,7 +968,7 @@ fn every_sparql_surface_costs_a_constant_per_conforming_focus_node() {
 /// value — so the two have to travel together.
 struct GovernedFixture {
     /// The mutation snapshot the validator is bound to.
-    snapshot: Arc<purrdf::ir::DeltaDatasetView>,
+    snapshot: Arc<purrdf_rdf::ir::DeltaDatasetView>,
     /// The validator bound to [`Self::snapshot`].
     validator: PreparedValidator,
     /// How many conforming focus nodes the change brings into scope.
@@ -1015,16 +1015,16 @@ struct GovernedFixture {
 fn governed_fixture(case: usize, conforming: usize, violating: usize) -> GovernedFixture {
     let name = CASES[case].name;
     let base = build_dataset_with_types(conforming, violating, false);
-    let mut mutation = purrdf::MutableDataset::new(base);
+    let mut mutation = purrdf_rdf::MutableDataset::new(base);
     for (prefix, count) in [('c', conforming), ('v', violating)] {
         for index in 0..count {
             assert!(
-                purrdf::DatasetMut::insert(
+                purrdf_rdf::DatasetMut::insert(
                     &mut mutation,
-                    purrdf::QuadValues {
-                        s: purrdf::TermValue::iri(format!("{NS}{prefix}{index}")),
-                        p: purrdf::TermValue::iri(RDF_TYPE),
-                        o: purrdf::TermValue::iri(format!("{NS}Focus")),
+                    purrdf_rdf::QuadValues {
+                        s: purrdf_rdf::TermValue::iri(format!("{NS}{prefix}{index}")),
+                        p: purrdf_rdf::TermValue::iri(RDF_TYPE),
+                        o: purrdf_rdf::TermValue::iri(format!("{NS}Focus")),
                         g: None,
                     },
                 )
@@ -1049,7 +1049,7 @@ fn governed_fixture(case: usize, conforming: usize, violating: usize) -> Governe
         .bind_delta_with_shapes_graph(
             Arc::clone(&snapshot),
             None,
-            purrdf::ir::ViewLimits::default(),
+            purrdf_rdf::ir::ViewLimits::default(),
         )
         .unwrap_or_else(|error| panic!("case {name}: the governed delta must bind: {error}"));
     GovernedFixture {

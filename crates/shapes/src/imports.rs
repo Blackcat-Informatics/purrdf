@@ -122,7 +122,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 use purrdf_core::dataset_view::{DatasetView, GraphMatch};
 use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
 use purrdf_core::imports::{ImportKeyError, ImportMap, UnanchoredImport, declared_import_targets};
@@ -881,7 +881,7 @@ mod tests {
     /// The IRI the shapes documents below are read under.
     const SHAPES_IRI: &str = "http://example.org/shapes";
 
-    fn graph(turtle: &str) -> std::sync::Arc<::purrdf::RdfDataset> {
+    fn graph(turtle: &str) -> std::sync::Arc<::purrdf_rdf::RdfDataset> {
         crate::text_ingest::parse_turtle_to_dataset(turtle, None).expect("turtle")
     }
 
@@ -1072,9 +1072,9 @@ mod tests {
             std::sync::Arc::ptr_eq(&resolved.dataset, &shapes),
             "nothing was merged"
         );
-        let other = ::purrdf::TermValue::iri("http://example.org/ns#Other");
-        let imports = ::purrdf::TermValue::iri("http://www.w3.org/2002/07/owl#imports");
-        let target = ::purrdf::TermValue::iri("http://example.org/ns#Target");
+        let other = ::purrdf_rdf::TermValue::iri("http://example.org/ns#Other");
+        let imports = ::purrdf_rdf::TermValue::iri("http://www.w3.org/2002/07/owl#imports");
+        let target = ::purrdf_rdf::TermValue::iri("http://example.org/ns#Target");
         assert!(
             resolved.dataset.quads().any(|quad| {
                 resolved.dataset.term_value(quad.s) == other

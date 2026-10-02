@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 
 use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::json_schema::{
@@ -584,7 +584,7 @@ fn parse_expression(
 
 /// The members of an `owl:unionOf`/`owl:intersectionOf` list, each parsed as
 /// an expression. The list is read by the strict walker
-/// ([`DatasetView::rdf_list_strict`](::purrdf::DatasetView::rdf_list_strict)):
+/// ([`DatasetView::rdf_list_strict`](::purrdf_rdf::DatasetView::rdf_list_strict)):
 /// OWL 2 Mapping to RDF Graphs §3.1 reads a sequence only from a well-formed
 /// collection, so a malformed one is refused rather than read short.
 fn parse_expression_list(
@@ -598,10 +598,12 @@ fn parse_expression_list(
         reason,
     };
     let items = match crate::data::resolve_id(objects, head) {
-        Some(head_id) => {
-            ::purrdf::DatasetView::rdf_list_strict(objects, head_id, ::purrdf::GraphMatch::Any)
-                .map_err(|error| malformed(format!("OWL expression list at {head}: {error}")))?
-        }
+        Some(head_id) => ::purrdf_rdf::DatasetView::rdf_list_strict(
+            objects,
+            head_id,
+            ::purrdf_rdf::GraphMatch::Any,
+        )
+        .map_err(|error| malformed(format!("OWL expression list at {head}: {error}")))?,
         None => {
             return Err(malformed(format!(
                 "OWL expression list must be an RDF list; found {head}"

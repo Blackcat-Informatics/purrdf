@@ -72,7 +72,7 @@ mod report;
 use report::report_nt;
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
 use purrdf_shapes::provenance::{ProductRestore, ValidatorProvenance};

@@ -201,8 +201,8 @@ use std::sync::Arc;
 
 use measured::{measure, measure_lock, measure_min};
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_alloc_probe::CountingAllocator;
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes};
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
 use purrdf_shapes::report::ValidationReport;
@@ -2113,7 +2113,11 @@ fn expansion_alloc_model(changes: usize) -> u64 {
 fn expansion_fixture(
     shapes: &str,
     changes: usize,
-) -> (Arc<purrdf::ir::DeltaDatasetView>, PreparedValidator, usize) {
+) -> (
+    Arc<purrdf_rdf::ir::DeltaDatasetView>,
+    PreparedValidator,
+    usize,
+) {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
     let focus_class = builder.intern_iri(&format!("{NS}{FOCUS_CLASS}"));
@@ -2126,16 +2130,17 @@ fn expansion_fixture(
     }
     let base = builder.freeze().expect("the expansion base freezes");
 
-    let mut mutation = purrdf::MutableDataset::new(base);
+    let mut mutation = purrdf_rdf::MutableDataset::new(base);
     for index in 0..changes {
-        let row = purrdf::QuadValues {
-            s: purrdf::TermValue::iri(format!("{NS}xt{index}")),
-            p: purrdf::TermValue::iri(format!("{NS}key")),
-            o: purrdf::TermValue::simple_literal(format!("k{index}")),
+        let row = purrdf_rdf::QuadValues {
+            s: purrdf_rdf::TermValue::iri(format!("{NS}xt{index}")),
+            p: purrdf_rdf::TermValue::iri(format!("{NS}key")),
+            o: purrdf_rdf::TermValue::simple_literal(format!("k{index}")),
             g: None,
         };
         assert!(
-            purrdf::DatasetMut::insert(&mut mutation, row).expect("the expansion insert applies"),
+            purrdf_rdf::DatasetMut::insert(&mut mutation, row)
+                .expect("the expansion insert applies"),
             "expansion row {index} changed nothing, so the measurement names more rows than it \
              makes"
         );
@@ -2147,7 +2152,7 @@ fn expansion_fixture(
     .bind_delta_with_shapes_graph(
         Arc::clone(&snapshot),
         None,
-        purrdf::ir::ViewLimits::default(),
+        purrdf_rdf::ir::ViewLimits::default(),
     )
     .expect("the expansion delta binds");
     (snapshot, validator, changes)
@@ -2155,7 +2160,11 @@ fn expansion_fixture(
 
 /// One expansion fixture: its snapshot, its validator, and the row count it was
 /// built with.
-type ExpansionFixture = (Arc<purrdf::ir::DeltaDatasetView>, PreparedValidator, usize);
+type ExpansionFixture = (
+    Arc<purrdf_rdf::ir::DeltaDatasetView>,
+    PreparedValidator,
+    usize,
+);
 
 /// Expand `fixture`'s change, requiring the answer to be bounded and to name
 /// `expected` focus nodes.

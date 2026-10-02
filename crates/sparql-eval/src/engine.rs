@@ -39,8 +39,7 @@ use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{
     EvalCtx, EvalOptions, EvaluatedOutcome, LossVocabulary, Outcome, StandpointPredicates,
-    evaluate_query, evaluate_query_evaluated, evaluate_query_evaluated_over, evaluate_query_over,
-    query_pattern,
+    evaluate_query_evaluated, evaluate_query_evaluated_over, evaluate_query_over, query_pattern,
 };
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
@@ -65,6 +64,9 @@ pub struct PreparedQuery {
     /// The parsed algebra. Private — see [`Self::query`] for why, and for the
     /// guarantee that privacy buys.
     query: Query,
+    /// The source SELECT's visible column order when admission changes it. This
+    /// is egress metadata, never a projection barrier inside the algebra.
+    source_schema: Option<Arc<crate::solution::VarSchema>>,
     /// The identity of the property-function registry this plan was parsed and
     /// feasibility-ordered against — empty when there was none.
     ///
@@ -170,8 +172,10 @@ impl PreparedQuery {
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
         let aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
             .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+        let source_schema = changed_source_schema(&query, planned.as_ref());
         Ok(Self::admitted(
             planned.unwrap_or(query),
+            source_schema,
             relations,
             aggregates,
             memory,
@@ -180,17 +184,60 @@ impl PreparedQuery {
 
     fn admitted(
         query: Query,
+        source_schema: Option<Arc<crate::solution::VarSchema>>,
         relations: String,
         aggregates: String,
         memory: &PlanMemoryObserver,
     ) -> Self {
-        let bytes = plan_payload_bytes(&query, relations.capacity(), aggregates.capacity());
+        let bytes = plan_payload_bytes(
+            &query,
+            source_schema.as_deref(),
+            relations.capacity(),
+            aggregates.capacity(),
+        );
         Self {
             query,
+            source_schema,
             relations,
             aggregates,
             memory: PlanCharge::new(memory, bytes),
             plan: crate::plan::PlanCache::default(),
+        }
+    }
+
+    fn restore_layout<I: purrdf_core::ViewTermId>(&self, outcome: Outcome<I>) -> Outcome<I> {
+        match (&self.source_schema, outcome) {
+            (Some(schema), Outcome::Solutions(rows)) => {
+                Outcome::Solutions(rows.reorder_like(schema))
+            }
+            (_, outcome) => outcome,
+        }
+    }
+
+    fn restore_evaluated_layout<I: purrdf_core::ViewTermId>(
+        &self,
+        evaluated: EvaluatedOutcome<I>,
+    ) -> EvaluatedOutcome<I> {
+        let Some(schema) = &self.source_schema else {
+            return evaluated;
+        };
+        match evaluated {
+            EvaluatedOutcome::Complete(outcome) => {
+                EvaluatedOutcome::Complete(self.restore_layout(outcome))
+            }
+            EvaluatedOutcome::Truncated {
+                outcome,
+                certificate,
+            } => {
+                let (rows, proof) = certificate.split();
+                EvaluatedOutcome::Truncated {
+                    outcome: self.restore_layout(outcome),
+                    certificate: crate::governor::lift::Truncation::new(
+                        rows.reorder_like(schema),
+                        proof,
+                    ),
+                }
+            }
         }
     }
 
@@ -220,6 +267,7 @@ impl PreparedQuery {
     pub fn retained_size_bytes(&self) -> usize {
         plan_payload_bytes(
             &self.query,
+            self.source_schema.as_deref(),
             self.relations.capacity(),
             self.aggregates.capacity(),
         )
@@ -234,6 +282,7 @@ impl PreparedQuery {
 
 fn plan_payload_bytes(
     query: &Query,
+    source_schema: Option<&crate::solution::VarSchema>,
     relations_capacity: usize,
     aggregates_capacity: usize,
 ) -> usize {
@@ -245,6 +294,42 @@ fn plan_payload_bytes(
         )
         .saturating_add(relations_capacity)
         .saturating_add(aggregates_capacity)
+        .saturating_add(source_schema.map_or(0, |schema| {
+            schema
+                .retained_size_bytes()
+                .saturating_add(2 * size_of::<usize>())
+        }))
+}
+
+/// Retain an observable source header only when the admitted layout differs.
+fn changed_source_schema(
+    source: &Query,
+    planned: Option<&Query>,
+) -> Option<Arc<crate::solution::VarSchema>> {
+    let Query::Select { pattern, .. } = source else {
+        return None;
+    };
+    let planned = planned?;
+    let visible = |pattern: &purrdf_sparql_algebra::GraphPattern| {
+        let schema = crate::eval::syntactic_schema(pattern);
+        if schema
+            .vars()
+            .iter()
+            .any(crate::blank_scope::is_joined_blank)
+        {
+            Arc::new(crate::solution::VarSchema::from_vars(
+                schema
+                    .vars()
+                    .iter()
+                    .filter(|variable| !crate::blank_scope::is_joined_blank(variable))
+                    .cloned(),
+            ))
+        } else {
+            schema
+        }
+    };
+    let source = visible(pattern);
+    (source != visible(query_pattern(planned))).then_some(source)
 }
 
 /// Admit `query`: structurally valid, and feasibility ordered against the supplied
@@ -588,8 +673,10 @@ impl PlanCache {
             &crate::property_fn_plan::parameter_set(parameters),
             reach,
         )?;
+        let source_schema = changed_source_schema(&parsed, planned.as_ref());
         let prepared = Arc::new(PreparedQuery::admitted(
             planned.unwrap_or(parsed),
+            source_schema,
             fingerprint.to_owned(),
             agg_fingerprint.to_owned(),
             &self.memory,
@@ -2836,7 +2923,10 @@ impl NativeSparqlEngine {
             };
             // `visit` runs BEFORE the workspace goes back, because the outcome it reads
             // resolves `SolutionTerm::Computed` ids through this context's scratch.
-            let answer = evaluated.map(|outcome| visit(borrow_outcome(&outcome, &ctx)));
+            let answer = evaluated.map(|outcome| {
+                let outcome = execution.prepared.restore_layout(outcome);
+                visit(borrow_outcome(&outcome, &ctx))
+            });
             if dataset.storage_live_budget().is_none() {
                 execution.check_in_workspace(&mut ctx.scratch);
             }
@@ -2930,6 +3020,7 @@ impl NativeSparqlEngine {
                 Err(refused) => Err(refused),
             };
             let answer = evaluated.and_then(|evaluated| {
+                let evaluated = prepared.restore_evaluated_layout(evaluated);
                 Ok(
                     match resolve_governed(evaluated, &mut ctx, state, identity)? {
                         GovernedResolution::Complete {
@@ -3387,18 +3478,22 @@ fn evaluate_with_substitutions<D: DatasetView + Sync>(
         )
     };
     if substitutions.is_empty() {
-        return evaluate_query_over(&prepared.query, Some(&prepared.plan), ctx).map_err(eval_err);
+        return evaluate_query_over(&prepared.query, Some(&prepared.plan), ctx)
+            .map(|outcome| prepared.restore_layout(outcome))
+            .map_err(eval_err);
     }
     let substituted =
         crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?;
-    evaluate_query(&substituted, ctx).map_err(eval_err)
+    evaluate_query_over(&substituted, None, ctx)
+        .map(|outcome| prepared.restore_layout(outcome))
+        .map_err(eval_err)
 }
 
 /// [`evaluate_with_substitutions`], on the trip-aware channel.
 ///
 /// The one difference is the evaluator entry point: this one may answer "a governor
 /// stopped here, and these rows are what it left", which the completion-only
-/// [`evaluate_query`] refuses by contract.
+/// [`crate::evaluate_query`] refuses by contract.
 fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
     substitutions: Prebindings<'_>,
@@ -3412,11 +3507,14 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
     };
     if substitutions.is_empty() {
         return evaluate_query_evaluated_over(&prepared.query, Some(&prepared.plan), ctx)
+            .map(|outcome| prepared.restore_evaluated_layout(outcome))
             .map_err(eval_err);
     }
     let substituted =
         crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?;
-    evaluate_query_evaluated(&substituted, ctx).map_err(eval_err)
+    evaluate_query_evaluated(&substituted, ctx)
+        .map(|outcome| prepared.restore_evaluated_layout(outcome))
+        .map_err(eval_err)
 }
 
 /// Which rewrite [`NativeSparqlEngine::query_governed_in_operation`] applies to a
@@ -4039,7 +4137,7 @@ fn check_plan_matches_registries(
     parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
     reach: ShaclPrebinding,
 ) -> Result<(), RdfDiagnostic> {
-    let planned = crate::property_fn_plan::plan_query(
+    let planned = crate::property_fn_plan::recheck_query(
         &prepared.query,
         options.property_functions(),
         options.aggregates(),
@@ -4205,12 +4303,14 @@ fn evaluate_governed_with_shacl_prebinding<D: DatasetView + Sync>(
 ) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
     let substituted =
         crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
-    evaluate_query_evaluated(&substituted, ctx).map_err(|e| {
-        RdfDiagnostic::error(
-            eval_diagnostic_code(&e, "native-sparql-query-eval"),
-            e.to_string(),
-        )
-    })
+    evaluate_query_evaluated(&substituted, ctx)
+        .map(|outcome| prepared.restore_evaluated_layout(outcome))
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                e.to_string(),
+            )
+        })
 }
 
 fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(
@@ -4220,12 +4320,14 @@ fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(
 ) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let substituted =
         crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
-    evaluate_query(&substituted, ctx).map_err(|e| {
-        RdfDiagnostic::error(
-            eval_diagnostic_code(&e, "native-sparql-query-eval"),
-            e.to_string(),
-        )
-    })
+    evaluate_query_over(&substituted, None, ctx)
+        .map(|outcome| prepared.restore_layout(outcome))
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                e.to_string(),
+            )
+        })
 }
 
 impl SparqlEngine for NativeSparqlEngine {
@@ -5266,8 +5368,8 @@ mod tests {
     /// The sub-`SELECT` is a separate scope, so the single-row `VALUES` seed the
     /// rewrite also injects cannot correlate with the inner `?g`: it binds an outer
     /// variable of the same name, compatible with every inner row. Only the SHACL
-    /// lane's expression-position walk reaches inside, which is divergence 1 in
-    /// `crate::enf`'s module doc.
+    /// lane's full walk reaches inside, replacing an IRI graph name or restricting
+    /// an unwritable name with a local `VALUES` join.
     ///
     /// The second operand is what keeps the seed OUTSIDE. `map_core_pattern`
     /// descends every single-child solution modifier, `Project` included, so a query
@@ -5279,9 +5381,10 @@ mod tests {
     const GRAPH_NAME_QUERY: &str = "SELECT ?o WHERE { ?a <http://ex/q> ?b . \
          { SELECT ?o WHERE { GRAPH ?g { ?s <http://ex/p> ?o } } } }";
 
-    /// [`GRAPH_NAME_QUERY`] with `?g` pre-bound to `value`, on the SHACL lane (the
-    /// only lane that rewrites a `GRAPH` name at all).
-    fn graph_name_answer(value: TermValue) -> Vec<String> {
+    /// [`GRAPH_NAME_QUERY`] with `?g` pre-bound to `value` on the requested lane.
+    /// Ordinary bindings stop at the sub-`SELECT`'s hidden column; SHACL bindings
+    /// constrain the inner `GRAPH` too.
+    fn graph_name_answer(value: TermValue, prebinding: ShaclPrebinding) -> Vec<String> {
         let ds = graph_name_ds();
         let engine = NativeSparqlEngine::new();
         let result = engine
@@ -5293,7 +5396,7 @@ mod tests {
                     substitutions: &[("g".to_owned(), value)],
                 },
                 QueryOptions {
-                    prebinding: ShaclPrebinding::Applied,
+                    prebinding,
                     ..QueryOptions::EMPTY
                 },
             )
@@ -5315,7 +5418,10 @@ mod tests {
     /// `:y` would mean it was substituted with the wrong graph.
     #[test]
     fn a_graph_name_pre_bound_to_an_iri_is_substituted_and_answers_that_graph() {
-        let got = graph_name_answer(TermValue::Iri("http://ex/g1".to_owned()));
+        let got = graph_name_answer(
+            TermValue::Iri("http://ex/g1".to_owned()),
+            ShaclPrebinding::Applied,
+        );
         assert_eq!(
             got.len(),
             1,
@@ -5330,35 +5436,39 @@ mod tests {
         );
     }
 
-    /// **A `GRAPH` name pre-bound to a LITERAL is still refused.**
+    /// **A literal is never converted to an IRI graph name by its lexical form.**
     ///
-    /// The REFUSED half of the same pair. A graph is named by an IRI, so a literal
-    /// has no business in this position: it rides the `VALUES` seed, where no named
-    /// graph is compatible with it, and the answer is empty.
+    /// The REFUSED half of the same pair. A literal names no graph. The ordinary
+    /// lane's outer `VALUES` seed cannot constrain the hidden inner `?g`, so both
+    /// graphs remain. The SHACL lane adds a local `VALUES` restriction, incompatible
+    /// with every graph name, so its answer is empty.
     ///
     /// The literal's lexical form is deliberately `:g2`'s IRI, which is what makes
     /// this test able to fail for the reason it states. Had the refusal been widened
     /// to admit a literal by its lexical form, the query would name `:g2` and answer
-    /// `:y` — a DIFFERENT, non-empty answer — rather than staying empty the way a
-    /// literal that merely fails to match any graph does. Without that choice, "the
-    /// literal was refused" and "the literal was substituted and matched nothing"
-    /// would be the same observation.
+    /// `:y` on the SHACL lane, instead of its empty answer. This distinguishes an
+    /// actual literal binding from an erroneous conversion to an IRI constant.
     #[test]
     fn a_graph_name_pre_bound_to_a_literal_is_still_refused() {
-        let got = graph_name_answer(TermValue::typed_literal(
-            "http://ex/g2",
-            "http://www.w3.org/2001/XMLSchema#string",
-        ));
+        let value =
+            TermValue::typed_literal("http://ex/g2", "http://www.w3.org/2001/XMLSchema#string");
+        let got = graph_name_answer(value.clone(), ShaclPrebinding::None);
         assert_eq!(
             got.len(),
             2,
-            "a literal names no graph, so the inner GRAPH stays a variable and \
-             enumerates BOTH of them: {got:?}"
+            "ordinary binding cannot reach the hidden inner graph variable, so \
+             BOTH graphs remain: {got:?}"
         );
         assert!(
             got.iter().any(|row| row.contains("http://ex/x"))
                 && got.iter().any(|row| row.contains("http://ex/y")),
             "both graphs' objects must survive: {got:?}"
+        );
+        let shacl = graph_name_answer(value, ShaclPrebinding::Applied);
+        assert!(
+            shacl.is_empty(),
+            "the SHACL binding reaches the inner GRAPH, where a literal names no \
+             graph: {shacl:?}"
         );
     }
 

@@ -20,12 +20,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use purrdf::{RdfQuad, RdfTerm};
 use purrdf_core::datatype::XSD_NS;
 use purrdf_iri::vocab::{
     activitystreams, cred, dcat, did, ma, oa, odrl, org, owl, prov, rdf, rdfs, skos, sosa, ssn,
     time,
 };
+use purrdf_rdf::{RdfQuad, RdfTerm};
 
 use crate::artifact::ArtifactRole;
 use crate::catalog::SliceCatalog;

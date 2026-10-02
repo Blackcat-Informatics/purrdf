@@ -15,7 +15,7 @@ use purrdf_iri::terminals::{is_ncname_char, is_ncname_start};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::json_model::{Object, ToJson, Value, ValueKind};
-use ::purrdf::loss::LossLedger;
+use ::purrdf_rdf::loss::LossLedger;
 use purrdf_iri::terminals;
 
 use crate::json_schema::CompiledSchema;

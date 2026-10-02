@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, RdfDatasetBuilder};
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder};
 use purrdf_shapes::engine::PreparedShapes;
 use purrdf_shapes::report::ValidationReport;
 

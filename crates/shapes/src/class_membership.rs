@@ -22,8 +22,8 @@ use crate::data_view::{ShaclDatasetView, ShaclRead};
 use std::hash::Hasher as _;
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::ir::QuadProbePlan;
-use ::purrdf::{
+use ::purrdf_rdf::ir::QuadProbePlan;
+use ::purrdf_rdf::{
     DatasetView, FastMap, FastSet, GraphMatch, QuadIds, RdfDataset, RdfStoreCapabilities, SmallVec,
     TermId, TermValue,
 };
@@ -1030,7 +1030,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use ::purrdf::{BlankScope, RdfDatasetBuilder};
+    use ::purrdf_rdf::{BlankScope, RdfDatasetBuilder};
     use purrdf_testkit::prop::prelude::*;
 
     const EX: &str = "https://example.org/class-membership/";
@@ -1259,7 +1259,7 @@ mod tests {
         let triple = builder.intern_triple(s, p, o);
         let reifier = builder.intern_iri(&format!("{EX}r"));
         let annotation_p = builder.intern_iri(&format!("{EX}source"));
-        let annotation_o = builder.intern_literal(::purrdf::RdfLiteral::simple("test"));
+        let annotation_o = builder.intern_literal(::purrdf_rdf::RdfLiteral::simple("test"));
         builder.push_reifier(reifier, triple);
         builder.push_annotation(reifier, annotation_p, annotation_o);
         let dataset = builder.freeze().expect("fixture freezes");

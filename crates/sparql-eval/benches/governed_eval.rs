@@ -7,7 +7,7 @@
 
 //! Report-only execution-governor cost envelope.
 //!
-//! Six comparisons keep distinct costs distinct:
+//! The comparisons keep distinct costs distinct:
 //!
 //! - ordinary ungoverned evaluation, whose latency is the regression ceiling;
 //! - the typed governed carrier under `UNBOUNDED`, which should take the same recursive
@@ -18,6 +18,8 @@
 //!   exponent, so growth follows the reachable relation rather than the numeric range;
 //! - linear paths connecting typed endpoints versus explicit triple expansion, with
 //!   preparation outside timing and a cold join-order cache in every sample;
+//! - equivalent UNION positions, opposing connector/attribute selectivity, and
+//!   preparation growth for compact sequences of alternatives;
 //! - the per-row loops of `FILTER`, `BIND` and `UNFOLD` over 16 384 rows, each run
 //!   ungoverned, under a stop signal alone, and under a fuel ceiling with a stop
 //!   signal, on the forced-sequential engine and on the default one that forks a
@@ -35,7 +37,7 @@ mod support;
 
 use support::result_size;
 
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlResult, TermValue,
@@ -376,11 +378,167 @@ fn bench_governed_row_loops(c: &mut Bench) {
     group.finish();
 }
 
+/// The same connected bag with its terminal predicate on either side of
+/// a UNION. Preparation is outside timing and both positions must answer equally.
+fn bench_union_positions(c: &mut Bench) {
+    let engine = NativeSparqlEngine::new();
+    let mut group = c.benchmark_group("governed_eval/union_positions");
+    for count in [64_usize, 256] {
+        let mut builder = RdfDatasetBuilder::new();
+        let node = builder.intern_iri(&format!("{EX}node"));
+        let controls_a = builder.intern_iri(&format!("{EX}controlsA"));
+        let controls_b = builder.intern_iri(&format!("{EX}controlsB"));
+        let target = builder.intern_iri(&format!("{EX}target"));
+        let connected = builder.intern_iri(&format!("{EX}connected"));
+        let yes = builder.intern_iri(&format!("{EX}yes"));
+        for index in 0..count {
+            let terminal = builder.intern_iri(&format!("{EX}terminal{index}"));
+            let control = builder.intern_iri(&format!("{EX}control{index}"));
+            let subject = builder.intern_iri(&format!("{EX}s{index}"));
+            let object = builder.intern_iri(&format!("{EX}target{index}"));
+            builder.push_quad(terminal, node, subject, None);
+            builder.push_quad(
+                control,
+                if index % 2 == 0 {
+                    controls_a
+                } else {
+                    controls_b
+                },
+                terminal,
+                None,
+            );
+            builder.push_quad(control, target, object, None);
+            builder.push_quad(terminal, connected, yes, None);
+        }
+        let dataset = builder.freeze().expect("UNION position benchmark dataset");
+        for (label, before, after) in [
+            ("before", "?terminal ex:connected ex:yes .", ""),
+            ("after", "", "?terminal ex:connected ex:yes ."),
+        ] {
+            let text = format!(
+                "PREFIX ex: <{EX}> SELECT ?s ?object WHERE {{ ?terminal ex:node ?s . {before} \
+                 {{ ?control ex:controlsA ?terminal }} UNION {{ ?control ex:controlsB ?terminal }} \
+                 ?control ex:target ?object . {after} }}"
+            );
+            let prepared = engine
+                .prepare_query(&text, None)
+                .expect("UNION position benchmark query");
+            assert_eq!(run_plain(&engine, &dataset, &prepared), count);
+            assert_eq!(
+                run_governed(&engine, &dataset, &prepared, &QueryGovernors::METERED).0,
+                count
+            );
+            group.bench_function(BenchmarkId::new(label, count), |bencher| {
+                bencher.iter(|| {
+                    std::hint::black_box(run_governed(
+                        &engine,
+                        &dataset,
+                        &prepared,
+                        &QueryGovernors::METERED,
+                    ))
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+/// Opposing selectivity: the tiny connector and tiny attribute sides each drive
+/// the same two answers under the same live allocation ceiling.
+fn bench_union_selectivity(c: &mut Bench) {
+    let mut group = c.benchmark_group("governed_eval/union_selectivity");
+    for (label, tiny_attributes) in [("connector", false), ("attributes", true)] {
+        let mut b = RdfDatasetBuilder::new();
+        let left_p = b.intern_iri(&format!("{EX}left"));
+        let right_p = b.intern_iri(&format!("{EX}right"));
+        let a = b.intern_iri(&format!("{EX}a"));
+        let bb = b.intern_iri(&format!("{EX}b"));
+        for i in 0..4096 {
+            let left = b.intern_iri(&format!("{EX}left{i}"));
+            let right = b.intern_iri(&format!("{EX}right{i}"));
+            let value = b.intern_iri(&format!("{EX}value{i}"));
+            if !tiny_attributes || i < 2 {
+                b.push_quad(left, left_p, value, None);
+                b.push_quad(right, right_p, value, None);
+            }
+            if tiny_attributes || i < 2 {
+                b.push_quad(left, if i % 2 == 0 { a } else { bb }, right, None);
+            }
+        }
+        let dataset = b.freeze().expect("selectivity fixture");
+        let engine = NativeSparqlEngine::new();
+        let governors = QueryGovernors::METERED.with_max_intermediate_cells(4096);
+        for (form, body) in [
+            (
+                "shared",
+                "?left ex:left ?lv . { ?left ex:a ?right } UNION { ?left ex:b ?right } ?right ex:right ?rv",
+            ),
+            (
+                "distributed",
+                "{ ?left ex:a ?right . ?left ex:left ?lv . ?right ex:right ?rv } UNION { ?left ex:b ?right . ?left ex:left ?lv . ?right ex:right ?rv }",
+            ),
+        ] {
+            let text = format!("PREFIX ex: <{EX}> SELECT ?left ?right ?lv ?rv WHERE {{ {body} }}");
+            let prepared = engine.prepare_query(&text, None).expect("selective query");
+            assert_eq!(run_governed(&engine, &dataset, &prepared, &governors).0, 2);
+            group.bench_function(format!("{label}/{form}"), |bencher| {
+                bencher.iter(|| {
+                    std::hint::black_box(run_governed(&engine, &dataset, &prepared, &governors))
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+/// Preparation growth over a compact sequence of two-arm connectors. Each
+/// original triple remains exactly once after normalization.
+fn bench_union_preparation(c: &mut Bench) {
+    let mut group = c.benchmark_group("governed_eval/union_preparation");
+    for count in [16_usize, 64, 256] {
+        let mut body = String::new();
+        for i in 0..count {
+            write!(
+                body,
+                "?v{i} ex:attr ?a{i} . {{ ?v{i} ex:a ?v{} }} UNION {{ ?v{i} ex:b ?v{} }} ",
+                i + 1,
+                i + 1,
+            )
+            .expect("String writes are infallible");
+        }
+        let text = format!("PREFIX ex: <{EX}> SELECT ?v0 ?v{count} WHERE {{ {body} }}");
+        let source = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&text)
+            .expect("preparation source");
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine
+            .prepare_algebra(source.clone(), QueryOptions::EMPTY)
+            .expect("preparation plan");
+        eprintln!(
+            "union preparation count={count} retained_bytes={}",
+            prepared.retained_size_bytes()
+        );
+        group.bench_function(BenchmarkId::from_parameter(count), |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(
+                    engine
+                        .prepare_algebra(source.clone(), QueryOptions::EMPTY)
+                        .expect("prepared"),
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 bench_group!(
     benches,
     bench_governed_query,
     bench_path_scaling,
     bench_linear_paths,
-    bench_governed_row_loops
+    bench_governed_row_loops,
+    bench_union_positions,
+    bench_union_selectivity,
+    bench_union_preparation
 );
 bench_main!(benches);

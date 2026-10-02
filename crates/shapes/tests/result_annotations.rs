@@ -21,7 +21,7 @@ mod turtle;
 
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
 use purrdf_shapes::report::ValidationReport;

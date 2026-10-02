@@ -58,7 +58,7 @@
 use std::collections::BTreeMap;
 
 use crate::json_model::{Map, Value, json};
-use ::purrdf::{DatasetView as _, FastMap, FastSet, GraphMatch, RdfDataset, TermId, TermRef};
+use ::purrdf_rdf::{DatasetView as _, FastMap, FastSet, GraphMatch, RdfDataset, TermId, TermRef};
 use purrdf_core::collections::{ListCellUse, convertible_list_cells};
 
 use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids, resolve_id};
@@ -617,7 +617,8 @@ mod tests {
         "#
         );
         let store = std::sync::Arc::new(
-            ::purrdf::parse_dataset(trig.as_bytes(), "application/trig", None).expect("TriG parse"),
+            ::purrdf_rdf::parse_dataset(trig.as_bytes(), "application/trig", None)
+                .expect("TriG parse"),
         );
         let doc = project_graph(&store, &fixture_ns());
         let graph = doc["@graph"].as_array().expect("@graph array");

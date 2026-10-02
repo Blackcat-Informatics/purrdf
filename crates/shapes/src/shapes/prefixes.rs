@@ -76,7 +76,7 @@ use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
 
 use super::objects_of;

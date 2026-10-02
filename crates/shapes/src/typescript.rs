@@ -30,8 +30,8 @@ use std::fmt::Write as _;
 
 use crate::json_model::{Number, NumberKind, Object, Value, ValueKind, json_string};
 use crate::limits;
-use ::purrdf::RdfLocation;
-use ::purrdf::loss::{LossEntry, LossLedger};
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
@@ -189,7 +189,7 @@ purrdf_lex::message_error! {
 /// # Example
 ///
 /// ```
-/// use purrdf::loss::LossLedger;
+/// use purrdf_rdf::loss::LossLedger;
 /// use purrdf_shapes::json_schema::CompiledSchema;
 /// use purrdf_shapes::{
 ///     TYPESCRIPT_DECLARATION_PATH, TypeScriptConfig, emit_typescript,
@@ -2143,7 +2143,7 @@ mod tests {
     use crate::json_model::{Map, json};
     use crate::json_schema::Namespaces;
     use crate::schema_import::SchemaDatatypeMap;
-    use ::purrdf::loss::{check_ledger_complete, check_ledger_sound};
+    use ::purrdf_rdf::loss::{check_ledger_complete, check_ledger_sound};
 
     use purrdf_xsd::datatype::XSD_NS as XSD;
 

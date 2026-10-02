@@ -50,8 +50,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use purrdf::{RdfDataset, TermValue};
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactSpec, ArtifactView, Identity};
+use purrdf_rdf::{RdfDataset, TermValue};
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{

@@ -7,7 +7,7 @@
 //! Every check here answers one question about ONE declaration of a spec IRI the
 //! table knows, and each refusal names the declaration and what to change.
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 
 use super::{ComponentRow, FunctionClass, NativeFunction, census};
 use crate::data::{GraphFilter, native_quads, objects_of as objects};

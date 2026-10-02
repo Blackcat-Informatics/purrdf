@@ -31,7 +31,7 @@ mod terms;
 use std::sync::Arc;
 use terms::ex_ns as ex_term;
 
-use purrdf::{RdfDataset, SparqlRequest, SparqlResult};
+use purrdf_rdf::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{parse_shapes, validate_with};
 use purrdf_shapes::expression::{RecursionGuard, eval_node_expr};

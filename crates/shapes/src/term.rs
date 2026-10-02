@@ -4,7 +4,7 @@
 //! The SHACL engine's native RDF 1.2 term value model.
 //!
 //! The engine, constraint evaluator, path evaluator, shape parser, and report all
-//! work over ONE term value type: this module's native model, built from `String` IRIs and [`purrdf::ir::TermRef`] resolution.
+//! work over ONE term value type: this module's native model, built from `String` IRIs and [`purrdf_rdf::ir::TermRef`] resolution.
 //!
 //! # Rendering contract (behavior-preserving)
 //!
@@ -35,9 +35,9 @@ use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::ops::ControlFlow;
 
-use ::purrdf::blank_label::ESCAPE_MARKER;
-use ::purrdf::{BlankScope, RdfLiteral, TermRef};
-use ::purrdf::{RdfTextDirection, TermId, TermValue};
+use ::purrdf_rdf::blank_label::ESCAPE_MARKER;
+use ::purrdf_rdf::{BlankScope, RdfLiteral, TermRef};
+use ::purrdf_rdf::{RdfTextDirection, TermId, TermValue};
 use purrdf_core::SmallVec;
 use purrdf_lex::iri_escape::{self, find_first_candidate, is_iriref_escape_required};
 use purrdf_lex::literal_escape::{self, Carrier, find_first_literal_escape};
@@ -919,10 +919,10 @@ impl Term {
         matches!(self, Self::NamedNode(_) | Self::BlankNode(_))
     }
 
-    /// Convert this native term into the owned [`RdfTerm`](purrdf::RdfTerm) model — used when
+    /// Convert this native term into the owned [`RdfTerm`](purrdf_rdf::RdfTerm) model — used when
     /// building a report dataset for serialization: its [`TermValue`] lifted by
     /// [`TermValue::into_rdf_term`].
-    pub fn to_rdf_term(&self) -> ::purrdf::RdfTerm {
+    pub fn to_rdf_term(&self) -> ::purrdf_rdf::RdfTerm {
         self.to_term_value()
             .into_rdf_term()
             .expect("a native quoted triple's predicate is a named node")
@@ -943,7 +943,7 @@ impl Term {
                     // term used as a SPARQL pre-binding denotes the SAME node the
                     // dataset holds rather than a second, doubly-qualified one.
                     Self::BlankNode(b) => {
-                        let (label, scope) = ::purrdf::BlankScope::unqualify_label(b);
+                        let (label, scope) = ::purrdf_rdf::BlankScope::unqualify_label(b);
                         TermValue::Blank {
                             label: label.into_owned(),
                             scope,
@@ -1171,7 +1171,7 @@ fn write_literal<W: TextOut + ?Sized>(l: &Literal, out: &mut W) {
 }
 
 /// Convert a resolved IR [`TermRef`] into a native [`Term`], through triple
-/// components via the dataset's [`resolve`](::purrdf::RdfDataset::resolve).
+/// components via the dataset's [`resolve`](::purrdf_rdf::RdfDataset::resolve).
 ///
 /// Blank labels are scope-qualified so two same-label blanks from different
 /// [`BlankScope`]s never conflate (C0.2); a DEFAULT-scope
@@ -1511,8 +1511,8 @@ mod tests {
     /// id's number instead of what the id denotes produces a visibly reversed
     /// answer rather than a plausible one. A dataset built in the natural order
     /// would let that mistake pass.
-    fn anti_canonical_dataset() -> std::sync::Arc<::purrdf::RdfDataset> {
-        use ::purrdf::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+    fn anti_canonical_dataset() -> std::sync::Arc<::purrdf_rdf::RdfDataset> {
+        use ::purrdf_rdf::{BlankScope, RdfDatasetBuilder, RdfLiteral};
 
         let mut builder = RdfDatasetBuilder::new();
         // Descending IRIs, so id order is the reverse of canonical order.
@@ -1561,7 +1561,7 @@ mod tests {
     /// they are comparing the same byte sequences.
     #[test]
     fn canonical_bytes_of_an_id_match_the_materialized_term() {
-        use ::purrdf::TermId;
+        use ::purrdf_rdf::TermId;
 
         let dataset = anti_canonical_dataset();
         assert!(dataset.term_count() > 20, "the fixture must be non-trivial");
@@ -1597,7 +1597,7 @@ mod tests {
     /// backwards on the IRIs rather than subtly off.
     #[test]
     fn id_comparison_is_canonical_and_not_insertion_order() {
-        use ::purrdf::TermId;
+        use ::purrdf_rdf::TermId;
 
         let dataset = anti_canonical_dataset();
         let ids: Vec<TermId> = (0..dataset.term_count())
@@ -1651,7 +1651,7 @@ pub(crate) mod term_walk_tests {
     use core::convert::Infallible;
     use core::ops::ControlFlow;
 
-    use ::purrdf::{RdfTerm, RdfTriple, TermRef, TermValue};
+    use ::purrdf_rdf::{RdfTerm, RdfTriple, TermRef, TermValue};
     use purrdf_core::backend::TermFactory as _;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermBox, TermId};
 

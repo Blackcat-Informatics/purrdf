@@ -12,7 +12,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, GraphMatch, IdSet, RdfTextDirection, TermId, TermRef};
+use ::purrdf_rdf::{FastMap, FastSet, GraphMatch, IdSet, RdfTextDirection, TermId, TermRef};
 use purrdf_core::SmallVec;
 use purrdf_core::collections::{ListFault, RdfListWalk};
 
@@ -4298,7 +4298,7 @@ fn build_regex(
 mod tests {
     use std::sync::{Arc, OnceLock};
 
-    use ::purrdf::RdfDataset;
+    use ::purrdf_rdf::RdfDataset;
 
     use super::*;
     use crate::report::Severity;

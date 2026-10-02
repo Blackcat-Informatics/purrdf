@@ -22,15 +22,17 @@ Internal dependency-requirement pins (every intra-workspace path dependency —
 a dependency line carrying BOTH ``path = "…"`` and ``version = "…"``):
 * ``Cargo.toml``                         — the ``[workspace.dependencies]`` pins
 * ``crates/*/Cargo.toml`` /
-  ``bindings/*/Cargo.toml``              — renamed-dep pins (e.g. shapes/slice's
-                                           ``purrdf = { package = "purrdf-rdf" }``
-                                           and rdf-capi's ``purrdf-rs``)
+  ``bindings/*/Cargo.toml``              — any directly declared path pins;
+                                           workspace-inherited dependencies,
+                                           including aliases, need no rewrite
 
 Other version locations:
 * ``crates/rdf-capi/Cargo.toml``         — ``[package.metadata.capi.library] version``
 * ``bindings/python/uv.lock``            — the editable ``purrdf`` package pin
 * ``CITATION.cff``                       — ``version`` (and ``date-released``,
                                            stamped to today's release date)
+* Every committed ``Cargo.lock``        — local path-package versions, including
+                                           independently resolved test consumers
 
 Edits are line-scoped so file formatting and comments are preserved (only the
 version value changes). Deps that inherit via ``version.workspace = true`` and
@@ -47,7 +49,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import UTC, datetime
 from pathlib import Path
 
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
@@ -132,7 +134,7 @@ def set_path_dep_versions(path: Path, version: str) -> int:
 
     An intra-workspace pin is any line carrying BOTH ``path = "…"`` and a quoted
     ``version = "…"`` (the internal ``[workspace.dependencies]`` entries and the
-    renamed-dep pins in member manifests). External deps have no ``path`` and
+    directly declared pins in member manifests). External deps have no ``path`` and
     ``version.workspace = true`` inheritors have no quoted version, so neither is
     touched. Returns the number of lines changed.
     """
@@ -215,7 +217,7 @@ def set_citation_cff(root: Path, version: str) -> None:
     form CFF uses.
     """
     path = root / "CITATION.cff"
-    today = date.today().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     set_version = set_date = False
     for i, line in enumerate(lines):
@@ -270,7 +272,7 @@ def main(argv: list[str]) -> int:
     set_npm_lock_version(root / "crates" / "rdf-wasm" / "js" / "package-lock.json", version)
 
     # 2. Every intra-workspace path-dependency version pin: the
-    #    [workspace.dependencies] internal pins and the member renamed-dep pins.
+    #    [workspace.dependencies] internal pins and any direct member path pins.
     pins = set_path_dep_versions(root / "Cargo.toml", version)
     for manifest in member_manifests(root):
         pins += set_path_dep_versions(manifest, version)
@@ -286,13 +288,29 @@ def main(argv: list[str]) -> int:
     # 4. Citation metadata (cited version + release date; pinned by the gate).
     set_citation_cff(root, version)
 
+    # Refresh local package identities in every committed resolution. Independent
+    # consumers inherit the bumped workspace packages too; their old lock entries
+    # otherwise make every subsequent --locked gate fail. Offline metadata keeps
+    # existing registry selections while resolving the changed local versions.
+    locks = subprocess.check_output(
+        ["git", "ls-files", "-z", "--", "Cargo.lock", "**/Cargo.lock"], cwd=root
+    )
+    for name in locks.split(b"\0"):
+        if name:
+            manifest = root / Path(name.decode()).parent / "Cargo.toml"
+            subprocess.run(
+                ["cargo", "metadata", "--offline", "--format-version", "1",
+                 "--manifest-path", str(manifest)],
+                cwd=root, check=True, stdout=subprocess.DEVNULL,
+            )
+
     print(
         f"set version {version} across crates.io/PyPI/npm "
         f"(+{pins} internal path-dep pins); verifying coherence…"
     )
     # Prove the sources now agree (and the publish list stays complete).
     return subprocess.run(
-        [sys.executable, str(root / "scripts" / "check-versions.py")], cwd=root
+        [sys.executable, str(root / "scripts" / "check-versions.py")], cwd=root, check=False
     ).returncode
 
 

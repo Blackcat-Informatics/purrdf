@@ -37,7 +37,7 @@ use purrdf_shapes::shacl_corpora;
 use std::fs;
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};

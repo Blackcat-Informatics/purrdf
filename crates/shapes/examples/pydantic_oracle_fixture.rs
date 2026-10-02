@@ -31,7 +31,7 @@ mod shacl_value_shapes;
 
 use json_model::{Value, json};
 use json_text::read_sorted;
-use purrdf::loss::{LossLedger, check_ledger_sound};
+use purrdf_rdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{
     PYDANTIC_DIALECT, PydanticClassConfig, PydanticConfig, PydanticModuleConfig, PydanticPackage,

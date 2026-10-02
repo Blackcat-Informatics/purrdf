@@ -29,10 +29,9 @@ path = "src/lib.rs"
 # import_gts_events) — the spec's "libpurrdf statically reuses purrdf-gts so a
 # language shim links one .so" clause. SPARQL is served by the native engine
 # (`purrdf-sparql-eval`, below).
-# The `python` feature stays OFF: this is a C-ABI, not a PyO3 extension.
-# NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
-# at an inheriting use site, and the workspace key `purrdf` is the umbrella.
-purrdf-rs = { package = "purrdf", path = "../purrdf", version = "3.0.0" }
+# The root declares this facade alias separately from the C ABI's own library
+# name, `purrdf`, so the shared version is inherited without an import collision.
+purrdf-rs = { workspace = true }
 # purrdf re-exports the core types, but the capi depends on the kernel
 # directly too so it can name MutableDataset/QuadValues/GraphMatchValue/DatasetMut
 # without leaning on re-export aliasing. Harmless to crate-check (acyclic).
@@ -85,4 +84,4 @@ description = "PurRDF purrdf semantic RDF-1.2 C-ABI"
 
 [package.metadata.capi.library]
 name = "purrdf"
-version = "3.0.0"
+version = "3.0.1"

@@ -16,9 +16,9 @@ mod parameters;
 use parameters::parse_parameter;
 use std::sync::OnceLock;
 
-use ::purrdf::TermValue;
-use ::purrdf::{DatasetView, RdfDataset};
-use ::purrdf::{FastMap, FastSet};
+use ::purrdf_rdf::TermValue;
+use ::purrdf_rdf::{DatasetView, RdfDataset};
+use ::purrdf_rdf::{FastMap, FastSet};
 use purrdf_sparql_eval::Prebinding;
 
 use crate::data::{GraphFilter, native_quads, objects_of};

@@ -43,7 +43,7 @@
 use purrdf_testkit::text::lowercase_filler as filler;
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_shapes::engine::{parse_shapes, validate_projected_dataset};
 use purrdf_testkit::bench::{
     BatchSize, Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box,

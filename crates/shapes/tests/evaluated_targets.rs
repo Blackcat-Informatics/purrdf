@@ -293,7 +293,7 @@ fn a_rule_fires_at_an_explicit_shape_target() {
         let entailed =
             purrdf_shapes::entail_dataset(turtle::data(PREFIXES, data_ttl).as_ref(), &shapes)
                 .expect("rules run");
-        purrdf::canonicalize(entailed.as_ref()).nquads
+        purrdf_rdf::canonicalize(entailed.as_ref()).nquads
     };
     let fired = "<http://example.org/ns#a> <http://example.org/ns#q> <http://example.org/ns#v>";
     assert!(entail("ex:a sh:shape ex:S .").contains(fired));

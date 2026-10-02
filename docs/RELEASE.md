@@ -303,6 +303,31 @@ downloads of the tagged repository. These source archives are distinct from the
 compiled C SDK. Preserve the full `CHANGELOG.md` history and commit both notes
 sources **before** pushing the release tag.
 
+GitHub release immutability locks every asset when the release is published.
+`scripts/publish-github-release.py` therefore creates or reuses a **draft**,
+attaches all four files, downloads and verifies their sizes, GitHub SHA-256
+digests and the retained checksum manifest against the audited local files,
+then publishes the draft. It checks that the remote tag resolves to the exact
+workflow commit before uploading and again before publication. Only a literal
+404 lookup permits creating a release; authentication and transport failures
+stop the lane. An upload or verification failure leaves a draft for the same
+tagged workflow to resume. See GitHub's
+[immutable release procedure](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+
+An already published release is verified **read-only** against its retained
+checksum manifest and downloaded assets, rather than against a fresh rebuild.
+Its tag identity, reviewed notes and complete four-file asset set must match.
+Missing or corrupt assets fail the lane explicitly; the publisher never
+deletes a release, recreates it or moves a tag to work around immutability.
+
+Cargo publication separately waits until both the crates.io API and Cargo's
+sparse index serve each exact **unyanked** version with matching checksums.
+API visibility alone cannot prove a dependent package can resolve the new
+version. This bounded propagation check also runs for versions an earlier
+attempt already uploaded, so resumed publication cannot skip the evidence its
+dependents need. Malformed identities, yanked versions and checksum mismatches
+stop immediately; an index that has not propagated times out visibly.
+
 ## Tag Release
 
 After the release commit is on `main` and all Trusted Publisher entries exist,

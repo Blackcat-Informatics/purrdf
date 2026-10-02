@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, RdfDatasetBuilder};
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder};
 use purrdf_shapes::path::eval;
 use purrdf_shapes::shapes::Path;
 use purrdf_shapes::term::{NamedNode, Term};

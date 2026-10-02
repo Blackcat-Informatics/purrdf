@@ -16,7 +16,7 @@ use std::sync::Arc;
 use terms::ex_ns as iri;
 use terms::integer as int;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
 use purrdf_shapes::rules::{RuleOptions, RuleProcessor, infer};

@@ -123,8 +123,8 @@ use std::sync::Arc;
 
 use measured::{assert_parallel_path_is_reachable, measure, measure_lock};
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_alloc_probe::CountingAllocator;
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes_with_config};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::{ValidationReport, ValidationResult};

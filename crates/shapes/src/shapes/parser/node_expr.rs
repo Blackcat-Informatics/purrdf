@@ -3,7 +3,7 @@
 
 //! SHACL Core constraint parsing and SHACL-AF node-expression parsing.
 
-use ::purrdf::FastSet;
+use ::purrdf_rdf::FastSet;
 use std::sync::{Arc, OnceLock};
 
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};

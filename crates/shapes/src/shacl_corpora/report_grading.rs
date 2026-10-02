@@ -86,7 +86,7 @@ use super::{Expected, ExpectedResult, Multiset, Tuple, W3cCase, file_iri, norm};
 /// it — or the loader's TYPED error. The outer `Err` is a file that cannot be read or
 /// Turtle that does not parse.
 type LoadedShapes = (
-    std::sync::Arc<purrdf::RdfDataset>,
+    std::sync::Arc<purrdf_rdf::RdfDataset>,
     Result<crate::shapes::Shapes, crate::ShapesError>,
 );
 

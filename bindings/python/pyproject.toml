@@ -8,7 +8,7 @@ backend-path = ["."]
 
 [project]
 name = "purrdf"
-version = "3.0.0"
+version = "3.0.1"
 description = "Python bindings for the PurRDF RDF 1.2 kernel, GTS carrier, SHACL, and slice tooling"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -32,7 +32,7 @@ classifiers = [
 # It MUST NOT be installed alongside the genuine rdflib (import-name collision) —
 # hence a separate distribution (bindings/python-rdflib-shadow), never bundled
 # into the main purrdf wheel and deliberately absent from the [dev] oracle env.
-rdflib = ["purrdf-rdflib==3.0.0"]
+rdflib = ["purrdf-rdflib==3.0.1"]
 # DuckDB is optional. SQLite uses the standard library; Parquet writing uses
 # the first-party native codec. The parquet extra supplies PyArrow for consumers
 # who want to read or interoperate with the emitted native v1 files.

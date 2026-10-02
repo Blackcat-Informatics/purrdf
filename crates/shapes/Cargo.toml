@@ -70,9 +70,7 @@ purrdf-deflate = { workspace = true }
 # zero-dependency RFC 3987 implementation.
 purrdf-iri = { workspace = true }
 # Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary.
-# NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
-# at an inheriting use site, and the workspace key `purrdf` is the umbrella.
-purrdf = { package = "purrdf-rdf", path = "../rdf", version = "3.0.0" }
+purrdf-rdf = { workspace = true }
 # Deterministic indexed focus-node scheduling. Rayon is always-on and
 # wasm32-clean; on single-threaded wasm it executes the same indexed work inline.
 rayon = { workspace = true }

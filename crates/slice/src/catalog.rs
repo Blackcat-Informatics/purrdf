@@ -10,8 +10,8 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
-use purrdf::RdfDataset;
 use purrdf_lex::json::{Object as JsonObject, Value as JsonValue};
+use purrdf_rdf::RdfDataset;
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
 use crate::error::SliceError;

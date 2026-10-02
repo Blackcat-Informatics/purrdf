@@ -16,12 +16,12 @@ use std::convert::Infallible;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use ::purrdf::RdfDatasetBuilder;
-use ::purrdf::provenance::Attribution;
-use ::purrdf::{FastMap, FastSet};
-use ::purrdf::{RdfQuad, RdfTerm, SerializeGraph, serialize_dataset};
+use ::purrdf_rdf::RdfDatasetBuilder;
+use ::purrdf_rdf::provenance::Attribution;
+use ::purrdf_rdf::{FastMap, FastSet};
+use ::purrdf_rdf::{RdfQuad, RdfTerm, SerializeGraph, serialize_dataset};
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, sh, xsd};
@@ -410,8 +410,8 @@ fn message_key(message: &Literal) -> (&str, Option<&str>, Option<u8>, &str) {
         message.value(),
         message.language(),
         message.direction().map(|direction| match direction {
-            ::purrdf::RdfTextDirection::Ltr => 0,
-            ::purrdf::RdfTextDirection::Rtl => 1,
+            ::purrdf_rdf::RdfTextDirection::Ltr => 0,
+            ::purrdf_rdf::RdfTextDirection::Rtl => 1,
         }),
         message.datatype_str(),
     )
@@ -651,8 +651,8 @@ impl ValidationReport {
     ///
     /// ```no_run
     /// # use purrdf_shapes::report::ValidationReport;
-    /// # use purrdf::{SerializeGraph, serialize_dataset};
-    /// # fn f(report: &ValidationReport) -> Result<Vec<u8>, purrdf::RdfDiagnostic> {
+    /// # use purrdf_rdf::{SerializeGraph, serialize_dataset};
+    /// # fn f(report: &ValidationReport) -> Result<Vec<u8>, purrdf_rdf::RdfDiagnostic> {
     /// serialize_dataset(&report.to_dataset(), "text/turtle", SerializeGraph::DefaultGraph)
     /// # }
     /// ```
@@ -761,7 +761,7 @@ impl ValidationReport {
             &mut builder,
             report_subj.clone(),
             sh::CONFORMS,
-            RdfTerm::Literal(::purrdf::RdfLiteral::typed(
+            RdfTerm::Literal(::purrdf_rdf::RdfLiteral::typed(
                 if self.conforms { "true" } else { "false" },
                 xsd::BOOLEAN,
             )),
@@ -793,7 +793,7 @@ impl ValidationReport {
                 &mut builder,
                 report_subj.clone(),
                 sh::SHAPES_GRAPH_WELL_FORMED,
-                RdfTerm::Literal(::purrdf::RdfLiteral::typed(
+                RdfTerm::Literal(::purrdf_rdf::RdfLiteral::typed(
                     if well_formed { "true" } else { "false" },
                     xsd::BOOLEAN,
                 )),
@@ -882,7 +882,7 @@ impl ValidationReport {
 /// The report invents `_:report`, `_:r0`, `_:r1`, … and the interior nodes of a
 /// complex `sh:path`. Blank-node labels reaching the report from the data or
 /// shapes graph are ordinary opaque strings — a data graph is entirely free to
-/// contain `_:r0` — and a blank label at [`::purrdf::BlankScope::DEFAULT`] passes
+/// contain `_:r0` — and a blank label at [`::purrdf_rdf::BlankScope::DEFAULT`] passes
 /// through the IR verbatim. Validating such a graph used to emit
 ///
 /// ```text
@@ -1316,7 +1316,7 @@ pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
 /// Parse a SHACL report N-Triples string into a query-able frozen [`RdfDataset`]
 /// via the native purrdf codec.
 fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
-    ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
+    ::purrdf_rdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
         .map_err(|e| format!("N-Triples parse error: {e}"))
 }
 
@@ -1564,7 +1564,7 @@ mod tests {
     /// (e.g. a GTS-backed store, or SHACL-SPARQL `BIND`/`CONSTRUCT` output).
     #[test]
     fn to_ntriples_survives_hostile_blank_labels_in_focus_nodes() {
-        use ::purrdf::{RdfQuad, RdfTerm};
+        use ::purrdf_rdf::{RdfQuad, RdfTerm};
 
         let hostile_labels = ["a\u{d7}b", "bad\u{1f}label"];
 
@@ -1602,7 +1602,7 @@ mod tests {
 
         // Prove the claim: re-parse the emitted text as N-Triples. A hostile
         // label that leaked through unescaped would break the grammar here.
-        let reparsed = ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
+        let reparsed = ::purrdf_rdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
             .expect("to_ntriples() output must be valid, re-parseable N-Triples");
         assert!(
             reparsed.quad_count() > 0,
@@ -1652,10 +1652,10 @@ mod tests {
         String::from_utf8(buf).expect("UTF-8")
     }
 
-    /// Every [`::purrdf::TermId`] in `dataset`'s dense term table.
-    fn term_ids(dataset: &RdfDataset) -> impl Iterator<Item = ::purrdf::TermId> {
+    /// Every [`::purrdf_rdf::TermId`] in `dataset`'s dense term table.
+    fn term_ids(dataset: &RdfDataset) -> impl Iterator<Item = ::purrdf_rdf::TermId> {
         let count = u32::try_from(dataset.term_count()).expect("report term table fits in u32");
-        (0..count).map(::purrdf::TermId::from_index)
+        (0..count).map(::purrdf_rdf::TermId::from_index)
     }
 
     /// A deliberately hostile report for the `to_dataset()` ≡ `to_ntriples()`
@@ -1776,8 +1776,8 @@ mod tests {
             "the direct dataset must carry exactly the quads the text does"
         );
         assert_eq!(
-            ::purrdf::canonicalize(&direct).nquads,
-            ::purrdf::canonicalize(&round_tripped).nquads,
+            ::purrdf_rdf::canonicalize(&direct).nquads,
+            ::purrdf_rdf::canonicalize(&round_tripped).nquads,
             "to_dataset() and parse(to_ntriples()) must be the same graph"
         );
     }
@@ -1814,7 +1814,7 @@ mod tests {
         let direct = report.to_dataset();
         assert!(
             term_ids(&direct)
-                .any(|id| matches!(direct.resolve(id), ::purrdf::TermRef::Triple { .. })),
+                .any(|id| matches!(direct.resolve(id), ::purrdf_rdf::TermRef::Triple { .. })),
             "to_dataset() must materialize the quoted triple as an IR triple term"
         );
     }
@@ -1836,8 +1836,8 @@ mod tests {
         let round_tripped = dataset_from_ntriples(&report.to_ntriples()).expect("must parse");
 
         assert_eq!(
-            ::purrdf::canonicalize(&direct).nquads,
-            ::purrdf::canonicalize(&round_tripped).nquads
+            ::purrdf_rdf::canonicalize(&direct).nquads,
+            ::purrdf_rdf::canonicalize(&round_tripped).nquads
         );
         assert_eq!(conforms_from_dataset(&direct), Some(true));
         assert!(tuples_from_dataset(&direct).is_empty());
@@ -1859,22 +1859,22 @@ mod tests {
 
         // Same graph up to blank labelling…
         assert_eq!(
-            ::purrdf::canonicalize(&direct).nquads,
-            ::purrdf::canonicalize(&round_tripped).nquads,
+            ::purrdf_rdf::canonicalize(&direct).nquads,
+            ::purrdf_rdf::canonicalize(&round_tripped).nquads,
             "escaping a blank label must not change the graph"
         );
         // …and the direct path still holds the caller's label unescaped.
         assert!(
             term_ids(&direct).any(|id| matches!(
                 direct.resolve(id),
-                ::purrdf::TermRef::Blank { label, .. } if label == "a\u{d7}b"
+                ::purrdf_rdf::TermRef::Blank { label, .. } if label == "a\u{d7}b"
             )),
             "the emission layer must carry the hostile blank label verbatim"
         );
         // …and the public report graph is the same graph under the report's labels.
         assert_eq!(
-            ::purrdf::canonicalize(&direct).nquads,
-            ::purrdf::canonicalize(&report.to_dataset()).nquads,
+            ::purrdf_rdf::canonicalize(&direct).nquads,
+            ::purrdf_rdf::canonicalize(&report.to_dataset()).nquads,
             "relabelling must not change the graph"
         );
     }
@@ -1999,15 +1999,15 @@ mod tests {
         }
         // …and the graph is still the same one the text path produces.
         assert_eq!(
-            ::purrdf::canonicalize(&dataset).nquads,
-            ::purrdf::canonicalize(
+            ::purrdf_rdf::canonicalize(&dataset).nquads,
+            ::purrdf_rdf::canonicalize(
                 &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse")
             )
             .nquads
         );
         assert_eq!(
-            ::purrdf::canonicalize(&dataset).nquads,
-            ::purrdf::canonicalize(&report.to_dataset()).nquads,
+            ::purrdf_rdf::canonicalize(&dataset).nquads,
+            ::purrdf_rdf::canonicalize(&report.to_dataset()).nquads,
             "relabelling must not change the graph"
         );
     }
@@ -2158,7 +2158,7 @@ mod tests {
     /// `ShapeOwner = A`, `FocusOrigin = B` — distinct units with distinct roles.
     #[test]
     fn cross_slice_shacl_distinct_roles() {
-        use ::purrdf::provenance::{Attribution, AttributionRole, UnitInterner};
+        use ::purrdf_rdf::provenance::{Attribution, AttributionRole, UnitInterner};
 
         let mut interner = UnitInterner::new();
         let unit_a = interner.intern("https://example.org/slices/core/shapes"); // slice A — owns the shape
@@ -2204,7 +2204,7 @@ mod tests {
     /// required (and not asserted here).
     #[test]
     fn absence_based_violation_carries_scope_and_shape_attributions() {
-        use ::purrdf::provenance::{Attribution, AttributionRole, UnitInterner};
+        use ::purrdf_rdf::provenance::{Attribution, AttributionRole, UnitInterner};
 
         let mut interner = UnitInterner::new();
         let unit_shape = interner.intern("https://example.org/slices/core/shapes"); // owns the sh:minCount shape

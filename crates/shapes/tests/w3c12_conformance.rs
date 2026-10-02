@@ -68,7 +68,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, RdfQuad, canonicalize};
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfQuad, canonicalize};
 use purrdf_shapes::data::{GraphFilter, ShaclData, native_quads};
 use purrdf_shapes::expression::{
     Binding, NodeExpr, RecursionGuard, Scope, eval_node_expr_in_scope,
@@ -402,16 +402,16 @@ fn expected_triples(expected: &InferExpected) -> Result<Arc<RdfDataset>, String>
                 if let Term::Triple(statement) = o
                     && reifies(p, o)
                 {
-                    builder.push_owned_reifier(&purrdf::RdfReifier::new(
+                    builder.push_owned_reifier(&purrdf_rdf::RdfReifier::new(
                         s.to_rdf_term(),
-                        purrdf::RdfTriple::new(
+                        purrdf_rdf::RdfTriple::new(
                             statement.subject.to_rdf_term(),
                             statement.predicate.as_str(),
                             statement.object.to_rdf_term(),
                         ),
                     ));
                 } else if reifiers.contains(&s) {
-                    builder.push_owned_annotation(&purrdf::RdfAnnotation::new(
+                    builder.push_owned_annotation(&purrdf_rdf::RdfAnnotation::new(
                         s.to_rdf_term(),
                         predicate.as_str(),
                         o.to_rdf_term(),
@@ -1440,7 +1440,7 @@ fn engine_emits_the_canonical_decimal_lexical_form() {
         @prefix sparql: <http://www.w3.org/ns/sparql#> .
         ex:root ex:expr [ sparql:ceil ( 3.2 ) ] .
     ";
-    let dataset = purrdf::parse_dataset(ttl.as_bytes(), "text/turtle", None).expect("parse");
+    let dataset = purrdf_rdf::parse_dataset(ttl.as_bytes(), "text/turtle", None).expect("parse");
     let root = native_quads(
         dataset.as_ref(),
         None,

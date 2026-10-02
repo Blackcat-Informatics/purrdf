@@ -38,7 +38,7 @@
 //! variable has no binding in the result set solution, then the values of
 //! sh:annotationValue are used, if present."
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 
 use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::model::{sh, xsd};

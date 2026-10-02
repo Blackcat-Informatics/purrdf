@@ -63,8 +63,8 @@ use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf::ir::ViewLimits;
-use purrdf::{DatasetMut, MutableDataset, QuadValues, TermId, TermValue};
+use purrdf_rdf::ir::ViewLimits;
+use purrdf_rdf::{DatasetMut, MutableDataset, QuadValues, TermId, TermValue};
 use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::term::Term;
@@ -180,7 +180,10 @@ fn focus_terms(reports: [&ValidationReport; 2]) -> BTreeMap<String, Term> {
 /// delta path uses, so the reifier declaration lands in the reifier side-table and
 /// a row about that reifier lands in the annotation side-table. A case with no
 /// overlay is handed back its parsed base untouched, never a re-frozen copy of it.
-fn fold_overlay_into_base(case: &Case, base: Arc<purrdf::RdfDataset>) -> Arc<purrdf::RdfDataset> {
+fn fold_overlay_into_base(
+    case: &Case,
+    base: Arc<purrdf_rdf::RdfDataset>,
+) -> Arc<purrdf_rdf::RdfDataset> {
     if case.base_overlay.is_empty() {
         return base;
     }
@@ -1090,7 +1093,7 @@ ex:ParentageShape a sh:NodeShape ;
 /// consumer the demoted row itself.
 #[test]
 fn a_reclassifying_delta_moves_no_verdict_because_statements_are_projected() {
-    use purrdf::prelude::{DatasetView, GraphMatch};
+    use purrdf_rdf::prelude::{DatasetView, GraphMatch};
 
     let shapes = r"
 ex:PersonShape a sh:NodeShape ;
@@ -1189,7 +1192,7 @@ fn bound(
     shapes: &str,
     data: &str,
     row: Row,
-) -> (Arc<purrdf::ir::DeltaDatasetView>, PreparedValidator) {
+) -> (Arc<purrdf_rdf::ir::DeltaDatasetView>, PreparedValidator) {
     let parsed = Arc::new(
         parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("fixture shapes must parse"),
     );
@@ -1453,7 +1456,7 @@ ex:PersonShape a sh:NodeShape ;
 /// A base, a one-row mutation that gains `ex:mallory` a violation, and the shapes
 /// both halves of the projection pair share. The snapshot is the SAME value in both
 /// halves, so the only thing that differs between them is the view mode.
-fn projection_pair_fixture() -> (PreparedShapes, Arc<purrdf::ir::DeltaDatasetView>) {
+fn projection_pair_fixture() -> (PreparedShapes, Arc<purrdf_rdf::ir::DeltaDatasetView>) {
     let parsed = Arc::new(
         parse_shapes(&format!("{PREFIXES}{PROJECTION_PAIR_SHAPES}"), None)
             .expect("fixture shapes must parse"),

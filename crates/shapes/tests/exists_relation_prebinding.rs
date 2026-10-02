@@ -43,8 +43,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
-use purrdf::RdfDataset;
 use purrdf_core::{TermId, TermValue};
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset};
 use purrdf_shapes::sparql::enter_property_function_scope;
 use purrdf_sparql_eval::{

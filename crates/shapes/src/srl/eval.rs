@@ -68,7 +68,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ::purrdf::{FastMap, FastSet, MutableDataset, RdfDataset, RdfDatasetBuilder};
+use ::purrdf_rdf::{FastMap, FastSet, MutableDataset, RdfDataset, RdfDatasetBuilder};
 use purrdf_datalog::guard::{GuardCall, GuardEvaluator, GuardSite};
 use purrdf_datalog::schedule::{self, Layer, LayerHooks, Schedule};
 use purrdf_datalog::seminaive::{BudgetResource, EvalError};
@@ -912,13 +912,14 @@ impl Engine<'_, '_> {
             view.delta_bytes + triples.iter().flatten().map(term_bytes).sum::<usize>();
         let compact = view.spent + delta_bytes > model.term_bytes().max(COMPACTION_FLOOR_BYTES);
         for [subject, predicate, object] in &triples {
-            let quad = ::purrdf::QuadValues::triple(
+            let quad = ::purrdf_rdf::QuadValues::triple(
                 subject.to_term_value(),
                 predicate.to_term_value(),
                 object.to_term_value(),
             );
             for dataset in std::iter::once(&mut view.core).chain(view.sparql.as_mut()) {
-                ::purrdf::DatasetMut::insert(dataset, quad.clone()).map_err(|e| e.to_string())?;
+                ::purrdf_rdf::DatasetMut::insert(dataset, quad.clone())
+                    .map_err(|e| e.to_string())?;
             }
         }
         view.rows = rows;
@@ -937,8 +938,12 @@ impl Engine<'_, '_> {
         view.spent += delta_bytes;
         let snapshot = |dataset: &MutableDataset| -> Result<Arc<ShaclDatasetView>, String> {
             let delta = dataset.snapshot_view().map_err(|e| e.to_string())?;
-            ShaclDatasetView::delta(Arc::new(delta), false, ::purrdf::ir::ViewLimits::default())
-                .map(Arc::new)
+            ShaclDatasetView::delta(
+                Arc::new(delta),
+                false,
+                ::purrdf_rdf::ir::ViewLimits::default(),
+            )
+            .map(Arc::new)
         };
         let core = snapshot(&view.core)?;
         let sparql = match &view.sparql {

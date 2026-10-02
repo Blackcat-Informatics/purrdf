@@ -43,6 +43,13 @@
 //! is exactly a label shared within one basic graph pattern, and renaming stops
 //! at every other operator.
 //!
+//! A plain-predicate alternative is translated into `UNION` branches inside one
+//! source triples block. The parser marks the block's shared blank endpoints and
+//! path joints with canonical hidden identities before splitting it. This pass
+//! carries those marked identities across the generated branches and reconciles
+//! a matching raw label in a sibling block separated by `FILTER`. Raw blanks in
+//! independently constructed `UNION` arms remain local to their own leaves.
+//!
 //! # Where the renamed columns end
 //!
 //! The renamed column is carried out of the spine rather than projected away at
@@ -65,16 +72,11 @@ use purrdf_sparql_algebra::{
 use crate::DetHashMap;
 use crate::solution::{SolutionSeq, VarSchema};
 
-/// The prefix of a renamed shared blank. NUL cannot occur in a parsed variable
-/// name, so nothing a query author writes can collide with it, and it is distinct
-/// from the per-leaf blank slot prefix `crate::bgp` uses, so a leaf treats it as a
-/// variable with a column rather than as one of its own blanks.
-const JOINED_BLANK_PREFIX: &str = "\u{0}bgp";
-
 /// Whether `variable` is a shared blank this pass renamed: a non-distinguished
-/// variable that must never be observed as part of a solution.
+/// variable that must never be observed as part of a solution. Its canonical
+/// identity cannot be written in SPARQL and differs from a per-leaf blank slot.
 pub(crate) fn is_joined_blank(variable: &Variable) -> bool {
-    variable.as_str().starts_with(JOINED_BLANK_PREFIX)
+    variable.is_hidden()
 }
 
 /// The columns of `schema` that are not renamed shared blanks, in order — or `None`
@@ -139,13 +141,43 @@ pub(crate) fn join_shared_blanks_in_query(query: &Query) -> Option<Query> {
     | Query::Construct { pattern, .. }
     | Query::Describe { pattern, .. }) = query;
     let joined = join_shared_blanks(pattern)?;
-    let mut query = query.clone();
-    let (Query::Select { pattern, .. }
-    | Query::Ask { pattern, .. }
-    | Query::Construct { pattern, .. }
-    | Query::Describe { pattern, .. }) = &mut query;
-    *pattern = joined;
-    Some(query)
+    Some(query_with_pattern(query, joined))
+}
+
+/// Carry a replacement WHERE pattern without cloning the discarded original.
+/// Query heads, templates and prologue metadata remain byte-identical.
+pub(crate) fn query_with_pattern(query: &Query, pattern: GraphPattern) -> Query {
+    let dataset = query.dataset().clone();
+    let base_iri = query.base_iri().cloned();
+    let version = query.version().cloned();
+    match query {
+        Query::Select { .. } => Query::Select {
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        },
+        Query::Ask { .. } => Query::Ask {
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        },
+        Query::Construct { template, .. } => Query::Construct {
+            template: template.clone(),
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        },
+        Query::Describe { targets, .. } => Query::Describe {
+            targets: targets.clone(),
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -205,48 +237,138 @@ fn spine_leaves_mut<'a>(pattern: &'a mut GraphPattern, out: &mut Vec<&'a mut Gra
 /// endpoints, a call's arguments — quoted triples included. Any other leaf is
 /// another basic graph pattern (or none) and contributes nothing.
 fn leaf_labels<'a>(leaf: &'a GraphPattern, out: &mut Vec<&'a str>) {
-    match leaf {
-        GraphPattern::Bgp { patterns } => {
-            for triple in patterns {
-                term_labels(&triple.subject, out);
-                term_labels(&triple.object, out);
-            }
-        }
-        GraphPattern::Path {
-            subject, object, ..
-        } => {
-            term_labels(subject, out);
-            term_labels(object, out);
-        }
-        GraphPattern::PropertyFunction(call) => {
-            for term in call.subject_args.iter().chain(&call.object_args) {
-                term_labels(term, out);
-            }
-        }
-        _ => {}
-    }
+    leaf_labels_with(leaf, out, LabelSource::All);
 }
 
-/// The blank node labels in a term, a quoted triple's subject before its object at
-/// every level, over a work list rather than a frame per level.
-fn term_labels<'a>(term: &'a TermPattern, out: &mut Vec<&'a str>) {
+fn leaf_labels_with<'a>(leaf: &'a GraphPattern, out: &mut Vec<&'a str>, source: LabelSource) {
+    visit_leaf_labels(leaf, source, &mut |label| {
+        out.push(label);
+        false
+    });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LabelSource {
+    Raw,
+    Carried,
+    All,
+}
+
+/// Visit a leaf's labels, stopping when the visitor returns true. A UNION exposes
+/// only carried parser-block identities, never its arms' local algebra blanks.
+fn visit_leaf_labels<'a>(
+    leaf: &'a GraphPattern,
+    source: LabelSource,
+    visit: &mut impl FnMut(&'a str) -> bool,
+) -> bool {
+    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![(leaf, source)];
+    while let Some((node, source)) = pending.pop() {
+        let found = match node {
+            GraphPattern::Bgp { patterns } => patterns.iter().any(|triple| {
+                visit_term_labels(&triple.subject, source, visit)
+                    || visit_term_labels(&triple.object, source, visit)
+            }),
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                visit_term_labels(subject, source, visit)
+                    || visit_term_labels(object, source, visit)
+            }
+            GraphPattern::PropertyFunction(call) => call
+                .subject_args
+                .iter()
+                .chain(&call.object_args)
+                .any(|term| visit_term_labels(term, source, visit)),
+            GraphPattern::Join { left, right } => {
+                pending.push((right, source));
+                pending.push((left, source));
+                false
+            }
+            GraphPattern::Union { arms } if source != LabelSource::Raw => {
+                pending.extend(arms.iter().rev().map(|arm| (arm, LabelSource::Carried)));
+                false
+            }
+            _ => false,
+        };
+        if found {
+            return true;
+        }
+    }
+    false
+}
+
+fn term_labels_with<'a>(term: &'a TermPattern, out: &mut Vec<&'a str>, source: LabelSource) {
+    visit_term_labels(term, source, &mut |label| {
+        out.push(label);
+        false
+    });
+}
+
+/// The blank labels in a term, subject before object at every quoted level, over
+/// an inline work list and with the same early-exit visitor as the leaf walk.
+fn visit_term_labels<'a>(
+    term: &'a TermPattern,
+    source: LabelSource,
+    visit: &mut impl FnMut(&'a str) -> bool,
+) -> bool {
     let mut pending: purrdf_core::SmallVec<[&'a TermPattern; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
-            TermPattern::BlankNode(blank) => out.push(blank.as_str()),
+            TermPattern::BlankNode(blank) if source != LabelSource::Carried => {
+                if visit(blank.as_str()) {
+                    return true;
+                }
+            }
+            TermPattern::Variable(variable) if source != LabelSource::Raw => {
+                if variable.source_blank_label().is_some_and(&mut *visit) {
+                    return true;
+                }
+            }
             TermPattern::Triple(triple) => {
                 pending.push(&triple.object);
                 pending.push(&triple.subject);
             }
-            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
+            TermPattern::NamedNode(_)
+            | TermPattern::BlankNode(_)
+            | TermPattern::Literal(_)
+            | TermPattern::Variable(_) => {}
         }
     }
+    false
 }
 
 /// The labels written in more than one of `leaves`, sorted.
 fn shared_labels(leaves: &[&GraphPattern]) -> Vec<String> {
+    // A canonical-only spine is already settled. In particular, do not rescan
+    // nested UNION subtrees at each enclosing sequence join during preparation.
+    if !leaves.iter().any(|leaf| leaf_has_raw_blank(leaf)) {
+        return Vec::new();
+    }
     let mut per_leaf: Vec<Vec<&str>> = Vec::new();
+    let mut raw = crate::DetHashSet::default();
     for leaf in leaves {
+        let mut original = Vec::new();
+        match leaf {
+            GraphPattern::Bgp { patterns } => {
+                for triple in patterns {
+                    term_labels_with(&triple.subject, &mut original, LabelSource::Raw);
+                    term_labels_with(&triple.object, &mut original, LabelSource::Raw);
+                }
+            }
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                term_labels_with(subject, &mut original, LabelSource::Raw);
+                term_labels_with(object, &mut original, LabelSource::Raw);
+            }
+            GraphPattern::PropertyFunction(call) => {
+                for term in call.subject_args.iter().chain(&call.object_args) {
+                    term_labels_with(term, &mut original, LabelSource::Raw);
+                }
+            }
+            _ => {}
+        }
+        raw.extend(original);
         let mut labels = Vec::new();
         leaf_labels(leaf, &mut labels);
         if !labels.is_empty() {
@@ -267,7 +389,7 @@ fn shared_labels(leaves: &[&GraphPattern]) -> Vec<String> {
     }
     let mut shared: Vec<String> = leaf_counts
         .into_iter()
-        .filter(|(_, leaves)| *leaves > 1)
+        .filter(|(label, leaves)| *leaves > 1 && raw.contains(*label))
         .map(|(label, _)| label.to_owned())
         .collect();
     shared.sort_unstable();
@@ -308,33 +430,11 @@ fn any_spine_leaf<'a>(
 
 /// Whether a leaf writes any blank node at all.
 fn leaf_has_blank(leaf: &GraphPattern) -> bool {
-    fn term(term: &TermPattern) -> bool {
-        let mut pending: purrdf_core::SmallVec<[&TermPattern; 8]> = purrdf_core::smallvec![term];
-        while let Some(term) = pending.pop() {
-            match term {
-                TermPattern::BlankNode(_) => return true,
-                TermPattern::Triple(t) => {
-                    pending.push(&t.object);
-                    pending.push(&t.subject);
-                }
-                TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
-            }
-        }
-        false
-    }
-    fn triple(t: &TriplePattern) -> bool {
-        term(&t.subject) || term(&t.object)
-    }
-    match leaf {
-        GraphPattern::Bgp { patterns } => patterns.iter().any(triple),
-        GraphPattern::Path {
-            subject, object, ..
-        } => term(subject) || term(object),
-        GraphPattern::PropertyFunction(call) => {
-            call.subject_args.iter().chain(&call.object_args).any(term)
-        }
-        _ => false,
-    }
+    visit_leaf_labels(leaf, LabelSource::All, &mut |_| true)
+}
+
+fn leaf_has_raw_blank(leaf: &GraphPattern) -> bool {
+    visit_leaf_labels(leaf, LabelSource::Raw, &mut |_| true)
 }
 
 /// One node the detection walk has still to look at.
@@ -375,10 +475,12 @@ fn needs(root: Node<'_>) -> bool {
                 // Only a spine with blanks in two of its leaves can share a label, and
                 // only that one pays for collecting them.
                 let mut blank_leaves = 0_usize;
-                any_spine_leaf(pattern, &mut |leaf| {
-                    blank_leaves += usize::from(leaf_has_blank(leaf));
-                    false
-                });
+                if any_spine_leaf(pattern, &mut leaf_has_raw_blank) {
+                    any_spine_leaf(pattern, &mut |leaf| {
+                        blank_leaves += usize::from(leaf_has_blank(leaf));
+                        false
+                    });
+                }
                 if blank_leaves > 1 {
                     let mut leaves = Vec::new();
                     spine_leaves(pattern, &mut leaves);
@@ -683,13 +785,17 @@ struct TakenAggregate {
 /// mutable in place, so one that reaches a shared blank is rebuilt with the same
 /// function, scalar values, sort keys and `DISTINCT` flag. Only expressions change,
 /// never their count, so the rebuilt aggregate is as valid as the original.
-fn take_aggregates(node: &mut GraphPattern, out: &mut Vec<Expression>) -> Vec<TakenAggregate> {
+fn take_aggregates(
+    node: &mut GraphPattern,
+    out: &mut Vec<Expression>,
+    all: bool,
+) -> Vec<TakenAggregate> {
     let GraphPattern::Group { aggregates, .. } = node else {
         return Vec::new();
     };
     let mut taken = Vec::new();
     for (index, (_, aggregate)) in aggregates.iter_mut().enumerate() {
-        if !aggregate_needs(aggregate) {
+        if !all && !aggregate_needs(aggregate) {
             continue;
         }
         let (function, args, scalarvals, order_by, distinct) =
@@ -792,6 +898,50 @@ enum Step {
 /// through, so their expressions are taken out with the node's other children and
 /// each aggregate is rebuilt as they come back.
 fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPattern {
+    map_patterns(pattern, false, &mut |node, in_spine| {
+        let spine = is_spine(node);
+        if spine && !in_spine && any_spine_leaf(node, &mut leaf_has_raw_blank) {
+            let mut leaves = Vec::new();
+            spine_leaves(node, &mut leaves);
+            let shared = shared_labels(&leaves);
+            if !shared.is_empty() {
+                let mut carried = Vec::new();
+                for leaf in &leaves {
+                    leaf_labels_with(leaf, &mut carried, LabelSource::Carried);
+                }
+                let mut canonical = crate::DetHashSet::default();
+                for label in carried {
+                    if !canonical.contains(label) {
+                        canonical.insert(label.to_owned());
+                    }
+                }
+                let number = *next_spine;
+                *next_spine += 1;
+                let mut leaves = Vec::new();
+                spine_leaves_mut(node, &mut leaves);
+                for leaf in leaves {
+                    rename_labels(leaf, &shared, &mut |label| {
+                        if canonical.contains(label) {
+                            Variable::hidden_blank(label)
+                        } else {
+                            Variable::hidden(format!("{number}:{label}"))
+                        }
+                    });
+                }
+            }
+        }
+        spine
+    })
+}
+
+/// Map every pattern, including expression and aggregate EXISTS bodies, before
+/// its children, using the same iterative reconstruction as blank scoping.
+/// The callback's returned context is passed to its immediate pattern children.
+pub(crate) fn map_patterns(
+    pattern: GraphPattern,
+    all_aggregates: bool,
+    transform: &mut impl FnMut(&mut GraphPattern, bool) -> bool,
+) -> GraphPattern {
     let mut steps = vec![Step::Pattern(pattern, false)];
     let mut done: Vec<Rewritten> = Vec::new();
     // The children of the node being taken apart, in visit order, before they are
@@ -800,23 +950,7 @@ fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPatter
     while let Some(step) = steps.pop() {
         match step {
             Step::Pattern(mut node, in_spine) => {
-                let spine = is_spine(&node);
-                if spine && !in_spine {
-                    let shared = {
-                        let mut leaves = Vec::new();
-                        spine_leaves(&node, &mut leaves);
-                        shared_labels(&leaves)
-                    };
-                    if !shared.is_empty() {
-                        let number = *next_spine;
-                        *next_spine += 1;
-                        let mut leaves = Vec::new();
-                        spine_leaves_mut(&mut node, &mut leaves);
-                        for leaf in leaves {
-                            rename_leaf(leaf, &shared, number);
-                        }
-                    }
-                }
+                let spine = transform(&mut node, in_spine);
                 for_each_child_mut(&mut node, &mut |child| {
                     children.push(match child {
                         ChildMut::Pattern(inner) => Step::Pattern(
@@ -829,7 +963,7 @@ fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPatter
                     });
                 });
                 let mut aggregate_exprs = Vec::new();
-                let aggregates = take_aggregates(&mut node, &mut aggregate_exprs);
+                let aggregates = take_aggregates(&mut node, &mut aggregate_exprs, all_aggregates);
                 children.extend(aggregate_exprs.into_iter().map(Step::Expression));
                 steps.push(Step::Assemble(Shell::Pattern {
                     node,
@@ -910,23 +1044,34 @@ fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPatter
 
 /// Rename, inside one leaf, every blank whose label is in `shared` to that label's
 /// variable for spine number `spine`.
+#[cfg(test)]
 fn rename_leaf(leaf: &mut GraphPattern, shared: &[String], spine: usize) {
+    rename_labels(leaf, shared, &mut |label| {
+        Variable::hidden(format!("{spine}:{label}"))
+    });
+}
+
+fn rename_labels(
+    leaf: &mut GraphPattern,
+    shared: &[String],
+    mint: &mut impl FnMut(&str) -> Variable,
+) {
     match leaf {
         GraphPattern::Bgp { patterns } => {
             for triple in patterns {
-                rename_term(&mut triple.subject, shared, spine);
-                rename_term(&mut triple.object, shared, spine);
+                rename_term(&mut triple.subject, shared, mint);
+                rename_term(&mut triple.object, shared, mint);
             }
         }
         GraphPattern::Path {
             subject, object, ..
         } => {
-            rename_term(subject, shared, spine);
-            rename_term(object, shared, spine);
+            rename_term(subject, shared, mint);
+            rename_term(object, shared, mint);
         }
         GraphPattern::PropertyFunction(call) => {
             for term in call.subject_args.iter_mut().chain(&mut call.object_args) {
-                rename_term(term, shared, spine);
+                rename_term(term, shared, mint);
             }
         }
         _ => {}
@@ -935,7 +1080,7 @@ fn rename_leaf(leaf: &mut GraphPattern, shared: &[String], spine: usize) {
 
 /// [`rename_leaf`] for one term position, a quoted triple's subject and object
 /// included at every level, over a work list.
-fn rename_term(term: &mut TermPattern, shared: &[String], spine: usize) {
+fn rename_term(term: &mut TermPattern, shared: &[String], mint: &mut impl FnMut(&str) -> Variable) {
     let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
@@ -944,10 +1089,7 @@ fn rename_term(term: &mut TermPattern, shared: &[String], spine: usize) {
                     .binary_search_by(|label| label.as_str().cmp(blank.as_str()))
                     .is_ok() =>
             {
-                *term = TermPattern::Variable(Variable::new(format!(
-                    "{JOINED_BLANK_PREFIX}{spine}:{}",
-                    blank.as_str()
-                )));
+                *term = TermPattern::Variable(mint(blank.as_str()));
             }
             TermPattern::Triple(triple) => {
                 let triple: &mut TriplePattern = triple;
@@ -961,6 +1103,7 @@ fn rename_term(term: &mut TermPattern, shared: &[String], spine: usize) {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use purrdf_sparql_algebra::SparqlParser;
@@ -994,7 +1137,7 @@ mod tests {
         );
         let rewritten = join_shared_blanks(&pattern).expect("the label is shared");
         let text = format!("{rewritten:?}");
-        assert!(text.contains("\u{0}bgp0:a"), "{text}");
+        assert!(text.contains("\\0bgp0:a"), "{text}");
         assert!(!text.contains("BlankNode"), "{text}");
         assert!(join_shared_blanks(&rewritten).is_none());
     }
@@ -1689,5 +1832,36 @@ mod walk_tests {
         .expect("spawn");
         assert_eq!(spine_leaves_renamed, 100_000);
         assert!(wrapped_ok);
+    }
+
+    /// A canonical-only alternative spine needs no rewrite. Its deeply nested
+    /// joins must not rescan their descendant UNIONs, and a second preparation
+    /// keeps the same reserved identities without cloning the tree.
+    #[test]
+    fn canonical_unions_a_hundred_thousand_deep_are_already_scoped() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            let block = || GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::hidden_blank("witness")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://example.org/p",
+                    )),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            };
+            let mut shape = block();
+            for _ in 0..100_000 {
+                shape = GraphPattern::union(
+                    GraphPattern::Join {
+                        left: Child::new(block()),
+                        right: Child::new(shape),
+                    },
+                    block(),
+                );
+            }
+            assert!(join_shared_blanks(&shape).is_none());
+            assert!(join_shared_blanks(&shape).is_none());
+        })
+        .expect("spawn a small-stack thread");
     }
 }

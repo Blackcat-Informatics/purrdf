@@ -57,7 +57,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, canonicalize};
+use purrdf_rdf::{RdfDataset, canonicalize};
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::shacl_corpora::file_iri;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
@@ -90,11 +90,11 @@ fn parse_input(path: &Path, text: &str) -> Result<ParsedInput, String> {
     } else {
         "text/turtle"
     };
-    let outcome = purrdf::parse_dataset_with(
+    let outcome = purrdf_rdf::parse_dataset_with(
         text.as_bytes(),
         media,
         Some(&file_iri(path)),
-        &purrdf::ParseOptions::default(),
+        &purrdf_rdf::ParseOptions::default(),
     )
     .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
     Ok((outcome.dataset, outcome.document_prefixes))
@@ -146,7 +146,7 @@ fn run_case(case: &Case) -> Result<(), String> {
     let expected_path = case.dir.join("expected-inferred.ttl");
     let expected_text = fs::read_to_string(&expected_path)
         .map_err(|e| format!("cannot read {}: {e}", expected_path.display()))?;
-    let derived_ds = purrdf::parse_dataset(
+    let derived_ds = purrdf_rdf::parse_dataset(
         expected_text.as_bytes(),
         "text/turtle",
         Some(&file_iri(&expected_path)),
@@ -277,7 +277,7 @@ fn entail_dataset_composes_project_then_apply_rules() {
         ex:alice a ex:Person .\n\
         ex:S a sh:NodeShape ; sh:targetClass ex:Person ;\n\
           sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .";
-    let input = purrdf::parse_dataset(text.as_bytes(), "text/turtle", None).expect("parse");
+    let input = purrdf_rdf::parse_dataset(text.as_bytes(), "text/turtle", None).expect("parse");
     let shapes = from_dataset_with_prefixes(
         &input,
         &text_ingest::parse_turtle_document(text, None)
@@ -313,11 +313,11 @@ fn sh_order_is_order_independent_over_the_closure() {
                             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n";
     let data_text = format!("{PREFIXES}ex:alice a ex:Person .");
     let data =
-        purrdf::parse_dataset(data_text.as_bytes(), "text/turtle", None).expect("data parse");
+        purrdf_rdf::parse_dataset(data_text.as_bytes(), "text/turtle", None).expect("data parse");
 
     let entail = |shapes_body: &str| {
         let shapes_text = format!("{PREFIXES}{shapes_body}");
-        let shapes_ds = purrdf::parse_dataset(shapes_text.as_bytes(), "text/turtle", None)
+        let shapes_ds = purrdf_rdf::parse_dataset(shapes_text.as_bytes(), "text/turtle", None)
             .expect("shapes parse");
         let shapes = from_dataset_with_prefixes(
             &shapes_ds,

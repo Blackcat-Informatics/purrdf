@@ -16,9 +16,9 @@ use std::sync::{Arc, OnceLock};
 
 use crate::json_model::{Map, Number, NumberKind, Object, Value, ValueKind};
 use crate::limits::MAX_SCHEMA_DEPTH;
-use ::purrdf::RdfLocation;
-use ::purrdf::RdfTextDirection;
-use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::RdfTextDirection;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 use purrdf_hash::fnv::fnv1a64;
 use purrdf_iri::vocab::rdf::{
     DIR_LANG_STRING as RDF_DIR_LANG_STRING, FIRST as RDF_FIRST, LANG_STRING as RDF_LANG_STRING,

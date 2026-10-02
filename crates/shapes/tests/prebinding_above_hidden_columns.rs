@@ -32,8 +32,8 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
 use purrdf_core::{SparqlRequest, SparqlResult, TermId, TermValue};
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions, ShaclPrebinding};
 

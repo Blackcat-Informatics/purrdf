@@ -22,7 +22,7 @@ const PREFIXES: &str = r"
 
 struct Fixture {
     shapes: Shapes,
-    ontology: std::sync::Arc<purrdf::RdfDataset>,
+    ontology: std::sync::Arc<purrdf_rdf::RdfDataset>,
     namespaces: Namespaces,
 }
 

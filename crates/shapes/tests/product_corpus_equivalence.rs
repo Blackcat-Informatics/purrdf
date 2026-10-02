@@ -107,7 +107,7 @@ use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::product::{
     HostBindings, ProductDimension, ShapesProduct, ShapesProductError, ShapesProfile,

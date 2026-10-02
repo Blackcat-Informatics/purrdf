@@ -40,7 +40,7 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
 use purrdf_shapes::rules::{RuleOptions, infer};
@@ -129,7 +129,7 @@ fn bench_refuse(c: &mut Bench) {
         None,
     )
     .expect("checks");
-    let base = purrdf::parse_dataset(
+    let base = purrdf_rdf::parse_dataset(
         b"<http://example.org/a> <http://example.org/p> <http://example.org/b> .",
         "text/turtle",
         None,

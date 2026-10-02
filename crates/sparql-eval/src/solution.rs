@@ -97,6 +97,41 @@ impl VarSchema {
 }
 
 impl VarSchema {
+    /// Conservative retained payload, including the optional ordinal index.
+    /// Shared variable strings are charged per occurrence, as in admitted algebra.
+    pub(crate) fn retained_size_bytes(&self) -> usize {
+        let variable_bytes = |variable: &Variable| {
+            variable
+                .as_str()
+                .len()
+                .saturating_add(2 * size_of::<usize>())
+        };
+        let buckets = if self.index.capacity() == 0 {
+            0
+        } else {
+            self.index
+                .capacity()
+                .saturating_add(1)
+                .checked_next_power_of_two()
+                .unwrap_or(usize::MAX)
+        };
+        size_of::<Self>()
+            .saturating_add(self.cols.capacity().saturating_mul(size_of::<Variable>()))
+            .saturating_add(
+                self.cols
+                    .iter()
+                    .map(variable_bytes)
+                    .fold(0, usize::saturating_add),
+            )
+            .saturating_add(buckets.saturating_mul(size_of::<(Variable, usize)>() + 1))
+            .saturating_add(
+                self.index
+                    .keys()
+                    .map(variable_bytes)
+                    .fold(0, usize::saturating_add),
+            )
+    }
+
     /// Build a schema from an ordered iterator of variables, keeping first
     /// occurrence and dropping later duplicates (so the column order is the
     /// variables' first-seen order).
@@ -173,10 +208,15 @@ impl VarSchema {
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         let mut out = self.clone();
-        for v in &other.cols {
-            out.push(v.clone());
-        }
+        out.append(other);
         out
+    }
+
+    /// Extend an owned schema without copying the already accumulated prefix.
+    pub(crate) fn append(&mut self, other: &Self) {
+        for variable in &other.cols {
+            self.push(variable.clone());
+        }
     }
 
     /// The shared columns of `self` and `other`, as `(self_ordinal, other_ordinal)`
@@ -211,6 +251,33 @@ pub struct SolutionSeq<I: ViewTermId = TermId> {
     pub schema: Arc<VarSchema>,
     /// The solution rows (a bag — duplicates significant).
     pub rows: Vec<Solution<I>>,
+}
+
+impl<I: ViewTermId> SolutionSeq<I> {
+    /// Restore an observable column layout without adding an algebra scope
+    /// barrier. Driver-only columns follow the requested logical columns.
+    pub(crate) fn reorder_like(mut self, target: &VarSchema) -> Self {
+        if self.schema.vars() == target.vars() {
+            return self;
+        }
+        let out = target.union(&self.schema);
+        if out.vars() == self.schema.vars() {
+            return self;
+        }
+        let columns: purrdf_core::SmallVec<[Option<usize>; 8]> = out
+            .vars()
+            .iter()
+            .map(|variable| self.schema.index_of(variable))
+            .collect();
+        for row in &mut self.rows {
+            *row = columns
+                .iter()
+                .map(|column| column.and_then(|column| row[column]))
+                .collect();
+        }
+        self.schema = Arc::new(out);
+        self
+    }
 }
 
 impl VarSchema {
