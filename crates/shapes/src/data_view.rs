@@ -308,6 +308,9 @@ enum Source {
 pub struct ShaclDatasetView {
     source: Source,
     projected: bool,
+    /// One physical named graph read as this view's default graph, in the view's
+    /// own term namespace. Independent of the whole-dataset union projection.
+    selected_graph: Option<TermId>,
     statements_projected: bool,
     /// Whether this source can put the SAME projected row on the wire twice, and
     /// therefore whether a probe has to dedup at all. Decided once, here, from
@@ -326,6 +329,31 @@ impl ShaclDatasetView {
     #[must_use]
     pub fn native(source: Arc<RdfDataset>) -> Self {
         Self::new(Source::Native(source), false)
+    }
+
+    /// Read one named graph as the default graph, borrowing the native dictionary
+    /// and indexes. The source's default graph and every other named graph are
+    /// invisible, and this view exposes no named graphs.
+    ///
+    /// RDF 1.2 reifier declarations and annotations in the selected graph are
+    /// projected as default-graph triples, with duplicate triples collapsed.
+    /// Term IDs and borrowed payloads retain their source identity. Construction
+    /// copies no row, builds no index and allocates no term mapping; an absent or
+    /// declared-empty graph yields an empty view. `graph` is source-local, like
+    /// every [`GraphMatch::Named`] argument.
+    #[must_use]
+    pub fn named_graph(source: Arc<RdfDataset>, graph: TermId) -> Self {
+        let mut view = Self::new(Source::Native(source), false);
+        view.selected_graph = Some(graph);
+        view.statements_projected = true;
+        // Restriction never merges two physical graphs. Only the statement layers
+        // can restate a native base row, so unrelated named graphs need no dedup.
+        let Source::Native(source) = &view.source else {
+            unreachable!("a native named-graph view retains its native source");
+        };
+        view.source_can_duplicate =
+            source.reifier_quads().next().is_some() || source.annotation_quads().next().is_some();
+        view
     }
 
     /// Read a native dataset through SHACL's graph-union and statement projection.
@@ -406,6 +434,7 @@ impl ShaclDatasetView {
         Self {
             source,
             projected,
+            selected_graph: None,
             statements_projected: projected,
             source_can_duplicate,
             materialized: OnceLock::new(),
@@ -468,6 +497,16 @@ impl ShaclDatasetView {
         )?;
         let mut view = Self::new(Source::Composite(dense), self.projected);
         view.statements_projected = self.statements_projected;
+        // The composite has a new id space. Resolve the selected graph's complete
+        // identity there rather than carrying a numerically equal, foreign id.
+        view.selected_graph = self.selected_graph.map(|graph| {
+            let value = self
+                .term_value(graph)
+                .expect("resident selected graph resolves");
+            view.term_id_by_value(&value)
+                .expect("resident composite lookup")
+                .expect("the retained source's graph term stays interned")
+        });
         view.wrapped_delta = wrapped_delta;
         Ok(view)
     }
@@ -512,6 +551,7 @@ impl ShaclDatasetView {
     pub fn materialized(&self) -> &Arc<RdfDataset> {
         if let Source::Native(source) = &self.source
             && !self.projected
+            && self.selected_graph.is_none()
             && !self.statements_projected
         {
             return source;
@@ -581,30 +621,70 @@ impl ShaclDatasetView {
         o: Option<TermId>,
         g: GraphMatch,
     ) -> impl Iterator<Item = QuadIds> + '_ + use<'_> {
-        let source_graph = if self.projected { GraphMatch::Any } else { g };
-        let allowed = !self.projected || !matches!(g, GraphMatch::Named(_));
-        let overlays = self
-            .statements_projected
+        let source_graph = self.source_graph(g);
+        let allowed = self.graph_allowed(g);
+        let native_selection =
+            self.selected_graph.is_some() && matches!(self.source, Source::Native(_));
+        let overlays = (allowed
+            && self.statements_projected
+            && (!native_selection || self.source_can_duplicate))
             .then(|| self.raw_overlay_probe(s, p, o, source_graph))
             .into_iter()
             .flatten();
         let dedup = self.statements_projected && self.source_can_duplicate;
         let mut seen = ProjectionDedup::default();
+        let membership_plan = RdfDataset::probe_plan(true, true, true, GraphMatch::Default);
         self.raw_probe(*plan, s, p, o, source_graph)
-            .chain(overlays)
-            .filter_map(move |mut q| {
+            .take(if allowed { usize::MAX } else { 0 })
+            .map(|q| (q, false))
+            .chain(overlays.map(|q| (q, true)))
+            .filter_map(move |(mut q, overlay)| {
                 if !allowed {
                     return None;
                 }
-                if self.projected {
+                if self.projected || self.selected_graph.is_some() {
                     q.g = None;
                 }
-                if dedup && !seen.insert(q) {
+                // Native selection cannot duplicate a base row. Reject an overlay
+                // restating one with an indexed membership probe, and retain only
+                // overlay identities for overlay-to-overlay dedup. Metadata in an
+                // invisible graph therefore never makes a wide base probe allocate.
+                if native_selection
+                    && overlay
+                    && self
+                        .raw_probe(
+                            membership_plan,
+                            Some(q.s),
+                            Some(q.p),
+                            Some(q.o),
+                            source_graph,
+                        )
+                        .next()
+                        .is_some()
+                {
+                    return None;
+                }
+                if dedup && (!native_selection || overlay) && !seen.insert(q) {
                     return None;
                 }
                 Some(q)
             })
     }
+    /// Translate one logical graph constraint to the retained source's index.
+    fn source_graph(&self, graph: GraphMatch) -> GraphMatch {
+        if let Some(selected) = self.selected_graph {
+            GraphMatch::Named(selected)
+        } else if self.projected {
+            GraphMatch::Any
+        } else {
+            graph
+        }
+    }
+
+    fn graph_allowed(&self, graph: GraphMatch) -> bool {
+        !(self.projected || self.selected_graph.is_some()) || !matches!(graph, GraphMatch::Named(_))
+    }
+
     fn raw_probe(
         &self,
         plan: QuadProbePlan,
@@ -883,8 +963,7 @@ impl DatasetView for ShaclDatasetView {
     fn probe_plan(&self, s: bool, p: bool, o: bool, g: GraphMatch) -> QuadProbePlan {
         // The union projection removes the physical graph constraint. Plan for
         // that source pattern once, before the plan is reused across probe rows.
-        let source_graph = if self.projected { GraphMatch::Any } else { g };
-        RdfDataset::probe_plan(s, p, o, source_graph)
+        RdfDataset::probe_plan(s, p, o, self.source_graph(g))
     }
     fn quads_for_pattern_with_plan(
         &self,
@@ -915,25 +994,41 @@ impl DatasetView for ShaclDatasetView {
         o: Option<TermId>,
         g: GraphMatch,
     ) -> u64 {
-        if self.projected || self.statements_projected {
+        if !self.graph_allowed(g) {
+            return 0;
+        }
+        if self.selected_graph.is_none() && (self.projected || self.statements_projected) {
             return u64::try_from(self.quads_for_pattern(s, p, o, g).count())
                 .expect("resident row count fits u64");
         }
-        match &self.source {
-            Source::Native(source) => source.cardinality_estimate(s, p, o, g),
+        let source_graph = self.source_graph(g);
+        let asserted = match &self.source {
+            Source::Native(source) => source.cardinality_estimate(s, p, o, source_graph),
             Source::Composite(dense) => dense.source.cardinality_estimate(
                 s.map(|id| dense.source_id(id)),
                 p.map(|id| dense.source_id(id)),
                 o.map(|id| dense.source_id(id)),
-                dense.graph(g),
+                dense.graph(source_graph),
             ),
             Source::Delta(dense) => dense.source.cardinality_estimate(
                 s.map(|id| dense.source_id(id)),
                 p.map(|id| dense.source_id(id)),
                 o.map(|id| dense.source_id(id)),
-                dense.graph(g),
+                dense.graph(source_graph),
             ),
-        }
+        };
+        // A native index run is already a sound upper bound. Add just the selected
+        // statement-layer matches, without counting or deduplicating the base run.
+        let native_selection =
+            self.selected_graph.is_some() && matches!(self.source, Source::Native(_));
+        let overlays =
+            if self.statements_projected && (!native_selection || self.source_can_duplicate) {
+                u64::try_from(self.raw_overlay_probe(s, p, o, source_graph).count())
+                    .expect("resident overlay count fits u64")
+            } else {
+                0
+            };
+        asserted.saturating_add(overlays)
     }
     fn stats_fingerprint(&self) -> u64 {
         let source = match &self.source {
@@ -941,7 +1036,15 @@ impl DatasetView for ShaclDatasetView {
             Source::Composite(dense) => dense.source.stats_fingerprint(),
             Source::Delta(dense) => dense.source.stats_fingerprint(),
         };
-        source ^ (u64::from(self.projected) << 62) ^ (u64::from(self.statements_projected) << 63)
+        let graph = self.selected_graph.map_or(0, |graph| {
+            purrdf_hash::mix::splitmix64_step(
+                u64::try_from(graph.index()).expect("resident term index fits u64"),
+            )
+        });
+        source
+            ^ graph
+            ^ (u64::from(self.projected) << 62)
+            ^ (u64::from(self.statements_projected) << 63)
     }
     fn term_count(&self) -> u64 {
         match &self.source {
@@ -984,7 +1087,11 @@ impl DatasetView for ShaclDatasetView {
                 Either::Right(boxed(dense.source.named_graphs().map(|id| dense.id(id))))
             }
         };
-        graphs.filter(|_| !self.projected)
+        graphs.take(if self.projected || self.selected_graph.is_some() {
+            0
+        } else {
+            usize::MAX
+        })
     }
 }
 
