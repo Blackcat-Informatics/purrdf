@@ -26,6 +26,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   attached and verified in a draft before publication makes them immutable.
   Resumed published releases verify their retained assets without altering them.
 
+### Acknowledgements
+
+Thanks to [@dshchyhlinski](https://github.com/dshchyhlinski) for the excellent
+reports behind both SHACL fixes, including the minimal reproductions, passing
+controls and representative validation benchmarks.
+
 ## [3.0.0] - 2026-10-01
 
 ### Breaking Changes
