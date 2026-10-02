@@ -211,7 +211,8 @@ fn unrelated_property_function_blanks_remain_unobserved_existentials() {
 #[test]
 fn non_distinguished_identity_is_admitted_only_in_match_roles() {
     use purrdf_sparql_algebra::{
-        AggregateExpression, AggregateFunction, Child, Expression, TermPattern,
+        AggregateExpression, AggregateFunction, Child, Expression, GraphUpdateOperation,
+        TermPattern, Update,
     };
     let hidden = Variable::hidden("witness");
     let Query::Select {
@@ -297,6 +298,32 @@ fn non_distinguished_identity_is_admitted_only_in_match_roles() {
             )
             .is_err()
         );
+        let expected = pattern
+            .validate_hidden_variables()
+            .expect_err("explicit hidden observation");
+        let operation = GraphUpdateOperation::DeleteInsert {
+            delete: vec![],
+            insert: vec![],
+            with: None,
+            using: vec![],
+            pattern: Box::new(pattern),
+        };
+        assert_eq!(
+            operation
+                .try_to_sparql()
+                .expect_err("checked operation refuses hidden WHERE observers"),
+            expected
+        );
+        assert_eq!(
+            Update {
+                operations: vec![operation],
+                base_iri: None,
+                version: None,
+            }
+            .try_to_sparql()
+            .expect_err("checked request refuses hidden WHERE observers"),
+            expected
+        );
     }
     query(GraphPattern::Project {
         inner: Child::new(matched),
@@ -358,7 +385,9 @@ fn hidden_graph_outputs_and_update_carriers_are_refused_in_every_template_slot()
             version: version.clone(),
         };
         assert!(query.validate().is_err());
-        assert!(query.validate_hidden_variables().is_err());
+        let expected = query
+            .validate_hidden_variables()
+            .expect_err("hidden graph output");
         for operation in [
             GraphUpdateOperation::InsertData {
                 data: vec![quad.clone()],
@@ -393,6 +422,18 @@ fn hidden_graph_outputs_and_update_carriers_are_refused_in_every_template_slot()
                 version: None,
             };
             let mut out = String::new();
+            assert_eq!(
+                request
+                    .try_to_sparql()
+                    .expect_err("typed refusal preflights the whole request"),
+                expected
+            );
+            assert_eq!(
+                operation
+                    .try_to_sparql()
+                    .expect_err("typed refusal before rendering"),
+                expected
+            );
             assert!(write!(&mut out, "{request}").is_err());
             assert!(
                 out.is_empty(),
@@ -414,4 +455,56 @@ fn hidden_graph_outputs_and_update_carriers_are_refused_in_every_template_slot()
     };
     assert!(describe.validate().is_err());
     assert!(describe.validate_hidden_variables().is_err());
+}
+
+#[test]
+fn checked_update_carriers_preserve_display_bytes_for_every_operation() {
+    for text in [
+        "INSERT DATA { GRAPH <http://example.org/g> { <http://example.org/s> <http://example.org/p> <<( <http://example.org/a> <http://example.org/b> \"v\"@en--ltr )>> } }",
+        "DELETE DATA { <http://example.org/s> <http://example.org/p> \"v\" }",
+        "DELETE { ?s ex:p ?o } INSERT { ?s ex:result ?o } WHERE { ?s ex:p ?o }",
+        "INSERT { ?s ex:result ?o } WHERE { ?s (ex:p|ex:q)/ex:r ?o }",
+        "LOAD SILENT <http://example.org/source> INTO GRAPH <http://example.org/g>",
+        "CLEAR SILENT NAMED",
+        "DROP SILENT ALL",
+        "CREATE SILENT GRAPH <http://example.org/g>",
+        "ADD SILENT DEFAULT TO GRAPH <http://example.org/g>",
+        "MOVE SILENT GRAPH <http://example.org/g> TO DEFAULT",
+        "COPY SILENT GRAPH <http://example.org/g> TO GRAPH <http://example.org/h>",
+    ] {
+        let request = SparqlParser::new()
+            .parse_update(&format!("{PREFIX}{text}"))
+            .expect("valid operation");
+        let rendered = request.try_to_sparql().expect("checked request");
+        assert_eq!(rendered, request.to_string(), "{text}");
+        for operation in &request.operations {
+            assert_eq!(
+                operation.try_to_sparql().expect("checked operation"),
+                operation.to_string(),
+                "{text}"
+            );
+        }
+        SparqlParser::new()
+            .parse_update(&rendered)
+            .expect("checked carrier remains valid SPARQL");
+        assert_eq!(request.try_to_sparql().expect("repeat"), rendered);
+    }
+
+    let canonical =
+        "BASE <http://example.org/> CREATE SILENT GRAPH <http://example.org/g> ; DROP SILENT ALL";
+    let request = SparqlParser::new()
+        .parse_update(canonical)
+        .expect("whole-request byte control");
+    assert_eq!(request.try_to_sparql().expect("checked request"), canonical);
+    assert_eq!(request.to_string(), canonical);
+
+    let canonical = "INSERT DATA { <http://example.org/s> <http://example.org/p> \"v\" . }";
+    let request = SparqlParser::new()
+        .parse_update(canonical)
+        .expect("template byte control");
+    assert_eq!(request.try_to_sparql().expect("checked request"), canonical);
+    assert_eq!(
+        request.operations[0].try_to_sparql().expect("operation"),
+        canonical
+    );
 }
