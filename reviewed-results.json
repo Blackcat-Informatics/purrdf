@@ -1,0 +1,32 @@
+{
+  "version": "3.0.0",
+  "pull_request": 376,
+  "publication_issue": 375,
+  "reviewed_head": "9d60a8298e1ecd39bb4f9aaef2f8a7e7bbef1f98",
+  "reviewed_tree": "861c8125f2942babede861abd25402f0e945aa38",
+  "reviewed_base": "ecbe4a9e05693b1915ba8c617feea5933d3c3b1b",
+  "qualification": {
+    "ci": {
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/36961861726",
+      "successful_jobs": 42,
+      "qualified_artifacts": 11,
+      "assembly_cells": 714,
+      "conformance_suites": 29,
+      "conformance_passes": 15286,
+      "ledgered_gaps": 25,
+      "conformance_failures": 0
+    },
+    "docs": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/36961861543",
+    "codeql": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/36961859082",
+    "local_artifacts": {
+      "cargo": 31,
+      "python": 4,
+      "npm": 1,
+      "c": 1,
+      "integrity_and_notice_audits": "passed"
+    },
+    "npm_runtime_tests": 417,
+    "browser": "Previously executed Chromium inputs reproduced byte-for-byte by current-source compilation; 256 MiB module maximum."
+  },
+  "publication_status": "Not yet published; registry verification remains in issue 375."
+}
