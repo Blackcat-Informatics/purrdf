@@ -93,6 +93,9 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
 
+      - name: Check exact tarball publication guards (offline)
+        run: python3 scripts/publish-npm.py --self-test
+
       - name: Pack the tarball (for attestation + SBOM)
         working-directory: crates/rdf-wasm/js
         run: npm pack
@@ -103,6 +106,7 @@ jobs:
           python3 scripts/package-licenses.py --profile npm --check
           python3 scripts/package-licenses.py --profile npm --add-runtime crates/rdf-wasm/js/*.tgz
           python3 scripts/package-licenses.py --profile npm --audit crates/rdf-wasm/js/*.tgz --receipt license-evidence-npm.json
+          python3 scripts/publish-npm.py --package-dir crates/rdf-wasm/js --receipt license-evidence-npm.json --check
 
       - name: Upload npm artifact license evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -142,18 +146,12 @@ jobs:
           path: crates/rdf-wasm/js/*.tgz
 
       - name: Publish to npm
-        working-directory: crates/rdf-wasm/js
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         # With no NPM_TOKEN secret, npm authenticates via the GitHub OIDC token
         # and the configured Trusted Publisher; npm's own sigstore provenance is
         # generated automatically (in addition to the GitHub attestation above).
         # The token branch exists only to bootstrap the first publish.
-        run: |
-          if [ -n "$NPM_TOKEN" ]; then
-            echo "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
-            NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public
-            rm -f "$HOME/.npmrc"
-          else
-            npm publish --access public
-          fi
+        # Revalidate the audit digest and upload its exact tarball, including
+        # the compiler notices added after packing. Never repack the directory.
+        run: python3 scripts/publish-npm.py --package-dir crates/rdf-wasm/js --receipt license-evidence-npm.json

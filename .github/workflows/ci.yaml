@@ -218,6 +218,9 @@ jobs:
       - name: Check release publication guards and resumable decisions (offline)
         run: bash scripts/publish-release-crates.sh --self-test
 
+      - name: Check exact npm tarball publication guards (offline)
+        run: python3 scripts/publish-npm.py --self-test
+
       - name: Check isolated empty bootstrap verification and registry refusals (offline)
         run: bash scripts/bootstrap-crates-io.sh --self-test
 

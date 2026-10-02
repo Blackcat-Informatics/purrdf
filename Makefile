@@ -141,6 +141,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-publish-order.py
 	bash scripts/check-crates-io-records.sh --self-test
 	bash scripts/publish-release-crates.sh --self-test
+	python3 scripts/publish-npm.py --self-test
 	bash scripts/bootstrap-crates-io.sh --self-test
 	python3 scripts/check-wasm-js-exports.py
 	python3 scripts/check-entailment-surface.py
