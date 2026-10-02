@@ -1,0 +1,12 @@
+{
+  "issue": 375,
+  "head": "48510206097df57bd2d5dee4a21ca3d35fba38dc",
+  "base": "2250a18ff174bc9f66a149d5946d1555b9ea1243",
+  "changed_paths": [
+    "bindings/python/purrdf_build_backend.py"
+  ],
+  "local_checks": "normal hook, signed commit, actual1.99 self-test, Ruff, exact failed-wheel metadata requalification and locked check PASS",
+  "independent_source_review": "GO",
+  "runtime_source": "unchanged",
+  "functional_publication": "not yet performed"
+}
