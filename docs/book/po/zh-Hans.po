@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-29T20:27:15-06:00\n"
+"POT-Creation-Date: 2026-10-01T23:21:18-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -816,7 +816,8 @@ msgid ""
 "Every engine hangs off the same facade. For example, the IRI layer, which "
 "has no third-party dependency, and the ShEx schema layer:"
 msgstr ""
-"每个引擎都挂在同一个门面之下。例如，没有任何第三方依赖的 IRI 层与 ShEx 模式层："
+"每个引擎都挂在同一个门面之下。例如，没有任何第三方依赖的 IRI 层与 ShEx 模式"
+"层："
 
 #: src/getting-started/rust.md:74 src/getting-started/rust.md:75
 #: src/concepts/interned-dataset.md:32 src/sparql/querying.md:31
@@ -4991,7 +4992,7 @@ msgid "§5.1.4"
 msgstr "§5.1.4"
 
 #: src/concepts/base-iris.md:30 src/concepts/base-iris.md:151
-#: src/project/diagnostic-codes.md:37
+#: src/project/diagnostic-codes.md:45
 msgid "`iri-relative-no-base`"
 msgstr "`iri-relative-no-base`"
 
@@ -5316,12 +5317,12 @@ msgstr ""
 "这些代码稳定且机器可读。每个编解码器、CLI、C ABI、Python 与 wasm 对同一情况都"
 "报告同一代码。"
 
-#: src/concepts/base-iris.md:149 src/project/diagnostic-codes.md:28
-#: src/project/diagnostic-codes.md:42 src/project/diagnostic-codes.md:68
-#: src/project/diagnostic-codes.md:85 src/project/diagnostic-codes.md:96
-#: src/project/diagnostic-codes.md:116 src/project/diagnostic-codes.md:138
-#: src/project/diagnostic-codes.md:184 src/project/diagnostic-codes.md:194
-#: src/project/diagnostic-codes.md:204
+#: src/concepts/base-iris.md:149 src/project/diagnostic-codes.md:36
+#: src/project/diagnostic-codes.md:50 src/project/diagnostic-codes.md:77
+#: src/project/diagnostic-codes.md:94 src/project/diagnostic-codes.md:105
+#: src/project/diagnostic-codes.md:125 src/project/diagnostic-codes.md:147
+#: src/project/diagnostic-codes.md:196 src/project/diagnostic-codes.md:206
+#: src/project/diagnostic-codes.md:216
 msgid "Code"
 msgstr "代码"
 
@@ -5346,7 +5347,7 @@ msgstr ""
 "为文档添加 `@base`/`BASE`/`xml:base`/`@context.@base`，或向 API 传入基准"
 "（CLI 上用 `--base`）"
 
-#: src/concepts/base-iris.md:152 src/project/diagnostic-codes.md:38
+#: src/concepts/base-iris.md:152 src/project/diagnostic-codes.md:46
 msgid "`iri-not-absolute-by-grammar`"
 msgstr "`iri-not-absolute-by-grammar`"
 
@@ -5365,7 +5366,7 @@ msgid ""
 "admits no relative reference"
 msgstr "以绝对形式书写 IRI；**基准无济于事**——该位置不允许相对引用"
 
-#: src/concepts/base-iris.md:153 src/project/diagnostic-codes.md:36
+#: src/concepts/base-iris.md:153 src/project/diagnostic-codes.md:44
 msgid "`iri-non-absolute-base`"
 msgstr "`iri-non-absolute-base`"
 
@@ -21000,25 +21001,21 @@ msgstr ""
 #: src/project/releases.md:8
 msgid ""
 "PurRDF ships to three registries — the crates.io crate suite, the PyPI "
-"`purrdf` package, and the npm `@blackcatinformatics/purrdf` package — from "
-"**one** workspace version, in lockstep. The full process is [`docs/"
-"RELEASE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/"
-"RELEASE.md)."
-msgstr ""
-"PurRDF 以**同一个**工作区版本、同步地发布到三个注册表——crates.io 上的 crate "
-"套件、PyPI 上的 `purrdf` 包，以及 npm 上的 `@blackcatinformatics/purrdf` 包。"
-"完整流程见 [`docs/RELEASE.md`](https://github.com/Blackcat-Informatics/"
-"purrdf/blob/main/docs/RELEASE.md)。"
+"`purrdf` and `purrdf-rdflib` distributions, and the npm "
+"`@blackcatinformatics/purrdf` package — from **one** workspace version, in "
+"lockstep. The full process is [`docs/RELEASE.md`](https://github.com/"
+"Blackcat-Informatics/purrdf/blob/main/docs/RELEASE.md)."
+msgstr "PurRDF 以**同一个**工作区版本、同步地发布到三个注册表——crates.io 上的 crate 套件、PyPI 上的 `purrdf` 与 `purrdf-rdflib` 分发包，以及 npm 上的 `@blackcatinformatics/purrdf` 包。完整流程见 [`docs/RELEASE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/RELEASE.md)。"
 
-#: src/project/releases.md:13
+#: src/project/releases.md:14
 msgid "Semver policy from 1.0.0"
 msgstr "自 1.0.0 起的语义化版本（semver）策略"
 
-#: src/project/releases.md:15
+#: src/project/releases.md:16
 msgid "From 1.0.0 the suite follows semantic versioning in full:"
 msgstr "自 1.0.0 起，整套软件完整遵循语义化版本："
 
-#: src/project/releases.md:17
+#: src/project/releases.md:18
 msgid ""
 "a **breaking** change bumps the **major** version. A commit carrying `!` or "
 "a `BREAKING CHANGE:` footer is a major-bump trigger, and the changelog marks "
@@ -21027,15 +21024,15 @@ msgstr ""
 "**破坏性**变更递增**主**版本号。带有 `!` 或 `BREAKING CHANGE:` 脚注的提交会触"
 "发主版本递增，变更日志会把每个此类条目标记为 **BREAKING**；"
 
-#: src/project/releases.md:20
+#: src/project/releases.md:21
 msgid "a **minor** bump is additive and API-compatible;"
 msgstr "**次**版本递增仅作增补，且与 API 兼容；"
 
-#: src/project/releases.md:21
+#: src/project/releases.md:22
 msgid "a **patch** bump is bugfix-only."
 msgstr "**补丁**版本递增仅修复缺陷。"
 
-#: src/project/releases.md:23
+#: src/project/releases.md:24
 msgid ""
 "That is what the version number commits to; it is a policy statement, not a "
 "claim of stability beyond what semver means. All three published surfaces "
@@ -21048,29 +21045,23 @@ msgstr ""
 "检查会在各版本来源（`Cargo.toml`、`pyproject.toml`、`package.json`、"
 "`CITATION.cff`）不一致时使构建失败。"
 
-#: src/project/releases.md:29
+#: src/project/releases.md:30
 msgid ""
 "The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](https://"
 "github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/"
 "purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently "
-"**0.7**), bumped on every exported-signature change, pinned by `crates/rdf-"
+"**0.8**), bumped on every exported-signature change, pinned by `crates/rdf-"
 "capi/tests/abi_signatures.rs`, and read back at runtime through "
 "`purrdf_abi_version`. It is versioned separately from the workspace and "
 "stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise "
 "about it."
-msgstr ""
-"唯一的例外是 C ABI。`libpurrdf` 的 [`purrdf.h`](https://github.com/Blackcat-"
-"Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h) 带有自己的 "
-"`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（目前为 **0.7**），每当导出签名变更时递"
-"增，由 `crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时通过 "
-"`purrdf_abi_version` 读回。它的版本独立于工作区，并保持在 `0.x`：它并未冻结，"
-"工作区的 1.0.0 对它不作任何承诺。"
+msgstr "唯一的例外是 C ABI。`libpurrdf` 的 [`purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h) 带有自己的 `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（目前为 **0.8**），每当导出签名变更时递增，由 `crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时通过 `purrdf_abi_version` 读回。它的版本独立于工作区，并保持在 `0.x`：它并未冻结，工作区的 1.0.0 对它不作任何承诺。"
 
-#: src/project/releases.md:31
+#: src/project/releases.md:38
 msgid "MSRV policy"
 msgstr "MSRV 策略"
 
-#: src/project/releases.md:33
+#: src/project/releases.md:40
 msgid ""
 "The supported minimum Rust is `rust-version` in the root `Cargo.toml` — "
 "currently **1.98** — on the **stable** channel, enforced by a dedicated CI "
@@ -21083,7 +21074,7 @@ msgstr ""
 "`RUSTUP_TOOLCHAIN`，并断言它所度量的编译器确实是 1.98。提高 MSRV 是一项记入变"
 "更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。"
 
-#: src/project/releases.md:39
+#: src/project/releases.md:46
 msgid ""
 "The MSRV is a promise to consumers; the development toolchain is a tool "
 "choice, and the two are orthogonal. `rust-toolchain.toml` names a **floating "
@@ -21101,11 +21092,11 @@ msgstr ""
 "[feature(...)]` 属性，MSRV 作业在每次变更时都会证明这一点），而发布通道在 "
 "stable 上构建每一个已发布的工件。"
 
-#: src/project/releases.md:47
+#: src/project/releases.md:54
 msgid "Tag-driven trusted publishing"
 msgstr "由标签驱动的可信发布"
 
-#: src/project/releases.md:49
+#: src/project/releases.md:56
 msgid ""
 "Releases are tag-driven: `rust-v<version>` publishes the crate suite to "
 "crates.io, `py-v<version>` publishes to PyPI, and `npm-v<version>` publishes "
@@ -21116,7 +21107,7 @@ msgstr ""
 "v<version>` 发布到 PyPI，`npm-v<version>` 把 wasm 包发布到 npm。各通道共享 "
 "cargo 通道的供应链安全姿态："
 
-#: src/project/releases.md:54
+#: src/project/releases.md:61
 msgid ""
 "publication uses **Trusted Publishing** through GitHub Actions OIDC — no "
 "long-lived registry secret;"
@@ -21124,57 +21115,65 @@ msgstr ""
 "发布通过 GitHub Actions OIDC 使用**可信发布**（Trusted Publishing）——没有长期"
 "有效的注册表密钥；"
 
-#: src/project/releases.md:56
+#: src/project/releases.md:63
 msgid "the privileged publish jobs use pinned actions and no dependency cache;"
 msgstr "拥有特权的发布作业使用固定版本的 action，且不使用依赖缓存；"
 
-#: src/project/releases.md:57
+#: src/project/releases.md:64
 msgid ""
 "every `.crate` package receives a GitHub **build-provenance attestation**;"
 msgstr ""
 "每个 `.crate` 包都会获得一份 GitHub **构建溯源证明**（build-provenance "
 "attestation）；"
 
-#: src/project/releases.md:58
+#: src/project/releases.md:65
 msgid "the package set receives an **SPDX SBOM** and SBOM attestation;"
 msgstr "整套包会获得一份 **SPDX SBOM** 及 SBOM 证明；"
 
-#: src/project/releases.md:59
+#: src/project/releases.md:66
 msgid ""
 "the release crate set is checked on `wasm32-unknown-unknown` before "
 "publishing;"
 msgstr "发布的 crate 集合在发布前会在 `wasm32-unknown-unknown` 上接受检查；"
 
-#: src/project/releases.md:61
+#: src/project/releases.md:68
 msgid "every workspace crate version must match the tag version."
 msgstr "每个工作区 crate 的版本都必须与标签版本一致。"
 
-#: src/project/releases.md:63
+#: src/project/releases.md:70
 msgid ""
-"After its initial record bootstrap, every version of every crate in the 31-"
-"crate release set is published by that lane. Each existing crate record is "
-"locked on crates.io with _Require trusted publishing_ (`trustpub_only`), so "
-"an API token cannot publish a new version of any of them: crates.io answers "
-"with `403 Forbidden: New versions of this crate can only be published using "
-"Trusted Publishing`. A token has exactly one role left, creating the record "
-"of a brand-new crate — the one thing a Trusted Publishing token is refused "
-"(`Trusted Publishing tokens do not support creating new crates`) — and the "
-"release process document above is exact about how that bootstrap works: the "
-"lane publishes up to the first crate that depends on a new one and stops "
-"cleanly, the token creates the new crate's record, Trusted Publishing is "
-"enabled on it, and the same run is resumed."
-msgstr ""
-"在各自最初的记录引导（bootstrap）之后，31 个 crate 的发布集合中每个 crate 的"
-"每个版本都由该通道发布。每个已有的 crate 记录都在 crates.io 上以 _Require "
-"trusted publishing_（`trustpub_only`）锁定，因此 API 令牌无法为其中任何一个发"
-"布新版本：crates.io 会回应 `403 Forbidden: New versions of this crate can "
-"only be published using Trusted Publishing`。令牌只剩下恰好一种用途，即为一个"
-"全新的 crate 创建记录——这正是可信发布令牌唯一被拒绝的事（`Trusted Publishing "
-"tokens do not support creating new crates`）——而上文的发布流程文档准确说明了"
-"该引导如何进行：通道发布到第一个依赖某个新 crate 的 crate 为止并干净地停止，"
-"由令牌创建新 crate 的记录，在其上启用可信发布，然后恢复同一次运行。"
+"Every functional version of every crate in the 31-crate release set is "
+"published by that lane. Each existing crate record is locked on crates.io "
+"with _Require trusted publishing_ (`trustpub_only`), so an API token cannot "
+"publish a new version of any of them: crates.io answers with `403 Forbidden: "
+"New versions of this crate can only be published using Trusted Publishing`."
+msgstr "31 个 crate 的发布集合中，每个 crate 的每个功能版本都由该通道发布。每个已有的 crate 记录都在 crates.io 上以 _Require trusted publishing_（`trustpub_only`）锁定，因此 API 令牌无法为其中任何一个发布新版本：crates.io 会回应 `403 Forbidden: New versions of this crate can only be published using Trusted Publishing`。"
 
-#: src/project/releases.md:75
+#: src/project/releases.md:76
+msgid ""
+"Set up new crate records **before tagging**. A token creates each missing "
+"record by publishing an isolated, empty, dependency-free **0.0.0** package; "
+"the real workspace crate keeps its functional release version. Configure its "
+"Trusted Publisher entry and enable _Require trusted publishing_, then "
+"reconcile `PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh`. All "
+"31 records must exist, all publisher entries must be configured, every "
+"record must be locked, and the ledger must be empty before the functional "
+"release begins. `scripts/check-crates-io-records.sh --require-all` verifies "
+"the public records and locks; publisher entries require separate "
+"configuration confirmation."
+msgstr "在**打标签之前**建立新 crate 的记录。使用令牌发布一个独立、空且无依赖的 **0.0.0** 包，以创建每个缺失的记录；实际工作区 crate 保持其功能发布版本。配置其可信发布者（Trusted Publisher）条目并启用 _Require trusted publishing_，然后核对并更新 `scripts/release-crates.sh` 中的 `PURRDF_UNBOOTSTRAPPED_CRATES`。功能发布开始前，全部 31 个记录必须存在、全部发布者条目必须配置完毕、每个记录必须锁定，且台账必须为空。`scripts/check-crates-io-records.sh --require-all` 验证公开记录与锁定状态；发布者条目的配置需要单独确认。"
+
+#: src/project/releases.md:86
+msgid ""
+"The tagged trusted-publishing run then publishes the functional versions in "
+"dependency order. After those versions are verified, yank the empty "
+"**0.0.0** versions using a token with the separate yank permission, "
+"retaining the records and publisher settings. The complete setup and "
+"historical bootstrap receipts are in the release process document linked "
+"above."
+msgstr "随后，由标签触发的可信发布运行按依赖顺序发布功能版本。在这些版本通过验证后，使用具有独立撤回（yank）权限的令牌撤回空的 **0.0.0** 版本，同时保留记录与发布者设置。完整的设置流程与历史记录引导凭据见上文链接的发布流程文档。"
+
+#: src/project/releases.md:92
 msgid ""
 "Eleven workspace members are deliberately never published to crates.io: "
 "`purrdf-capi` (built via cargo-c, distributed as `libpurrdf`), `purrdf-"
@@ -21199,7 +21198,7 @@ msgstr ""
 "具）、`helper-census`（共享辅助函数门禁背后的结构普查工具），以及 `purrdf-"
 "python`（扩展 crate，改为经由 maturin 发布到 PyPI）。"
 
-#: src/project/releases.md:87
+#: src/project/releases.md:104
 msgid ""
 "`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven "
 "that published crates depend on, and they reach them solely through `[dev-"
@@ -21215,75 +21214,103 @@ msgstr ""
 "将它们从打包后的清单中去除的原因：未发布的 crate 不能成为已发布 crate 的带版"
 "本依赖，而 `cargo publish` 的验证步骤也会解析 dev-dependencies。"
 
-#: src/project/releases.md:95
+#: src/project/releases.md:112
 msgid "Cutting a release"
 msgstr "切出一个发布"
 
-#: src/project/releases.md:97
+#: src/project/releases.md:114
 msgid ""
 "The coherent flow from `main` uses the `make` helpers so the three lanes can "
 "never drift:"
 msgstr ""
 "从 `main` 出发的连贯流程使用 `make` 辅助目标，因此三条通道永远不会出现偏差："
 
-#: src/project/releases.md:101
+#: src/project/releases.md:118
 msgid ""
 "# 1. Bump all three version sources in lockstep (fails unless they end up "
 "equal).\n"
 msgstr "# 1. 同步递增全部三个版本来源（除非最终三者相等，否则失败）。\n"
 
-#: src/project/releases.md:103
+#: src/project/releases.md:120
 msgid ""
 "# 2. Regenerate the committed C-ABI header from the bumped crate version.\n"
 msgstr "# 2. 依据递增后的 crate 版本重新生成已提交的 C-ABI 头文件。\n"
 
-#: src/project/releases.md:106
-msgid "# 3. Regenerate the changelog from the conventional-commit history.\n"
-msgstr "# 3. 依据约定式提交（conventional commit）历史重新生成变更日志。\n"
+#: src/project/releases.md:123
+msgid ""
+"# 3. Complete the release notes, preserving existing migration guidance.\n"
+msgstr "# 3. 完善发布说明，保留现有的迁移指导。\n"
 
-#: src/project/releases.md:109
+#: src/project/releases.md:125
+msgid "# Use make changelog only for history-generated notes.\n"
+msgstr "# 仅对根据提交历史生成的说明使用 make changelog。\n"
+
+#: src/project/releases.md:127
 msgid ""
 "# 4. Review, then commit the release bump, generated header, and changelog.\n"
 msgstr "# 4. 审阅后，提交版本递增、生成的头文件与变更日志。\n"
 
-#: src/project/releases.md:111
+#: src/project/releases.md:129
 msgid "\"chore(release): 0.2.2\""
 msgstr "\"chore(release): 0.2.2\""
 
-#: src/project/releases.md:112
+#: src/project/releases.md:130
 msgid ""
 "# 5. From an up-to-date main, run every release gate, then push all three "
 "tags.\n"
 msgstr "# 5. 从最新的 main 出发，运行每一道发布关卡，然后推送全部三个标签。\n"
 
-#: src/project/releases.md:117
+#: src/project/releases.md:135
 msgid ""
 "`make release-tags` refuses to run unless the working tree is clean, the "
-"branch is `main` and synchronized with `origin/main`, the version check "
-"passes, `VERSION` matches the tree, the release-notes section exists, and "
-"none of the three tags already exists locally or remotely. It then runs the "
-"Rust and wasm workspace gate, the generated C-ABI/header check, the native "
-"Python binding suite, and the optimized size-gated npm/wasm package tests. "
+"branch is `main` and synchronized with `origin/main`, the version and "
+"crates.io record/lock checks pass, `VERSION` matches the tree, the release-"
+"notes section exists, and none of the three tags already exists locally or "
+"remotely. It then runs these gates in order:"
+msgstr "`make release-tags` 在以下条件未全部满足时拒绝运行：工作树干净、分支为 `main` 且与 `origin/main` 同步、版本及 crates.io 记录/锁定检查通过、`VERSION` 与工作树一致、发布说明小节存在，且三个标签均未在本地或远程存在。随后它按以下顺序运行各项关卡："
+
+#: src/project/releases.md:141
+msgid "`make check`: the Rust and wasm workspace gate and repository hygiene."
+msgstr "`make check`：Rust 与 wasm 工作区关卡及仓库卫生检查。"
+
+#: src/project/releases.md:142
+msgid "`make capi-check`: the generated C-ABI/header check and linked C smoke."
+msgstr "`make capi-check`：生成的 C-ABI/头文件检查，以及链接后的 C 冒烟测试。"
+
+#: src/project/releases.md:143
+msgid "`make pytest`: the native Python binding suite."
+msgstr "`make pytest`：原生 Python 绑定测试套件。"
+
+#: src/project/releases.md:144
+msgid ""
+"`make python-release-check`: build and audit both Python wheel/sdist pairs, "
+"check them with the pinned publisher tools, and install them together."
+msgstr "`make python-release-check`：构建并审计两个 Python 分发包各自的 wheel/sdist，使用固定版本的发布工具检查它们，并将它们一同安装。"
+
+#: src/project/releases.md:146
+msgid "`make wasm-pkg-test`: the optimized size-gated npm/wasm package tests."
+msgstr "`make wasm-pkg-test`：经过优化、带体积关卡的 npm/wasm 包测试。"
+
+#: src/project/releases.md:147
+msgid ""
+"`make capi-bundle`: build and audit the native C distribution, including "
+"recipient notices and relocated linked smoke."
+msgstr "`make capi-bundle`：构建并审计原生 C 分发包，包括接收方许可声明与重定位后的链接冒烟测试。"
+
+#: src/project/releases.md:150
+msgid ""
 "Only after every surface passes does it recheck the clean synchronized state "
 "and atomically push the `rust-v`, `py-v`, and `npm-v` tags together. No tag "
 "is created before the complete cross-surface preflight passes. Each tag "
 "triggers its own lane, and the cargo lane additionally publishes a GitHub "
 "Release built from the committed `CHANGELOG.md`."
-msgstr ""
-"`make release-tags` 在以下条件未全部满足时拒绝运行：工作树干净、分支为 "
-"`main` 且与 `origin/main` 同步、版本检查通过、`VERSION` 与工作树一致、发布说"
-"明小节存在，且三个标签都不在本地或远程已存在。随后它运行 Rust 与 wasm 工作区"
-"关卡、生成的 C-ABI/头文件检查、原生 Python 绑定测试套件，以及经过优化、带体积"
-"关卡的 npm/wasm 包测试。只有在每个接口都通过之后，它才会重新检查干净且已同步"
-"的状态，并以原子方式一同推送 `rust-v`、`py-v` 与 `npm-v` 标签。在完整的跨接口"
-"预检通过之前，不会创建任何标签。每个标签触发各自的通道，而 cargo 通道还会额外"
-"发布一个依据已提交的 `CHANGELOG.md` 构建的 GitHub Release。"
+msgstr "只有在每个接口都通过之后，它才会重新检查干净且已同步的状态，并以原子方式一同推送 `rust-v`、`py-v` 与 `npm-v` 标签。在完整的跨接口预检通过之前，不会创建任何标签。每个标签触发各自的通道，而 cargo 通道还会额外发布一个依据已提交的 `CHANGELOG.md` 构建的 GitHub Release。"
 
-#: src/project/releases.md:129
+#: src/project/releases.md:156
 msgid "Citing PurRDF"
 msgstr "引用 PurRDF"
 
-#: src/project/releases.md:131
+#: src/project/releases.md:158
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -21322,10 +21349,22 @@ msgstr ""
 "整个字符串，而不是前缀。"
 
 #: src/project/diagnostic-codes.md:21
+msgid ""
+"`RdfDiagnostic::presentation()` optionally provides a stable message "
+"identity, named typed parameters and structured detail. Select a "
+"presentation template by `message_id()`: one diagnostic code can cover "
+"several templates. Read parameter values directly instead of extracting them "
+"from English text. `to_json()` emits the versioned machine record, with "
+"logical 64-bit anchors and typed integers as exact decimal strings. SARIF "
+"retains it in `properties.diagnosticRecord`; C callers use the borrowed "
+"`purrdf_error_presentation_json` accessor."
+msgstr "`RdfDiagnostic::presentation()` 可选地提供稳定的消息标识、具名且带类型的参数，以及结构化详情。通过 `message_id()` 选择展示模板：一个诊断代码可以涵盖多个模板。直接读取参数值，而不是从英文文本中提取。`to_json()` 输出带版本的机器记录，其中逻辑 64 位定位信息及带类型的整数以精确的十进制字符串表示。SARIF 在 `properties.diagnosticRecord` 中保留该记录；C 调用方使用借用的 `purrdf_error_presentation_json` 访问器。"
+
+#: src/project/diagnostic-codes.md:29
 msgid "`iri-*` — IRI parsing and base resolution (`purrdf-iri`)"
 msgstr "`iri-*`——IRI 解析与基准解析（`purrdf-iri`）"
 
-#: src/project/diagnostic-codes.md:23
+#: src/project/diagnostic-codes.md:31
 msgid ""
 "`IriError::diagnostic_code` is the single owner of these strings for the "
 "whole workspace; every codec, SPARQL, ShEx and SHACL route an IRI failure "
@@ -21336,109 +21375,109 @@ msgstr ""
 "器、SPARQL、ShEx 与 SHACL 都把 IRI 失败交由它处理。两个与基准相关的代码之所以"
 "分开，是因为它们的补救办法不同：一个可以通过提供基准来修复，另一个则不能。"
 
-#: src/project/diagnostic-codes.md:28 src/project/diagnostic-codes.md:42
-#: src/project/diagnostic-codes.md:68 src/project/diagnostic-codes.md:85
-#: src/project/diagnostic-codes.md:96 src/project/diagnostic-codes.md:116
-#: src/project/diagnostic-codes.md:138 src/project/diagnostic-codes.md:184
-#: src/project/diagnostic-codes.md:194 src/project/diagnostic-codes.md:204
+#: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
+#: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
+#: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:125
+#: src/project/diagnostic-codes.md:147 src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:206 src/project/diagnostic-codes.md:216
 msgid "Meaning"
 msgstr "含义"
 
-#: src/project/diagnostic-codes.md:28 src/project/diagnostic-codes.md:42
-#: src/project/diagnostic-codes.md:68 src/project/diagnostic-codes.md:85
-#: src/project/diagnostic-codes.md:96 src/project/diagnostic-codes.md:116
-#: src/project/diagnostic-codes.md:138 src/project/diagnostic-codes.md:184
-#: src/project/diagnostic-codes.md:194 src/project/diagnostic-codes.md:204
+#: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
+#: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
+#: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:125
+#: src/project/diagnostic-codes.md:147 src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:206 src/project/diagnostic-codes.md:216
 msgid "Remedy"
 msgstr "补救办法"
 
-#: src/project/diagnostic-codes.md:30
+#: src/project/diagnostic-codes.md:38
 msgid "`iri-empty`"
 msgstr "`iri-empty`"
 
-#: src/project/diagnostic-codes.md:30
+#: src/project/diagnostic-codes.md:38
 msgid "The string is empty where a non-empty IRI/URI was required."
 msgstr "在要求非空 IRI/URI 的地方，字符串为空。"
 
-#: src/project/diagnostic-codes.md:30
+#: src/project/diagnostic-codes.md:38
 msgid "Supply a non-empty IRI."
 msgstr "提供一个非空的 IRI。"
 
-#: src/project/diagnostic-codes.md:31
+#: src/project/diagnostic-codes.md:39
 msgid "`iri-missing-scheme`"
 msgstr "`iri-missing-scheme`"
 
-#: src/project/diagnostic-codes.md:31
+#: src/project/diagnostic-codes.md:39
 msgid "The string has no scheme, so it cannot be an absolute IRI."
 msgstr "该字符串没有 scheme（方案），因此不可能是绝对 IRI。"
 
-#: src/project/diagnostic-codes.md:31
+#: src/project/diagnostic-codes.md:39
 msgid "Write the IRI in absolute form, with a scheme."
 msgstr "以带有 scheme 的绝对形式书写 IRI。"
 
-#: src/project/diagnostic-codes.md:32
+#: src/project/diagnostic-codes.md:40
 msgid "`iri-bad-scheme`"
 msgstr "`iri-bad-scheme`"
 
-#: src/project/diagnostic-codes.md:32
+#: src/project/diagnostic-codes.md:40
 msgid ""
 "The scheme is malformed (it must start with a letter and contain only "
 "letters, digits, `+`, `-` and `.`)."
 msgstr ""
 "scheme 格式错误（它必须以字母开头，且只包含字母、数字、`+`、`-` 与 `.`）。"
 
-#: src/project/diagnostic-codes.md:32
+#: src/project/diagnostic-codes.md:40
 msgid "Correct the scheme."
 msgstr "更正 scheme。"
 
-#: src/project/diagnostic-codes.md:33
+#: src/project/diagnostic-codes.md:41
 msgid "`iri-bad-percent-encoding`"
 msgstr "`iri-bad-percent-encoding`"
 
-#: src/project/diagnostic-codes.md:33
+#: src/project/diagnostic-codes.md:41
 msgid ""
 "A `%` at the reported byte offset is not followed by two hexadecimal digits."
 msgstr "所报告字节偏移处的 `%` 后面没有跟两个十六进制数字。"
 
-#: src/project/diagnostic-codes.md:33
+#: src/project/diagnostic-codes.md:41
 msgid "Percent-encode the `%` itself, or complete the escape."
 msgstr "对 `%` 本身进行百分号编码，或补全转义。"
 
-#: src/project/diagnostic-codes.md:34
+#: src/project/diagnostic-codes.md:42
 msgid "`iri-disallowed-char`"
 msgstr "`iri-disallowed-char`"
 
-#: src/project/diagnostic-codes.md:34
+#: src/project/diagnostic-codes.md:42
 msgid ""
 "A character the IRI grammar does not admit occurs at the reported byte "
 "offset."
 msgstr "所报告的字节偏移处出现了 IRI 语法不允许的字符。"
 
-#: src/project/diagnostic-codes.md:34
+#: src/project/diagnostic-codes.md:42
 msgid "Percent-encode or remove the character."
 msgstr "对该字符进行百分号编码或删除它。"
 
-#: src/project/diagnostic-codes.md:35
+#: src/project/diagnostic-codes.md:43
 msgid "`iri-bad-authority`"
 msgstr "`iri-bad-authority`"
 
-#: src/project/diagnostic-codes.md:35
+#: src/project/diagnostic-codes.md:43
 msgid "The authority component (`//host:port`) is malformed."
 msgstr "authority 组件（`//host:port`）格式错误。"
 
-#: src/project/diagnostic-codes.md:35
+#: src/project/diagnostic-codes.md:43
 msgid "Correct the host or port."
 msgstr "更正主机或端口。"
 
-#: src/project/diagnostic-codes.md:36
+#: src/project/diagnostic-codes.md:44
 msgid "The base IRI supplied for resolution is not itself absolute."
 msgstr "为解析提供的基准 IRI 本身不是绝对的。"
 
-#: src/project/diagnostic-codes.md:36
+#: src/project/diagnostic-codes.md:44
 msgid "Supply a base IRI that has a scheme, e.g. `http://example.org/dir/`."
 msgstr "提供一个带有 scheme 的基准 IRI，例如 `http://example.org/dir/`。"
 
-#: src/project/diagnostic-codes.md:37
+#: src/project/diagnostic-codes.md:45
 msgid ""
 "A relative IRI reference was met with no base in scope: no in-document "
 "directive, no caller-supplied base, no retrieval IRI."
@@ -21446,7 +21485,7 @@ msgstr ""
 "遇到一个相对 IRI 引用，但作用域内没有基准：没有文档内指令，没有调用方提供的基"
 "准，也没有获取 IRI。"
 
-#: src/project/diagnostic-codes.md:37
+#: src/project/diagnostic-codes.md:45
 msgid ""
 "Add a base to the document (`@base`/`BASE` in Turtle-family syntaxes, "
 "`xml:base` in RDF/XML, `@context.@base` in JSON-LD) or pass a base IRI to "
@@ -21455,7 +21494,7 @@ msgstr ""
 "为文档添加基准（Turtle 族语法中用 `@base`/`BASE`，RDF/XML 中用 `xml:base`，"
 "JSON-LD 中用 `@context.@base`），或向 API 传入一个基准 IRI。"
 
-#: src/project/diagnostic-codes.md:38
+#: src/project/diagnostic-codes.md:46
 msgid ""
 "The reference is not absolute and the syntax admits no relative reference at "
 "all (N-Triples, N-Quads), so no base could ever apply."
@@ -21463,19 +21502,19 @@ msgstr ""
 "该引用不是绝对的，而该语法根本不允许相对引用（N-Triples、N-Quads），因此任何"
 "基准都不可能适用。"
 
-#: src/project/diagnostic-codes.md:38
+#: src/project/diagnostic-codes.md:46
 msgid "Write the IRI in absolute form; supplying a base will not help."
 msgstr "以绝对形式书写 IRI；提供基准无济于事。"
 
-#: src/project/diagnostic-codes.md:40
+#: src/project/diagnostic-codes.md:48
 msgid "`native-codec-*` — the text and XML codecs (`purrdf-rdf`)"
 msgstr "`native-codec-*`——文本与 XML 编解码器（`purrdf-rdf`）"
 
-#: src/project/diagnostic-codes.md:44
+#: src/project/diagnostic-codes.md:52
 msgid "`native-codec-parse`"
 msgstr "`native-codec-parse`"
 
-#: src/project/diagnostic-codes.md:44
+#: src/project/diagnostic-codes.md:52
 msgid ""
 "The codec (Turtle family, RDF/XML, TriX, HexTuples) could not parse the "
 "input; the location names the line and column. Term nesting past the "
@@ -21484,27 +21523,43 @@ msgstr ""
 "编解码器（Turtle 族、RDF/XML、TriX、HexTuples）无法解析输入；位置信息指明行与"
 "列。项嵌套超过解析器深度上限，也以该代码报告。"
 
-#: src/project/diagnostic-codes.md:44
+#: src/project/diagnostic-codes.md:52
 msgid "Fix the document at the reported position."
 msgstr "在所报告的位置修正文档。"
 
-#: src/project/diagnostic-codes.md:45
+#: src/project/diagnostic-codes.md:53
+msgid "`native-codec-limit`"
+msgstr "`native-codec-limit`"
+
+#: src/project/diagnostic-codes.md:53
+msgid ""
+"A cumulative source byte/line counter or explicitly bounded local column "
+"cannot represent the next position."
+msgstr "累计的源字节/行计数器，或明确设有上限的局部列计数器，无法表示下一个位置。"
+
+#: src/project/diagnostic-codes.md:53
+msgid ""
+"Split the source into separately addressed documents, or shorten an "
+"oversized line."
+msgstr "将源拆分为分别寻址的文档，或缩短过长的行。"
+
+#: src/project/diagnostic-codes.md:54
 msgid "`native-codec-utf8`"
 msgstr "`native-codec-utf8`"
 
-#: src/project/diagnostic-codes.md:45
+#: src/project/diagnostic-codes.md:54
 msgid "The input bytes are not valid UTF-8."
 msgstr "输入字节不是有效的 UTF-8。"
 
-#: src/project/diagnostic-codes.md:45
+#: src/project/diagnostic-codes.md:54
 msgid "Re-encode the document as UTF-8."
 msgstr "把文档重新编码为 UTF-8。"
 
-#: src/project/diagnostic-codes.md:46
+#: src/project/diagnostic-codes.md:55
 msgid "`native-codec-panic`"
 msgstr "`native-codec-panic`"
 
-#: src/project/diagnostic-codes.md:46
+#: src/project/diagnostic-codes.md:55
 msgid ""
 "The codec panicked while parsing and the panic guard caught it. This is a "
 "defect in PurRDF, never in the input."
@@ -21512,191 +21567,191 @@ msgstr ""
 "编解码器在解析时发生 panic，被 panic 防护捕获。这是 PurRDF 的缺陷，绝不是输入"
 "的问题。"
 
-#: src/project/diagnostic-codes.md:46
+#: src/project/diagnostic-codes.md:55
 msgid "Report it with the input that triggered it."
 msgstr "连同触发它的输入一起报告。"
 
-#: src/project/diagnostic-codes.md:47
+#: src/project/diagnostic-codes.md:56
 msgid "`native-codec-read`"
 msgstr "`native-codec-read`"
 
-#: src/project/diagnostic-codes.md:47
+#: src/project/diagnostic-codes.md:56
 msgid ""
 "Reading the RDF source through the streaming reader failed with an IO error."
 msgstr "通过流式读取器读取 RDF 源时，因 IO 错误而失败。"
 
-#: src/project/diagnostic-codes.md:47
+#: src/project/diagnostic-codes.md:56
 msgid "Check the source stream or file."
 msgstr "检查源流或源文件。"
 
-#: src/project/diagnostic-codes.md:48
+#: src/project/diagnostic-codes.md:57
 msgid "`native-codec-write`"
 msgstr "`native-codec-write`"
 
-#: src/project/diagnostic-codes.md:48
+#: src/project/diagnostic-codes.md:57
 msgid "Writing the serialized output failed with an IO error."
 msgstr "写出序列化输出时，因 IO 错误而失败。"
 
-#: src/project/diagnostic-codes.md:48
+#: src/project/diagnostic-codes.md:57
 msgid "Check the destination."
 msgstr "检查目标位置。"
 
-#: src/project/diagnostic-codes.md:49
+#: src/project/diagnostic-codes.md:58
 msgid "`native-codec-serialize`"
 msgstr "`native-codec-serialize`"
 
-#: src/project/diagnostic-codes.md:49
+#: src/project/diagnostic-codes.md:58
 msgid ""
 "The target format cannot represent the dataset — for example a named graph "
 "in a single-graph format — or the writer failed."
 msgstr "目标格式无法表示该数据集——例如单图格式中的命名图——或写出器失败。"
 
-#: src/project/diagnostic-codes.md:49
+#: src/project/diagnostic-codes.md:58
 msgid ""
 "Choose a format that carries the construct, or serialize through the loss-"
 "ledger lane."
 msgstr "选择一种能承载该构造的格式，或通过损失台账通道进行序列化。"
 
-#: src/project/diagnostic-codes.md:50
+#: src/project/diagnostic-codes.md:59
 msgid "`native-codec-replay`"
 msgstr "`native-codec-replay`"
 
-#: src/project/diagnostic-codes.md:50
+#: src/project/diagnostic-codes.md:59
 msgid ""
 "Replaying a parsed dataset into an event sink failed because the sink "
 "returned an error."
 msgstr "把已解析的数据集重放到事件接收器时失败，因为接收器返回了错误。"
 
-#: src/project/diagnostic-codes.md:50
+#: src/project/diagnostic-codes.md:59
 msgid "The sink's own error is carried in the message."
 msgstr "接收器自身的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:51
+#: src/project/diagnostic-codes.md:60
 msgid "`native-codec-unsupported-format`"
 msgstr "`native-codec-unsupported-format`"
 
-#: src/project/diagnostic-codes.md:51
+#: src/project/diagnostic-codes.md:60
 msgid "The media type or format identifier names no codec."
 msgstr "该媒体类型或格式标识符不对应任何编解码器。"
 
-#: src/project/diagnostic-codes.md:51
+#: src/project/diagnostic-codes.md:60
 msgid "Use one of the supported media types or format ids."
 msgstr "使用受支持的媒体类型或格式 id 之一。"
 
-#: src/project/diagnostic-codes.md:52
+#: src/project/diagnostic-codes.md:61
 msgid "`native-codec-datatype-not-iri`"
 msgstr "`native-codec-datatype-not-iri`"
 
-#: src/project/diagnostic-codes.md:52
+#: src/project/diagnostic-codes.md:61
 msgid "A literal's datatype term is not an IRI."
 msgstr "字面量的数据类型项不是 IRI。"
 
-#: src/project/diagnostic-codes.md:52 src/project/diagnostic-codes.md:109
-#: src/project/diagnostic-codes.md:121
+#: src/project/diagnostic-codes.md:61 src/project/diagnostic-codes.md:118
+#: src/project/diagnostic-codes.md:130
 msgid "Give the literal an IRI datatype."
 msgstr "为该字面量指定一个 IRI 数据类型。"
 
-#: src/project/diagnostic-codes.md:53
+#: src/project/diagnostic-codes.md:62
 msgid "`native-codec-direction-without-language`"
 msgstr "`native-codec-direction-without-language`"
 
-#: src/project/diagnostic-codes.md:53
+#: src/project/diagnostic-codes.md:62
 msgid "A base direction was given on a literal that has no language tag."
 msgstr "在一个没有语言标签的字面量上给出了基础方向（base direction）。"
 
-#: src/project/diagnostic-codes.md:53 src/project/diagnostic-codes.md:122
+#: src/project/diagnostic-codes.md:62 src/project/diagnostic-codes.md:131
 msgid "Add a language tag, or drop the direction."
 msgstr "添加语言标签，或去掉方向。"
 
-#: src/project/diagnostic-codes.md:54
+#: src/project/diagnostic-codes.md:63
 msgid "`native-codec-invalid-direction`"
 msgstr "`native-codec-invalid-direction`"
 
-#: src/project/diagnostic-codes.md:54
+#: src/project/diagnostic-codes.md:63
 msgid "A literal base direction other than `ltr` or `rtl` was given."
 msgstr "给出的字面量基础方向既不是 `ltr` 也不是 `rtl`。"
 
-#: src/project/diagnostic-codes.md:54 src/project/diagnostic-codes.md:123
+#: src/project/diagnostic-codes.md:63 src/project/diagnostic-codes.md:132
 msgid "Use `ltr` or `rtl`."
 msgstr "使用 `ltr` 或 `rtl`。"
 
-#: src/project/diagnostic-codes.md:55
+#: src/project/diagnostic-codes.md:64
 msgid "`native-codec-iri-missing-value`"
 msgstr "`native-codec-iri-missing-value`"
 
-#: src/project/diagnostic-codes.md:55
+#: src/project/diagnostic-codes.md:64
 msgid "An IRI term event carried an empty value."
 msgstr "某个 IRI 项事件携带了空值。"
 
-#: src/project/diagnostic-codes.md:55 src/project/diagnostic-codes.md:108
-#: src/project/diagnostic-codes.md:119
+#: src/project/diagnostic-codes.md:64 src/project/diagnostic-codes.md:117
+#: src/project/diagnostic-codes.md:128
 msgid "Supply the IRI."
 msgstr "提供该 IRI。"
 
-#: src/project/diagnostic-codes.md:56
+#: src/project/diagnostic-codes.md:65
 msgid "`native-codec-missing-reifier-binding`"
 msgstr "`native-codec-missing-reifier-binding`"
 
-#: src/project/diagnostic-codes.md:56
+#: src/project/diagnostic-codes.md:65
 msgid "A triple term refers to a reifier that has no binding."
 msgstr "某个三元组项（triple term）引用了一个没有绑定的具体化节点（reifier）。"
 
-#: src/project/diagnostic-codes.md:56
+#: src/project/diagnostic-codes.md:65
 msgid "Bind the reifier before referring to it."
 msgstr "在引用具体化节点之前先绑定它。"
 
-#: src/project/diagnostic-codes.md:57
+#: src/project/diagnostic-codes.md:66
 msgid "`native-codec-predicate-not-iri`"
 msgstr "`native-codec-predicate-not-iri`"
 
-#: src/project/diagnostic-codes.md:57
+#: src/project/diagnostic-codes.md:66
 msgid "A term in an IRI-only position (the predicate) is not an IRI."
 msgstr "只允许 IRI 的位置（谓词）上的项不是 IRI。"
 
-#: src/project/diagnostic-codes.md:57 src/project/diagnostic-codes.md:99
-#: src/project/diagnostic-codes.md:120 src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:66 src/project/diagnostic-codes.md:108
+#: src/project/diagnostic-codes.md:129 src/project/diagnostic-codes.md:190
 msgid "Use an IRI predicate."
 msgstr "使用 IRI 谓词。"
 
-#: src/project/diagnostic-codes.md:58
+#: src/project/diagnostic-codes.md:67
 msgid "`native-codec-reifier-not-triple`"
 msgstr "`native-codec-reifier-not-triple`"
 
-#: src/project/diagnostic-codes.md:58
+#: src/project/diagnostic-codes.md:67
 msgid "A reifier binds something other than a triple term."
 msgstr "具体化节点绑定的不是三元组项。"
 
-#: src/project/diagnostic-codes.md:58 src/project/diagnostic-codes.md:103
+#: src/project/diagnostic-codes.md:67 src/project/diagnostic-codes.md:112
 msgid "Bind the reifier to a triple term."
 msgstr "把具体化节点绑定到一个三元组项。"
 
-#: src/project/diagnostic-codes.md:59
+#: src/project/diagnostic-codes.md:68
 msgid "`native-codec-term-out-of-range`"
 msgstr "`native-codec-term-out-of-range`"
 
-#: src/project/diagnostic-codes.md:59
+#: src/project/diagnostic-codes.md:68
 msgid ""
 "A term id in the event stream is outside the range the stream introduced."
 msgstr "事件流中的某个项 id 超出了该流所引入的范围。"
 
-#: src/project/diagnostic-codes.md:59
+#: src/project/diagnostic-codes.md:68
 msgid "The producing stream is inconsistent; regenerate it."
 msgstr "产生这些事件的流不一致；请重新生成该流。"
 
-#: src/project/diagnostic-codes.md:60
+#: src/project/diagnostic-codes.md:69
 msgid "`native-codec-unbound-triple-term`"
 msgstr "`native-codec-unbound-triple-term`"
 
-#: src/project/diagnostic-codes.md:60
+#: src/project/diagnostic-codes.md:69
 msgid "A triple term names neither its components nor a reifier."
 msgstr "某个三元组项既未给出其组成部分，也未指明具体化节点。"
 
-#: src/project/diagnostic-codes.md:60 src/project/diagnostic-codes.md:112
-#: src/project/diagnostic-codes.md:125
+#: src/project/diagnostic-codes.md:69 src/project/diagnostic-codes.md:121
+#: src/project/diagnostic-codes.md:134
 msgid "Give the triple term its components or a reifier."
 msgstr "为该三元组项给出其组成部分或具体化节点。"
 
-#: src/project/diagnostic-codes.md:62
+#: src/project/diagnostic-codes.md:71
 msgid ""
 "The last nine arise when the codec lane consumes term events rather than "
 "text — a GTS graph being resolved through the codec surface — and mirror the "
@@ -21705,15 +21760,15 @@ msgstr ""
 "最后九个代码出现在编解码器通道消费项事件而非文本时——即某个 GTS 图正在经由编解"
 "码器接口被解析——并与下文的 `gts-*` 与 `rdf-ir-*` 代码相对应。"
 
-#: src/project/diagnostic-codes.md:66
+#: src/project/diagnostic-codes.md:75
 msgid "`native-jsonld-*` and `jsonld-*` — JSON-LD and YAML-LD"
 msgstr "`native-jsonld-*` 与 `jsonld-*`——JSON-LD 与 YAML-LD"
 
-#: src/project/diagnostic-codes.md:70
+#: src/project/diagnostic-codes.md:79
 msgid "`native-jsonld-decode`"
 msgstr "`native-jsonld-decode`"
 
-#: src/project/diagnostic-codes.md:70
+#: src/project/diagnostic-codes.md:79
 msgid ""
 "The JSON-LD or YAML-LD input is malformed at the surface: invalid JSON/YAML, "
 "an encoding error, or a materialized-carrier byte budget exceeded."
@@ -21721,54 +21776,54 @@ msgstr ""
 "JSON-LD 或 YAML-LD 输入在表层语法上格式错误：无效的 JSON/YAML、编码错误，或超"
 "出了物化载体的字节预算。"
 
-#: src/project/diagnostic-codes.md:70
+#: src/project/diagnostic-codes.md:79
 msgid "Fix the surface syntax or reduce the document."
 msgstr "修正表层语法或缩减文档。"
 
-#: src/project/diagnostic-codes.md:71
+#: src/project/diagnostic-codes.md:80
 msgid "`native-jsonld-parse`"
 msgstr "`native-jsonld-parse`"
 
-#: src/project/diagnostic-codes.md:71
+#: src/project/diagnostic-codes.md:80
 msgid "The input is well-formed JSON-LD that does not map to RDF."
 msgstr "输入是良构的 JSON-LD，但无法映射到 RDF。"
 
-#: src/project/diagnostic-codes.md:71
+#: src/project/diagnostic-codes.md:80
 msgid "Correct the JSON-LD structure."
 msgstr "更正 JSON-LD 结构。"
 
-#: src/project/diagnostic-codes.md:72
+#: src/project/diagnostic-codes.md:81
 msgid "`jsonld-json-input`"
 msgstr "`jsonld-json-input`"
 
-#: src/project/diagnostic-codes.md:72
+#: src/project/diagnostic-codes.md:81
 msgid ""
 "The strict JSON reader rejected the input, for example a duplicate object "
 "member."
 msgstr "严格的 JSON 读取器拒绝了该输入，例如出现重复的对象成员。"
 
-#: src/project/diagnostic-codes.md:72
+#: src/project/diagnostic-codes.md:81
 msgid "Remove the duplicate or correct the JSON."
 msgstr "删除重复项或更正 JSON。"
 
-#: src/project/diagnostic-codes.md:73
+#: src/project/diagnostic-codes.md:82
 msgid "`jsonld-context-invalid`"
 msgstr "`jsonld-context-invalid`"
 
-#: src/project/diagnostic-codes.md:73
+#: src/project/diagnostic-codes.md:82
 msgid ""
 "A context document, or the strict versioned options document, is invalid."
 msgstr "某个上下文文档，或严格的带版本选项文档，无效。"
 
-#: src/project/diagnostic-codes.md:73
+#: src/project/diagnostic-codes.md:82
 msgid "Correct the context or options document."
 msgstr "更正上下文文档或选项文档。"
 
-#: src/project/diagnostic-codes.md:74
+#: src/project/diagnostic-codes.md:83
 msgid "`jsonld-context-limit`"
 msgstr "`jsonld-context-limit`"
 
-#: src/project/diagnostic-codes.md:74
+#: src/project/diagnostic-codes.md:83
 msgid ""
 "A context-processing ceiling was exceeded: loaded bytes, work count, "
 "definition complexity, or the offline context registry size."
@@ -21776,56 +21831,56 @@ msgstr ""
 "超出了某项上下文处理上限：已加载字节数、工作计数、定义复杂度，或离线上下文注"
 "册表的大小。"
 
-#: src/project/diagnostic-codes.md:74
+#: src/project/diagnostic-codes.md:83
 msgid "Reduce the context, or raise the limit the options document declares."
 msgstr "缩减上下文，或提高选项文档所声明的上限。"
 
-#: src/project/diagnostic-codes.md:75
+#: src/project/diagnostic-codes.md:84
 msgid "`jsonld-derived-invalid`"
 msgstr "`jsonld-derived-invalid`"
 
-#: src/project/diagnostic-codes.md:75
+#: src/project/diagnostic-codes.md:84
 msgid ""
 "The deterministic dataset-IRI `derived` mode could not derive a prefix (an "
 "invalid IRI, or a null mapping)."
 msgstr ""
 "确定性的数据集 IRI `derived` 模式无法推导出前缀（无效的 IRI，或 null 映射）。"
 
-#: src/project/diagnostic-codes.md:75
+#: src/project/diagnostic-codes.md:84
 msgid "Correct the IRI the prefix would be derived from."
 msgstr "更正用于推导前缀的那个 IRI。"
 
-#: src/project/diagnostic-codes.md:76
+#: src/project/diagnostic-codes.md:85
 msgid "`jsonld-derived-limit`"
 msgstr "`jsonld-derived-limit`"
 
-#: src/project/diagnostic-codes.md:76
+#: src/project/diagnostic-codes.md:85
 msgid "A derived-context work or byte ceiling was exceeded."
 msgstr "超出了派生上下文的工作量或字节上限。"
 
-#: src/project/diagnostic-codes.md:76
+#: src/project/diagnostic-codes.md:85
 msgid "Reduce the dataset's IRI vocabulary or raise the declared limit."
 msgstr "缩减数据集的 IRI 词汇，或提高所声明的上限。"
 
-#: src/project/diagnostic-codes.md:77
+#: src/project/diagnostic-codes.md:86
 msgid "`jsonld-options-unused`"
 msgstr "`jsonld-options-unused`"
 
-#: src/project/diagnostic-codes.md:77
+#: src/project/diagnostic-codes.md:86
 msgid ""
 "JSON-LD serialization options were supplied for a format that is not JSON-LD "
 "or YAML-LD."
 msgstr "为一种既非 JSON-LD 也非 YAML-LD 的格式提供了 JSON-LD 序列化选项。"
 
-#: src/project/diagnostic-codes.md:77
+#: src/project/diagnostic-codes.md:86
 msgid "Drop the options, or serialize to JSON-LD/YAML-LD."
 msgstr "去掉这些选项，或序列化为 JSON-LD/YAML-LD。"
 
-#: src/project/diagnostic-codes.md:79
+#: src/project/diagnostic-codes.md:88
 msgid "`cdt-*` — SEP-0009 composite literals"
 msgstr "`cdt-*`——SEP-0009 复合字面量"
 
-#: src/project/diagnostic-codes.md:81
+#: src/project/diagnostic-codes.md:90
 msgid ""
 "A `cdt:List` or `cdt:Map` lexical form denotes blank nodes in the enclosing "
 "document's scope, so a form that does not parse leaves that scope undefined "
@@ -21835,36 +21890,36 @@ msgstr ""
 "无法解析的词法形式会使该作用域处于未定义状态，于是整个文档被拒绝，而不是把该"
 "字面量作为不透明值保留。"
 
-#: src/project/diagnostic-codes.md:87
+#: src/project/diagnostic-codes.md:96
 msgid "`cdt-literal-malformed`"
 msgstr "`cdt-literal-malformed`"
 
-#: src/project/diagnostic-codes.md:87
+#: src/project/diagnostic-codes.md:96
 msgid "A composite literal's lexical form does not parse."
 msgstr "复合字面量的词法形式无法解析。"
 
-#: src/project/diagnostic-codes.md:87
+#: src/project/diagnostic-codes.md:96
 msgid "Correct the literal."
 msgstr "更正该字面量。"
 
-#: src/project/diagnostic-codes.md:88
+#: src/project/diagnostic-codes.md:97
 msgid "`cdt-literal-scan-disagreement`"
 msgstr "`cdt-literal-scan-disagreement`"
 
-#: src/project/diagnostic-codes.md:88
+#: src/project/diagnostic-codes.md:97
 msgid ""
 "The bounded lexical scanner and the full parser disagree about the literal."
 msgstr "有界词法扫描器与完整解析器对该字面量的判断不一致。"
 
-#: src/project/diagnostic-codes.md:88
+#: src/project/diagnostic-codes.md:97
 msgid "This is a defect in PurRDF; report it with the literal."
 msgstr "这是 PurRDF 的缺陷；请连同该字面量一起报告。"
 
-#: src/project/diagnostic-codes.md:90
+#: src/project/diagnostic-codes.md:99
 msgid "`rdf-ir-*` — dataset structure (`purrdf-core` freeze and GTS import)"
 msgstr "`rdf-ir-*`——数据集结构（`purrdf-core` 冻结与 GTS 导入）"
 
-#: src/project/diagnostic-codes.md:92
+#: src/project/diagnostic-codes.md:101
 msgid ""
 "`RdfDatasetBuilder::freeze()` validates the structure of the dataset it is "
 "about to freeze; the GTS import sink reports the same family for a container "
@@ -21873,403 +21928,449 @@ msgstr ""
 "`RdfDatasetBuilder::freeze()` 会验证它即将冻结的数据集的结构；若某个容器中的"
 "项不构成良构的数据集，GTS 导入接收器也报告同一族代码。"
 
-#: src/project/diagnostic-codes.md:98
+#: src/project/diagnostic-codes.md:107
 msgid "`rdf-ir-term-out-of-range`"
 msgstr "`rdf-ir-term-out-of-range`"
 
-#: src/project/diagnostic-codes.md:98
+#: src/project/diagnostic-codes.md:107
 msgid "A quad references a `TermId` the builder never interned."
 msgstr "某个四元组引用了构建器从未驻留过的 `TermId`。"
 
-#: src/project/diagnostic-codes.md:98
+#: src/project/diagnostic-codes.md:107
 msgid "Intern the term before pushing the quad."
 msgstr "在推入该四元组之前先驻留该项。"
 
-#: src/project/diagnostic-codes.md:99
+#: src/project/diagnostic-codes.md:108
 msgid "`rdf-ir-predicate-not-iri`"
 msgstr "`rdf-ir-predicate-not-iri`"
 
-#: src/project/diagnostic-codes.md:99
+#: src/project/diagnostic-codes.md:108
 msgid "A quad's predicate is not an IRI."
 msgstr "四元组的谓词不是 IRI。"
 
-#: src/project/diagnostic-codes.md:100
+#: src/project/diagnostic-codes.md:109
 msgid "`rdf-ir-literal-subject`"
 msgstr "`rdf-ir-literal-subject`"
 
-#: src/project/diagnostic-codes.md:100
+#: src/project/diagnostic-codes.md:109
 msgid "A literal occupies subject position."
 msgstr "字面量出现在主语位置。"
 
-#: src/project/diagnostic-codes.md:100
+#: src/project/diagnostic-codes.md:109
 msgid "RDF admits no literal subject; restructure the statement."
 msgstr "RDF 不允许字面量作主语；请重新组织该陈述。"
 
-#: src/project/diagnostic-codes.md:101
+#: src/project/diagnostic-codes.md:110
 msgid "`rdf-ir-triple-subject`"
 msgstr "`rdf-ir-triple-subject`"
 
-#: src/project/diagnostic-codes.md:101
+#: src/project/diagnostic-codes.md:110
 msgid "A triple term occupies subject position."
 msgstr "三元组项出现在主语位置。"
 
-#: src/project/diagnostic-codes.md:101
+#: src/project/diagnostic-codes.md:110
 msgid "RDF 1.2 admits triple terms in object position only; use a reifier."
 msgstr "RDF 1.2 只允许三元组项出现在宾语位置；请使用具体化节点。"
 
-#: src/project/diagnostic-codes.md:102
+#: src/project/diagnostic-codes.md:111
 msgid "`rdf-ir-graph-name-invalid`"
 msgstr "`rdf-ir-graph-name-invalid`"
 
-#: src/project/diagnostic-codes.md:102
+#: src/project/diagnostic-codes.md:111
 msgid "A graph name is a literal or a triple term."
 msgstr "图名是字面量或三元组项。"
 
-#: src/project/diagnostic-codes.md:102
+#: src/project/diagnostic-codes.md:111
 msgid "A graph name must be an IRI or a blank node."
 msgstr "图名必须是 IRI 或空节点。"
 
-#: src/project/diagnostic-codes.md:103
+#: src/project/diagnostic-codes.md:112
 msgid "`rdf-ir-reifier-not-triple`"
 msgstr "`rdf-ir-reifier-not-triple`"
 
-#: src/project/diagnostic-codes.md:103
+#: src/project/diagnostic-codes.md:112
 msgid "A reifier binding points at something other than a triple term."
 msgstr "具体化节点绑定指向的不是三元组项。"
 
-#: src/project/diagnostic-codes.md:104
+#: src/project/diagnostic-codes.md:113
 msgid "`rdf-ir-triple-cycle`"
 msgstr "`rdf-ir-triple-cycle`"
 
-#: src/project/diagnostic-codes.md:104
+#: src/project/diagnostic-codes.md:113
 msgid "A triple term contains itself, directly or through nesting."
 msgstr "某个三元组项直接或通过嵌套包含了它自身。"
 
-#: src/project/diagnostic-codes.md:104 src/project/diagnostic-codes.md:126
+#: src/project/diagnostic-codes.md:113 src/project/diagnostic-codes.md:135
 msgid "Remove the cycle."
 msgstr "消除该环。"
 
-#: src/project/diagnostic-codes.md:105
+#: src/project/diagnostic-codes.md:114
 msgid "`rdf-ir-triple-nesting-limit`"
 msgstr "`rdf-ir-triple-nesting-limit`"
 
-#: src/project/diagnostic-codes.md:105
+#: src/project/diagnostic-codes.md:114
 msgid "Triple-term nesting exceeds the builder's depth limit."
 msgstr "三元组项的嵌套超出了构建器的深度上限。"
 
-#: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:111
-#: src/project/diagnostic-codes.md:127 src/project/diagnostic-codes.md:134
+#: src/project/diagnostic-codes.md:114 src/project/diagnostic-codes.md:120
+#: src/project/diagnostic-codes.md:136 src/project/diagnostic-codes.md:143
 msgid "Flatten the nesting."
 msgstr "将嵌套展平。"
 
-#: src/project/diagnostic-codes.md:106
+#: src/project/diagnostic-codes.md:115
 msgid "`rdf-ir-dangling-term-ref`"
 msgstr "`rdf-ir-dangling-term-ref`"
 
-#: src/project/diagnostic-codes.md:106
+#: src/project/diagnostic-codes.md:115
 msgid "A GTS role references a term id that no term event introduced."
 msgstr "某个 GTS 角色引用了一个没有任何项事件引入的项 id。"
 
-#: src/project/diagnostic-codes.md:106 src/project/diagnostic-codes.md:118
+#: src/project/diagnostic-codes.md:115 src/project/diagnostic-codes.md:127
 msgid "The container is inconsistent; regenerate it."
 msgstr "该容器不一致；请重新生成它。"
 
-#: src/project/diagnostic-codes.md:107
+#: src/project/diagnostic-codes.md:116
 msgid "`rdf-ir-gts-fold-diagnostic`"
 msgstr "`rdf-ir-gts-fold-diagnostic`"
 
-#: src/project/diagnostic-codes.md:107
+#: src/project/diagnostic-codes.md:116
 msgid "The GTS fold reported a diagnostic, surfaced through the import."
 msgstr "GTS 折叠报告了一条诊断，经由导入呈现出来。"
 
-#: src/project/diagnostic-codes.md:107
+#: src/project/diagnostic-codes.md:116
 msgid "The fold diagnostic's own code and detail are in the message."
 msgstr "折叠诊断自身的代码与详情包含在消息中。"
 
-#: src/project/diagnostic-codes.md:108
+#: src/project/diagnostic-codes.md:117
 msgid "`rdf-ir-iri-missing-value`"
 msgstr "`rdf-ir-iri-missing-value`"
 
-#: src/project/diagnostic-codes.md:108
+#: src/project/diagnostic-codes.md:117
 msgid "An imported IRI term has an empty value."
 msgstr "某个导入的 IRI 项的值为空。"
 
-#: src/project/diagnostic-codes.md:109
+#: src/project/diagnostic-codes.md:118
 msgid "`rdf-ir-literal-datatype-not-iri`"
 msgstr "`rdf-ir-literal-datatype-not-iri`"
 
-#: src/project/diagnostic-codes.md:109
+#: src/project/diagnostic-codes.md:118
 msgid "An imported literal's datatype resolves to a non-IRI."
 msgstr "某个导入的字面量的数据类型解析为非 IRI。"
 
-#: src/project/diagnostic-codes.md:110
+#: src/project/diagnostic-codes.md:119
 msgid "`rdf-ir-missing-reifier-binding`"
 msgstr "`rdf-ir-missing-reifier-binding`"
 
-#: src/project/diagnostic-codes.md:110
+#: src/project/diagnostic-codes.md:119
 msgid "An imported triple term references a reifier with no recorded binding."
 msgstr "某个导入的三元组项引用了一个没有记录绑定的具体化节点。"
 
-#: src/project/diagnostic-codes.md:110 src/project/diagnostic-codes.md:124
+#: src/project/diagnostic-codes.md:119 src/project/diagnostic-codes.md:133
 msgid "Bind the reifier in the container."
 msgstr "在容器中绑定该具体化节点。"
 
-#: src/project/diagnostic-codes.md:111
+#: src/project/diagnostic-codes.md:120
 msgid "`rdf-ir-term-nesting-limit`"
 msgstr "`rdf-ir-term-nesting-limit`"
 
-#: src/project/diagnostic-codes.md:111
+#: src/project/diagnostic-codes.md:120
 msgid "Imported triple-term nesting exceeds the depth limit."
 msgstr "导入的三元组项嵌套超出了深度上限。"
 
-#: src/project/diagnostic-codes.md:112
+#: src/project/diagnostic-codes.md:121
 msgid "`rdf-ir-unbound-triple-term`"
 msgstr "`rdf-ir-unbound-triple-term`"
 
-#: src/project/diagnostic-codes.md:112
+#: src/project/diagnostic-codes.md:121
 msgid "An imported triple term names neither its components nor a reifier."
 msgstr "某个导入的三元组项既未给出其组成部分，也未指明具体化节点。"
 
-#: src/project/diagnostic-codes.md:114
+#: src/project/diagnostic-codes.md:123
 msgid "`gts-*` and `rdf-*` — GTS graph resolution, verification and writing"
 msgstr "`gts-*` 与 `rdf-*`——GTS 图的解析、验证与写出"
 
-#: src/project/diagnostic-codes.md:118
+#: src/project/diagnostic-codes.md:127
 msgid "`gts-term-out-of-range`"
 msgstr "`gts-term-out-of-range`"
 
-#: src/project/diagnostic-codes.md:118
+#: src/project/diagnostic-codes.md:127
 msgid "A GTS term id is out of range for the graph."
 msgstr "某个 GTS 项 id 超出了该图的范围。"
 
-#: src/project/diagnostic-codes.md:119
+#: src/project/diagnostic-codes.md:128
 msgid "`gts-iri-missing-value`"
 msgstr "`gts-iri-missing-value`"
 
-#: src/project/diagnostic-codes.md:119
+#: src/project/diagnostic-codes.md:128
 msgid "A GTS IRI term has an empty value."
 msgstr "某个 GTS IRI 项的值为空。"
 
-#: src/project/diagnostic-codes.md:120
+#: src/project/diagnostic-codes.md:129
 msgid "`gts-predicate-not-iri`"
 msgstr "`gts-predicate-not-iri`"
 
-#: src/project/diagnostic-codes.md:120
+#: src/project/diagnostic-codes.md:129
 msgid "A GTS predicate term is not an IRI."
 msgstr "某个 GTS 谓词项不是 IRI。"
 
-#: src/project/diagnostic-codes.md:121
+#: src/project/diagnostic-codes.md:130
 msgid "`gts-literal-datatype-not-iri`"
 msgstr "`gts-literal-datatype-not-iri`"
 
-#: src/project/diagnostic-codes.md:121
+#: src/project/diagnostic-codes.md:130
 msgid "A GTS literal datatype does not resolve to an IRI."
 msgstr "某个 GTS 字面量的数据类型未解析为 IRI。"
 
-#: src/project/diagnostic-codes.md:122
+#: src/project/diagnostic-codes.md:131
 msgid "`gts-direction-without-language`"
 msgstr "`gts-direction-without-language`"
 
-#: src/project/diagnostic-codes.md:122
+#: src/project/diagnostic-codes.md:131
 msgid "A GTS literal carries a base direction but no language tag."
 msgstr "某个 GTS 字面量带有基础方向，却没有语言标签。"
 
-#: src/project/diagnostic-codes.md:123
+#: src/project/diagnostic-codes.md:132
 msgid "`gts-invalid-direction`"
 msgstr "`gts-invalid-direction`"
 
-#: src/project/diagnostic-codes.md:123
+#: src/project/diagnostic-codes.md:132
 msgid "A GTS literal base direction is neither `ltr` nor `rtl`."
 msgstr "某个 GTS 字面量的基础方向既不是 `ltr` 也不是 `rtl`。"
 
-#: src/project/diagnostic-codes.md:124
+#: src/project/diagnostic-codes.md:133
 msgid "`gts-missing-reifier-binding`"
 msgstr "`gts-missing-reifier-binding`"
 
-#: src/project/diagnostic-codes.md:124
+#: src/project/diagnostic-codes.md:133
 msgid "A GTS triple term references a reifier the graph does not bind."
 msgstr "某个 GTS 三元组项引用了一个该图未绑定的具体化节点。"
 
-#: src/project/diagnostic-codes.md:125
+#: src/project/diagnostic-codes.md:134
 msgid "`gts-unbound-triple-term`"
 msgstr "`gts-unbound-triple-term`"
 
-#: src/project/diagnostic-codes.md:125
+#: src/project/diagnostic-codes.md:134
 msgid "A GTS triple term names neither its own components nor a reifier."
 msgstr "某个 GTS 三元组项既未给出其自身的组成部分，也未指明具体化节点。"
 
-#: src/project/diagnostic-codes.md:126
+#: src/project/diagnostic-codes.md:135
 msgid "`gts-self-reaching-term`"
 msgstr "`gts-self-reaching-term`"
 
-#: src/project/diagnostic-codes.md:126
+#: src/project/diagnostic-codes.md:135
 msgid ""
 "A GTS term resolves through itself, so no walk of its components can "
 "terminate."
 msgstr "某个 GTS 项经由其自身解析，因此对其组成部分的任何游走都无法终止。"
 
-#: src/project/diagnostic-codes.md:127
+#: src/project/diagnostic-codes.md:136
 msgid "`gts-term-nesting-limit`"
 msgstr "`gts-term-nesting-limit`"
 
-#: src/project/diagnostic-codes.md:127
+#: src/project/diagnostic-codes.md:136
 msgid "GTS term nesting exceeds the depth limit."
 msgstr "GTS 项嵌套超出了深度上限。"
 
-#: src/project/diagnostic-codes.md:128
+#: src/project/diagnostic-codes.md:137
 msgid "`gts-fold-diagnostic`"
 msgstr "`gts-fold-diagnostic`"
 
-#: src/project/diagnostic-codes.md:128
+#: src/project/diagnostic-codes.md:137
 msgid "The GTS fold reported one or more diagnostics."
 msgstr "GTS 折叠报告了一条或多条诊断。"
 
-#: src/project/diagnostic-codes.md:128
+#: src/project/diagnostic-codes.md:137
 msgid "Inspect the fold diagnostics listed in the detail."
 msgstr "检查详情中列出的折叠诊断。"
 
-#: src/project/diagnostic-codes.md:129
+#: src/project/diagnostic-codes.md:138
 msgid "`gts-verify-digest-inclusion`"
 msgstr "`gts-verify-digest-inclusion`"
 
-#: src/project/diagnostic-codes.md:129
+#: src/project/diagnostic-codes.md:138
 msgid "Content-addressed terms are not included in the verified chain."
 msgstr "内容寻址的 RDF 项未被包含在已验证的链中。"
 
-#: src/project/diagnostic-codes.md:129
+#: src/project/diagnostic-codes.md:138
 msgid "The container's chain does not cover its content; do not trust it."
 msgstr "该容器的链没有覆盖其内容；不要信任它。"
 
-#: src/project/diagnostic-codes.md:130
+#: src/project/diagnostic-codes.md:139
 msgid "`gts-verify-signature`"
 msgstr "`gts-verify-signature`"
 
-#: src/project/diagnostic-codes.md:130
+#: src/project/diagnostic-codes.md:139
 msgid "COSE signature verification failed."
 msgstr "COSE 签名验证失败。"
 
-#: src/project/diagnostic-codes.md:130
+#: src/project/diagnostic-codes.md:139
 msgid "Check the signing key and the container's integrity."
 msgstr "检查签名密钥与容器的完整性。"
 
-#: src/project/diagnostic-codes.md:131
+#: src/project/diagnostic-codes.md:140
 msgid "`gts-writer-codec`"
 msgstr "`gts-writer-codec`"
 
-#: src/project/diagnostic-codes.md:131
+#: src/project/diagnostic-codes.md:140
 msgid "The GTS writer's codec reported an error while writing."
 msgstr "GTS 写出器的编解码器在写出时报告了错误。"
 
-#: src/project/diagnostic-codes.md:131
+#: src/project/diagnostic-codes.md:140
 msgid "The codec's own error is in the message."
 msgstr "编解码器自身的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:132
+#: src/project/diagnostic-codes.md:141
 msgid "`rdf-graph-name-not-node`"
 msgstr "`rdf-graph-name-not-node`"
 
-#: src/project/diagnostic-codes.md:132
+#: src/project/diagnostic-codes.md:141
 msgid ""
 "While building a GTS graph, a named-graph name is not an IRI or blank node."
 msgstr "在构建 GTS 图时，某个命名图的名称不是 IRI 或空节点。"
 
-#: src/project/diagnostic-codes.md:132
+#: src/project/diagnostic-codes.md:141
 msgid "Use an IRI or blank node graph name."
 msgstr "使用 IRI 或空节点作为图名。"
 
-#: src/project/diagnostic-codes.md:133
+#: src/project/diagnostic-codes.md:142
 msgid "`rdf-reifier-not-node`"
 msgstr "`rdf-reifier-not-node`"
 
-#: src/project/diagnostic-codes.md:133
+#: src/project/diagnostic-codes.md:142
 msgid ""
 "While building a GTS graph, an RDF 1.2 reifier is not an IRI or blank node."
 msgstr "在构建 GTS 图时，某个 RDF 1.2 具体化节点不是 IRI 或空节点。"
 
-#: src/project/diagnostic-codes.md:133
+#: src/project/diagnostic-codes.md:142
 msgid "Use an IRI or blank node reifier."
 msgstr "使用 IRI 或空节点作为具体化节点。"
 
-#: src/project/diagnostic-codes.md:134
+#: src/project/diagnostic-codes.md:143
 msgid "`rdf-term-nesting-limit`"
 msgstr "`rdf-term-nesting-limit`"
 
-#: src/project/diagnostic-codes.md:134
+#: src/project/diagnostic-codes.md:143
 msgid "RDF term nesting exceeded the depth limit while building a GTS graph."
 msgstr "在构建 GTS 图时，RDF 项嵌套超出了深度上限。"
 
-#: src/project/diagnostic-codes.md:136
+#: src/project/diagnostic-codes.md:145
 msgid "`native-sparql-*` — the SPARQL engine boundary (`purrdf-sparql-eval`)"
 msgstr "`native-sparql-*`——SPARQL 引擎边界（`purrdf-sparql-eval`）"
 
-#: src/project/diagnostic-codes.md:140
+#: src/project/diagnostic-codes.md:149
 msgid "`native-sparql-query-parse`"
 msgstr "`native-sparql-query-parse`"
 
-#: src/project/diagnostic-codes.md:140
+#: src/project/diagnostic-codes.md:149
 msgid ""
 "The query text does not parse under the SPARQL 1.1/1.2 grammar (including "
 "the enforced `VERSION` declaration)."
 msgstr ""
 "查询文本无法按 SPARQL 1.1/1.2 语法解析（包括强制执行的 `VERSION` 声明）。"
 
-#: src/project/diagnostic-codes.md:140
+#: src/project/diagnostic-codes.md:149
 msgid "Fix the query at the reported position."
 msgstr "在所报告的位置修正查询。"
 
-#: src/project/diagnostic-codes.md:141
+#: src/project/diagnostic-codes.md:150
 msgid "`native-sparql-update-parse`"
 msgstr "`native-sparql-update-parse`"
 
-#: src/project/diagnostic-codes.md:141
+#: src/project/diagnostic-codes.md:150
 msgid "The update request does not parse."
 msgstr "更新请求无法解析。"
 
-#: src/project/diagnostic-codes.md:141
+#: src/project/diagnostic-codes.md:150
 msgid "Fix the update at the reported position."
 msgstr "在所报告的位置修正更新。"
 
-#: src/project/diagnostic-codes.md:142
+#: src/project/diagnostic-codes.md:151
 msgid "`native-sparql-query-explain`"
 msgstr "`native-sparql-query-explain`"
 
-#: src/project/diagnostic-codes.md:142
+#: src/project/diagnostic-codes.md:151
 msgid ""
 "Evaluation under `--explain` failed; the evaluator's error is in the message."
 msgstr "在 `--explain` 下求值失败；求值器的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:142 src/project/diagnostic-codes.md:143
-#: src/project/diagnostic-codes.md:144 src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:151 src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:156 src/project/diagnostic-codes.md:187
 msgid "Address the underlying evaluation error."
 msgstr "处理底层的求值错误。"
 
-#: src/project/diagnostic-codes.md:143
+#: src/project/diagnostic-codes.md:152
 msgid "`native-sparql-query-eval`"
 msgstr "`native-sparql-query-eval`"
 
-#: src/project/diagnostic-codes.md:143
+#: src/project/diagnostic-codes.md:152
 msgid ""
 "Query evaluation failed with an error no more specific code classifies; the "
 "evaluator's error is in the message."
 msgstr ""
 "查询求值失败，且没有更具体的代码对该错误分类；求值器的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:144
+#: src/project/diagnostic-codes.md:153
+msgid "`native-sparql-source-read`"
+msgstr "`native-sparql-source-read`"
+
+#: src/project/diagnostic-codes.md:153
+msgid ""
+"Operational storage refused a forward/reverse lookup or complete row drain. "
+"The error is fatal, including inside `SERVICE SILENT`; no partial answer is "
+"published."
+msgstr "存储操作拒绝了正向/反向查找或完整的行迭代消费。这是致命错误，即使在 `SERVICE SILENT` 内也如此；不会发布部分答案。"
+
+#: src/project/diagnostic-codes.md:153
+msgid ""
+"Repair the source or adjust its explicit resource limits before retrying."
+msgstr "修复源或调整其明确的资源限制，然后再重试。"
+
+#: src/project/diagnostic-codes.md:154
+msgid "`native-sparql-workspace-unpriced`"
+msgstr "`native-sparql-workspace-unpriced`"
+
+#: src/project/diagnostic-codes.md:154
+msgid ""
+"A bounded operational view was given an execution shape without a certified "
+"working-memory bound, or a raw evaluator entry without a held drain "
+"reservation."
+msgstr "有界的存储操作视图收到了一种没有经过认证的工作内存上界的执行形式，或在未持有行迭代消费预留的情况下调用了原始求值器入口。"
+
+#: src/project/diagnostic-codes.md:154
+msgid ""
+"Use the engine's fallible projected basic-graph-pattern `SELECT` entry with "
+"its default dataset and empty extension configuration, or choose a resident "
+"view."
+msgstr "使用引擎中可返回操作错误的基本图模式投影 `SELECT` 入口，并采用其默认数据集和空的扩展配置，或者选择驻留视图。"
+
+#: src/project/diagnostic-codes.md:155
+msgid "`native-sparql-workspace-bound-overflow`"
+msgstr "`native-sparql-workspace-bound-overflow`"
+
+#: src/project/diagnostic-codes.md:155
+msgid "Certified workspace arithmetic exceeds `u64`."
+msgstr "经过认证的工作内存上界计算超出了 `u64`。"
+
+#: src/project/diagnostic-codes.md:155
+msgid "Reduce the query's intermediate cardinality or pattern count."
+msgstr "降低查询的中间结果基数或模式数量。"
+
+#: src/project/diagnostic-codes.md:156
 msgid "`native-sparql-update-eval`"
 msgstr "`native-sparql-update-eval`"
 
-#: src/project/diagnostic-codes.md:144
+#: src/project/diagnostic-codes.md:156
 msgid ""
 "Update evaluation failed with an error no more specific code classifies; the "
 "evaluator's error is in the message."
 msgstr ""
 "更新求值失败，且没有更具体的代码对该错误分类；求值器的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:145
+#: src/project/diagnostic-codes.md:157
 msgid "`native-sparql-algebra`"
 msgstr "`native-sparql-algebra`"
 
-#: src/project/diagnostic-codes.md:145
+#: src/project/diagnostic-codes.md:157
 msgid ""
 "The query's algebra was refused before evaluation: `Query::validate` refused "
 "it, or a prepared plan needs replanning for the registries this evaluation "
@@ -22278,43 +22379,43 @@ msgstr ""
 "查询的代数在求值之前被拒绝：`Query::validate` 拒绝了它，或者某个预备好的计划"
 "需要针对本次求值提供的注册表重新规划。"
 
-#: src/project/diagnostic-codes.md:145
+#: src/project/diagnostic-codes.md:157
 msgid ""
 "Fix the query as the message says, or prepare the changed algebra before "
 "executing it."
 msgstr "按消息所说修正查询，或在执行之前预备改动后的代数。"
 
-#: src/project/diagnostic-codes.md:146
+#: src/project/diagnostic-codes.md:158
 msgid "`native-sparql-construct`"
 msgstr "`native-sparql-construct`"
 
-#: src/project/diagnostic-codes.md:146
+#: src/project/diagnostic-codes.md:158
 msgid "Typed graph building was handed a query that is not a `CONSTRUCT`."
 msgstr "类型化的图构建收到的查询不是 `CONSTRUCT`。"
 
-#: src/project/diagnostic-codes.md:146
+#: src/project/diagnostic-codes.md:158
 msgid "Build graphs from a `CONSTRUCT` query."
 msgstr "用 `CONSTRUCT` 查询构建图。"
 
-#: src/project/diagnostic-codes.md:147
+#: src/project/diagnostic-codes.md:159
 msgid "`native-sparql-execution-parameter`"
 msgstr "`native-sparql-execution-parameter`"
 
-#: src/project/diagnostic-codes.md:147
+#: src/project/diagnostic-codes.md:159
 msgid ""
 "A prepared execution was given a parameter name or slot it does not declare."
 msgstr "预备好的执行收到了它未声明的参数名或槽位。"
 
-#: src/project/diagnostic-codes.md:147
+#: src/project/diagnostic-codes.md:159
 msgid ""
 "Bind only the parameters the execution declares; the message lists them."
 msgstr "只绑定该执行所声明的参数；消息中列出了它们。"
 
-#: src/project/diagnostic-codes.md:148
+#: src/project/diagnostic-codes.md:160
 msgid "`native-sparql-relation-incomplete`"
 msgstr "`native-sparql-relation-incomplete`"
 
-#: src/project/diagnostic-codes.md:148
+#: src/project/diagnostic-codes.md:160
 msgid ""
 "A property-function relation answered from less than all of its data on an "
 "entry that has no evidence slot to label the short answer (the ungoverned "
@@ -22324,7 +22425,7 @@ msgstr ""
 "证据槽（不受管控的查询通道，以及 UPDATE）。消息会指名该关系及其自身给出的原"
 "因。"
 
-#: src/project/diagnostic-codes.md:148
+#: src/project/diagnostic-codes.md:160
 msgid ""
 "Run the query on a governed entry, whose receipt carries the relation's "
 "witness, or wait for the relation to be complete."
@@ -22332,11 +22433,11 @@ msgstr ""
 "在受 governor 管控的入口上运行查询——其回执携带该关系的见证——或等待该关系完"
 "整。"
 
-#: src/project/diagnostic-codes.md:149
+#: src/project/diagnostic-codes.md:161
 msgid "`native-sparql-property-function`"
 msgstr "`native-sparql-property-function`"
 
-#: src/project/diagnostic-codes.md:149
+#: src/project/diagnostic-codes.md:161
 msgid ""
 "The property-function seam refused the query: a predicate under a declared "
 "namespace has no registration, a call site's arity does not match the "
@@ -22347,17 +22448,17 @@ msgstr ""
 "有注册，某个调用点的元数与该关系不匹配，没有任何全序能用于某条链，或者一个预"
 "备好的计划正在一个与其预备时不同的注册表下求值。"
 
-#: src/project/diagnostic-codes.md:149
+#: src/project/diagnostic-codes.md:161
 msgid ""
 "Register the relation, correct the arity, or prepare and evaluate under the "
 "same registry."
 msgstr "注册该关系、更正元数，或在同一个注册表下预备并求值。"
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:162
 msgid "`native-sparql-aggregate-function`"
 msgstr "`native-sparql-aggregate-function`"
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:162
 msgid ""
 "The custom-aggregate seam refused the query: an `AGG(<iri>, …)` names no "
 "registered aggregate, or a prepared plan is being evaluated under a "
@@ -22366,16 +22467,16 @@ msgstr ""
 "自定义聚合扩展点拒绝了该查询：某个 `AGG(<iri>, …)` 没有指向任何已注册的聚合，"
 "或者一个预备好的计划正在另一个聚合注册表下求值。"
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:162
 msgid ""
 "Register the aggregate, or prepare and evaluate under the same registry."
 msgstr "注册该聚合，或在同一个注册表下预备并求值。"
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:163
 msgid "`native-sparql-custom-function`"
 msgstr "`native-sparql-custom-function`"
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:163
 msgid ""
 "A function or aggregate IRI resolved to no registered custom function, "
 "native function, or XSD constructor."
@@ -22383,15 +22484,15 @@ msgstr ""
 "某个函数或聚合 IRI 没有解析到任何已注册的自定义函数、原生函数或 XSD 构造函"
 "数。"
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:163
 msgid "Register the function under that IRI, or use a native one."
 msgstr "在该 IRI 下注册函数，或使用原生函数。"
 
-#: src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:164
 msgid "`native-sparql-quoted-triple-term-variable`"
 msgstr "`native-sparql-quoted-triple-term-variable`"
 
-#: src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:164
 msgid ""
 "A variable occupies a component of a quoted-triple term in a basic graph "
 "pattern or property path; structural triple-term matching is out of scope."
@@ -22399,31 +22500,31 @@ msgstr ""
 "在基本图模式或属性路径中，某个变量占据了引用三元组项的一个组成部分；结构化的"
 "三元组项匹配不在支持范围之内。"
 
-#: src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:164
 msgid ""
 "Bind the triple term as a whole, or match its components through the reifier "
 "surface."
 msgstr "把三元组项作为整体绑定，或通过具体化节点接口匹配其组成部分。"
 
-#: src/project/diagnostic-codes.md:153
+#: src/project/diagnostic-codes.md:165
 msgid "`native-sparql-heldin-unconfigured`"
 msgstr "`native-sparql-heldin-unconfigured`"
 
-#: src/project/diagnostic-codes.md:153
+#: src/project/diagnostic-codes.md:165
 msgid ""
 "`heldIn` was called with no caller-supplied standpoint-predicate "
 "configuration."
 msgstr "调用 `heldIn` 时没有调用方提供的 standpoint（立场）谓词配置。"
 
-#: src/project/diagnostic-codes.md:153
+#: src/project/diagnostic-codes.md:165
 msgid "Configure the standpoint predicates before using `heldIn`."
 msgstr "在使用 `heldIn` 之前先配置 standpoint 谓词。"
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:166
 msgid "`native-sparql-evaluation-stack-exhausted`"
 msgstr "`native-sparql-evaluation-stack-exhausted`"
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:166
 msgid ""
 "The request nests deeper than the stack of the thread evaluating it can "
 "hold: before its recursive passes run, the evaluator measures the whole "
@@ -22438,7 +22539,7 @@ msgstr ""
 "并在耗尽之前拒绝，而不是让进程中止或让 wasm 实例陷入 trap。解析器已接受该请"
 "求，在更大的栈上同一请求可以得到应答。"
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:166
 msgid ""
 "Evaluate on a native thread spawned with more stack, or nest the request "
 "less deeply. In wasm both lanes run on stacks of the same size — an "
@@ -22450,11 +22551,11 @@ msgstr ""
 "运行在大小相同的栈上——异步作业的栈区域与模块自身的影子栈完全一样大——因此在那"
 "里的补救办法是减少嵌套深度，消息也不会给出其他办法。"
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:167
 msgid "`native-sparql-unsupported`"
 msgstr "`native-sparql-unsupported`"
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:167
 msgid ""
 "The request is well-formed but uses something this engine refuses to "
 "evaluate as written — for example a `SERVICE ?e` for which no solution names "
@@ -22467,15 +22568,15 @@ msgstr ""
 "`VERSION`。消息会指出具体是什么，并在可行时给出改写方式。Cloudflare 适配器以 "
 "`400` 应答。"
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:167
 msgid "Rewrite the request as the message says."
 msgstr "按消息所述改写请求。"
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:168
 msgid "`native-sparql-host-stack-exhausted`"
 msgstr "`native-sparql-host-stack-exhausted`"
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:168
 msgid ""
 "wasm only: the request nests deeper than the JavaScript engine's own call "
 "stack holds. PurRDF keeps a fixed 640 KiB budget of that stack for "
@@ -22492,27 +22593,27 @@ msgstr ""
 "通道和异步作业分配的栈相同，因此超出预算的计划会在运行之前被拒绝，两条通道一"
 "致。解析不消耗该栈的任何部分。Cloudflare 适配器以 `400` 应答。"
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:168
 msgid "Nest the request less deeply."
 msgstr "减少请求的嵌套深度。"
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:169
 msgid "`native-sparql-bnode-mint-prefix`"
 msgstr "`native-sparql-bnode-mint-prefix`"
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:169
 msgid "The blank-node mint prefix supplied in the options is invalid."
 msgstr "选项中提供的空节点生成前缀无效。"
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:169
 msgid "Supply a valid prefix."
 msgstr "提供一个有效的前缀。"
 
-#: src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:170
 msgid "`native-sparql-service-denied`"
 msgstr "`native-sparql-service-denied`"
 
-#: src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:170
 msgid ""
 "An installed `ServiceCatalog` withheld a capability from a `SERVICE` "
 "endpoint the request names — the endpoint has no profile, or its profile "
@@ -22525,16 +22626,16 @@ msgstr ""
 "端点。在 `SERVICE SILENT` 下该子句则是连接的单位元，并记录为一次被静默的 "
 "`denied` 调用。Cloudflare 适配器以 `403` 应答。"
 
-#: src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:170
 msgid ""
 "Grant the endpoint the capability in the catalog, or remove the `SERVICE`."
 msgstr "在目录中为该端点授予该能力，或去掉 `SERVICE`。"
 
-#: src/project/diagnostic-codes.md:159
+#: src/project/diagnostic-codes.md:171
 msgid "`native-sparql-service-host-denied`"
 msgstr "`native-sparql-service-host-denied`"
 
-#: src/project/diagnostic-codes.md:159
+#: src/project/diagnostic-codes.md:171
 msgid ""
 "The host's own service resolver refused a `SERVICE` request by its own "
 "policy, naming no catalog capability — for example a JavaScript "
@@ -22548,15 +22649,15 @@ msgstr ""
 "因此没有联系任何端点。在 `SERVICE SILENT` 下该子句则是连接的单位元，并记录为"
 "一次被静默的 `host-denied` 调用。Cloudflare 适配器以 `403` 应答。"
 
-#: src/project/diagnostic-codes.md:159
+#: src/project/diagnostic-codes.md:171
 msgid "Allow the request in the host's policy, or remove the `SERVICE`."
 msgstr "在宿主策略中允许该请求，或去掉 `SERVICE`。"
 
-#: src/project/diagnostic-codes.md:160
+#: src/project/diagnostic-codes.md:172
 msgid "`native-sparql-service-failed`"
 msgstr "`native-sparql-service-failed`"
 
-#: src/project/diagnostic-codes.md:160
+#: src/project/diagnostic-codes.md:172
 msgid ""
 "A `SERVICE` endpoint was contacted and gave no usable answer: a transport "
 "failure, an HTTP error status, a redirect, a timeout of the resolver's own, "
@@ -22568,15 +22669,15 @@ msgstr ""
 "重定向、解析器自身的超时，或无法解码的响应体。在 `SERVICE SILENT` 下该子句则"
 "是连接的单位元，并记录为一次被静默的调用。Cloudflare 适配器以 `502` 应答。"
 
-#: src/project/diagnostic-codes.md:160
+#: src/project/diagnostic-codes.md:172
 msgid "Make the endpoint reachable, or write `SERVICE SILENT`."
 msgstr "让该端点可达，或写作 `SERVICE SILENT`。"
 
-#: src/project/diagnostic-codes.md:161
+#: src/project/diagnostic-codes.md:173
 msgid "`native-sparql-service-unconfigured`"
 msgstr "`native-sparql-service-unconfigured`"
 
-#: src/project/diagnostic-codes.md:161
+#: src/project/diagnostic-codes.md:173
 msgid ""
 "No remote query source reaches a `SERVICE` endpoint the request names: none "
 "was configured, or the configured one answers that nothing it holds reaches "
@@ -22589,15 +22690,15 @@ msgstr ""
 "子句则是连接的单位元，并记录为一次被静默的 `unconfigured` 调用。Cloudflare 适"
 "配器以 `500` 应答。"
 
-#: src/project/diagnostic-codes.md:161
+#: src/project/diagnostic-codes.md:173
 msgid "Configure a source that reaches the endpoint, or remove the `SERVICE`."
 msgstr "配置一个能到达该端点的来源，或去掉 `SERVICE`。"
 
-#: src/project/diagnostic-codes.md:162
+#: src/project/diagnostic-codes.md:174
 msgid "`native-sparql-load-no-resolver`"
 msgstr "`native-sparql-load-no-resolver`"
 
-#: src/project/diagnostic-codes.md:162
+#: src/project/diagnostic-codes.md:174
 msgid ""
 "`LOAD <iri>` was requested but no `GraphResolver` host seam was provided. "
 "`LOAD SILENT` succeeds instead with nothing loaded, recorded as a silenced "
@@ -22606,15 +22707,15 @@ msgstr ""
 "请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主扩展点。`LOAD SILENT` 则"
 "会成功返回、不加载任何内容，并记录为一次被静默的 `unconfigured` 调用。"
 
-#: src/project/diagnostic-codes.md:162
+#: src/project/diagnostic-codes.md:174
 msgid "Inject a resolver, or remove the `LOAD`."
 msgstr "注入一个解析器，或去掉该 `LOAD`。"
 
-#: src/project/diagnostic-codes.md:163
+#: src/project/diagnostic-codes.md:175
 msgid "`native-sparql-load-denied`"
 msgstr "`native-sparql-load-denied`"
 
-#: src/project/diagnostic-codes.md:163
+#: src/project/diagnostic-codes.md:175
 msgid ""
 "An installed `ServiceCatalog` withheld a capability from the `LOAD` source "
 "(`LoadError::Denied`) — the source, or a location a redirect named, has no "
@@ -22628,15 +22729,15 @@ msgstr ""
 "不加载任何内容，并记录为一次被静默的 `denied` 调用。Cloudflare 适配器以 "
 "`403` 应答。"
 
-#: src/project/diagnostic-codes.md:163
+#: src/project/diagnostic-codes.md:175
 msgid "Grant the source `network` in the catalog, or remove the `LOAD`."
 msgstr "在目录中为该来源授予 `network`，或去掉 `LOAD`。"
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:176
 msgid "`native-sparql-load-host-denied`"
 msgstr "`native-sparql-load-host-denied`"
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:176
 msgid ""
 "The host's own `LOAD` resolver refused the source by its own policy, naming "
 "no catalog capability (`LoadError::HostDenied`) — for example a JavaScript "
@@ -22649,15 +22750,15 @@ msgstr ""
 "`{ kind: \"denied\" }`。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为"
 "一次被静默的 `host-denied` 调用。Cloudflare 适配器以 `403` 应答。"
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:176
 msgid "Allow the source in the host's policy, or remove the `LOAD`."
 msgstr "在宿主策略中允许该来源，或去掉 `LOAD`。"
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:177
 msgid "`native-sparql-load-failed`"
 msgstr "`native-sparql-load-failed`"
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:177
 msgid ""
 "A `GraphResolver` could not fetch the document (`LoadError::Transport`) — "
 "for example the wasm package's asynchronous `resolveLoad` answered `{ kind: "
@@ -22671,15 +22772,15 @@ msgstr ""
 "时，或跟随了五次以上的重定向。`LOAD SILENT` 则会成功返回、不加载任何内容，并"
 "记录为一次被静默的调用。Cloudflare 适配器以 `502` 应答。"
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:177
 msgid "Make the source reachable, or write `LOAD SILENT`."
 msgstr "让该来源可达，或写作 `LOAD SILENT`。"
 
-#: src/project/diagnostic-codes.md:166
+#: src/project/diagnostic-codes.md:178
 msgid "`native-sparql-load-decode`"
 msgstr "`native-sparql-load-decode`"
 
-#: src/project/diagnostic-codes.md:166
+#: src/project/diagnostic-codes.md:178
 msgid ""
 "A `GraphResolver` fetched the document and could not parse it "
 "(`LoadError::Decode`) — for example the wasm package's asynchronous "
@@ -22693,16 +22794,16 @@ msgstr ""
 "所指名的语法。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默"
 "的调用。Cloudflare 适配器以 `502` 应答。"
 
-#: src/project/diagnostic-codes.md:166
+#: src/project/diagnostic-codes.md:178
 msgid ""
 "Serve a document in a syntax the resolver parses, or write `LOAD SILENT`."
 msgstr "以解析器能够解析的语法提供文档，或写作 `LOAD SILENT`。"
 
-#: src/project/diagnostic-codes.md:167
+#: src/project/diagnostic-codes.md:179
 msgid "`native-sparql-load-stopped`"
 msgstr "`native-sparql-load-stopped`"
 
-#: src/project/diagnostic-codes.md:167
+#: src/project/diagnostic-codes.md:179
 msgid ""
 "The request's own stop signal (a cancellation or the deadline) fired while a "
 "`LOAD` was awaited (`LoadError::Governed`). A governed request reports the "
@@ -22712,15 +22813,15 @@ msgstr ""
 "（`LoadError::Governed`）。受 governor 管控的请求报告的是 governor 触发，而不"
 "是这个代码，无论是否写了 `SILENT`。"
 
-#: src/project/diagnostic-codes.md:167
+#: src/project/diagnostic-codes.md:179
 msgid "Raise the deadline, or do not cancel the job."
 msgstr "放宽截止时间，或不要取消该作业。"
 
-#: src/project/diagnostic-codes.md:168
+#: src/project/diagnostic-codes.md:180
 msgid "`native-sparql-load-fault`"
 msgstr "`native-sparql-load-fault`"
 
-#: src/project/diagnostic-codes.md:168
+#: src/project/diagnostic-codes.md:180
 msgid ""
 "A `GraphResolver`'s handler faulted (`LoadError::Fault`) — for example the "
 "wasm package's asynchronous `resolveLoad` threw, rejected, answered with "
@@ -22736,7 +22837,7 @@ msgstr ""
 "载任何内容，并记录为一次被静默的 `fault` 调用。Cloudflare 适配器以经过清理的 "
 "`500` 应答，真正的原话以关联 id 写入其日志。"
 
-#: src/project/diagnostic-codes.md:168
+#: src/project/diagnostic-codes.md:180
 msgid ""
 "Return a document with its media type, a `Response`, a `Dataset`, a redirect "
 "or a typed failure — never throw."
@@ -22744,11 +22845,11 @@ msgstr ""
 "返回一份带媒体类型的文档、一个 `Response`、一个 `Dataset`、一次重定向或一个带"
 "类型的失败——绝不要抛出异常。"
 
-#: src/project/diagnostic-codes.md:169
+#: src/project/diagnostic-codes.md:181
 msgid "`native-sparql-cancelled`"
 msgstr "`native-sparql-cancelled`"
 
-#: src/project/diagnostic-codes.md:169
+#: src/project/diagnostic-codes.md:181
 msgid ""
 "wasm asynchronous lane: an ungoverned operation was cancelled (its "
 "`AbortSignal` fired). A governed operation reports the trip on its outcome "
@@ -22757,15 +22858,15 @@ msgstr ""
 "wasm 异步通道：一个不受 governor 管控的操作被取消（其 `AbortSignal` 已触"
 "发）。受管控的操作则在其结果中报告这次触发。Cloudflare 适配器以 `503` 应答。"
 
-#: src/project/diagnostic-codes.md:169
+#: src/project/diagnostic-codes.md:181
 msgid "Do not cancel the operation."
 msgstr "不要取消该操作。"
 
-#: src/project/diagnostic-codes.md:170
+#: src/project/diagnostic-codes.md:182
 msgid "`native-sparql-deadline`"
 msgstr "`native-sparql-deadline`"
 
-#: src/project/diagnostic-codes.md:170
+#: src/project/diagnostic-codes.md:182
 msgid ""
 "wasm asynchronous lane: an ungoverned operation's deadline passed. The "
 "Cloudflare adapter answers it with a `503`."
@@ -22773,15 +22874,15 @@ msgstr ""
 "wasm 异步通道：一个不受 governor 管控的操作超过了截止时间。Cloudflare 适配器"
 "以 `503` 应答。"
 
-#: src/project/diagnostic-codes.md:170
+#: src/project/diagnostic-codes.md:182
 msgid "Raise the deadline."
 msgstr "放宽截止时间。"
 
-#: src/project/diagnostic-codes.md:171
+#: src/project/diagnostic-codes.md:183
 msgid "`native-sparql-not-acceptable`"
 msgstr "`native-sparql-not-acceptable`"
 
-#: src/project/diagnostic-codes.md:171
+#: src/project/diagnostic-codes.md:183
 msgid ""
 "wasm asynchronous lane: a negotiated query's result — a graph carrying named "
 "graphs — can be carried by no format the `Accept` header allows. The "
@@ -22791,15 +22892,15 @@ msgstr ""
 "头允许的格式能够承载。Cloudflare 适配器以 `406` 应答，并列出能够承载它的格"
 "式。"
 
-#: src/project/diagnostic-codes.md:171
+#: src/project/diagnostic-codes.md:183
 msgid "Accept TriG, N-Quads or JSON-LD."
 msgstr "接受 TriG、N-Quads 或 JSON-LD。"
 
-#: src/project/diagnostic-codes.md:172
+#: src/project/diagnostic-codes.md:184
 msgid "`native-sparql-update-in-flight`"
 msgstr "`native-sparql-update-in-flight`"
 
-#: src/project/diagnostic-codes.md:172
+#: src/project/diagnostic-codes.md:184
 msgid ""
 "wasm asynchronous lane: an asynchronous update of the same dataset is "
 "already in flight, or the dataset was mutated while the update ran, so the "
@@ -22810,15 +22911,15 @@ msgstr ""
 "修改，因此该更新被拒绝，而不是针对一个它从未见过的状态求值（或提交在其之"
 "上）。Cloudflare 适配器以 `409` 应答。"
 
-#: src/project/diagnostic-codes.md:172
+#: src/project/diagnostic-codes.md:184
 msgid "Await the first update, then send the next."
 msgstr "等待第一个更新完成，再发送下一个。"
 
-#: src/project/diagnostic-codes.md:173
+#: src/project/diagnostic-codes.md:185
 msgid "`native-sparql-host-fault`"
 msgstr "`native-sparql-host-fault`"
 
-#: src/project/diagnostic-codes.md:173
+#: src/project/diagnostic-codes.md:185
 msgid ""
 "The host, not the request and not an endpoint, failed: a `SERVICE` source's "
 "handler faulted (`EvalError::ServiceHostFault`) — for example a wasm "
@@ -22838,15 +22939,15 @@ msgstr ""
 "被破坏，或其栈帧覆写了其栈区域的金丝雀字。Cloudflare 适配器以经过清理的 "
 "`500` 应答，真正的原话以关联 id 写入其日志。"
 
-#: src/project/diagnostic-codes.md:173
+#: src/project/diagnostic-codes.md:185
 msgid "Fix the host handler."
 msgstr "修正宿主的处理函数。"
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:186
 msgid "`native-sparql-governor-ceiling`"
 msgstr "`native-sparql-governor-ceiling`"
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:186
 msgid ""
 "Protocol boundary: a deterministic governor ceiling stopped the operation — "
 "it was reached, or the planner's estimate already exceeded it. The "
@@ -22857,15 +22958,15 @@ msgstr ""
 "已经超出。操作的结果携带这次触发；这是宿主据以应答它的 problem 的 `code`"
 "（Cloudflare 适配器的 `422`）。"
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:186
 msgid "Raise the ceiling, or narrow the request."
 msgstr "提高上限，或收窄请求。"
 
-#: src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:187
 msgid "`native-sparql-evaluation`"
 msgstr "`native-sparql-evaluation`"
 
-#: src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:187
 msgid ""
 "Protocol boundary: the operation's evaluation failed with no more specific "
 "code; the problem's `code` a host answers it with."
@@ -22873,11 +22974,11 @@ msgstr ""
 "协议边界：操作的求值失败，且没有更具体的代码；这是宿主据以应答它的 problem "
 "的 `code`。"
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:188
 msgid "`native-sparql-update-bad-destination`"
 msgstr "`native-sparql-update-bad-destination`"
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:188
 msgid ""
 "An `ADD`/`MOVE`/`COPY`/`LOAD` destination is `NAMED` or `ALL`; it must be "
 "`DEFAULT` or a single named `GRAPH`."
@@ -22885,65 +22986,65 @@ msgstr ""
 "`ADD`/`MOVE`/`COPY`/`LOAD` 的目标是 `NAMED` 或 `ALL`；它必须是 `DEFAULT` 或单"
 "个命名的 `GRAPH`。"
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:188
 msgid "Name a single destination graph."
 msgstr "指定单个目标图。"
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:189
 msgid "`native-sparql-subst-iri`"
 msgstr "`native-sparql-subst-iri`"
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:189
 msgid "A substitution value is not a valid IRI."
 msgstr "某个替换值不是有效的 IRI。"
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:189
 msgid "Supply a valid IRI."
 msgstr "提供一个有效的 IRI。"
 
-#: src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:190
 msgid "`native-sparql-subst-triple-predicate`"
 msgstr "`native-sparql-subst-triple-predicate`"
 
-#: src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:190
 msgid "A substituted quoted triple has a predicate that is not an IRI."
 msgstr "某个被替换的引用三元组的谓词不是 IRI。"
 
-#: src/project/diagnostic-codes.md:179
+#: src/project/diagnostic-codes.md:191
 msgid "`native-sparql-subst-literal-datatype`"
 msgstr "`native-sparql-subst-literal-datatype`"
 
-#: src/project/diagnostic-codes.md:179
+#: src/project/diagnostic-codes.md:191
 msgid "A substituted literal's datatype is not an IRI."
 msgstr "被替换的字面量的数据类型不是 IRI。"
 
-#: src/project/diagnostic-codes.md:179
+#: src/project/diagnostic-codes.md:191
 msgid "Use an IRI datatype."
 msgstr "使用 IRI 数据类型。"
 
-#: src/project/diagnostic-codes.md:180
+#: src/project/diagnostic-codes.md:192
 msgid "`native-sparql-subst-langtag`"
 msgstr "`native-sparql-subst-langtag`"
 
-#: src/project/diagnostic-codes.md:180
+#: src/project/diagnostic-codes.md:192
 msgid ""
 "A pre-bound literal's language tag is not one the lexing profile accepts."
 msgstr "预绑定字面量的语言标签不是该词法 profile 所接受的。"
 
-#: src/project/diagnostic-codes.md:180
+#: src/project/diagnostic-codes.md:192
 msgid "Supply a well-formed language tag."
 msgstr "提供一个良构的语言标签。"
 
-#: src/project/diagnostic-codes.md:182
+#: src/project/diagnostic-codes.md:194
 msgid "`reasoning-*` — SPARQL under an entailment regime (`purrdf`)"
 msgstr ""
 "`reasoning-*`——在蕴涵机制（entailment regime）下执行的 SPARQL（`purrdf`）"
 
-#: src/project/diagnostic-codes.md:186
+#: src/project/diagnostic-codes.md:198
 msgid "`reasoning-closure-relation-witness`"
 msgstr "`reasoning-closure-relation-witness`"
 
-#: src/project/diagnostic-codes.md:186
+#: src/project/diagnostic-codes.md:198
 msgid ""
 "Property-function relations derived from the closure cannot be combined with "
 "an OWL Direct-Semantics run whose restricted chase minted existential "
@@ -22954,7 +23055,7 @@ msgstr ""
 "Direct-Semantics 运行组合使用：遍历闭包的关系可能返回一个生成的空节点，而该机"
 "制的作用域图并不包含它。"
 
-#: src/project/diagnostic-codes.md:186
+#: src/project/diagnostic-codes.md:198
 msgid ""
 "Query under a regime that mints no witnesses (`rdf`, `rdfs`, `owl-rl`, `d`, "
 "`rif`, `simple`), or drop the dataset-derived relations from the call."
@@ -22962,98 +23063,98 @@ msgstr ""
 "在不生成见证的机制（`rdf`、`rdfs`、`owl-rl`、`d`、`rif`、`simple`）下查询，或"
 "从该调用中去掉由数据集派生的关系。"
 
-#: src/project/diagnostic-codes.md:187
+#: src/project/diagnostic-codes.md:199
 msgid "`reasoning-closure-relation-rebuild`"
 msgstr "`reasoning-closure-relation-rebuild`"
 
-#: src/project/diagnostic-codes.md:187
+#: src/project/diagnostic-codes.md:199
 msgid "Rebuilding the property-function relations over the closure failed."
 msgstr "在推理闭包上重建属性函数关系失败。"
 
-#: src/project/diagnostic-codes.md:187
+#: src/project/diagnostic-codes.md:199
 msgid "The relation builder's own error is in the message."
 msgstr "关系构建器自身的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:189
+#: src/project/diagnostic-codes.md:201
 msgid "`statements-*` — statement-metadata ingestion (`purrdf-rdf`)"
 msgstr "`statements-*`——陈述元数据的摄入（`purrdf-rdf`）"
 
-#: src/project/diagnostic-codes.md:191
+#: src/project/diagnostic-codes.md:203
 msgid ""
 "These arise when a document's `rdf:reifies` and `owl:Axiom` statements are "
 "read into the statement layer."
 msgstr ""
 "当把文档的 `rdf:reifies` 与 `owl:Axiom` 陈述读入陈述层时，会出现这些代码。"
 
-#: src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:208
 msgid "`statements-turtle-parse`"
 msgstr "`statements-turtle-parse`"
 
-#: src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:208
 msgid "The statement-metadata Turtle failed to parse."
 msgstr "陈述元数据 Turtle 解析失败。"
 
-#: src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:208
 msgid "Fix the Turtle."
 msgstr "修正该 Turtle。"
 
-#: src/project/diagnostic-codes.md:197
+#: src/project/diagnostic-codes.md:209
 msgid "`statements-non-iri`"
 msgstr "`statements-non-iri`"
 
-#: src/project/diagnostic-codes.md:197
+#: src/project/diagnostic-codes.md:209
 msgid "A term that must be an IRI in this context is not one."
 msgstr "在此上下文中必须是 IRI 的某个项不是 IRI。"
 
-#: src/project/diagnostic-codes.md:197
+#: src/project/diagnostic-codes.md:209
 msgid "Use an IRI."
 msgstr "使用 IRI。"
 
-#: src/project/diagnostic-codes.md:198
+#: src/project/diagnostic-codes.md:210
 msgid "`statements-reifies-non-triple`"
 msgstr "`statements-reifies-non-triple`"
 
-#: src/project/diagnostic-codes.md:198
+#: src/project/diagnostic-codes.md:210
 msgid "The object of `rdf:reifies` is not a triple term."
 msgstr "`rdf:reifies` 的宾语不是三元组项。"
 
-#: src/project/diagnostic-codes.md:198
+#: src/project/diagnostic-codes.md:210
 msgid "Reify a triple term."
 msgstr "对一个三元组项进行具体化。"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:211
 msgid "`statements-malformed-axiom`"
 msgstr "`statements-malformed-axiom`"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:211
 msgid "An `owl:Axiom` lacks its source, property or target."
 msgstr "某个 `owl:Axiom` 缺少其源、属性或目标。"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:211
 msgid "Complete the axiom."
 msgstr "补全该公理。"
 
-#: src/project/diagnostic-codes.md:200
+#: src/project/diagnostic-codes.md:212
 msgid "`statements-conflicting-structural`"
 msgstr "`statements-conflicting-structural`"
 
-#: src/project/diagnostic-codes.md:200
+#: src/project/diagnostic-codes.md:212
 msgid "One subject carries two different values for a structural field."
 msgstr "同一个主语在某个结构字段上带有两个不同的值。"
 
-#: src/project/diagnostic-codes.md:200
+#: src/project/diagnostic-codes.md:212
 msgid "Keep one value."
 msgstr "只保留一个值。"
 
-#: src/project/diagnostic-codes.md:202
+#: src/project/diagnostic-codes.md:214
 msgid "Other single-code families"
 msgstr "其他单代码族"
 
-#: src/project/diagnostic-codes.md:206
+#: src/project/diagnostic-codes.md:218
 msgid "`sssom-tsv-parse`"
 msgstr "`sssom-tsv-parse`"
 
-#: src/project/diagnostic-codes.md:206
+#: src/project/diagnostic-codes.md:218
 msgid ""
 "An SSSOM TSV document is malformed: a missing or unreadable header row, a "
 "malformed `curie_map` entry or set comment, a malformed row, or a non-"
@@ -23062,15 +23163,15 @@ msgstr ""
 "某个 SSSOM TSV 文档格式错误：缺少表头行或表头行不可读、`curie_map` 条目或集合"
 "注释格式错误、某行格式错误，或置信度不是数值；位置信息指明所在行。"
 
-#: src/project/diagnostic-codes.md:206
+#: src/project/diagnostic-codes.md:218
 msgid "Fix the TSV at the reported line."
 msgstr "在所报告的行修正该 TSV。"
 
-#: src/project/diagnostic-codes.md:207
+#: src/project/diagnostic-codes.md:219
 msgid "`content-id-scheme`"
 msgstr "`content-id-scheme`"
 
-#: src/project/diagnostic-codes.md:207
+#: src/project/diagnostic-codes.md:219
 msgid ""
 "A content-id scheme prefix is invalid: empty, non-ASCII, or ending in a "
 "hexadecimal digit (which would make it ambiguous with the 64-hex-character "
@@ -23079,17 +23180,17 @@ msgstr ""
 "某个内容 id 的 scheme 前缀无效：为空、含非 ASCII 字符，或以十六进制数字结尾"
 "（这会使它与 64 个十六进制字符的尾部产生歧义）。"
 
-#: src/project/diagnostic-codes.md:207
+#: src/project/diagnostic-codes.md:219
 msgid ""
 "Choose a prefix that is non-empty ASCII and does not end in `0-9`, `a-f` or "
 "`A-F`."
 msgstr "选择一个非空、纯 ASCII 且不以 `0-9`、`a-f` 或 `A-F` 结尾的前缀。"
 
-#: src/project/diagnostic-codes.md:209
+#: src/project/diagnostic-codes.md:221
 msgid "Where the code reaches you"
 msgstr "代码在何处呈现给调用方"
 
-#: src/project/diagnostic-codes.md:211
+#: src/project/diagnostic-codes.md:223
 msgid ""
 "**Rust** — `RdfDiagnostic::code` on the returned error; its `Display` form "
 "is `<severity> <code>: <message>`."
@@ -23097,7 +23198,7 @@ msgstr ""
 "**Rust**——返回错误上的 `RdfDiagnostic::code`；其 `Display` 形式为 "
 "`<severity> <code>: <message>`。"
 
-#: src/project/diagnostic-codes.md:213
+#: src/project/diagnostic-codes.md:225
 msgid ""
 "**Python** — the `ValueError` message is that `Display` form (for example "
 "`error native-codec-parse: …`); an IRI failure is rendered as `<code>: "
@@ -23107,7 +23208,7 @@ msgstr ""
 "parse: …`）；IRI 失败则输出为 `<code>: <message>`（例如 `iri-relative-no-"
 "base: …`）。"
 
-#: src/project/diagnostic-codes.md:216
+#: src/project/diagnostic-codes.md:228
 msgid ""
 "**JavaScript** — the thrown `Error` message carries the same text, and its "
 "`code` property carries the code itself. The wasm package's own refusals "
@@ -23127,12 +23228,12 @@ msgstr ""
 "environment`（无法构建聚合注册表）、`purrdf-wasm-shacl` 与 `purrdf-wasm-"
 "shacl-product-refusal`（某个 SHACL 接口失败，或拒绝了一个预备好的产物）。"
 
-#: src/project/diagnostic-codes.md:225
+#: src/project/diagnostic-codes.md:237
 msgid ""
 "**C** — the error string returned through the C ABI carries the same text."
 msgstr "**C**——经由 C ABI 返回的错误字符串携带相同的文本。"
 
-#: src/project/diagnostic-codes.md:226
+#: src/project/diagnostic-codes.md:238
 msgid ""
 "**SARIF** — the `ruleId` of each result is the code, with a "
 "`reportingDescriptor` in the run's rule table ([`purrdf-validate`](https://"
@@ -23141,3 +23242,33 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid ""
+#~ "After its initial record bootstrap, every version of every crate in the "
+#~ "31-crate release set is published by that lane. Each existing crate "
+#~ "record is locked on crates.io with _Require trusted publishing_ "
+#~ "(`trustpub_only`), so an API token cannot publish a new version of any of "
+#~ "them: crates.io answers with `403 Forbidden: New versions of this crate "
+#~ "can only be published using Trusted Publishing`. A token has exactly one "
+#~ "role left, creating the record of a brand-new crate — the one thing a "
+#~ "Trusted Publishing token is refused (`Trusted Publishing tokens do not "
+#~ "support creating new crates`) — and the release process document above is "
+#~ "exact about how that bootstrap works: the lane publishes up to the first "
+#~ "crate that depends on a new one and stops cleanly, the token creates the "
+#~ "new crate's record, Trusted Publishing is enabled on it, and the same run "
+#~ "is resumed."
+#~ msgstr ""
+#~ "在各自最初的记录引导（bootstrap）之后，31 个 crate 的发布集合中每个 crate "
+#~ "的每个版本都由该通道发布。每个已有的 crate 记录都在 crates.io 上以 "
+#~ "_Require trusted publishing_（`trustpub_only`）锁定，因此 API 令牌无法为其"
+#~ "中任何一个发布新版本：crates.io 会回应 `403 Forbidden: New versions of "
+#~ "this crate can only be published using Trusted Publishing`。令牌只剩下恰好"
+#~ "一种用途，即为一个全新的 crate 创建记录——这正是可信发布令牌唯一被拒绝的事"
+#~ "（`Trusted Publishing tokens do not support creating new crates`）——而上文"
+#~ "的发布流程文档准确说明了该引导如何进行：通道发布到第一个依赖某个新 crate "
+#~ "的 crate 为止并干净地停止，由令牌创建新 crate 的记录，在其上启用可信发布，"
+#~ "然后恢复同一次运行。"
+
+#~ msgid ""
+#~ "# 3. Regenerate the changelog from the conventional-commit history.\n"
+#~ msgstr "# 3. 依据约定式提交（conventional commit）历史重新生成变更日志。\n"
