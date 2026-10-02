@@ -6,7 +6,8 @@ SPDX-License-Identifier: CC-BY-4.0
 # Versioning & Releases
 
 PurRDF ships to three registries — the crates.io crate suite, the PyPI
-`purrdf` package, and the npm `@blackcatinformatics/purrdf` package — from
+`purrdf` and `purrdf-rdflib` distributions, and the npm
+`@blackcatinformatics/purrdf` package — from
 **one** workspace version, in lockstep. The full process is
 [`docs/RELEASE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/RELEASE.md).
 
@@ -26,7 +27,13 @@ share one workspace version and are released together, and a
 version-coherence check in CI fails the build if the version sources
 (`Cargo.toml`, `pyproject.toml`, `package.json`, `CITATION.cff`) disagree.
 
-The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.7**), bumped on every exported-signature change, pinned by `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through `purrdf_abi_version`. It is versioned separately from the workspace and stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise about it.
+The one exception is the C ABI. `libpurrdf`'s
+[`purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h)
+carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.8**), bumped
+on every exported-signature change, pinned by
+`crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through
+`purrdf_abi_version`. It is versioned separately from the workspace and stays
+`0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise about it.
 
 ## MSRV policy
 
@@ -60,17 +67,27 @@ cargo lane:
   publishing;
 - every workspace crate version must match the tag version.
 
-After its initial record bootstrap, every version of every crate in the
-31-crate release set is published by that lane. Each existing crate record is locked on crates.io with *Require trusted
-publishing* (`trustpub_only`), so an API token cannot publish a new version of
-any of them: crates.io answers with `403 Forbidden: New versions of this crate
-can only be published using Trusted Publishing`. A token has exactly one role
-left, creating the record of a brand-new crate — the one thing a Trusted
-Publishing token is refused (`Trusted Publishing tokens do not support creating
-new crates`) — and the release process document above is exact about how that
-bootstrap works: the lane publishes up to the first crate that depends on a
-new one and stops cleanly, the token creates the new crate's record, Trusted
-Publishing is enabled on it, and the same run is resumed.
+Every functional version of every crate in the 31-crate release set is
+published by that lane. Each existing crate record is locked on crates.io with
+*Require trusted publishing* (`trustpub_only`), so an API token cannot publish
+a new version of any of them: crates.io answers with
+`403 Forbidden: New versions of this crate can only be published using Trusted Publishing`.
+
+Set up new crate records **before tagging**. A token creates each missing
+record by publishing an isolated, empty, dependency-free **0.0.0** package;
+the real workspace crate keeps its functional release version. Configure its
+Trusted Publisher entry and enable *Require trusted publishing*, then reconcile
+`PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh`. All 31 records
+must exist, all publisher entries must be configured, every record must be
+locked, and the ledger must be empty before the functional release begins.
+`scripts/check-crates-io-records.sh --require-all` verifies the public records
+and locks; publisher entries require separate configuration confirmation.
+
+The tagged trusted-publishing run then publishes the functional versions in
+dependency order. After those versions are verified, yank the empty **0.0.0**
+versions using a token with the separate yank permission, retaining the records
+and publisher settings. The complete setup and historical bootstrap receipts
+are in the release process document linked above.
 
 Eleven workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
@@ -104,8 +121,9 @@ make bump VERSION=0.2.2
 # 2. Regenerate the committed C-ABI header from the bumped crate version.
 make capi-header
 
-# 3. Regenerate the changelog from the conventional-commit history.
-make changelog
+# 3. Complete the release notes, preserving existing migration guidance.
+# Rename the Unreleased section to the bumped version and release date.
+# Use make changelog only for history-generated notes.
 
 # 4. Review, then commit the release bump, generated header, and changelog.
 git add -A && git commit -m "chore(release): 0.2.2"
@@ -115,16 +133,25 @@ make release-tags VERSION=0.2.2
 ```
 
 `make release-tags` refuses to run unless the working tree is clean, the
-branch is `main` and synchronized with `origin/main`, the version check passes,
-`VERSION` matches the tree, the release-notes section exists, and none of the
-three tags already exists locally or remotely. It then runs the Rust and wasm
-workspace gate, the generated C-ABI/header check, the native Python binding
-suite, and the optimized size-gated npm/wasm package tests. Only after every
-surface passes does it recheck the clean synchronized state and atomically push
-the `rust-v`, `py-v`, and `npm-v` tags together. No tag is created before the
-complete cross-surface preflight passes. Each tag triggers its own lane, and the
-cargo lane additionally publishes a GitHub Release built from the committed
-`CHANGELOG.md`.
+branch is `main` and synchronized with `origin/main`, the version and crates.io
+record/lock checks pass, `VERSION` matches the tree, the release-notes section
+exists, and none of the three tags already exists locally or remotely. It then
+runs these gates in order:
+
+1. `make check`: the Rust and wasm workspace gate and repository hygiene.
+2. `make capi-check`: the generated C-ABI/header check and linked C smoke.
+3. `make pytest`: the native Python binding suite.
+4. `make python-release-check`: build and audit both Python wheel/sdist pairs,
+   check them with the pinned publisher tools, and install them together.
+5. `make wasm-pkg-test`: the optimized size-gated npm/wasm package tests.
+6. `make capi-bundle`: build and audit the native C distribution, including
+   recipient notices and relocated linked smoke.
+
+Only after every surface passes does it recheck the clean synchronized state
+and atomically push the `rust-v`, `py-v`, and `npm-v` tags together. No tag is
+created before the complete cross-surface preflight passes. Each tag triggers
+its own lane, and the cargo lane additionally publishes a GitHub Release built
+from the committed `CHANGELOG.md`.
 
 ## Citing PurRDF
 
