@@ -28,6 +28,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   column order survive these rewrites; compiler-generated match witnesses stay
   hidden when algebra is evaluated or rendered to a SPARQL carrier. Existing
   query limits and operator scope boundaries still apply.
+- **Governed SPARQL:** when fuel runs out, unfinished basic graph pattern
+  matches are withheld instead of being returned as certain partial answers.
 - **Rust publishing:** dependent crates wait for their exact, unyanked versions
   to become visible in Cargo's sparse registry index. GitHub Release assets are
   attached and verified in a draft before publication makes them immutable.
