@@ -6,9 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::json_model::{Map, Object, Value, ValueKind};
-use ::purrdf::RdfLocation;
-use ::purrdf::RdfTextDirection;
-use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::RdfTextDirection;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 
 use super::{
     LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDisposition, is_linkml_identifier,

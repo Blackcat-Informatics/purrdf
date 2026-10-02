@@ -68,7 +68,7 @@ impl Component {
 /// `parameter-name-not-in` / `parameter-name-VARNAME` for the name it yields,
 /// `optional-maxCount` / `optional-datatype` for `sh:optional`.
 pub(super) fn parse_parameter(
-    data: &purrdf::RdfDataset,
+    data: &purrdf_rdf::RdfDataset,
     param_node: &Term,
     component_iri: &str,
 ) -> Result<Parameter, (&'static str, String)> {

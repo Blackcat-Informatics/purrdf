@@ -4,14 +4,14 @@
 //! Native RDF query surface for the slice emitters and linters.
 //!
 //! Every store/term type is native: parsing folds the
-//! RDF 1.2 statement layer into the frozen [`purrdf::RdfDataset`] IR via the
-//! native codecs ([`purrdf::parse_dataset`]), pattern queries route through the
-//! IR's [`purrdf::DatasetView::quads_for_pattern`] (an indexed lookup), and the
+//! RDF 1.2 statement layer into the frozen [`purrdf_rdf::RdfDataset`] IR via the
+//! native codecs ([`purrdf_rdf::parse_dataset`]), pattern queries route through the
+//! IR's [`purrdf_rdf::DatasetView::quads_for_pattern`] (an indexed lookup), and the
 //! object terms surface as the native [`Object`] value model.
 //!
 //! Multi-file accumulation (the merged DSL / ontology stores) uses
-//! [`purrdf::RdfDatasetBuilder::push_dataset`], which standardizes blank nodes
-//! apart per source dataset (a fresh [`purrdf::BlankScope`] per file, C0.2) — the
+//! [`purrdf_rdf::RdfDatasetBuilder::push_dataset`], which standardizes blank nodes
+//! apart per source dataset (a fresh [`purrdf_rdf::BlankScope`] per file, C0.2) — the
 //! native equivalent of the old per-source blank-prefix scoping. Quads dedup at
 //! freeze (C0.5), matching the old `Store::insert` set semantics.
 //!
@@ -22,7 +22,7 @@
 
 use std::path::Path;
 
-use purrdf::{
+use purrdf_rdf::{
     DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfQuad,
     RdfTextDirection, TermId, TermRef, TermValue, parse_dataset,
 };
@@ -291,9 +291,9 @@ fn subject_term_id(ds: &RdfDataset, subject: &Subject) -> Option<TermId> {
 // ── Dataset wrapper ─────────────────────────────────────────────────────────────
 
 /// A frozen RDF dataset plus the IRI-pattern query surface the slice emitters and
-/// linters use. Wraps [`purrdf::RdfDataset`]; the query helpers resolve a query
-/// IRI to a dataset-local term id via [`purrdf::RdfDataset::term_id_by_value`]
-/// and pattern-scan via the indexed [`purrdf::DatasetView::quads_for_pattern`].
+/// linters use. Wraps [`purrdf_rdf::RdfDataset`]; the query helpers resolve a query
+/// IRI to a dataset-local term id via [`purrdf_rdf::RdfDataset::term_id_by_value`]
+/// and pattern-scan via the indexed [`purrdf_rdf::DatasetView::quads_for_pattern`].
 #[derive(Debug)]
 pub struct Dataset {
     ds: RdfDataset,
@@ -532,18 +532,18 @@ impl Dataset {
     /// **flattened** — the RDF 1.2 statement overlay (reifier bindings + annotations)
     /// is re-materialized back into plain `rdf:reifies` / annotation triples BEFORE
     /// canonicalizing, with no overlay re-fold. This is byte-identical to
-    /// `purrdf::canonical_nquads` over the flat quad set: both canonicalize
+    /// `purrdf_rdf::canonical_nquads` over the flat quad set: both canonicalize
     /// the same flat triple set, so the semantic digest is preserved (the native
     /// folded `canonicalize` would instead emit reserved overlay sentinels).
     pub fn canonical_nquads_flat(&self) -> Result<String, SliceError> {
         let mut builder = RdfDatasetBuilder::new();
-        for quad in purrdf::flat_rdf_quads(&self.ds) {
+        for quad in purrdf_rdf::flat_rdf_quads(&self.ds) {
             builder.push_owned_quad(&quad);
         }
         let frozen = builder
             .freeze()
             .map_err(|e| SliceError::Parse(format!("flatten for canonicalization: {e}")))?;
-        Ok(purrdf::canonicalize(&frozen).nquads)
+        Ok(purrdf_rdf::canonicalize(&frozen).nquads)
     }
 
     /// Build a frozen [`RdfDataset`] from a flat owned-quad set (`push_owned_quad`,
@@ -843,7 +843,7 @@ fn owned_clone_of(ds: &RdfDataset) -> RdfDataset {
 // ── Multi-file scoped accumulator ───────────────────────────────────────────────
 
 /// A builder that accumulates several parsed RDF documents into ONE frozen dataset,
-/// standardizing each document's blank nodes apart (a fresh [`purrdf::BlankScope`]
+/// standardizing each document's blank nodes apart (a fresh [`purrdf_rdf::BlankScope`]
 /// per `add`, C0.2) — the native equivalent of the old per-source blank-prefix
 /// scoping. Quads dedup at [`freeze`](Self::freeze) (C0.5), matching the old
 /// `Store::insert` set semantics.
@@ -1401,7 +1401,7 @@ mod tests {
         );
         assert!(matches!(
             ds.rdf_list(&head),
-            Err(SliceError::RdfList(purrdf::RdfListError::MultipleFirst))
+            Err(SliceError::RdfList(purrdf_rdf::RdfListError::MultipleFirst))
         ));
     }
 
@@ -1420,7 +1420,7 @@ mod tests {
         );
         assert!(matches!(
             ds.rdf_list(&head),
-            Err(SliceError::RdfList(purrdf::RdfListError::DanglingRest))
+            Err(SliceError::RdfList(purrdf_rdf::RdfListError::DanglingRest))
         ));
     }
 
@@ -1592,8 +1592,8 @@ mod tests {
 mod term_walk_tests {
     //! The dataset term resolution against its recursive reference.
 
-    use purrdf::{RdfDataset, RdfDatasetBuilder, TermId, TermRef};
     use purrdf_core::backend::TermFactory as _;
+    use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, TermId, TermRef};
 
     use super::{
         Object, Subject, TripleTerm, iri_text_of, object_leaf, object_of, subject_leaf, subject_of,

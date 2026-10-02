@@ -92,7 +92,7 @@
 use std::fmt::{self, Write as _};
 use std::sync::Arc;
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 
 use crate::data::GraphFilter;
 use crate::engine::validate_dataset_as_document;

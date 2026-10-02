@@ -273,7 +273,7 @@ fn named_graph_repetitions_count_distinct_rdf_objects() {
                  sh:minCount 1; sh:class ex:A, ex:B .";
     let trig = format!("{PREFIXES} ex:g1 {{ {graph} }} ex:g2 {{ {graph} }}");
     let dataset =
-        ::purrdf::parse_dataset(trig.as_bytes(), "application/trig", None).expect("valid TriG");
+        ::purrdf_rdf::parse_dataset(trig.as_bytes(), "application/trig", None).expect("valid TriG");
     let shapes = from_dataset(&dataset).expect("repeated statements are not extra values");
     assert_eq!(shapes.node_shapes.len(), 1);
     assert_eq!(

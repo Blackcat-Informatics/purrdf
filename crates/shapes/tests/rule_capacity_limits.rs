@@ -13,11 +13,11 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
 use purrdf_datalog::seminaive::{
     NATIVE_DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_JOIN_STEPS,
     WASM_DEFAULT_MAX_STORED_FACTS,
 };
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
 use purrdf_shapes::rules::{RuleOptions, infer};

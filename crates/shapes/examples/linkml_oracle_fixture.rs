@@ -31,7 +31,7 @@ mod shacl_value_shapes;
 
 use json_model::{Value, json};
 use json_text::read_sorted;
-use purrdf::loss::check_ledger_sound;
+use purrdf_rdf::loss::check_ledger_sound;
 use purrdf_shapes::{
     ImportedShapes, LinkmlConfig, LinkmlPackage, Namespaces, SchemaDatatypeMap, SchemaImportConfig,
     emit_linkml, import_linkml_package, parse_linkml, write_linkml,

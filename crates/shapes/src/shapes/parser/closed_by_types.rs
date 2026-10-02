@@ -20,7 +20,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use ::purrdf::{IdSet, TermId};
+use ::purrdf_rdf::{IdSet, TermId};
 
 use super::shacl_instance::ShaclInstances;
 use crate::data::{GraphFilter, quads_for_pattern_ids};
@@ -138,7 +138,12 @@ impl Parser<'_> {
     /// nothing when the shapes graph does not intern `predicate`.
     fn objects_of_id(&self, subject: TermId, predicate: Option<TermId>) -> Vec<TermId> {
         predicate.map_or_else(Vec::new, |predicate| {
-            ::purrdf::DatasetView::objects(self.data, subject, predicate, ::purrdf::GraphMatch::Any)
+            ::purrdf_rdf::DatasetView::objects(
+                self.data,
+                subject,
+                predicate,
+                ::purrdf_rdf::GraphMatch::Any,
+            )
         })
     }
 

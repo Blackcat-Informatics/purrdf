@@ -31,8 +31,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use purrdf::{RdfDataset, TermId, TermRef};
 use purrdf_core::FastMap;
+use purrdf_rdf::{RdfDataset, TermId, TermRef};
 use purrdf_sparql_algebra::{ParserOptions, SparqlParser};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
@@ -1221,8 +1221,8 @@ mod term_walk_tests {
 
     use std::collections::BTreeSet;
 
-    use purrdf::{RdfDataset, RdfDatasetBuilder, TermId, TermRef};
     use purrdf_core::backend::TermFactory as _;
+    use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, TermId, TermRef};
 
     use super::collect_term_iri_refs;
 

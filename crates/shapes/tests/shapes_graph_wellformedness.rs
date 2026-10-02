@@ -1369,7 +1369,7 @@ fn a_string_rule_deactivation_is_refused_and_boolean_true_deactivates_the_rule()
         );
         let input = turtle::data(PREFIXES, "ex:a a ex:C .");
         let entailed = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("rules run");
-        purrdf::canonicalize(entailed.as_ref()).nquads
+        purrdf_rdf::canonicalize(entailed.as_ref()).nquads
     };
     assert!(!entail("true").contains("<http://example.org/ns#q>"));
     assert!(entail("false").contains("<http://example.org/ns#q>"));
@@ -1921,7 +1921,7 @@ fn an_af_graph_with_functions_rules_and_node_expressions_loads_and_runs() {
         "the SPARQL function ran: only ex:bad's tripled amount exceeds 100"
     );
     let entailed = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("the rules run");
-    let nquads = purrdf::canonicalize(entailed.as_ref()).nquads;
+    let nquads = purrdf_rdf::canonicalize(entailed.as_ref()).nquads;
     assert!(
         nquads.contains(
             "<http://example.org/ns#childCount> \"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"

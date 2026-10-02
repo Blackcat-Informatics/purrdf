@@ -27,8 +27,8 @@ const PREFIXES: &str = r"
     @prefix meta: <http://example.org/meta/> .
 ";
 
-fn dataset(body: &str) -> Arc<::purrdf::RdfDataset> {
-    ::purrdf::parse_dataset(format!("{PREFIXES}{body}").as_bytes(), "text/turtle", None)
+fn dataset(body: &str) -> Arc<::purrdf_rdf::RdfDataset> {
+    ::purrdf_rdf::parse_dataset(format!("{PREFIXES}{body}").as_bytes(), "text/turtle", None)
         .expect("valid Turtle")
 }
 

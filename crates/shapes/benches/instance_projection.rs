@@ -19,7 +19,7 @@ const PREFIXES: &str = r"
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 ";
 
-fn dataset(nodes: usize, lists: bool) -> std::sync::Arc<purrdf::RdfDataset> {
+fn dataset(nodes: usize, lists: bool) -> std::sync::Arc<purrdf_rdf::RdfDataset> {
     let mut turtle = String::from(PREFIXES);
     for node in 0..nodes {
         let _ = write!(

@@ -58,7 +58,7 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
+use ::purrdf_rdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 use purrdf_sparql_algebra::{Query, SparqlParser};
 
 use crate::constraints::conforms_with_plan;
@@ -73,13 +73,13 @@ use crate::srl::{self, Inference};
 use crate::term::canonical_cmp;
 use crate::term::{NamedNode, Term, term_id_to_native};
 
-/// The fixed non-default [`::purrdf::BlankScope`] the shapes document's blanks
+/// The fixed non-default [`::purrdf_rdf::BlankScope`] the shapes document's blanks
 /// are standardized apart into when exposed as `$shapesGraph` (see
-/// [`build_round_base`]): disjoint from [`::purrdf::BlankScope::DEFAULT`], which
+/// [`build_round_base`]): disjoint from [`::purrdf_rdf::BlankScope::DEFAULT`], which
 /// the base data and derived facts share. Named so a second scoped push cannot
 /// silently reuse the bare literal `1` and conflate two documents' blanks — every
 /// additional shapes-graph-scope push in this module must use this constant.
-const SHAPES_BLANK_SCOPE: ::purrdf::BlankScope = ::purrdf::BlankScope(1);
+const SHAPES_BLANK_SCOPE: ::purrdf_rdf::BlankScope = ::purrdf_rdf::BlankScope(1);
 
 // ── Model ───────────────────────────────────────────────────────────────────────
 
@@ -1934,16 +1934,16 @@ pub(crate) fn push_fact(
     if predicate.as_str() == rdf::REIFIES
         && let Term::Triple(statement) = o
     {
-        builder.push_owned_reifier(&::purrdf::RdfReifier::new(
+        builder.push_owned_reifier(&::purrdf_rdf::RdfReifier::new(
             s.to_rdf_term(),
-            ::purrdf::RdfTriple::new(
+            ::purrdf_rdf::RdfTriple::new(
                 statement.subject.to_rdf_term(),
                 statement.predicate.as_str(),
                 statement.object.to_rdf_term(),
             ),
         ));
     } else if reifiers.contains(s) {
-        builder.push_owned_annotation(&::purrdf::RdfAnnotation::new(
+        builder.push_owned_annotation(&::purrdf_rdf::RdfAnnotation::new(
             s.to_rdf_term(),
             predicate.as_str(),
             o.to_rdf_term(),
@@ -2105,7 +2105,7 @@ mod tests {
     }
 
     fn canon(ds: &RdfDataset) -> String {
-        ::purrdf::canonicalize(ds).nquads
+        ::purrdf_rdf::canonicalize(ds).nquads
     }
 
     // ── Parsing ────────────────────────────────────────────────────────────────
@@ -3254,10 +3254,10 @@ mod tests {
 
         let serialize = |shapes_body: &str| {
             let entailed = entail(data, shapes_body);
-            ::purrdf::serialize_dataset(
+            ::purrdf_rdf::serialize_dataset(
                 entailed.as_ref(),
                 "application/n-triples",
-                ::purrdf::SerializeGraph::Dataset,
+                ::purrdf_rdf::SerializeGraph::Dataset,
             )
             .expect("N-Triples serialization must succeed")
         };
@@ -3730,7 +3730,7 @@ mod tests {
             Term::Literal(Literal::new_directional_language_tagged_literal_unchecked(
                 "x",
                 "en",
-                ::purrdf::RdfTextDirection::Ltr,
+                ::purrdf_rdf::RdfTextDirection::Ltr,
             )),
             Term::Literal(Literal::new_typed_literal(
                 "x",
@@ -3748,7 +3748,7 @@ mod tests {
                 assert_ne!(left, right, "foci {focus} and {other} must not share a tag");
             }
             assert!(
-                ::purrdf::blank_label::is_valid_blank_node_label(&format!("{left}c1")),
+                ::purrdf_rdf::blank_label::is_valid_blank_node_label(&format!("{left}c1")),
                 "the minted label for focus {focus} must be serializable: {left}c1"
             );
         }
@@ -3804,10 +3804,10 @@ mod tests {
             let label = format!("{}c1", focus_tag(focus));
             assert!(!label.contains('.'), "minted labels are dot-free: {label}");
             assert_eq!(
-                ::purrdf::BlankScope::unqualify_label(&label),
+                ::purrdf_rdf::BlankScope::unqualify_label(&label),
                 (
                     std::borrow::Cow::Borrowed(label.as_str()),
-                    ::purrdf::BlankScope::DEFAULT
+                    ::purrdf_rdf::BlankScope::DEFAULT
                 ),
                 "{label}"
             );
@@ -3815,10 +3815,10 @@ mod tests {
         // The §16.2 freshness suffix `r{k}` is alphanumeric, so a reminted label
         // is equally immune.
         assert_eq!(
-            ::purrdf::BlankScope::unqualify_label("fb1_c1r0"),
+            ::purrdf_rdf::BlankScope::unqualify_label("fb1_c1r0"),
             (
                 std::borrow::Cow::Borrowed("fb1_c1r0"),
-                ::purrdf::BlankScope::DEFAULT
+                ::purrdf_rdf::BlankScope::DEFAULT
             )
         );
     }
@@ -4016,11 +4016,14 @@ mod tests {
     /// isomorphic to the entailed one (canonical N-Quads equality).
     fn assert_serialization_roundtrip(entailed: &RdfDataset) {
         for media in ["text/turtle", "application/n-triples"] {
-            let bytes =
-                ::purrdf::serialize_dataset(entailed, media, ::purrdf::SerializeGraph::Dataset)
-                    .unwrap_or_else(|e| panic!("{media} serialization must succeed: {e}"));
+            let bytes = ::purrdf_rdf::serialize_dataset(
+                entailed,
+                media,
+                ::purrdf_rdf::SerializeGraph::Dataset,
+            )
+            .unwrap_or_else(|e| panic!("{media} serialization must succeed: {e}"));
             assert_blank_tokens_clean(&bytes, media);
-            let reparsed = ::purrdf::parse_dataset(&bytes, media, None)
+            let reparsed = ::purrdf_rdf::parse_dataset(&bytes, media, None)
                 .unwrap_or_else(|e| panic!("{media} re-parse must succeed: {e}"));
             assert_eq!(
                 canon(entailed),
@@ -4040,7 +4043,7 @@ mod tests {
         assert!(!labels.is_empty(), "the rule must mint template blanks");
         for label in &labels {
             assert!(
-                ::purrdf::blank_label::is_valid_blank_node_label(label),
+                ::purrdf_rdf::blank_label::is_valid_blank_node_label(label),
                 "minted label must be a legal BLANK_NODE_LABEL: {label:?}"
             );
         }
@@ -4067,7 +4070,7 @@ mod tests {
         );
         for label in &labels {
             assert!(
-                ::purrdf::blank_label::is_valid_blank_node_label(label),
+                ::purrdf_rdf::blank_label::is_valid_blank_node_label(label),
                 "label must be a legal BLANK_NODE_LABEL: {label:?}"
             );
         }
@@ -4084,14 +4087,14 @@ mod tests {
             2,
             "two foci mint one template blank each"
         );
-        let bytes = ::purrdf::serialize_dataset(
+        let bytes = ::purrdf_rdf::serialize_dataset(
             entailed.as_ref(),
             "text/turtle",
-            ::purrdf::SerializeGraph::Dataset,
+            ::purrdf_rdf::SerializeGraph::Dataset,
         )
         .expect("Turtle serialization must succeed");
-        let reparsed =
-            ::purrdf::parse_dataset(&bytes, "text/turtle", None).expect("re-parse must succeed");
+        let reparsed = ::purrdf_rdf::parse_dataset(&bytes, "text/turtle", None)
+            .expect("re-parse must succeed");
         assert_eq!(
             blank_labels(reparsed.as_ref()).len(),
             2,
@@ -4115,10 +4118,10 @@ mod tests {
     fn entailed_serialization_is_byte_identical_across_runs() {
         let serialize = || {
             let entailed = entail(HOSTILE_FOCI_DATA, PROPERTY_MINTING_SHAPES);
-            ::purrdf::serialize_dataset(
+            ::purrdf_rdf::serialize_dataset(
                 entailed.as_ref(),
                 "text/turtle",
-                ::purrdf::SerializeGraph::Dataset,
+                ::purrdf_rdf::SerializeGraph::Dataset,
             )
             .expect("Turtle serialization must succeed")
         };

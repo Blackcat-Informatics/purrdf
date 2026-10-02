@@ -383,7 +383,7 @@ pub(crate) fn finish_text(mut text: String) -> String {
 mod tests {
     use super::*;
     use crate::json_model::json;
-    use ::purrdf::loss::LossLedger;
+    use ::purrdf_rdf::loss::LossLedger;
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {

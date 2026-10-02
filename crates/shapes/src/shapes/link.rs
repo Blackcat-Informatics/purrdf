@@ -63,7 +63,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::FastMap;
+use ::purrdf_rdf::FastMap;
 use purrdf_sparql_eval::{Arity, ExprFnCall, UserFunctionRegistry};
 
 use crate::expression::{CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg};

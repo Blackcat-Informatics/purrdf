@@ -24,7 +24,7 @@
 //! (a constraint parameter on a rule) are load errors naming the term and the node, never
 //! silently walked past.
 
-use purrdf::FastSet;
+use purrdf_rdf::FastSet;
 
 use crate::model::{rdf, sh, xsd};
 use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration, check_construct};
@@ -173,7 +173,7 @@ impl Parser<'_> {
     fn rule_typed_nodes(&self) -> Vec<Term> {
         let templates = self.rule_templates();
         let mut instances = ShaclInstances::new(self.data);
-        let classes: Vec<Option<purrdf::TermId>> =
+        let classes: Vec<Option<purrdf_rdf::TermId>> =
             [sh::RULE_CLASS, sh::TRIPLE_RULE, sh::SPARQL_RULE]
                 .iter()
                 .map(|iri| self.data.term_id_by_iri(iri))

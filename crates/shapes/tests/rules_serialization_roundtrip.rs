@@ -11,7 +11,7 @@
 //! equality with the entailed dataset — proving the minted per-focus blank
 //! labels survive both egress syntaxes losslessly.
 
-use purrdf::{SerializeGraph, canonicalize, parse_dataset, serialize_dataset};
+use purrdf_rdf::{SerializeGraph, canonicalize, parse_dataset, serialize_dataset};
 use purrdf_shapes::rules::entail_dataset;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
 use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};

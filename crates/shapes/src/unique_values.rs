@@ -43,7 +43,7 @@
 //! terms, so two values collide exactly when they are the same RDF term — the
 //! exact matching the note requires, with no value-space coercion.
 
-use ::purrdf::{FastSet, IdSet, TermId};
+use ::purrdf_rdf::{FastSet, IdSet, TermId};
 use purrdf_core::SmallVec;
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
@@ -124,10 +124,10 @@ impl UniqueGroups {
             crate::engine::resolve_focus_nodes(data, &spec.shape, &spec.targets, binding, classes)?;
         // The first target seen with each tuple, and whether a second one has
         // been seen since — so the first is marked colliding exactly once.
-        let mut first: ::purrdf::FastMap<ValueKey, (TermId, bool)> =
-            ::purrdf::FastMap::with_capacity_and_hasher(
+        let mut first: ::purrdf_rdf::FastMap<ValueKey, (TermId, bool)> =
+            ::purrdf_rdf::FastMap::with_capacity_and_hasher(
                 targets.len(),
-                ::purrdf::FastHasher::default(),
+                ::purrdf_rdf::FastHasher::default(),
             );
         for focus in &targets {
             // A target the data graph does not intern is the subject of no

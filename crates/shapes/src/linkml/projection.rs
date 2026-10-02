@@ -7,8 +7,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::json_model::{Map, Object, Value, ValueKind};
-use ::purrdf::RdfLocation;
-use ::purrdf::loss::{LossEntry, LossLedger};
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 use purrdf_hash::fnv::fnv1a64;
 
 use super::{
@@ -2511,7 +2511,7 @@ mod tests {
 
     use super::*;
     use crate::json_model::json;
-    use ::purrdf::loss::check_ledger_sound;
+    use ::purrdf_rdf::loss::check_ledger_sound;
     use purrdf_testkit::prop::prelude::*;
 
     fn compiled(schema: &Value) -> CompiledSchema {

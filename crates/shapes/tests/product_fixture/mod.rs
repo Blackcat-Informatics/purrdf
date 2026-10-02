@@ -50,7 +50,7 @@
 
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes_with_config};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{HostBindings, ShapesProfile};

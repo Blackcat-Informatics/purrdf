@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use ::purrdf::RdfDataset;
-use ::purrdf::parse_dataset;
+use ::purrdf_rdf::RdfDataset;
+use ::purrdf_rdf::parse_dataset;
 use purrdf_shapes::ShapesImports;
 use purrdf_shapes::engine::{validate_dataset_graphs, validate_graphs};
 
@@ -40,7 +40,7 @@ fn load_data_turtle(ttl: &str) -> Arc<RdfDataset> {
 /// the reports are byte-identical.
 fn assert_backends_agree(label: &str, shapes_ttl: &str, data_nt: &str) {
     let dataset = if data_nt.is_empty() {
-        ::purrdf::RdfDatasetBuilder::new()
+        ::purrdf_rdf::RdfDatasetBuilder::new()
             .freeze()
             .expect("empty dataset")
     } else {
@@ -64,7 +64,7 @@ fn assert_backends_agree(label: &str, shapes_ttl: &str, data_nt: &str) {
 /// dataset path against an owned-quad round-trip re-freeze of the same dataset
 /// (which preserves reifiers/annotations): both must produce byte-identical reports.
 fn assert_backends_agree_store(label: &str, shapes_ttl: &str, dataset: &Arc<RdfDataset>) {
-    use ::purrdf::RdfDatasetBuilder;
+    use ::purrdf_rdf::RdfDatasetBuilder;
 
     let mut builder = RdfDatasetBuilder::new();
     for quad in dataset.owned_quads() {

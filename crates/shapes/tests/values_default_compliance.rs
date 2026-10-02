@@ -37,7 +37,7 @@ mod turtle;
 
 use std::sync::Arc;
 
-use purrdf::canonicalize;
+use purrdf_rdf::canonicalize;
 use purrdf_shapes::entail_dataset;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::spec::census::{Role, Site, TermClass, classify};
@@ -362,7 +362,8 @@ fn reification(shapes_ttl: &str, data_ttl: &str) -> (usize, usize) {
         &turtle::loads(PREFIXES, shapes_ttl),
     )
     .expect("rules run");
-    let reifiers: Vec<purrdf::TermId> = entailed.reifiers().map(|(reifier, _)| reifier).collect();
+    let reifiers: Vec<purrdf_rdf::TermId> =
+        entailed.reifiers().map(|(reifier, _)| reifier).collect();
     let annotations = reifiers
         .iter()
         .map(|reifier| entailed.annotations_of(*reifier).count())

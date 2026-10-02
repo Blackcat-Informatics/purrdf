@@ -6,12 +6,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use purrdf::{
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_iri::vocab::{rdf, rdfs};
+use purrdf_rdf::{
     BlankScope, DatasetView, FastSet, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfTextDirection, TermId, TermRef,
 };
-use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
-use purrdf_iri::vocab::{rdf, rdfs};
 use purrdf_shapes::data_view::{ShaclDatasetView, ShaclRead};
 use purrdf_shapes::engine::{PreparedShapes, ValidationOptions, parse_shapes};
 

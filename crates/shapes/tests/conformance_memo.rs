@@ -109,7 +109,7 @@ use std::sync::Arc;
 
 use measured::measure_lock;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes};
 use purrdf_shapes::sparql::enter_property_function_scope;
 use purrdf_shapes::term::NamedNode;

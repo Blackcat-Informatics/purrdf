@@ -27,8 +27,8 @@
 //! what the split adds is the column each half lands in.
 #![allow(missing_docs)]
 
-use purrdf::ir::{CompositeDatasetView, CompositeSource, GraphPlacement, ViewLimits};
-use purrdf::{
+use purrdf_rdf::ir::{CompositeDatasetView, CompositeSource, GraphPlacement, ViewLimits};
+use purrdf_rdf::{
     DatasetMut, DatasetView, GraphMatch, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, TermId, TermValue,
 };

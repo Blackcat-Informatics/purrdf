@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 
 use super::FunctionClass;
 use crate::data::{GraphFilter, native_quads, objects_of as objects};

@@ -32,7 +32,7 @@
 //!
 //! `sh:sparql` / `sh:SPARQLTarget` constraints have no JSON Schema equivalent.
 //! They are never silently skipped: each one is dropped, recorded as a
-//! [`::purrdf::loss::LossEntry`] on the compiled [`CompiledSchema::losses`]
+//! [`::purrdf_rdf::loss::LossEntry`] on the compiled [`CompiledSchema::losses`]
 //! ledger, and (for node/property-level constraints) annotated with a
 //! `$comment` on the affected schema.
 //!
@@ -148,10 +148,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::json_model::{Map, ToJson, Value, ValueKind, json};
-use ::purrdf::RdfDataset;
-use ::purrdf::RdfLocation;
-use ::purrdf::RdfTextDirection;
-use ::purrdf::loss::{LossEntry, LossLedger};
+use ::purrdf_rdf::RdfDataset;
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::RdfTextDirection;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
@@ -935,14 +935,13 @@ pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
 fn schema_compilation_key(
     request: &SchemaCompileRequest<'_>,
 ) -> Result<SchemaCompilationKey, SchemaCompileError> {
-    let shapes =
-        ::purrdf::try_canonicalize(request.shapes.shapes_dataset.as_ref()).map_err(|error| {
-            SchemaCompileError::Canonicalization {
-                input: SchemaCompilationInput::Shapes,
-                message: error.to_string(),
-            }
-        })?;
-    let ontology = ::purrdf::try_canonicalize(request.ontology).map_err(|error| {
+    let shapes = ::purrdf_rdf::try_canonicalize(request.shapes.shapes_dataset.as_ref()).map_err(
+        |error| SchemaCompileError::Canonicalization {
+            input: SchemaCompilationInput::Shapes,
+            message: error.to_string(),
+        },
+    )?;
+    let ontology = ::purrdf_rdf::try_canonicalize(request.ontology).map_err(|error| {
         SchemaCompileError::Canonicalization {
             input: SchemaCompilationInput::Ontology,
             message: error.to_string(),
@@ -983,7 +982,7 @@ fn schema_compilation_key(
         frame_be_labelled(&mut bytes, "fixed-limit", &limit.to_be_bytes());
     }
     Ok(SchemaCompilationKey(
-        ::purrdf::ContentDigest::of(&bytes).to_hex(),
+        ::purrdf_rdf::ContentDigest::of(&bytes).to_hex(),
     ))
 }
 
@@ -7859,7 +7858,7 @@ mod tests {
              got {:?}",
             c.losses
         );
-        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
         let schema = schema_of(&c);
         assert!(
             schema["$defs"]["PinnedShape"].is_null(),
@@ -7890,7 +7889,7 @@ mod tests {
              own subject, got {:?}",
             c.losses
         );
-        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
         let schema = schema_of(&c);
         assert!(
             schema["$defs"]["AuthorShape"].is_null(),
@@ -7921,7 +7920,7 @@ mod tests {
              subject, got {:?}",
             c.losses
         );
-        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
         let schema = schema_of(&c);
         assert!(
             schema["$defs"]["BookShape"].is_null(),
@@ -7964,7 +7963,7 @@ mod tests {
              loss, got {:?}",
             c.losses
         );
-        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
         let schema = schema_of(&c);
         // The class is primary-namespace, so it is keyed by its bare local name.
         let widget = def(&schema, "Widget");
@@ -8073,7 +8072,7 @@ mod tests {
                 c.losses
             );
         }
-        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
     }
 
     #[test]

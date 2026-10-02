@@ -15,7 +15,7 @@ use std::error::Error;
 mod json_model;
 
 use json_model::json;
-use purrdf::loss::LossLedger;
+use purrdf_rdf::loss::LossLedger;
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig, emit_graphql};
 

@@ -3,11 +3,11 @@
 
 //! Parsing for SHACL-AF `sh:SPARQLFunction` declarations.
 
-use ::purrdf::FastSet;
+use ::purrdf_rdf::FastSet;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use ::purrdf::{RdfDataset, TermValue};
+use ::purrdf_rdf::{RdfDataset, TermValue};
 use purrdf_sparql_algebra::{Query, SparqlParser};
 use purrdf_sparql_eval::{
     EvalError, ExprFnCall, NodeKind as EvalNodeKind, TypeConstraint, UserFnBody, UserFnParam,

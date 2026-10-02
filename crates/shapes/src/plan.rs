@@ -42,7 +42,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{FastMap, FastSet, IdSet, TermId};
+use ::purrdf_rdf::{FastMap, FastSet, IdSet, TermId};
 
 use crate::data::{ShaclData, resolve_id};
 use crate::data_view::ShaclRead;

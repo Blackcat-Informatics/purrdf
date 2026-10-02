@@ -10,7 +10,7 @@
 //!   may use the shapes document's `@prefix` declarations as a fallback (see
 //!   `crate::shapes::prefixes`), and the frozen IR does not retain them. They come
 //!   from the Turtle codec's OWN record of the directives it parsed
-//!   ([`::purrdf::ParseOutcome::document_prefixes`]) — one parser, no second reading
+//!   ([`::purrdf_rdf::ParseOutcome::document_prefixes`]) — one parser, no second reading
 //!   of the text. A text scan cannot tell a directive from the same characters
 //!   quoted inside a long string literal (a `PREFIX` line inside an `sh:select`
 //!   query is exactly that), and every prefix such a scan invents is prepended to
@@ -23,8 +23,8 @@
 
 use std::sync::Arc;
 
-use ::purrdf::RdfDataset;
-use ::purrdf::{ParseOptions, parse_dataset, parse_dataset_with};
+use ::purrdf_rdf::RdfDataset;
+use ::purrdf_rdf::{ParseOptions, parse_dataset, parse_dataset_with};
 use purrdf_iri::terminals;
 
 /// Parse a Turtle document into a frozen [`RdfDataset`] via the native codecs,
@@ -67,7 +67,7 @@ pub struct TurtleDocument {
     /// `purrdf_core::imports` as a loaded document IRI (see [`crate::imports`]).
     pub base: Option<String>,
     /// The document's prefix map, as the Turtle codec itself recorded it
-    /// ([`::purrdf::ParseOutcome::document_prefixes`]): one `(label, namespace)` pair
+    /// ([`::purrdf_rdf::ParseOutcome::document_prefixes`]): one `(label, namespace)` pair
     /// per label a `@prefix` / `PREFIX` directive declared, sorted by label, bound to
     /// the namespace of the label's LAST declaration.
     ///
@@ -134,7 +134,7 @@ pub fn parse_ntriples_to_dataset(data_nt: &str) -> Result<Arc<RdfDataset>, Vec<S
 
 /// A frozen empty dataset (the `parse_dataset` of an empty document).
 fn empty_dataset() -> Arc<RdfDataset> {
-    ::purrdf::RdfDatasetBuilder::new()
+    ::purrdf_rdf::RdfDatasetBuilder::new()
         .freeze()
         .expect("an empty dataset freezes")
 }
@@ -148,9 +148,9 @@ fn empty_dataset() -> Arc<RdfDataset> {
 /// From the codec, never from the text. The recovery carries one directive state —
 /// the prefix bindings and the base in force — from statement to statement: each
 /// statement is parsed under the state the previous ones left, and the state it
-/// leaves is read back from the parse ([`::purrdf::ParseOutcome::document_prefixes`]
+/// leaves is read back from the parse ([`::purrdf_rdf::ParseOutcome::document_prefixes`]
 /// and `document_base`), or, when that statement is itself malformed, from the
-/// failure ([`::purrdf::ParseFailure`]), which reports the directives the grammar
+/// failure ([`::purrdf_rdf::ParseFailure`]), which reports the directives the grammar
 /// read before the failing token. So a `PREFIX` line quoted inside a string literal
 /// declares nothing here either, a directive applies only to the statements after
 /// it (a later `@base` does not re-resolve an earlier statement), and a SPARQL-form
@@ -189,7 +189,7 @@ fn turtle_statement_errors(ttl: &str, base: Option<&str>) -> Vec<String> {
         }
         candidate.push_str(trimmed);
         candidate.push('\n');
-        match ::purrdf::parse_dataset_reporting_failure(
+        match ::purrdf_rdf::parse_dataset_reporting_failure(
             candidate.as_bytes(),
             "text/turtle",
             state_base.as_deref(),
@@ -555,7 +555,7 @@ mod tests {
         // LAW: test-only, self-built fixture Turtle (`ttl` above) — never
         // caller-supplied and never reachable through a binding, so the panicking
         // wrapper is sound here.
-        let nt = ::purrdf::canonical_flat_nquads(dataset.as_ref()).expect("serialize");
+        let nt = ::purrdf_rdf::canonical_flat_nquads(dataset.as_ref()).expect("serialize");
         assert!(
             nt.contains("<http://example.org/dir/rel>"),
             "the relative subject must resolve against the base: {nt}"

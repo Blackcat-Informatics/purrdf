@@ -13,9 +13,9 @@
 
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::FastMap;
-use ::purrdf::FastSet;
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::FastMap;
+use ::purrdf_rdf::FastSet;
+use ::purrdf_rdf::RdfDataset;
 
 use purrdf_sparql_eval::{AggregateRegistry, UserFunctionRegistry};
 
@@ -963,7 +963,7 @@ impl Default for Shapes {
             validation_options: crate::engine::ValidationOptions::default(),
             target_types: std::collections::BTreeMap::new(),
             shapes_graph: None,
-            shapes_dataset: ::purrdf::RdfDatasetBuilder::new()
+            shapes_dataset: ::purrdf_rdf::RdfDatasetBuilder::new()
                 .freeze()
                 .expect("empty shapes dataset"),
             parse_provenance: ParseProvenance::default(),
@@ -1608,8 +1608,8 @@ impl<'s> Parser<'s> {
         //    rdfs:subClassOf of both sh:NodeShape and rdfs:Class".
         {
             let mut instances = parser::shacl_instance::ShaclInstances::new(self.data);
-            let mut typed: Vec<::purrdf::TermId> = Vec::new();
-            let mut seen = ::purrdf::IdSet::default();
+            let mut typed: Vec<::purrdf_rdf::TermId> = Vec::new();
+            let mut seen = ::purrdf_rdf::IdSet::default();
             if let Some(rdf_type) = self.data.term_id_by_iri(rdf::TYPE) {
                 for quad in crate::data::quads_for_pattern_ids(
                     self.data,
@@ -2959,7 +2959,7 @@ impl<'s> Parser<'s> {
     /// in G and exactly one value for the property rdf:rest in G that is also a
     /// SHACL list in G, and the list does not have itself as a value of the
     /// property path rdf:rest+ in G." That is the strict walker's contract
-    /// ([`DatasetView::rdf_list_strict`](::purrdf::DatasetView::rdf_list_strict)):
+    /// ([`DatasetView::rdf_list_strict`](::purrdf_rdf::DatasetView::rdf_list_strict)):
     /// a cell without `rdf:first` or `rdf:rest`, with two of either, a literal
     /// cell, or a cycle is refused rather than read as a shorter list.
     fn walk_rdf_list(&self, head: &Term, shape_id: &Term) -> Result<Vec<Term>, String> {
@@ -2978,14 +2978,18 @@ impl<'s> Parser<'s> {
                 Err(malformed(&"it has no rdf:first"))
             };
         };
-        ::purrdf::DatasetView::rdf_list_strict(self.data, head_id, ::purrdf::GraphMatch::Any)
-            .map(|members| {
-                members
-                    .into_iter()
-                    .map(|member| crate::term::term_id_to_native(self.data, member))
-                    .collect()
-            })
-            .map_err(|error| malformed(&error))
+        ::purrdf_rdf::DatasetView::rdf_list_strict(
+            self.data,
+            head_id,
+            ::purrdf_rdf::GraphMatch::Any,
+        )
+        .map(|members| {
+            members
+                .into_iter()
+                .map(|member| crate::term::term_id_to_native(self.data, member))
+                .collect()
+        })
+        .map_err(|error| malformed(&error))
     }
 
     /// Walk an RDF list of shape nodes, parsing each as an anonymous shape.
@@ -3877,7 +3881,7 @@ mod tests {
             "/../../vectors/shacl/sparql/component/optional-001.ttl"
         ))
         .expect("fixture exists");
-        let dataset: Arc<RdfDataset> = ::purrdf::parse_dataset(
+        let dataset: Arc<RdfDataset> = ::purrdf_rdf::parse_dataset(
             ttl.as_bytes(),
             "text/turtle",
             Some("http://datashapes.org/sh/tests/sparql/component/optional-001.test"),

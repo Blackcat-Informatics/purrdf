@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Production-surface red/green demo for the reusable sound+complete loss
-//! verification helpers (`purrdf::loss::{check_ledger_complete,
+//! verification helpers (`purrdf_rdf::loss::{check_ledger_complete,
 //! assert_ledger_complete, check_ledger_sound, assert_ledger_sound}`).
 //!
 //! `purrdf_shapes::json_schema::compile` is the one live runtime producer of a
-//! [`purrdf::loss::LossLedger`] (`CompiledSchema::losses`): every test here
+//! [`purrdf_rdf::loss::LossLedger`] (`CompiledSchema::losses`): every test here
 //! drives that REAL entry point over `example.org` SHACL fixtures — never a
 //! hand-built ledger — and observes the helpers against its actual output.
 //!
@@ -22,7 +22,7 @@
 //! - `lossless_shape_compiles_with_empty_ledger`: a shape with no
 //!   unrepresentable construct compiles to an empty ledger.
 
-use purrdf::loss::{assert_ledger_complete, assert_ledger_sound, check_ledger_complete};
+use purrdf_rdf::loss::{assert_ledger_complete, assert_ledger_sound, check_ledger_complete};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, SchemaCompileError, compile};
 use purrdf_shapes::shapes::from_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;

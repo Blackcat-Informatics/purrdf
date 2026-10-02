@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::ShapesError;
 use purrdf_shapes::engine::validate_graphs;
 use purrdf_shapes::imports::ShapesImports;
@@ -374,8 +374,8 @@ ex:PersonRule a sh:NodeShape ;
     };
     assert_eq!(quiet.tripped(), None);
     assert_eq!(
-        purrdf::canonical_flat_nquads(entailed.as_ref()).expect("canonical"),
-        purrdf::canonical_flat_nquads(baseline.as_ref()).expect("canonical"),
+        purrdf_rdf::canonical_flat_nquads(entailed.as_ref()).expect("canonical"),
+        purrdf_rdf::canonical_flat_nquads(baseline.as_ref()).expect("canonical"),
         "a quiet signal changes nothing entailed"
     );
 

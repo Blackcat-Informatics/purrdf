@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
-use purrdf::{RdfDataset, SparqlRequest, SparqlResult};
+use purrdf_rdf::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
 
 use super::{ShapeIndex, link_shapes};

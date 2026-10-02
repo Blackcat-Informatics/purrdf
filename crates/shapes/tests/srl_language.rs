@@ -15,14 +15,14 @@ use std::sync::Arc;
 use terms::example_org as iri;
 use terms::integer as int;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::srl::{self, InferOptions, SrlError};
 use purrdf_shapes::term::{NamedNode, Term};
 
 const EX: &str = "http://example.org/";
 
 fn data(ttl: &str) -> Arc<RdfDataset> {
-    purrdf::parse_dataset(
+    purrdf_rdf::parse_dataset(
         format!("@prefix : <{EX}> .\n{ttl}").as_bytes(),
         "text/turtle",
         None,

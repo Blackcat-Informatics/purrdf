@@ -25,7 +25,7 @@ pub enum SliceError {
     },
     /// A structurally malformed RDF Collection encountered while walking an
     /// `rdf:first`/`rdf:rest` chain.
-    RdfList(purrdf::RdfListError),
+    RdfList(purrdf_rdf::RdfListError),
     /// A JSON value does not have the shape a slice record decodes from
     /// (`from_json` on [`crate::ManifestView`], [`crate::ArtifactRecord`] and
     /// their parts).

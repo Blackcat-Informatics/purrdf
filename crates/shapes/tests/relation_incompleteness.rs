@@ -22,7 +22,7 @@ mod relation;
 
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{GovernedValidation, validate_dataset_with_governors};
 use purrdf_shapes::sparql::enter_property_function_scope;
 use purrdf_sparql_eval::{

@@ -42,8 +42,8 @@ use std::fmt::Write as _;
 use crate::json_model::{Map, Object, Value, ValueKind};
 // A JSON string literal is a valid Python `str` literal with the same value.
 use crate::json_model::json_string as python_string;
-use ::purrdf::RdfLocation;
-use ::purrdf::loss::{LossEntry, LossLedger};
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 use purrdf_hash::fnv::fnv1a64;
 
 use crate::json_schema::CompiledSchema;
@@ -2551,7 +2551,7 @@ mod tests {
     use crate::json_model::json;
     use crate::json_schema::Namespaces;
     use crate::schema_import::SchemaDatatypeMap;
-    use ::purrdf::loss::check_ledger_sound;
+    use ::purrdf_rdf::loss::check_ledger_sound;
 
     use purrdf_xsd::datatype::XSD_NS as XSD;
 

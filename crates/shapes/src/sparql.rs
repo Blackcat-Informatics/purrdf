@@ -19,8 +19,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
-use ::purrdf::TermValue;
-use ::purrdf::{DatasetView, FastMap, RdfDataset};
+use ::purrdf_rdf::TermValue;
+use ::purrdf_rdf::{DatasetView, FastMap, RdfDataset};
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
     AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, GraphResolver,
@@ -2482,7 +2482,7 @@ fn cached_plan_count() -> usize {
 mod tests {
     use std::sync::Arc;
 
-    use ::purrdf::RdfDataset;
+    use ::purrdf_rdf::RdfDataset;
 
     use super::*;
     use crate::report::Severity;

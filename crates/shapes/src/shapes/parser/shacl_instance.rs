@@ -31,7 +31,7 @@
 //! here whether or not the shapes graph asserts them: a type that reaches
 //! `sh:ShapeClass` reaches `sh:NodeShape` and `rdfs:Class` too.
 
-use ::purrdf::{FastMap, IdSet, RdfDataset, TermId};
+use ::purrdf_rdf::{FastMap, IdSet, RdfDataset, TermId};
 
 use crate::data::{GraphFilter, quads_for_pattern_ids};
 use crate::model::{rdf, rdfs, sh};

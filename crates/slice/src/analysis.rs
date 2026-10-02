@@ -513,8 +513,8 @@ mod tests {
         // nothing relative for one to resolve. A relative IRI appearing here would be an
         // emitter bug, and the hard `iri-relative-no-base` failure is how this test
         // would catch it.
-        let dataset =
-            purrdf::parse_dataset(turtle.as_bytes(), "text/turtle", None).unwrap_or_else(|e| {
+        let dataset = purrdf_rdf::parse_dataset(turtle.as_bytes(), "text/turtle", None)
+            .unwrap_or_else(|e| {
                 panic!("emitted Turtle is not valid:\n{e}\n\n--- emitted body ---\n{turtle}")
             });
 

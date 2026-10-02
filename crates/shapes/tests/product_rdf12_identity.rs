@@ -42,7 +42,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, RdfTextDirection};
+use purrdf_rdf::{RdfDataset, RdfTextDirection};
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
 use purrdf_shapes::model::sh;
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};

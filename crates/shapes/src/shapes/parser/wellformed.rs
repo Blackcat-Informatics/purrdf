@@ -30,7 +30,7 @@
 //! not support is enforced where the one regime this processor supports is read
 //! (`Parser::parse_rule_graph`).
 
-use ::purrdf::FastSet;
+use ::purrdf_rdf::FastSet;
 
 use super::shacl_instance::ShaclInstances;
 use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids};
@@ -307,7 +307,7 @@ impl Parser<'_> {
         let mut instances = ShaclInstances::new(self.data);
         let parameter_class = self.data.term_id_by_iri(sh::PARAMETER);
         if let Some(rdf_type) = self.data.term_id_by_iri(rdf::TYPE) {
-            let typed: Vec<::purrdf::TermId> =
+            let typed: Vec<::purrdf_rdf::TermId> =
                 quads_for_pattern_ids(self.data, None, Some(rdf_type), None, GraphFilter::AnyGraph)
                     .map(|quad| quad.s)
                     .collect();
@@ -329,7 +329,7 @@ impl Parser<'_> {
         // "s is a SHACL instance of sh:NodeShape or sh:PropertyShape" — through
         // `rdfs:subClassOf*` and `sh:ShapeClass` (see `shacl_instance`).
         let mut instances = ShaclInstances::new(self.data);
-        let mut typed = ::purrdf::IdSet::default();
+        let mut typed = ::purrdf_rdf::IdSet::default();
         if let Some(rdf_type) = self.data.term_id_by_iri(rdf::TYPE) {
             for quad in
                 quads_for_pattern_ids(self.data, None, Some(rdf_type), None, GraphFilter::AnyGraph)

@@ -31,7 +31,7 @@ mod shacl_value_shapes;
 
 use json_model::{ToJson, Value, json};
 use json_text::read_sorted;
-use purrdf::loss::{check_ledger_complete, check_ledger_sound};
+use purrdf_rdf::loss::{check_ledger_complete, check_ledger_sound};
 use purrdf_shapes::{
     SchemaImportConfig, TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT, TypeScriptConfig,
     TypeScriptPackage, emit_typescript, import_typescript_package,

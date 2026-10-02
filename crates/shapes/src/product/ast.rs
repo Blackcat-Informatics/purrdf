@@ -208,7 +208,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{FastMap, RdfTextDirection};
+use ::purrdf_rdf::{FastMap, RdfTextDirection};
 use purrdf_core::ir::pack::bits::{PackBitsError, read_varint, write_varint};
 
 use crate::expression::{

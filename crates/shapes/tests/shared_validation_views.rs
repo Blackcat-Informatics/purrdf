@@ -3,8 +3,8 @@
 
 //! Regression coverage for typed immutable carrier publication.
 
-use purrdf::ir::{CompositeDatasetView, ViewLimits};
-use purrdf::{
+use purrdf_rdf::ir::{CompositeDatasetView, ViewLimits};
+use purrdf_rdf::{
     BlankScope, DatasetMut, DatasetView, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, TermValue,
 };
@@ -378,7 +378,7 @@ fn assert_probe_pattern_matrix(
     view: &ShaclDatasetView,
     projected: bool,
 ) {
-    use purrdf::GraphMatch;
+    use purrdf_rdf::GraphMatch;
     use std::collections::BTreeSet;
 
     let id = |local| {

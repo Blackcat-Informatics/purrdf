@@ -45,7 +45,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use ::purrdf::RdfDataset;
+use ::purrdf_rdf::RdfDataset;
 use purrdf_datalog::seminaive::EvalError;
 use purrdf_iri::LineIndex;
 

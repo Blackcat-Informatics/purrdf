@@ -8,10 +8,10 @@ use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::ir::{
+use ::purrdf_rdf::ir::{
     CompositeDatasetView, DeltaDatasetView, QuadProbePlan, ViewLimits, import::DatasetImporter,
 };
-use ::purrdf::{
+use ::purrdf_rdf::{
     BlankScope, DatasetView, FastMap, FastSet, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder,
     RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,
 };
@@ -400,10 +400,10 @@ impl ShaclDatasetView {
             base,
             added,
             |id| match id {
-                ::purrdf::ir::DeltaViewId::Base(id) => Some(id.index()),
-                ::purrdf::ir::DeltaViewId::Delta(_) => None,
+                ::purrdf_rdf::ir::DeltaViewId::Base(id) => Some(id.index()),
+                ::purrdf_rdf::ir::DeltaViewId::Delta(_) => None,
             },
-            |index| ::purrdf::ir::DeltaViewId::Base(local_handle(index)),
+            |index| ::purrdf_rdf::ir::DeltaViewId::Base(local_handle(index)),
             limits,
         )?;
         Ok(Self::new(Source::Delta(dense), projected))
@@ -462,12 +462,12 @@ impl ShaclDatasetView {
         limits: ViewLimits,
     ) -> Result<Self, String> {
         debug_assert_eq!(terms.quad_count(), 0, "a term supplement carries no rows");
-        let extra = ::purrdf::ir::CompositeSource::new(terms);
+        let extra = ::purrdf_rdf::ir::CompositeSource::new(terms);
         let (composite, wrapped_delta) = match &self.source {
             Source::Native(native) => (
                 CompositeDatasetView::from_shared_sources(
                     vec![
-                        ::purrdf::ir::CompositeSource::new(Arc::clone(native)),
+                        ::purrdf_rdf::ir::CompositeSource::new(Arc::clone(native)),
                         extra,
                     ],
                     limits,
@@ -477,7 +477,7 @@ impl ShaclDatasetView {
             Source::Delta(dense) => (
                 CompositeDatasetView::from_shared_sources(
                     vec![
-                        ::purrdf::ir::CompositeSource::from_delta(Arc::clone(&dense.source)),
+                        ::purrdf_rdf::ir::CompositeSource::from_delta(Arc::clone(&dense.source)),
                         extra,
                     ],
                     limits,
@@ -583,7 +583,7 @@ impl ShaclDatasetView {
 
     /// This view's own handle for a snapshot term, or `None` when the term is not
     /// one this view maps.
-    pub(crate) fn local_delta_id(&self, id: ::purrdf::ir::DeltaViewId) -> Option<TermId> {
+    pub(crate) fn local_delta_id(&self, id: ::purrdf_rdf::ir::DeltaViewId) -> Option<TermId> {
         match &self.source {
             Source::Delta(dense) => dense.local(id),
             // The wrapped snapshot is source 0 of the composite (see
@@ -810,7 +810,7 @@ impl ProjectionDedup {
         }
         let mut set: FastSet<QuadIds> = FastSet::with_capacity_and_hasher(
             self.inline.len() * 2,
-            ::purrdf::FastHasher::default(),
+            ::purrdf_rdf::FastHasher::default(),
         );
         set.extend(self.inline.iter().copied());
         let fresh = set.insert(quad);

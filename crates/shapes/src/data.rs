@@ -19,8 +19,8 @@
 use crate::data_view::{ShaclDatasetView, ShaclRead};
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{GraphMatch, QuadIds};
-use ::purrdf::{RdfDataset, TermId};
+use ::purrdf_rdf::{GraphMatch, QuadIds};
+use ::purrdf_rdf::{RdfDataset, TermId};
 
 use crate::class_membership::ClassMembershipView;
 use crate::term::{NamedNode, Term, term_id_to_native};
@@ -46,10 +46,10 @@ pub(crate) fn resolve_id(dataset: &impl ShaclRead, term: &Term) -> Option<TermId
                 // the fallback. (The two spellings differ only for a scoped or
                 // marker-prefixed label; every other label is its own qualification.)
                 Term::BlankNode(label) => {
-                    let (decoded, scope) = ::purrdf::BlankScope::unqualify_label(label);
-                    dataset
-                        .term_id_by_blank(&decoded, scope)
-                        .or_else(|| dataset.term_id_by_blank(label, ::purrdf::BlankScope::DEFAULT))
+                    let (decoded, scope) = ::purrdf_rdf::BlankScope::unqualify_label(label);
+                    dataset.term_id_by_blank(&decoded, scope).or_else(|| {
+                        dataset.term_id_by_blank(label, ::purrdf_rdf::BlankScope::DEFAULT)
+                    })
                 }
                 Term::Literal(literal) => dataset.term_id_by_literal(
                     literal.value(),
@@ -204,7 +204,7 @@ impl ShaclData {
     /// pays for it.
     pub(crate) fn graph_nodes(&self) -> &[TermId] {
         self.graph_nodes.get_or_init(|| {
-            let mut seen = ::purrdf::IdSet::default();
+            let mut seen = ::purrdf_rdf::IdSet::default();
             let mut nodes: Vec<TermId> = Vec::new();
             for quad in quads_for_pattern_ids(&*self.core, None, None, None, GraphFilter::AnyGraph)
             {
@@ -299,14 +299,14 @@ impl ShaclData {
         let (core, sparql) = if missing.is_empty() {
             (Arc::clone(&self.core), Arc::clone(&self.sparql))
         } else {
-            let mut terms = ::purrdf::RdfDatasetBuilder::new();
+            let mut terms = ::purrdf_rdf::RdfDatasetBuilder::new();
             for iri in missing {
                 terms.intern_iri(iri);
             }
             let terms = terms
                 .freeze()
                 .map_err(|error| format!("the subClassOfInShapesGraph terms: {error}"))?;
-            let limits = ::purrdf::ir::ViewLimits::default();
+            let limits = ::purrdf_rdf::ir::ViewLimits::default();
             let core = Arc::new(self.core.with_extra_terms(Arc::clone(&terms), limits)?);
             let sparql = if self.sparql_view_shares_core_ids() {
                 Arc::clone(&core)
@@ -401,7 +401,7 @@ pub fn quads_for_pattern_ids(
 }
 
 /// The distinct objects of `(subject, predicate, ?)` in any graph, as native
-/// terms: [`DatasetView::objects`](::purrdf::DatasetView::objects), lifted from
+/// terms: [`DatasetView::objects`](::purrdf_rdf::DatasetView::objects), lifted from
 /// the native term and IRI a cold-path reader holds. Empty when `subject` or
 /// `predicate` is not interned, so neither can have a statement.
 pub(crate) fn objects_of(ds: &impl ShaclRead, subject: &Term, predicate: &str) -> Vec<Term> {
@@ -489,7 +489,7 @@ mod tests {
     /// always said `true` would be the defect itself.
     #[test]
     fn the_id_crossing_predicate_distinguishes_one_view_from_two() {
-        let mut b = ::purrdf::RdfDatasetBuilder::new();
+        let mut b = ::purrdf_rdf::RdfDatasetBuilder::new();
         let s = b.intern_iri("http://example.org/s");
         let p = b.intern_iri("http://example.org/p");
         let o = b.intern_iri("http://example.org/o");

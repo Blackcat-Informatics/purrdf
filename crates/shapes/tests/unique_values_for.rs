@@ -30,8 +30,8 @@ mod terms;
 use std::sync::Arc;
 use terms::ex_ns as ex_term;
 
-use purrdf::ir::ViewLimits;
-use purrdf::{DatasetMut, MutableDataset, QuadValues, TermValue};
+use purrdf_rdf::ir::ViewLimits;
+use purrdf_rdf::{DatasetMut, MutableDataset, QuadValues, TermValue};
 use purrdf_shapes::engine::PreparedShapes;
 use purrdf_shapes::report::ValidationReport;
 

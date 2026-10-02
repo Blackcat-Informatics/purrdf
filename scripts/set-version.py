@@ -22,9 +22,9 @@ Internal dependency-requirement pins (every intra-workspace path dependency —
 a dependency line carrying BOTH ``path = "…"`` and ``version = "…"``):
 * ``Cargo.toml``                         — the ``[workspace.dependencies]`` pins
 * ``crates/*/Cargo.toml`` /
-  ``bindings/*/Cargo.toml``              — renamed-dep pins (e.g. shapes/slice's
-                                           ``purrdf = { package = "purrdf-rdf" }``
-                                           and rdf-capi's ``purrdf-rs``)
+  ``bindings/*/Cargo.toml``              — any directly declared path pins;
+                                           workspace-inherited dependencies,
+                                           including aliases, need no rewrite
 
 Other version locations:
 * ``crates/rdf-capi/Cargo.toml``         — ``[package.metadata.capi.library] version``
@@ -134,7 +134,7 @@ def set_path_dep_versions(path: Path, version: str) -> int:
 
     An intra-workspace pin is any line carrying BOTH ``path = "…"`` and a quoted
     ``version = "…"`` (the internal ``[workspace.dependencies]`` entries and the
-    renamed-dep pins in member manifests). External deps have no ``path`` and
+    directly declared pins in member manifests). External deps have no ``path`` and
     ``version.workspace = true`` inheritors have no quoted version, so neither is
     touched. Returns the number of lines changed.
     """
@@ -272,7 +272,7 @@ def main(argv: list[str]) -> int:
     set_npm_lock_version(root / "crates" / "rdf-wasm" / "js" / "package-lock.json", version)
 
     # 2. Every intra-workspace path-dependency version pin: the
-    #    [workspace.dependencies] internal pins and the member renamed-dep pins.
+    #    [workspace.dependencies] internal pins and any direct member path pins.
     pins = set_path_dep_versions(root / "Cargo.toml", version)
     for manifest in member_manifests(root):
         pins += set_path_dep_versions(manifest, version)

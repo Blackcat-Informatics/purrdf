@@ -27,8 +27,8 @@ use crate::json_model::{Map, NumberKind, Object, ToJson, Value, ValueKind, json}
 use crate::limits::{self, MAX_SCHEMA_DEPTH};
 // A JSON string literal is a GraphQL `StringValue` with the same value.
 use crate::json_model::json_string as graphql_string;
-use ::purrdf::RdfLocation;
-use ::purrdf::loss::{LossEntry, LossLedger};
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
@@ -3006,7 +3006,7 @@ mod tests {
     use crate::json_model::json;
     use crate::json_schema::Namespaces;
     use crate::schema_import::SchemaDatatypeMap;
-    use ::purrdf::loss::{check_ledger_complete, check_ledger_sound};
+    use ::purrdf_rdf::loss::{check_ledger_complete, check_ledger_sound};
     use purrdf_testkit::prop::prelude::*;
 
     use purrdf_xsd::datatype::XSD_NS as XSD;

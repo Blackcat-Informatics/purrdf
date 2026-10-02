@@ -61,7 +61,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::data::{GraphFilter, native_quads, resolve_id};
-use purrdf::{DatasetView as _, GraphMatch, RdfDataset};
+use purrdf_rdf::{DatasetView as _, GraphMatch, RdfDataset};
 
 pub mod node_expr_grading;
 pub mod report_grading;
@@ -276,7 +276,7 @@ pub fn named(iri: &str) -> Term {
 }
 
 /// The distinct objects of `(subject, predicate, ?)` in any graph:
-/// [`DatasetView::objects`](purrdf::DatasetView::objects), lifted to native terms.
+/// [`DatasetView::objects`](purrdf_rdf::DatasetView::objects), lifted to native terms.
 pub fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     crate::data::objects_of(g, subject, predicate)
 }
@@ -341,7 +341,7 @@ pub fn iri_to_path(iri: &str) -> PathBuf {
 pub fn parse_turtle_file(path: &Path) -> Result<Arc<RdfDataset>, String> {
     let text =
         fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    purrdf::parse_dataset(text.as_bytes(), "text/turtle", Some(&file_iri(path)))
+    purrdf_rdf::parse_dataset(text.as_bytes(), "text/turtle", Some(&file_iri(path)))
         .map_err(|e| format!("cannot parse {}: {e}", path.display()))
 }
 

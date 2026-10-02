@@ -47,8 +47,8 @@ use purrdf_sparql_eval::fixture::OneRowRelation;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use purrdf::RdfDataset;
 use purrdf_core::TermValue;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::validate_dataset;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::sparql::{enter_parser_options_scope, enter_property_function_scope};

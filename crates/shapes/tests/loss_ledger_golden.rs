@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Golden drift gate for the public **runtime** loss-ledger schema
-//! ([`purrdf::loss::LossLedger::render_json`]) over a REAL
+//! ([`purrdf_rdf::loss::LossLedger::render_json`]) over a REAL
 //! [`purrdf_shapes::json_schema::compile`] output — never a hand-built ledger.
 //!
 //! `generated/rdf-loss-matrix.json` / `generated/transcode-loss-matrix.json`
@@ -23,7 +23,7 @@
 //! keep the two copies in lock-step; a drift between them is still caught
 //! (the regenerated file would then fail this test's own drift check).
 
-use purrdf::loss::assert_ledger_sound;
+use purrdf_rdf::loss::assert_ledger_sound;
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, compile};
 use purrdf_shapes::shapes::from_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;

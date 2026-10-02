@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::validate_dataset;
 use purrdf_shapes::model::sh;
 use purrdf_shapes::shapes::{Constraint, Shapes, from_dataset};
@@ -18,7 +18,7 @@ const PREFIXES: &str = r"
 ";
 
 fn dataset(body: &str) -> Arc<RdfDataset> {
-    purrdf::parse_dataset(format!("{PREFIXES}{body}").as_bytes(), "text/turtle", None)
+    purrdf_rdf::parse_dataset(format!("{PREFIXES}{body}").as_bytes(), "text/turtle", None)
         .expect("RDF fixture parses")
 }
 
@@ -304,7 +304,7 @@ fn repeated_statements_across_graphs_do_not_duplicate_parameters_or_constraints(
         ex:Validator a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" .
         ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ; ex:arg ex:a, ex:b ."#;
     let trig = format!("{PREFIXES} ex:g1 {{ {graph} }} ex:g2 {{ {graph} }}");
-    let ds = purrdf::parse_dataset(trig.as_bytes(), "application/trig", None).unwrap();
+    let ds = purrdf_rdf::parse_dataset(trig.as_bytes(), "application/trig", None).unwrap();
     let parsed = from_dataset(&ds).expect("named graphs contribute distinct object values");
     assert_eq!(parsed.node_shapes[0].constraints.len(), 2);
     assert_eq!(

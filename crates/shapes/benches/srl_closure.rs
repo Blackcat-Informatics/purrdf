@@ -30,7 +30,7 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
 use purrdf_shapes::rules::{RuleOptions, infer};
@@ -51,7 +51,7 @@ fn chain(len: usize) -> Arc<RdfDataset> {
     for index in 0..len {
         writeln!(text, ":n{index} :link :n{} .", index + 1).expect("write to String");
     }
-    purrdf::parse_dataset(text.as_bytes(), "text/turtle", None).expect("the chain parses")
+    purrdf_rdf::parse_dataset(text.as_bytes(), "text/turtle", None).expect("the chain parses")
 }
 
 fn bench(c: &mut Bench) {

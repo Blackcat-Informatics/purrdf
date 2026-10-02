@@ -117,9 +117,9 @@ use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
 use json_model::{Object as Map, Value, json};
-use purrdf::loss::LossLedger;
-use purrdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
+use purrdf_rdf::loss::LossLedger;
+use purrdf_rdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_shapes::ShapesImports;
 use purrdf_shapes::engine::{
     __prepared_class_membership_view, FocusId, PreparedValidator, parse_shapes,

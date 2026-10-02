@@ -4286,7 +4286,7 @@ fn json_schema_records_shape_based_property_constraints() {
             "sh:uniqueLang",
         ]
     );
-    purrdf::loss::assert_ledger_sound(&emitted.compiled.losses, "shacl", "json-schema");
+    purrdf_rdf::loss::assert_ledger_sound(&emitted.compiled.losses, "shacl", "json-schema");
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
         holder["properties"]["ex:subject"]["anyOf"][0]["allOf"][0]["$comment"],
@@ -4320,5 +4320,5 @@ fn json_schema_projects_focus_node_constraints() {
     let classed =
         emit("ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ; sh:class ex:Root .");
     assert_eq!(source_codes(&classed), owned2(&[("sh:class", HOLDER)]));
-    purrdf::loss::assert_ledger_sound(&classed.compiled.losses, "shacl", "json-schema");
+    purrdf_rdf::loss::assert_ledger_sound(&classed.compiled.losses, "shacl", "json-schema");
 }

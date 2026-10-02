@@ -50,8 +50,8 @@
 use purrdf_shapes::product_fixture::core_product;
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactSpec, ArtifactView, Identity};
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
 use purrdf_shapes::product::{
     HostBindings, ProductDimension, ShapesProduct, ShapesProductError, ShapesProfile,

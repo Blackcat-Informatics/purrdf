@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
+use purrdf_rdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::free_expression::{FreeExpression, evaluate, parse_term};
 use purrdf_shapes::function_resolution::FunctionBinding;

@@ -27,9 +27,7 @@ path = "src/lib.rs"
 [dependencies]
 # The slice catalog/emitters/linters parse via the native
 # `gts` text codecs (`parse_dataset`) into the `RdfDataset` IR and query it directly.
-# NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
-# at an inheriting use site, and the workspace key `purrdf` is the umbrella.
-purrdf = { package = "purrdf-rdf", path = "../rdf", version = "3.0.1" }
+purrdf-rdf = { workspace = true }
 # The ring-fenced kernel, named directly (not through the `purrdf` umbrella) for
 # `graph::tarjan_scc`: the workspace's ONE strongly-connected-components
 # implementation, which the link-unit linker runs over slice dependency edges.

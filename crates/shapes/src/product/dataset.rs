@@ -83,7 +83,7 @@
 
 use std::sync::Arc;
 
-use ::purrdf::{PackBuilder, PackDigest, PackError, RdfDataset, restore_pack, verify_pack};
+use ::purrdf_rdf::{PackBuilder, PackDigest, PackError, RdfDataset, restore_pack, verify_pack};
 
 use super::error::{ProductDimension, ShapesProductError};
 
@@ -299,7 +299,7 @@ pub(crate) fn certify_dataset(bytes: &[u8]) -> Result<PackDigest, ShapesProductE
 mod tests {
     use std::sync::Arc;
 
-    use ::purrdf::{RdfDataset, pack_digest, try_canonicalize};
+    use ::purrdf_rdf::{RdfDataset, pack_digest, try_canonicalize};
 
     use super::{ProductDimension, certify_dataset, encode_dataset, open_dataset};
     use crate::product::ast::encode_ast_derived;

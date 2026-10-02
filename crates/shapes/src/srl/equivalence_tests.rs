@@ -90,11 +90,11 @@ fn the_rules_corpus_infers_the_same_under_both_reexecutions() {
         };
         let text = fs::read_to_string(&input).expect("the case input");
         let base = format!("file://{}", input.display());
-        let parsed = ::purrdf::parse_dataset_with(
+        let parsed = ::purrdf_rdf::parse_dataset_with(
             text.as_bytes(),
             media,
             Some(&base),
-            &::purrdf::ParseOptions::default(),
+            &::purrdf_rdf::ParseOptions::default(),
         )
         .expect("the case input parses");
         let shapes =

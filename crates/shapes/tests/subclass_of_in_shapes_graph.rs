@@ -14,8 +14,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use purrdf::ir::ViewLimits;
-use purrdf::{DatasetMut, MutableDataset, QuadValues, TermValue};
+use purrdf_rdf::ir::ViewLimits;
+use purrdf_rdf::{DatasetMut, MutableDataset, QuadValues, TermValue};
 use purrdf_shapes::engine::{
     PreparedShapes, ValidationOptions, parse_shapes, validate_dataset_with_shapes_graph,
 };

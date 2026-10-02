@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ::purrdf::FastSet;
+use ::purrdf_rdf::FastSet;
 
 use purrdf_sparql_algebra::{Query, SparqlParser};
 

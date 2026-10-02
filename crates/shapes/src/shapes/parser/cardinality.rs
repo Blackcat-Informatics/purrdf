@@ -3,7 +3,7 @@
 
 //! Native SHACL parameter cardinalities, independent of vocabulary imports.
 
-use ::purrdf::{FastMap, IdSet, RdfDataset, TermId};
+use ::purrdf_rdf::{FastMap, IdSet, RdfDataset, TermId};
 
 use crate::data::{GraphFilter, quads_for_pattern_ids};
 use crate::model::{rdf, rdfs, sh};
