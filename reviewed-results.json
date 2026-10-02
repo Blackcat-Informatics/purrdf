@@ -1,0 +1,43 @@
+{
+  "pull_request": 377,
+  "publication_issue": 375,
+  "head": "4cafe98e2d53f681e6f6a671d81e32f46ce5220c",
+  "base": "91c22d7f44f418f05e88f6c9025f3289af43a9ee",
+  "files": [
+    "docs/book/src/project/releases.md",
+    "docs/book/po/zh-Hans.po"
+  ],
+  "scope": "Documentation and translation only",
+  "local_validation": {
+    "documented_claims": 154,
+    "gate_parity_cases": 68,
+    "rendering_gates": 6,
+    "rendered_pages": 33,
+    "sparql_fences": 24,
+    "active_translated_units": 2865,
+    "active_fuzzy": 0,
+    "active_untranslated": 0,
+    "source_catalog_drift": 0,
+    "normal_commit_hooks": "passed",
+    "independent_chinese_review": "GO"
+  },
+  "hosted_checks_status": "All exact-head CI, Docs and CodeQL workflows completed successfully",
+  "publication_status": "No 3.0.0 tags or publication yet",
+  "hosted_checks": {
+    "ci": {
+      "run": 36968998654,
+      "conclusion": "success",
+      "successful_jobs": 42
+    },
+    "docs": {
+      "run": 36968998653,
+      "conclusion": "success",
+      "pull_request_deployment": "skipped"
+    },
+    "codeql": {
+      "run": 36968996095,
+      "conclusion": "success",
+      "successful_language_jobs": 5
+    }
+  }
+}
