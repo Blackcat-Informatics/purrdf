@@ -121,11 +121,12 @@ make bump VERSION=0.2.2
 # 2. Regenerate the committed C-ABI header from the bumped crate version.
 make capi-header
 
-# 3. Complete the release notes, preserving existing migration guidance.
+# 3. Complete the changelog and reviewed summary, preserving migration guidance.
 # Rename the Unreleased section to the bumped version and release date.
 # Use make changelog only for history-generated notes.
+# Add the reviewed short summary at docs/releases/<version>.md.
 
-# 4. Review, then commit the release bump, generated header, and changelog.
+# 4. Review, then commit the bump, generated header, changelog and summary.
 git add -A && git commit -m "chore(release): 0.2.2"
 
 # 5. From an up-to-date main, run every release gate, then push all three tags.
@@ -134,8 +135,9 @@ make release-tags VERSION=0.2.2
 
 `make release-tags` refuses to run unless the working tree is clean, the
 branch is `main` and synchronized with `origin/main`, the version and crates.io
-record/lock checks pass, `VERSION` matches the tree, the release-notes section
-exists, and none of the three tags already exists locally or remotely. It then
+record/lock checks pass, `VERSION` matches the tree, the full changelog section
+and validated reviewed summary exist, and none of the three tags already exists
+locally or remotely. It then
 runs these gates in order:
 
 1. `make check`: the Rust and wasm workspace gate and repository hygiene.
@@ -150,8 +152,10 @@ runs these gates in order:
 Only after every surface passes does it recheck the clean synchronized state
 and atomically push the `rust-v`, `py-v`, and `npm-v` tags together. No tag is
 created before the complete cross-surface preflight passes. Each tag triggers
-its own lane, and the cargo lane additionally publishes a GitHub Release built
-from the committed `CHANGELOG.md`.
+its own lane, and the cargo lane additionally publishes a GitHub Release using
+the committed reviewed summary in `docs/releases/<version>.md`, linked to the
+complete changelog. The shared checker validates the exact version and 64 KiB
+UTF-8 size ceiling before tags and publication; no notes are truncated.
 
 ## Citing PurRDF
 

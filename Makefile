@@ -51,8 +51,8 @@ CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 .PHONY: help doctor metadata fmt hooks check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
 
-# The changelog generator is pinned so the committed CHANGELOG.md and the notes
-# the release workflow slices out of it stay byte-reproducible across machines.
+# The changelog generator is pinned so the detailed CHANGELOG.md history stays
+# byte-reproducible across machines. GitHub uses a separately reviewed summary.
 GIT_CLIFF_VERSION := 2.13.1
 
 # binaryen (wasm-opt / wasm-dis) is pinned so the optimized npm artifact is
@@ -138,6 +138,8 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-doc-claims.py
 	python3 scripts/check-i18n-glossary.py
 	python3 scripts/check-versions.py
+	python3 scripts/check-release-notes.py --self-test
+	python3 scripts/check-release-notes.py
 	python3 scripts/check-publish-order.py
 	bash scripts/check-crates-io-records.sh --self-test
 	bash scripts/publish-release-crates.sh --self-test
@@ -212,13 +214,12 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	@test -z "$$(git status --porcelain)" || { echo "ERROR: working tree is dirty — commit the release bump + changelog first"; exit 1; }
 	@branch=$$(git branch --show-current); test "$$branch" = "main" || { echo "ERROR: release tags must be cut from main (currently on $$branch)"; exit 1; }
 	@python3 scripts/check-versions.py
+	@python3 scripts/check-release-notes.py --version "$(VERSION)"
 	@bash scripts/check-crates-io-records.sh --require-all
 	@tree_version=$$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])"); \
 		test "$$tree_version" = "$(VERSION)" || { echo "ERROR: VERSION=$(VERSION) does not match the tree version $$tree_version — run 'make bump VERSION=$(VERSION)' first"; exit 1; }
-	@# Pre-tag guard: the CHANGELOG.md section is the release notes the cargo
-	@# workflow slices out AFTER publishing — verify it exists BEFORE we push the
-	@# irreversible rust-v tag. This awk slice is byte-identical to the one in
-	@# .github/workflows/release-cargo.yaml so the local and CI guards never diverge.
+	@# Preserve the full versioned history alongside the reviewed short summary.
+	@# Both must exist before the irreversible rust-v tag is pushed.
 	@notes=$$(awk -v v="$(VERSION)" ' \
 		$$0 == "## [" v "]" || index($$0, "## [" v "] ") == 1 { flag = 1; next } \
 		/^## \[/ { flag = 0 } \

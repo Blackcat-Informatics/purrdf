@@ -387,7 +387,7 @@ const subjectsOf = (result) =>
     .map((row) => row.s.value.replace(EX, ""))
     .sort();
 
-test("admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned", async () => {
+test("admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned", async (t) => {
   const engine = new QueryEngine();
   const data = Dataset.parse(NEST_DATA, "nquads");
   const before = data.canonicalize();
@@ -427,6 +427,7 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
     assert.equal(stackPointer(), IDLE);
   }
   const { synchronous, job } = ends;
+  t.diagnostic(`admitted nesting endpoints: ${JSON.stringify(ends)}`);
   assert.ok(job >= synchronous && job - synchronous <= 1, `the lanes end together: ${JSON.stringify(ends)}`);
   // A floor, measured with `query.test.mjs`'s: 182 levels of this shape answer
   // synchronously on the build measured.

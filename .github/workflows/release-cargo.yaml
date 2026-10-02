@@ -85,6 +85,11 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Prepare reviewed GitHub Release summary before publication
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: python3 scripts/check-release-notes.py --version "${VERSION#rust-v}" --output target/release-notes.md
+
       # THE POINT OF NO RETURN IS THE PUBLISH LOOP, AND IT IS NOT ATOMIC.
       # `cargo publish` runs once per crate, in dependency order, and cannot be undone.
       # Every record must exist and be locked before the first irreversible
@@ -157,6 +162,7 @@ jobs:
         run: |
           cargo install cargo-c --version 0.10.23 --locked
           make capi-bundle
+          python3 scripts/check-release-notes.py --checksum-output target/dist/SHA256SUMS
 
       - name: Attest build provenance for C distribution
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
@@ -170,6 +176,7 @@ jobs:
           path: |
             target/license-evidence-cargo.json
             target/dist/*.license-receipt.json
+            target/dist/SHA256SUMS
 
       - name: Attest build provenance for crates
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
@@ -251,7 +258,7 @@ jobs:
           echo "::error::The publisher did not confirm the complete release set. No GitHub Release will be created; inspect the publication and registry preflight results before rerunning."
           exit 1
 
-      - name: Publish GitHub Release with changelog notes
+      - name: Publish GitHub Release with reviewed summary
         if: steps.publish.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -260,28 +267,13 @@ jobs:
           set -euo pipefail
 
           version="${VERSION#rust-v}"
-
-          # Slice this version's section out of the committed CHANGELOG.md
-          # (reviewed and completed before tagging). No git-cliff runs here;
-          # the committed changelog is the single deterministic source.
-          notes="$(awk -v v="$version" '
-            $0 == "## [" v "]" || index($0, "## [" v "] ") == 1 { flag = 1; next }
-            /^## \[/ { flag = 0 }
-            flag { print }
-          ' CHANGELOG.md)"
-
-          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
-            echo "No CHANGELOG.md section for ${version}; complete and commit the release notes before tagging" >&2
-            exit 1
-          fi
-
-          printf '%s\n' "$notes" > /tmp/purrdf-release-notes.md
+          python3 scripts/check-release-notes.py --version "$version" --output target/release-notes.md
 
           # Rerun-safe: create the release once, update its notes on re-runs.
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release edit "$VERSION" --title "purrdf ${version}" --notes-file /tmp/purrdf-release-notes.md
+            gh release edit "$VERSION" --title "PurRDF ${version}" --notes-file target/release-notes.md
           else
-            gh release create "$VERSION" --verify-tag --title "purrdf ${version}" --notes-file /tmp/purrdf-release-notes.md
+            gh release create "$VERSION" --verify-tag --title "PurRDF ${version}" --notes-file target/release-notes.md
           fi
 
       - name: Attach the C bundle and artifact license evidence to the GitHub release
@@ -289,4 +281,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.ref_name }}
-        run: gh release upload "$VERSION" target/dist/purrdf-capi-*.tar.gz target/dist/*.license-receipt.json target/license-evidence-cargo.json --clobber
+        run: |
+          set -euo pipefail
+          version="${VERSION#rust-v}"
+          sdk="target/dist/purrdf-capi-${version}-x86_64-unknown-linux-gnu"
+          python3 scripts/check-release-notes.py --version "$version" --checksum-output target/dist/SHA256SUMS
+          gh release upload "$VERSION" "${sdk}.tar.gz" "${sdk}.license-receipt.json" target/license-evidence-cargo.json target/dist/SHA256SUMS --clobber

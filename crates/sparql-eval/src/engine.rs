@@ -1289,7 +1289,10 @@ impl NativeSparqlEngine {
 
     /// Construct and configure one query context before evaluation begins. Keeping
     /// the context and its options in one builder keeps ordinary and governed
-    /// executions on the same options application seam.
+    /// executions on the same options application seam. On wasm32 the construction
+    /// frame must return before recursive evaluation so its temporary contexts consume
+    /// no space underneath that evaluation on the fixed shadow stack.
+    #[cfg_attr(target_arch = "wasm32", inline(never))]
     fn query_ctx<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
@@ -1312,6 +1315,9 @@ impl NativeSparqlEngine {
     /// query. See `EvalCtx::witnessing`: the flag is a fact about the return type, never
     /// a caller's preference, and a governed lane that left it unset would hand back a
     /// receipt whose witness said nothing about relations that were invoked.
+    // On wasm32 return the context-construction frame before recursive evaluation,
+    // including the temporary context moved while attaching governors.
+    #[cfg_attr(target_arch = "wasm32", inline(never))]
     fn governed_ctx<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
