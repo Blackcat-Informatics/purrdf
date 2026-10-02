@@ -27,10 +27,12 @@
 //! what the split adds is the column each half lands in.
 #![allow(missing_docs)]
 
-use purrdf::ir::ViewLimits;
+use purrdf::ir::{CompositeDatasetView, CompositeSource, GraphPlacement, ViewLimits};
 use purrdf::{
-    DatasetMut, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue,
+    DatasetMut, DatasetView, GraphMatch, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder,
+    RdfLiteral, TermId, TermValue,
 };
+use purrdf_shapes::data_view::ShaclDatasetView;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 use std::sync::Arc;
@@ -215,5 +217,167 @@ fn bench(c: &mut Bench) {
     }
     group.finish();
 }
-bench_group!(benches, bench);
+const SELECTED_GRAPH: &str = "https://example.org/selected";
+
+fn named_graph_data(rows: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("https://example.org/value");
+    let rdf_type = builder.intern_iri(purrdf_iri::vocab::rdf::TYPE);
+    let subclass = builder.intern_iri(purrdf_iri::vocab::rdfs::SUB_CLASS_OF);
+    let child = builder.intern_iri("https://example.org/Child");
+    let parent = builder.intern_iri("https://example.org/Parent");
+    let selected = builder.intern_iri(SELECTED_GRAPH);
+    let sibling = builder.intern_iri("https://example.org/sibling");
+    let good = builder.intern_literal(RdfLiteral::simple("good"));
+    let bad = builder.intern_literal(RdfLiteral::simple("bad"));
+    builder.push_quad(child, subclass, parent, Some(selected));
+    for row in 0..rows {
+        let subject = builder.intern_iri(&format!("https://example.org/subject{row}"));
+        builder.push_quad(subject, rdf_type, child, Some(selected));
+        builder.push_quad(subject, predicate, good, Some(selected));
+        builder.push_quad(subject, predicate, bad, Some(sibling));
+        builder.push_annotation_in_graph(subject, predicate, bad, Some(sibling));
+        builder.push_quad(subject, predicate, bad, None);
+    }
+    builder.freeze().expect("named-graph data")
+}
+
+fn composite_selection(source: &Arc<RdfDataset>) -> ShaclDatasetView {
+    let limits = ViewLimits::default();
+    let source = Arc::new(
+        CompositeDatasetView::with_shared_scopes(vec![Arc::clone(source)], limits)
+            .expect("native composite"),
+    );
+    let selection =
+        CompositeSource::from_selection(source, [TermValue::iri(SELECTED_GRAPH)], limits)
+            .expect("selection")
+            .with_graph_placement(GraphPlacement::Default);
+    let composite = Arc::new(
+        CompositeDatasetView::from_shared_sources(vec![selection], limits)
+            .expect("selected composite"),
+    );
+    ShaclDatasetView::composite(composite, true, limits).expect("selected validation view")
+}
+
+fn named_graph_bench(c: &mut Bench) {
+    let shapes = Arc::new(parse_shapes(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> . <https://example.org/Shape> a sh:NodeShape; sh:targetClass <https://example.org/Parent>; sh:property [ sh:path <https://example.org/value>; sh:minCount 1; sh:maxCount 1 ] .",
+        None,
+    ).expect("named-graph shapes"));
+    let prepared = PreparedShapes::new(shapes);
+    let mut group = c.benchmark_group("shacl_named_graph");
+    for rows in [100, 10_000] {
+        let source = named_graph_data(rows);
+        let native = Arc::new(source.project_named_graph(SELECTED_GRAPH));
+        let views = [
+            ("native_owned", Arc::new(ShaclDatasetView::native(native))),
+            (
+                "composite_selection",
+                Arc::new(composite_selection(&source)),
+            ),
+            (
+                "native_selection",
+                Arc::new(ShaclDatasetView::named_graph(
+                    Arc::clone(&source),
+                    source
+                        .term_id_by_iri(SELECTED_GRAPH)
+                        .expect("selected graph"),
+                )),
+            ),
+        ];
+        let expected = prepared
+            .bind_view(Arc::clone(&views[0].1))
+            .expect("native binding")
+            .validate()
+            .expect("native report")
+            .to_ntriples();
+        for (name, view) in &views {
+            let validator = prepared.bind_view(Arc::clone(view)).expect("binding");
+            assert_eq!(
+                validator.validate().expect("report").to_ntriples(),
+                expected
+            );
+            assert_eq!(view.stats().materializations, 0);
+            group.bench_with_input(
+                BenchmarkId::new(format!("{name}/stage1_bind"), rows),
+                view,
+                |b, view| {
+                    b.iter(|| {
+                        std::hint::black_box(prepared.bind_view(Arc::clone(view)).expect("binding"))
+                    });
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new(format!("{name}/stage2_validate"), rows),
+                &validator,
+                |b, validator| {
+                    b.iter(|| std::hint::black_box(validator.validate().expect("report")));
+                },
+            );
+            let predicate = view
+                .term_id_by_value(&TermValue::iri("https://example.org/value"))
+                .expect("lookup")
+                .expect("predicate");
+            let subjects: Vec<TermId> = (0..rows)
+                .map(|row| {
+                    view.term_id_by_value(&TermValue::iri(format!(
+                        "https://example.org/subject{row}"
+                    )))
+                    .expect("lookup")
+                    .expect("subject")
+                })
+                .collect();
+            let plan = view.probe_plan(true, true, false, GraphMatch::Default);
+            group.bench_with_input(
+                BenchmarkId::new(format!("{name}/indexed_probes"), rows),
+                &subjects,
+                |b, subjects| {
+                    b.iter(|| {
+                        for &subject in subjects {
+                            std::hint::black_box(
+                                view.quads_for_pattern_with_plan(
+                                    &plan,
+                                    Some(subject),
+                                    Some(predicate),
+                                    None,
+                                    GraphMatch::Default,
+                                )
+                                .count(),
+                            );
+                        }
+                    });
+                },
+            );
+        }
+        let graph = source
+            .term_id_by_iri(SELECTED_GRAPH)
+            .expect("selected graph");
+        group.bench_with_input(
+            BenchmarkId::new("native_selection/construct", rows),
+            &source,
+            |b, source| {
+                b.iter(|| {
+                    std::hint::black_box(ShaclDatasetView::named_graph(Arc::clone(source), graph))
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("owned_projection/construct", rows),
+            &source,
+            |b, source| {
+                b.iter(|| std::hint::black_box(source.project_named_graph(SELECTED_GRAPH)));
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("composite_selection/construct", rows),
+            &source,
+            |b, source| {
+                b.iter(|| std::hint::black_box(composite_selection(source)));
+            },
+        );
+    }
+    group.finish();
+}
+
+bench_group!(benches, bench, named_graph_bench);
 bench_main!(benches);
