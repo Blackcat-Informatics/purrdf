@@ -256,7 +256,7 @@ impl DcatRdfConfig {
 ///
 /// Returns typed mapping, query, vocabulary, model, codec, integrity, package, or
 /// resource-limit failures.
-pub fn project_dcat_rdf<D: DatasetView + Sync>(
+pub fn project_dcat_rdf<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     view: &D,
     config: &DcatRdfConfig,
 ) -> Result<RdfDescriptionProjection, ProjectionError> {

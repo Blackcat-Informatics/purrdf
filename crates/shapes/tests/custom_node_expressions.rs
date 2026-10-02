@@ -651,8 +651,8 @@ fn a_function_called_during_the_rules_fixpoint_sees_the_current_round_s_graph() 
 
 /// Every `(subject, predicate, object)` of `dataset` rendered as plain strings.
 fn triples_of(dataset: &Arc<RdfDataset>) -> Vec<(String, String, String)> {
-    use purrdf::DatasetView;
     dataset
+        .as_ref()
         .quad_refs()
         .map(|quad| {
             (

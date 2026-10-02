@@ -48,6 +48,7 @@ pub mod ingest;
 // `GlobalTermId`, plus the `PageProvider` demand-paging hook and per-page
 // `PageTranslation` local↔global id map.
 pub mod paged;
+pub mod segmented;
 // The succinct, dependency-free dataset pack. Its builder/view/restore surface is
 // public; the bit-packing implementation modules remain doc-hidden.
 pub mod pack;
@@ -69,9 +70,9 @@ pub use canon::{
     RESERVED_NAMESPACE, ReservedVocabulary, TermPosition, ViewCanonError, blank_count_view,
     canonical_relabel, canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view,
     canonicalize_view, canonicalize_with, check_admissible, check_admissible_flat_view,
-    check_admissible_view, graph_digest_view, try_canonicalize, try_canonicalize_flat_graph_view,
-    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_view,
-    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
+    check_admissible_view, graph_digest_view, try_blank_count_view, try_canonicalize,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
@@ -97,9 +98,17 @@ pub use pipeline_bundle::{
     BundleDigestWork, CanonScopeName, GraphLayer, HandleEntry, HandleKey, PIPELINE_ROOT_DOMAIN,
     PipelineBundle, PipelineBundleError, PipelineViewBundle,
 };
+pub use segmented::{
+    SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError, SegmentedEvidence,
+    SegmentedExportError, SegmentedHandle, SegmentedImage, SegmentedProvider, SegmentedReadLimits,
+    SegmentedReceipt, SegmentedReceiptAuthority, SegmentedRequest, SegmentedReservation,
+    SegmentedSession, SegmentedSnapshot, SegmentedTermGuard,
+};
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, NonIriPredicate, TermId, TermValue};
-pub use term_walk::{Nested, TermBox, TermVisit, fold_term, try_fold_nested, visit_nested};
+pub use term_walk::{
+    Nested, TermBox, TermVisit, fold_term, try_fold_nested, try_fold_term, visit_nested,
+};
 
 pub use composite::{
     CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,

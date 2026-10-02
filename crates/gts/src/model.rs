@@ -409,7 +409,7 @@ pub struct Diagnostic {
     /// Human-readable detail string.
     pub detail: String,
     /// Absolute CBOR item index when the problem belongs to a frame.
-    pub frame_index: Option<usize>,
+    pub frame_index: Option<u64>,
 }
 
 /// The verification outcome for a signed frame (§9.2).
@@ -440,9 +440,9 @@ pub struct StreamableInfo {
     /// Whether the segment header explicitly claimed `layout = "streamable"`.
     pub claimed: bool,
     /// Number of frames covered by the last intact index footer.
-    pub covered: usize,
+    pub covered: u64,
     /// Number of legal accretive frames after the covered prefix.
-    pub tail: usize,
+    pub tail: u64,
     /// Head id declared by the last intact index footer.
     pub head: Option<Vec<u8>>,
 }
@@ -452,14 +452,14 @@ pub struct StreamableInfo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ByteRange {
     /// Start byte offset.
-    pub start: usize,
+    pub start: u64,
     /// End byte offset, exclusive.
-    pub end: usize,
+    pub end: u64,
 }
 
 impl ByteRange {
     /// Number of bytes spanned by this range.
-    pub fn len(&self) -> usize {
+    pub fn len(&self) -> u64 {
         self.end.saturating_sub(self.start)
     }
 

@@ -3,6 +3,8 @@
 
 //! Shared deterministic RDF dataset-description serialization.
 
+use purrdf_core::dataset_view::TermGuard as _;
+
 use crate::projections::util::validate_portable_bound;
 use std::sync::Arc;
 
@@ -229,7 +231,7 @@ pub struct ConstructViewProjection {
 /// Returns a typed resource, syntax, or integrity error when source/result bounds are
 /// exceeded, preparation/evaluation fails, or the engine violates the graph-result
 /// and default-graph CONSTRUCT contract.
-pub fn project_construct_view<D: DatasetView + Sync>(
+pub fn project_construct_view<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     view: &D,
     config: &ConstructViewConfig,
 ) -> Result<ConstructViewProjection, ProjectionError> {
@@ -253,7 +255,11 @@ pub fn project_construct_view<D: DatasetView + Sync>(
     let result = engine
         .query_prepared_view(view, &prepared, &[], QueryOptions::EMPTY)
         .map_err(|error| {
-            ProjectionError::integrity(format!("evaluate CONSTRUCT query: {error}"))
+            if error.code == "native-sparql-source-read" {
+                ProjectionError::source_read(error)
+            } else {
+                ProjectionError::integrity(format!("evaluate CONSTRUCT query: {error}"))
+            }
         })?;
     let SparqlResult::Graph(dataset) = result else {
         return Err(ProjectionError::integrity(
@@ -633,48 +639,53 @@ fn expression_cause<'a>(
 }
 
 fn view_record_count<D: DatasetView>(view: &D, label: &str) -> Result<usize, ProjectionError> {
-    view.quads()
-        .count()
-        .checked_add(view.named_graphs().count())
-        .and_then(|count| count.checked_add(view.reifier_quads().count()))
-        .and_then(|count| count.checked_add(view.annotation_quads().count()))
-        .ok_or_else(|| ProjectionError::limit(format!("{label} record count overflow")))
+    view.checked_read(|view| {
+        view.quads()
+            .count()
+            .checked_add(view.named_graphs().count())
+            .and_then(|count| count.checked_add(view.reifier_quads().count()))
+            .and_then(|count| count.checked_add(view.annotation_quads().count()))
+            .ok_or_else(|| ProjectionError::limit(format!("{label} record count overflow")))
+    })
+    .map_err(ProjectionError::source_read)?
 }
 
 fn ensure_blank_free<D: DatasetView>(
     view: &D,
     limits: ProjectionLimits,
 ) -> Result<(), ProjectionError> {
-    for quad in view.quads() {
-        for id in [quad.s, quad.p, quad.o] {
-            reject_blank_term(view, id, limits)?;
+    view.checked_read(|view| {
+        for quad in view.quads() {
+            for id in [quad.s, quad.p, quad.o] {
+                reject_blank_term(view, id, limits)?;
+            }
+            if let Some(graph) = quad.g {
+                reject_blank_term(view, graph, limits)?;
+            }
         }
-        if let Some(graph) = quad.g {
+        for row in view.reifier_quads() {
+            for id in [row.s, row.p, row.o] {
+                reject_blank_term(view, id, limits)?;
+            }
+            if let Some(graph) = row.g {
+                reject_blank_term(view, graph, limits)?;
+            }
+        }
+        for row in view.annotation_quads() {
+            for id in [row.s, row.p, row.o] {
+                reject_blank_term(view, id, limits)?;
+            }
+            if let Some(graph) = row.g {
+                reject_blank_term(view, graph, limits)?;
+            }
+        }
+        for graph in view.named_graphs() {
             reject_blank_term(view, graph, limits)?;
         }
-    }
-    for row in view.reifier_quads() {
-        for id in [row.s, row.p, row.o] {
-            reject_blank_term(view, id, limits)?;
-        }
-        if let Some(graph) = row.g {
-            reject_blank_term(view, graph, limits)?;
-        }
-    }
-    for row in view.annotation_quads() {
-        for id in [row.s, row.p, row.o] {
-            reject_blank_term(view, id, limits)?;
-        }
-        if let Some(graph) = row.g {
-            reject_blank_term(view, graph, limits)?;
-        }
-    }
-    for graph in view.named_graphs() {
-        reject_blank_term(view, graph, limits)?;
-    }
-    Ok(())
+        Ok(())
+    })
+    .map_err(ProjectionError::source_read)?
 }
-
 fn reject_blank_term<D: DatasetView>(
     view: &D,
     id: D::Id,
@@ -694,7 +705,8 @@ fn term_contains_blank<D: DatasetView>(
     limits: ProjectionLimits,
     depth: usize,
 ) -> Result<bool, ProjectionError> {
-    match view.resolve(id) {
+    let guard = view.resolve(id).map_err(ProjectionError::source_read)?;
+    match guard.term() {
         TermRef::Blank { .. } => Ok(true),
         TermRef::Triple { s, p, o } => {
             if depth > limits.max_term_depth() {

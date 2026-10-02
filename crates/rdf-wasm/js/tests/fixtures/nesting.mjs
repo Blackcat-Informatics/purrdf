@@ -9,6 +9,9 @@
 import assert from "node:assert/strict";
 
 export const STACK_REFUSAL = /evaluation stack exhausted|host call stack budget exceeded/;
+/** The evaluator's own words, without a native-thread remedy on a wasm lane. */
+export const EVALUATION_STACK_REFUSAL_EXACT =
+  /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\)$/;
 /**
  * The host-stack refusal: the budget kept under the JavaScript engine's own call stack,
  * the same on both lanes, so it names no remedy but nesting less deeply. The text is the

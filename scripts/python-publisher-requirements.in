@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+# Publisher-only tools; the generated, hashed .txt is the installation lock.
+twine==7.0.0
+pypi-attestations==0.0.30
+sigstore==4.5.0
+cryptography==50.0.2
+tuf==7.0.1
+urllib3==2.8.0
+requests==2.34.2

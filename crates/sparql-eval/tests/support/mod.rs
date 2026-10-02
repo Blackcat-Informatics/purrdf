@@ -8,6 +8,8 @@
 // uses every helper; an unused-here helper is used there.
 #![allow(dead_code, unreachable_pub)]
 
+pub mod segmented;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

@@ -124,3 +124,72 @@ fn quad_refs_resolution_allocates_zero() {
 fn quad_ref_len(q: &QuadRef<'_>) -> usize {
     term_ref_len(q.s) + term_ref_len(q.p) + term_ref_len(q.o) + q.g.map_or(0, term_ref_len)
 }
+
+/// Exercise the generic contract, including its pinned rows and both batch paths.
+fn resident_generic_reads<D>(
+    view: &D,
+    ids: &[purrdf_core::TermId],
+    values: &[purrdf_core::TermValue],
+) -> usize
+where
+    D: purrdf_core::DatasetView<Id = purrdf_core::TermId, ReadError = std::convert::Infallible>,
+{
+    use purrdf_core::dataset_view::{TermGuard as _, WorkspaceReservation as _};
+    let mut total = 0usize;
+    let mut reservation = view.reserve_workspace(0).unwrap();
+    reservation.resize(u64::MAX).unwrap();
+    for id in ids {
+        let guard = view.resolve(*id).unwrap();
+        total = total.wrapping_add(term_ref_len(guard.term()));
+    }
+    view.resolve_batch(ids, |_, term| {
+        total = total.wrapping_add(term_ref_len(term));
+    })
+    .unwrap();
+    for value in values {
+        total = total.wrapping_add(usize::from(view.term_id_by_value(value).unwrap().is_some()));
+    }
+    view.lookup_batch(values, |_, id| {
+        total = total.wrapping_add(usize::from(id.is_some()));
+    })
+    .unwrap();
+    for row in view.quad_refs() {
+        let row = row.unwrap();
+        total = total.wrapping_add(quad_ref_len(&row.as_ref()));
+    }
+    reservation.resize(0).unwrap();
+    total
+}
+
+#[test]
+fn generic_resident_guards_batches_and_workspace_allocate_zero() {
+    use purrdf_core::{DatasetView, TermId, TermRef, TermValue};
+    // This assignment also proves the resident GAT is still the borrowed TermRef.
+    fn borrowed_guard(view: &purrdf_core::RdfDataset, id: TermId) -> TermRef<'_> {
+        DatasetView::resolve(view, id).unwrap()
+    }
+    assert_eq!(size_of::<TermId>(), 4);
+    assert_eq!(size_of::<QuadIds>(), 16);
+    let dataset = build_dataset();
+    let first = dataset.quads().next().unwrap();
+    let ids = [first.s, first.p, first.o];
+    let values = [
+        TermValue::iri("http://example.org/p"),
+        TermValue::integer(7),
+        TermValue::blank("b0"),
+        TermValue::iri("http://example.org/absent"),
+    ];
+    assert!(dataset.as_ref().term_id_by_value(&values[0]).is_some());
+    assert!(dataset.as_ref().term_id_by_value(&values[3]).is_none());
+    std::hint::black_box(borrowed_guard(dataset.as_ref(), first.s));
+    let expected = resident_generic_reads(dataset.as_ref(), &ids, &values);
+    assert!(expected > 0);
+    let window = CurrentThreadWindow::open();
+    let actual = resident_generic_reads(dataset.as_ref(), &ids, &values);
+    let measured = window.close();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        measured.allocations, 0,
+        "resident generic reads must allocate zero"
+    );
+}

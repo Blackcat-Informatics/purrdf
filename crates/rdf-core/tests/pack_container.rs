@@ -585,18 +585,27 @@ impl BudgetedView {
 
 impl DatasetView for BudgetedView {
     type Id = TermId;
+    type ReadError = ProbeFault;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = ();
+
+    fn read_error(&self) -> Option<Self::ReadError> {
+        self.budget.read_error()
+    }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.budget.take(self.inner.quads())
     }
 
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        self.inner.resolve(id)
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        self.checked_read(|_| self.inner.as_ref().resolve(id))
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        self.inner.term_id_by_value(value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        self.checked_read(|view| view.inner.as_ref().term_id_by_value(value))
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
@@ -616,7 +625,7 @@ impl DatasetView for BudgetedView {
         self.quads_for_pattern(s, p, o, g)
     }
 
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         self.inner.term_count()
     }
 

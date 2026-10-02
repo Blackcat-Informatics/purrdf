@@ -1,0 +1,15 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>PurRDF bounded persistent storage qualification</title>
+<h1>PurRDF bounded persistent storage qualification</h1>
+<p>This workload runs the frozen resident browser envelope, scans one million
+certified rows, evaluates an exact two-pattern join, and drains the complete RDF
+export. It also repeats the resident workloads with at least 100,000 actual RDF
+rows. WebAssembly linear memory has an explicitly selected maximum
+(up to 256 MiB); the reader shares a separate 64 MiB allocation ledger.</p>
+<pre id="result" data-status="running">Loading the pinned workload…</pre>
+<script type="module" src="./run.mjs"></script>
+</html>

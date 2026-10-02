@@ -100,6 +100,7 @@ fn graph_probes<D: DatasetView>(view: &D) -> Vec<GraphMatch<D::Id>> {
     probes.extend(view.named_graphs().map(GraphMatch::Named));
     probes.extend(
         view.term_id_by_value(&TermValue::iri(P))
+            .expect("fixture reverse lookup succeeds")
             .map(GraphMatch::Named),
     );
     probes
@@ -213,7 +214,9 @@ fn composite_graph_seam_matches_the_filtered_stream_over_a_selection() {
     // pass by skipping the projection outright.
     assert!(
         view.reifier_quads_in_graph(GraphMatch::Named(
-            view.term_id_by_value(&iri("g1")).expect("g1 is held")
+            view.term_id_by_value(&iri("g1"))
+                .expect("fixture reverse lookup succeeds")
+                .expect("g1 is held")
         ))
         .count()
             > 0,
@@ -302,13 +305,19 @@ fn delta_graph_seam_matches_the_filtered_stream() {
 
     // The overlay genuinely masked and genuinely added, so an implementation that
     // dropped either mask would be visible in the counts the law is checked against.
-    let g2 = view.term_id_by_value(&iri("g2")).expect("g2 survives");
+    let g2 = view
+        .term_id_by_value(&iri("g2"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("g2 survives");
     assert_eq!(
         view.reifier_quads_in_graph(GraphMatch::Named(g2)).count(),
         0,
         "the removed g2 declaration must not reappear through the narrowed seam"
     );
-    let g3 = view.term_id_by_value(&iri("g3")).expect("g3 is added");
+    let g3 = view
+        .term_id_by_value(&iri("g3"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("g3 is added");
     assert_eq!(
         view.reifier_quads_in_graph(GraphMatch::Named(g3)).count(),
         1,
@@ -487,7 +496,10 @@ fn a_respelled_term_resolves_onto_the_base_row_and_never_duplicates_it() {
         base_annotations,
         "a re-spelled annotation must not add an annotation row"
     );
-    let g1 = view.term_id_by_value(&iri("g1")).expect("g1 survives");
+    let g1 = view
+        .term_id_by_value(&iri("g1"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("g1 survives");
     for (g, label) in [
         (GraphMatch::Named(g1), "g1"),
         (GraphMatch::Default, "default"),

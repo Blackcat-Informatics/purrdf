@@ -473,7 +473,7 @@ impl<'a> FrozenDatasetSource<'a> {
         sink: &mut S,
         id: TermId,
     ) -> Result<ControlFlow<()>, EventError> {
-        let event_id = EventTermId(id.index() as u32);
+        let event_id = EventTermId(u64::try_from(id.index()).expect("bounded local term index"));
         match self.dataset.resolve(id) {
             TermRef::Iri(iri) => sink.term(event_id, EventTerm::Iri(iri)),
             TermRef::Blank { label, scope } => sink.term(
@@ -509,9 +509,9 @@ impl<'a> FrozenDatasetSource<'a> {
             TermRef::Triple { s, p, o } => sink.term(
                 event_id,
                 EventTerm::Triple(EventTriple {
-                    s: EventTermId(s.index() as u32),
-                    p: EventTermId(p.index() as u32),
-                    o: EventTermId(o.index() as u32),
+                    s: EventTermId(u64::try_from(s.index()).expect("bounded local term index")),
+                    p: EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+                    o: EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
                 }),
             ),
         }
@@ -549,10 +549,12 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
         }
         for quad in self.dataset.quads() {
             let event = EventQuad {
-                s: EventTermId(quad.s.index() as u32),
-                p: EventTermId(quad.p.index() as u32),
-                o: EventTermId(quad.o.index() as u32),
-                g: quad.g.map(|g| EventTermId(g.index() as u32)),
+                s: EventTermId(u64::try_from(quad.s.index()).expect("bounded local term index")),
+                p: EventTermId(u64::try_from(quad.p.index()).expect("bounded local term index")),
+                o: EventTermId(u64::try_from(quad.o.index()).expect("bounded local term index")),
+                g: quad.g.map(|g| {
+                    EventTermId(u64::try_from(g.index()).expect("bounded local term index"))
+                }),
             };
             if sink.quad(event)? == ControlFlow::Break(()) {
                 return Ok(());
@@ -565,23 +567,28 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
                 return Err(EventError::message("reifier did not bind a triple term"));
             };
             let event = EventTriple {
-                s: EventTermId(s.index() as u32),
-                p: EventTermId(p.index() as u32),
-                o: EventTermId(o.index() as u32),
+                s: EventTermId(u64::try_from(s.index()).expect("bounded local term index")),
+                p: EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+                o: EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
             };
-            let g_event = g.map(|g| EventTermId(g.index() as u32));
-            if sink.reifier_in_graph(EventTermId(reifier.index() as u32), event, g_event)?
-                == ControlFlow::Break(())
+            let g_event =
+                g.map(|g| EventTermId(u64::try_from(g.index()).expect("bounded local term index")));
+            if sink.reifier_in_graph(
+                EventTermId(u64::try_from(reifier.index()).expect("bounded local term index")),
+                event,
+                g_event,
+            )? == ControlFlow::Break(())
             {
                 return Ok(());
             }
         }
         for (reifier, p, o, g) in self.dataset.annotations_with_graph() {
-            let g_event = g.map(|g| EventTermId(g.index() as u32));
+            let g_event =
+                g.map(|g| EventTermId(u64::try_from(g.index()).expect("bounded local term index")));
             if sink.annotation_in_graph(
-                EventTermId(reifier.index() as u32),
-                EventTermId(p.index() as u32),
-                EventTermId(o.index() as u32),
+                EventTermId(u64::try_from(reifier.index()).expect("bounded local term index")),
+                EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+                EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
                 g_event,
             )? == ControlFlow::Break(())
             {
@@ -976,9 +983,9 @@ mod tests {
         // exceeds MAX_TERM_NESTING_DEPTH, so resolving the head recurses past the bound.
         let chain = MAX_TERM_NESTING_DEPTH + 4;
         for k in 0..chain {
-            let this = EventTermId(3 + k as u32);
+            let this = EventTermId(3 + k as u64);
             let object = if k + 1 < chain {
-                EventTermId(3 + k as u32 + 1)
+                EventTermId(3 + k as u64 + 1)
             } else {
                 leaf
             };

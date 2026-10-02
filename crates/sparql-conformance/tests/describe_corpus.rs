@@ -218,7 +218,7 @@ fn expectation_graphs(case_local: &str) -> Vec<(String, Option<String>)> {
     let ds = purrdf::parse_dataset(&bytes, "application/n-quads", None)
         .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
     let name = |g: Option<purrdf_core::TermId>| {
-        g.map(|g| match ds.resolve(g) {
+        g.map(|g| match ds.as_ref().resolve(g) {
             TermRef::Iri(iri) => iri.to_owned(),
             other => panic!("a graph name must be an IRI, got {other:?}"),
         })

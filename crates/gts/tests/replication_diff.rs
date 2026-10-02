@@ -55,7 +55,7 @@ fn diff_appends_new_segment_is_fetch() {
     assert!(result.continuous);
     assert_eq!(result.fetch.len(), 1);
     assert_eq!(result.fetch[0].remote_index, 1);
-    assert_eq!(result.splice_offset, Some(local.len()));
+    assert_eq!(result.splice_offset, Some(local.len() as u64));
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn diff_midsegment_append_is_fetch() {
     let remote_inventory = inventory(&remote);
     assert!(!remote_inventory.has_problems());
     let cut = remote_inventory.segments[0].frames[0].end;
-    let local = remote[..cut].to_vec();
+    let local = remote[..usize::try_from(cut).unwrap()].to_vec();
     let local_inventory = inventory(&local);
     assert!(!local_inventory.has_problems());
     assert_eq!(local_inventory.segments[0].frames.len(), 1);
@@ -185,20 +185,20 @@ fn diff_midsegment_append_is_fetch() {
         vec![SegmentFetch {
             remote_index: 0,
             range: ByteRange {
-                start: local.len(),
-                end: remote.len(),
+                start: local.len() as u64,
+                end: remote.len() as u64,
             },
             head: remote_inventory.segments[0].head.clone(),
         }]
     );
-    assert_eq!(result.splice_offset, Some(local.len()));
+    assert_eq!(result.splice_offset, Some(local.len() as u64));
 
     let spliced = splice(&local, &remote, &result).expect("splice should succeed");
     assert_eq!(spliced, remote);
 }
 
 /// Build a minimal, "clean" (no diagnostics) single-frame [`FrameInventory`].
-fn synth_frame(frame_index: usize, id: &[u8], prev: Option<&[u8]>, valid: bool) -> FrameInventory {
+fn synth_frame(frame_index: u64, id: &[u8], prev: Option<&[u8]>, valid: bool) -> FrameInventory {
     FrameInventory {
         item_index: frame_index + 1,
         frame_index,
@@ -213,21 +213,21 @@ fn synth_frame(frame_index: usize, id: &[u8], prev: Option<&[u8]>, valid: bool) 
 
 /// Build a minimal, "clean" (no diagnostics) [`SegmentInventory`].
 fn synth_segment(
-    index: usize,
-    start: usize,
-    end: usize,
+    index: u64,
+    start: u64,
+    end: u64,
     head: Option<Vec<u8>>,
     frames: Vec<FrameInventory>,
 ) -> SegmentInventory {
     SegmentInventory {
         index,
         item_start: 0,
-        item_end: frames.len() + 1,
+        item_end: frames.len() as u64 + 1,
         start,
         end,
         profile: "generic".to_string(),
         head,
-        frame_count: frames.len(),
+        frame_count: frames.len() as u64,
         layout: StreamableInfo::default(),
         diagnostics: Vec::new(),
         frames,

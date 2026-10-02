@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 <h1 align="center">PurRDF</h1>
 
 <p align="center">
-  <em>The RDF 1.2 toolkit with a purr: primitives, codecs, SPARQL, SHACL, ShEx, entailment, full-text search, GeoSPARQL, and graph transport.</em>
+  <em>RDF 1.2, reasoning, retrieval, and graph transport — one Rust engine, shared across languages.</em>
 </p>
 
 <p align="center">
@@ -34,149 +34,48 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 ---
 
-PurRDF is an [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) toolkit —
-primitives, codecs, SPARQL 1.1/1.2, SHACL, ShEx, entailment regimes, and the
-GTS graph transport — implemented once in Rust and carried verbatim into
-Python, WebAssembly/JavaScript, and C, with one exception stated up front: the
-GTS container reaches Rust, the CLI (as an input format), Python and C, and is
-not exposed by the wasm/JavaScript package. Every published crate builds for
-`wasm32-unknown-unknown`, so the engine that answers a query on a server
-answers it, byte for byte, in a browser tab.
+PurRDF is a Rust toolkit for building applications around knowledge graphs.
+It brings RDF 1.2, SPARQL, validation, reasoning, text and vector retrieval,
+document codecs, and graph transport into one engine. Python, JavaScript /
+WebAssembly, and C call that engine rather than reimplementing it.
 
-**What it removes from your architecture.** The three jobs that usually keep
-a PostgreSQL instance running beside a triple store — ranked full-text search,
-spatial predicates, and vector similarity — are answered inside PurRDF:
-in-process, over the same dataset, from the same SPARQL query, with no second
-database, no sync job, and no question split between SPARQL and SQL. Each
-answer is exact and deterministic — the same rows, in the same order, with the
-same score lexicals, natively and on wasm32 — which is a guarantee a Postgres
-stack does not make across machines. This is not a projection: these query
-surfaces have already removed a whole PostgreSQL requirement from one RDF
-project. The verified capability table, the boundary of each surface, and an
-architectural before/after are in
-[One engine instead of three databases](#one-engine-instead-of-three-databases).
+A graph can carry statements about statements, multilingual literals, named
+graphs, provenance, and linked binary content. PurRDF keeps those distinctions
+through querying, validation and the carriers that can represent them; a
+projection that loses information returns a located loss ledger.
 
-## A document as a graph of itself
+**One RDF engine. One behavior. Every language.** The language surfaces expose
+different portions of the toolkit, described below. Every published Rust crate
+also builds for `wasm32-unknown-unknown`.
 
-PurRDF ships a structural Markdown-to-RDF 1.2 slicer,
-[`purrdf-markdown`](./crates/markdown/), under a
-[published specification](./crates/markdown/SPEC.md) with a designated
-vocabulary namespace, `https://w3id.org/purrdf/markdown#`. The registered
-[w3id redirect](https://w3id.org/purrdf/markdown) resolves to the project site.
-The shipped specification defines the vocabulary and codec contract; no network
-lookup is needed to parse, project, or reconstruct a document.
+[Try the browser playground](https://blackcat-informatics.github.io/purrdf/playground/)
+· [Read the book](https://blackcat-informatics.github.io/purrdf/)
+· [Rust API](https://docs.rs/purrdf)
+· [Migrating to 3.0](./docs/MIGRATION-3.0.md)
 
-A document becomes a graph of its own headings, verses, and paragraphs: every
-node names a verbatim byte range of the source, node identities are
-content-addressed, and the profile they are minted under is content-addressed
-over the slicing law itself, so a change to the law re-mints rather than
-drifts. The same bytes under the same profile give byte-for-byte identical
-output on every target, and a concordance table lifts into RDF 1.2 reified
-citations. The graph is a **codec's output, not an index**: the emitted spans
-cover every byte of the source — heading lines, blank runs, rules and table
-rows carried as typed verbatim literals beside the units — so the specified
-decode law rebuilds the document from the triples alone, byte for byte, and
-proves the rebuild against the source digest the graph itself states. Plain
-literals are exactly the content (a unit's text, a heading's words), typed
-literals are the bytes, so a text index that selects the simple literals
-sees every word once and not a byte of structure. We surveyed the standards that map documents to RDF and found none
-that combines determinism, byte-span addressability, and law-content-addressed
-identity for Markdown. The specification's
-[related work](./crates/markdown/SPEC.md#12-related-work) section names every
-standard we examined and, for each, which of those three it does not provide;
-if one we missed has all three, we would rather hear which than claim none
-does. It slices the dialect
-the specification writes out; it is not a CommonMark implementation.
+## What you can build
 
-## Why does this exist?
+| Job | PurRDF provides |
+| --- | --- |
+| Carry RDF 1.2 through an application | Interned datasets, triple terms, reifiers, annotations, directional literals and named graphs; native text codecs, canonicalization, diff and isomorphism. |
+| Query and change a graph | SPARQL 1.1/1.2 query and Update, prepared execution, property paths, host extensions, resource governors and explain receipts. |
+| Validate and derive knowledge | SHACL 1.2, ShEx 2.1, deterministic Datalog, RDF/RDFS/OWL-RL/D materialization, OWL-Direct reasoning and RIF-Core. |
+| Retrieve across several signals | Exact fixed-point BM25, GeoSPARQL predicates, exact embedding kNN, deterministic HNSW, and reciprocal-rank fusion with per-producer evidence. |
+| Make a document queryable | Structural Markdown and ordered JSON codecs with byte-addressed occurrences, explicit profiles and exact reconstruction. |
+| Exchange graph data | GTS containers with binary payloads; canonical five-table Parquet; graph, tabular and research-object projections with loss records. |
+| Read an immutable snapshot under a budget | Certified segmented storage, authenticated range reads, pinned terms, sparse caches and shared workspace admission through the ordinary dataset/evaluator seams. |
 
-RDF tooling fragments along two axes.
+Start with the [`purrdf`](./crates/purrdf/) facade in Rust. It exposes the RDF
+surface at the root and the other engines as modules. Applications supply their
+own vocabularies, extension registrations, network transports and embedding
+models. Standard RDF vocabulary terms are built in; application namespaces are
+explicit configuration.
 
-**Across languages**: every ecosystem has its own parser, with its own bugs, its own
-corner-case interpretations, and its own subset of the spec. Move a graph from a Rust
-service to a Python pipeline to a browser and you have silently changed what the data
-means three times.
+## Query, reason and retrieve together
 
-**Across time**: [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) — triple terms,
-reifiers, base-direction literals — is the current revision of the standard, and
-almost no incumbent library carries it.
-
-PurRDF exists so that a graph is **the same graph everywhere**. It is a from-scratch,
-dependency-light Rust core — parser to SPARQL engine to SHACL validator to binary
-transport — carried verbatim into Python, WebAssembly/JavaScript, and C (the
-binary transport excepted on wasm, as above). There are
-deliberately **no Cargo feature flags** anywhere in the workspace (CI enforces this):
-a data carrier must not have optional behavior, so every consumer gets the same
-byte-identical semantics.
-
-PurRDF is the data backbone of the [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology)
-stack and the reference home of the [GTS](./docs/GTS-SPEC.md) graph-transport engine,
-but it assumes nothing about your ontology or application.
-
-## One engine instead of three databases
-
-An RDF project that needs ranked text search, spatial predicates, or
-nearest-neighbour search has usually run PostgreSQL beside its triple store for
-exactly those three jobs. PurRDF answers all three from SPARQL, over the
-dataset already in memory, through the evaluator's caller-keyed
-property-function and scalar-function seams. Every capability below is one you
-can open a crate and find; every boundary is one its tests pin.
-
-| You needed | Usually from | Now inside PurRDF | Where it stops |
-| --- | --- | --- | --- |
-| Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [`purrdf-text`](./crates/text/): an inverted index over RDF 1.2 literals (annotation layer included), Unicode case folding and word-boundary segmentation, and BM25 ranking in exact `i128` base-10 fixed point with **no floating point in the crate** (`#![deny(clippy::float_arithmetic)]`). Two relations: `?doc <iri> ( "needle" ?score ?rank ?lang ?matched )` for ranked retrieval and `?doc <iri> ( "term" ?lang ?position )` for term occurrence, from which phrase and proximity compose in plain SPARQL. | BM25 ranking, not a Lucene: no stemming, no stop-word lists, no query dialect; `k1` and `b` are fixed constants; the index is in-memory and built once over a frozen dataset (`TextIndex::from_dataset`). |
-| Spatial predicates | PostGIS | [`purrdf-geo`](./crates/geo/): GeoSPARQL 1.1 (OGC 22-047r1) — WKT and GeoJSON literals read as exact rationals, every Simple Features, Egenhofer and RCC8 relation decided over an exact DE-9IM, the `geof:` functions on the scalar seam and the Query Rewrite relations (`?a geo:sfWithin ?b` between features) on the property-function seam. No GEOS, no PROJ, no float arithmetic; the one float boundary is the `xsd:double` result literal. | Topological predicates, accessors, and the exactly computable measures and constructors over vector geometry, not a PostGIS: `geof:transform` hard-errors by name (there is no CRS database), a `metric*` measure answers only in a CRS the caller declared in metres (there is no ellipsoidal geodesic), and `buffer`, `concaveHull`, `boundingCircle`, the overlay set operations (`intersection`/`union`/`difference`/`symDifference`) and the GML/KML/DGGS encodings are registered and hard-error by name. No raster, no persistent spatial index. |
-| Vector similarity | pgvector | Embedding kNN in [`purrdf-sparql-eval`](./crates/sparql-eval/): `?neighbour <space> ( ?seed k ?distance )` over a [PURREMB](./docs/PURREMB.md) embedding space (`EmbeddingSpace::from_artifact`, `EmbeddingKnnRelation`), exact top-k under the metric the artifact declares, in binary64 with a pinned accumulation order and no fused multiply-add, ties broken by content-derived row order. | Exact search — every candidate is scored, there is no pruning and no approximate index — bounded by a caller-supplied `KnnGuard` (largest space, largest `k`; refusals, not clamps). Three metrics: cosine, negative dot, squared Euclidean. PurRDF computes no embeddings and runs no ANN payload: the vectors come from a PURREMB artifact the caller fills — PurRDF writes the carrier itself (`EmbeddingBuilder` in memory, `EmbeddingStreamWriter<W: Write + Seek>` streaming, both in `purrdf-core` and Rust only) and opens it fail-closed (`EmbeddingView::from_bytes`); the model that produced the vectors is the caller's. |
-
-Two more capabilities landed on the same seam in this release: **path
-witnesses**, a property function that binds a traversal hop by hop with every
-traversed statement as an RDF 1.2 triple term, and the **SEP-0009 composite
-datatypes** (`cdt:List`/`cdt:Map`, with `FOLD` and `UNFOLD`). One divergence in
-the latter is stated rather than hidden: PurRDF admits RDF 1.2 triple terms and
-directional language-tagged literals as composite elements, a lexical superset
-that a conformant SEP-0009 reader will call ill-formed, emitted only for values
-SEP-0009 cannot express at all.
-
-**Deterministic, and therefore portable.** A Postgres stack gives one answer
-per build: `ts_rank` and pgvector distances are floating point, and PostGIS
-predicates run on GEOS's floating-point geometry. PurRDF's three surfaces are pure
-functions of their input on every target — BM25 in `i128` fixed point with a
-fixed-iteration integer logarithm, geometry as exact rationals with integer
-DE-9IM decisions, kNN's exact arithmetic (the default) in binary64 with one
-pinned sixteen-lane accumulation order that holds on every target — the
-opt-in reassociated arithmetic trades that guarantee for speed, so its last
-bits may depend on the target and build — and every ordering is canonical:
-document ids are assigned after sorting on
-`(graph, subject, language)`, spatial rows sort in `TermValue`'s total order,
-and kNN ties break on the content-derived `TargetId`. The claim is executed,
-not argued: the text and kNN determinism tests are one body per case on one
-shared test runner, run natively by `cargo test` and on
-`wasm32-unknown-unknown` by `make wasm-test`, and `make geo-determinism` runs
-the same corpus on both targets and compares bytes.
-
-**In the browser.** All three crates are `wasm32-unknown-unknown`-clean and
-their determinism tests execute there — which none of the three Postgres
-extensions can do at all. They are Rust-host seams: a host builds an index or
-opens a space and registers it under its own IRIs, and that host may itself be
-compiled to wasm32 (that is how the wasm tests run). The shipped
-`@blackcatinformatics/purrdf` npm package and the `purrdf` Python wheel do not
-yet expose these three relations; the data-shaped property functions (frozen
-tables, graph-backed tables, path witnesses) are what cross those boundaries
-today.
-
-**Illustrative before/after** (the project is real; it is not named here):
-
-- *Before* — a triple store for the graph, and a PostgreSQL instance beside it
-  for `tsvector`/`tsquery` over labels and abstracts, PostGIS
-  `ST_Within`/`ST_Intersects` over feature geometries, and pgvector `<->` over
-  document embeddings: three copies of the data, one sync job to keep them
-  aligned, and every question that spanned them written half in SPARQL and
-  half in SQL.
-- *After* — one PurRDF dataset; one `PropertyFunctionRegistry` holding a
-  `TextSearchRelation`, the `geo:` Query Rewrite relations, and an
-  `EmbeddingKnnRelation`, each under the project's own IRIs; one SPARQL query
-  joining all three through basic graph patterns; and no PostgreSQL. The answer
-  is the same on the server and in the browser.
+A Rust host can join graph patterns with text search, spatial relations and
+embedding neighbours in the same SPARQL evaluator. Register each relation under
+a predicate IRI supplied by the application:
 
 ```sparql
 PREFIX ex:  <https://example.org/>
@@ -191,393 +90,131 @@ SELECT ?doc ?score ?distance WHERE {
 ORDER BY ?rank
 ```
 
-Each predicate above is the caller's: PurRDF mints no vocabulary, so
-`ex:search`, `ex:nearest` and the CRS behind `geo:sfWithin` are registrations
-the host supplies, and a query naming an IRI nobody registered is an ordinary
-triple pattern.
+This query assumes the host has registered the text, spatial and vector
+relations and supplied the coordinate-system configuration. An unregistered
+predicate remains an ordinary RDF pattern.
 
-## What's inside
+- **Text:** [`purrdf-text`](./crates/text/) indexes RDF literals, including the
+  annotation layer, with Unicode normalization, case folding and segmentation.
+  BM25 scores use exact fixed-point arithmetic. Ranked search and term-occurrence
+  relations support phrase and proximity composition in SPARQL. The index is
+  resident and built over a frozen dataset; stemming, stop-word dictionaries and
+  a separate query dialect are outside its surface.
+- **Geometry:** [`purrdf-geo`](./crates/geo/) implements GeoSPARQL 1.1 topological
+  predicates over exact rational WKT/GeoJSON geometry, plus accessors and
+  exactly computable measures and constructors. Coordinate transformation,
+  ellipsoidal geodesics, buffers and overlay set operations are not implemented;
+  registered unsupported functions refuse by name. The host declares the CRS
+  and which coordinate systems use metres.
+- **Vectors:** [PURREMB](./docs/PURREMB.md) carries caller-produced embeddings,
+  their coordinates and derivation identities. Exact kNN supports cosine,
+  negative dot and squared Euclidean distance. [`purrdf-hnsw`](./crates/hnsw/)
+  adds an approximate index with deterministic levels, build scheduling and
+  payload bytes under its default arithmetic. Approximate candidates never
+  certify that no nearer row exists. PurRDF writes and reads embedding artifacts;
+  it does not run a model to generate the vectors.
+- **Fusion:** [`purrdf-retrieval`](./crates/retrieval/) plans a typed request,
+  compiles it to per-producer SPARQL, executes it and fuses the ranked streams.
+  Exact fixed-point reciprocal-rank fusion carries plan, fusion-law and evidence
+  identities, per-stratum provenance, index-generation attestations and declared
+  search fidelity. Unserved request terms and incomplete producers remain
+  visible in the result. Producers, strata and weights are caller-supplied.
 
-- **RDF 1.2 primitives** — an immutable, value-interned dataset IR (`TermId` space,
-  string arena, copy-on-write mutation), with triple terms in object position,
-  reifier/annotation side-tables, and base-direction literals (`rdf:dirLangString`).
-- **Pack container** — a content-addressed, zero-copy snapshot of a whole RDF
-  1.2 dataset (`PackBuilder`/`PackView` in `purrdf-core`; `--from pack`/`--to
-  pack`, `pack verify` and `query --data x.purrpck` on the CLI): one
-  front-coded value dictionary, bitmap-triples with FoQ indexes that answer all
-  eight `(s, p, o)` pattern shapes without decompressing a section,
-  reifier/annotation side-tables, a SHA-256 per section and a canonical
-  identity digest in the header. `verify_pack` re-interns every row and
-  re-canonicalizes the reconstruction against that digest, and the CLI runs it
-  on every pack it opens, so nothing enters a pipeline unverified. Where it
-  stops: read-only — the only writer rebuilds a whole dataset and a `PackView`
-  has no write path; the kernel reads borrowed bytes and never maps a file
-  itself (the CLI's mmap is the consumer's tier); Rust and the CLI only, not
-  Python, wasm or C.
-- **Paged datasets and fallible views** (Rust only) — `PagedDataset` composes
-  frozen pages from a `PageProvider` into one logical `DatasetView` with a
-  shared value dictionary, and `PagedQueryLimits` (pages, bytes) drives the
-  evaluator's `query_*_fallible_view` entries, which return a complete result
-  only from a final ready checkpoint: an operational `PageFault` discards every
-  row rather than certifying a partial, which is what separates a storage
-  fault from a governor trip. Where it stops: the only page providers that
-  ship are in-memory (`InMemoryPageProvider`, `SubsetPageProvider`) — no
-  durable or disk-backed tier ships, by contract (G5 in
-  [`docs/design/purrdf-backend-contract.md`](./docs/design/purrdf-backend-contract.md))
-  — and none of it reaches the CLI, Python, wasm or C.
-- **Native codecs** — first-party parsers/serializers for **Turtle, TriG, N-Triples,
-  N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD**, plus bidirectional
-  OKF Markdown bundles with caller-supplied vocabulary; byte-deterministic output.
-- **JSON-LD 1.1 context lens** — deterministic context compilation
-  (`CompiledJsonLdContext`, over an offline `JsonLdContextRegistry` keyed by
-  IRI) with three output modes on `JsonLdSerializeMode`: expanded, compaction
-  through a reusable compiled context, and a derived vocabulary-neutral prefix
-  context mined from the dataset's own IRIs, all driven by a versioned options
-  document on every host (`--jsonld-options` on the CLI, `serialize_jsonld` in
-  Python, `serializeConfigured`/`serializeWithContext` in wasm,
-  `purrdf_jsonld_context_compile` + `purrdf_serialize_jsonld_configured` in
-  C). Where it stops: no network loader and no remote contexts — context IRIs
-  and `@import` resolve only through the caller-supplied registry — a fixed,
-  private resource envelope (1 MiB per context, 128 registry documents, 4,096
-  terms, nesting depth 64), and no framing API: a context lens, not a full
-  JSON-LD 1.1 processor. Gated by **73 / 73** applicable W3C toRDF vectors and
-  **13 / 13** exact compaction vectors, revision-pinned with per-vector
-  SHA-256.
-- **One base-resolution layer** — every codec, SPARQL, ShEx and SHACL resolve a
-  relative IRI reference through the single RFC 3986 implementation in
-  `purrdf-iri` (`BaseIri`/`BaseScope`), on RFC 3986 §5.1's precedence chain: an
-  in-document directive (`@base`/`BASE`/`xml:base`/`@context.@base`), else a
-  caller-supplied base, else the document's retrieval IRI (the `file://` IRI of a
-  file the CLI opened), else the hard error `iri-relative-no-base`. A relative
-  IRI never enters a graph unresolved, and syntaxes that can express a base
-  (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) write and relativize against one on
-  the way out. See [Base IRIs & Relative References](./docs/book/src/concepts/base-iris.md).
-- **Canonicalization** — W3C **RDFC-1.0** dataset canonicalization, tested against the
-  W3C fixture suite (SHA-256 and SHA-384). Over RDF 1.2 constructs there are
-  two canonical forms and they are named apart: the **flat form**
-  (`canonical_flat_nquads`; what the CLI's `--canonical` and the wasm
-  `Dataset.canonicalize()` run) rewrites reifiers and annotations to plain
-  `rdf:reifies`/annotation triples and canonicalizes those under RDFC-1.0,
-  while the native `purrdf::canonicalize` is the first-party
-  **`purrdf-rdfc12` v2** profile, which lowers them into a reserved
-  `urn:purrdf:rdfc:` namespace instead and refuses any input already carrying
-  it — other than in the two shapes its own output is written in, which fold
-  back into the statement layer, so canonicalizing the canonical document
-  returns it unchanged. The profile agrees with RDFC-1.0 byte for byte only on
-  the RDF 1.1 subset, and a digest over its output must not be labelled
-  RDFC-1.0 — see
-  [`docs/RDF12-CANON-PROFILE.md`](./docs/RDF12-CANON-PROFILE.md). Beside both,
-  a **review-friendly canonical Turtle** rendering (`render_canonical_turtle`
-  in `purrdf-core`, `canonical_turtle` in `purrdf-rdf`, Python
-  `canonicalize_turtle`, and what the rdflib compat layer's `turtle` and
-  `longturtle` serializers emit): a pure function of the graph with
-  content-derived ordering, inline `[ ]`, `( )` collections, `a` first, and
-  structural `_:bN` labels only for shared or cyclic blanks, so re-rendering
-  is idempotent. Where it stops: Turtle only, graph names are not represented,
-  stability under isomorphism is claimed for non-symmetric graphs, it is a
-  review form rather than either identity form above, and it is not on the
-  CLI, wasm or C.
-- **Projections & carriers** — deterministic graph, tabular, and
-  research-object projections, sixteen profiles behind one `purrdf project`
-  verb (ten of them lift back with `purrdf lift`): four graph-database
-  carriers off one canonical LPG model — generic LPG CSV, **Neo4j** Admin
-  Import CSV, **openCypher** and **GraphML** 1.0 — each with a strict reader
-  and a lift that reconstructs reifiers, triple terms, named graphs and blank
-  scope from an exact RDF sideband carried in the archive (what is lost is the
-  native LPG legibility of those constructs, never the data); W3C-gated CSVW
-  (**270/270** RDF conversions, **282/282** validation cases), OBO Graphs and
-  SKOS views, native DCAT/VoID dataset descriptions, and RO-Crate 1.3 /
-  Croissant 1.1 / DataCite 4.6 / DCAT 3 / Frictionless carriers — every lossy
-  step reported through a located loss ledger whose code set is the
-  drift-gated
-  [`generated/transcode-loss-matrix.json`](./generated/transcode-loss-matrix.json)
-  — plus the five-table byte-deterministic Parquet codec in `purrdf-columnar`.
-  Where it stops: every IRI and limit is caller-supplied JSON with no
-  `Default` (`ProjectionLimits`, `LpgExecutionLimits`); the archive is one
-  byte-deterministic USTAR file; and the LPG lane is graded by in-tree
-  round-trip tests only — there is no external Neo4j or openCypher oracle.
-  Reachable from Rust, the CLI, Python (`project`/`lift`, plus the
-  Python-only streaming `project_artifacts` for the four LPG profiles), wasm
-  (`Dataset.project`, `liftProjection`) and C (`purrdf_project`,
-  `purrdf_lift`).
-- **RDF 1.2 visualization** — a statement-centric projection (`purrdf::viz`)
-  that lays out a dataset and renders static SVG, with RDF 1.2 drawn as RDF
-  1.2: a triple term is a bounded statement glyph rather than an arrow, a
-  reifier is a node joined to the statement it reifies by a `reifies` edge
-  with its annotations beside it, an asserted occurrence stays distinct from a
-  quoted one, and named-graph context and dialect diagnostics (generalized or
-  symmetric positions) are kept rather than flattened. Three modes over one
-  model — `compact` (resource graph), `incidence` (exact statement/incidence
-  graph) and `table` (statement rows). The layout is deterministic: ids are
-  minted from statement keys, every ordering is a sort on them, cycle breaking
-  is fixed, and the complete versioned export JSON (`purrdf-viz-export-1`)
-  the picture was drawn from is embedded in the SVG's `<metadata>`, so the
-  file is a machine-readable export of the statement model as well as a
-  drawing; `make check` re-renders the book's fifteen sample SVGs and fails
-  on any byte of drift. Where it stops: static SVG only, no interactive layout; a
-  caller-set ceiling (`VizSpec::max_statements`, default 500, and
-  `max_terms`, default 1,500) that refuses a larger input with
-  `VizError::TooLarge` rather than truncating it; reachable from Rust and the
-  JavaScript/wasm package (`visualModel`, `visualExport`, `visualSvg`), not
-  yet from Python, C or the CLI. See
-  [RDF 1.2 Visualization](./docs/book/src/concepts/visualization.md) and its
-  samples, e.g.
-  [asserted-reified-compact](./docs/book/src/assets/visualization/purrdf-viz2-asserted-reified-compact.svg).
-- **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator over the
-  interned IR: all four query forms plus full SPARQL Update, property paths,
-  cost-based BGP planning, and the enforced `VERSION` declaration (including
-  the `1.2-basic` profile). `EXISTS`/`NOT EXISTS` runs on SEP-0007's
-  defensible substitution semantics (`Replace`/`PrjMap`, a JOIN rather than a
-  term rewrite, plus its Part 3 assignment restriction), answered by a
-  memoized existence probe where a prepare-time proof licenses it and by the
-  per-row definition otherwise. The 1.2 surface includes temporal arithmetic
-  (SEP-0002: instants, durations, and the five Gregorian partial-date types,
-  plus duration `SUM`/`AVG` and `ADJUST`) and `LATERAL` (SEP-0006, with
-  Jena's scope rule), the SEP-0008 SHA-3 builtins, and the SEP-0009 composite
-  datatypes (`cdt:List`/`cdt:Map`, the fifteen-function library, the `FOLD`
-  aggregate and the `UNFOLD` graph pattern, evaluated in the closed-leaf
-  `purrdf-cdt` crate and gated by the vendored `awslabs/SPARQL-CDTs` corpus).
-  One deliberate divergence is stated rather than hidden: PurRDF admits RDF 1.2
-  triple terms and directional language-tagged literals as composite elements,
-  a lexical superset that a conformant SEP-0009 reader will call ill-formed,
-  emitted only for values SEP-0009 cannot express at all. Three caller-keyed
-  extension seams — scalar functions, property functions (magic predicates),
-  and custom aggregates via `AGG(<iri>, …)` with a closed ten-member
-  statistical set — `MEDIAN`, `PERCENTILE` (`P=`), `STDDEV`, `STDDEV_POP`,
-  `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`, `LAST`, `TOPK` (`K=`) — registered
-  under a caller-supplied namespace (`--aggregate-namespace`,
-  `aggregate_namespace=`), exact on the XSD promotion tower except the final
-  `sqrt` of `STDDEV`/`STDDEV_POP`, which is `xsd:double`, and poisoning the
-  fold to unbound on non-numeric input rather than erroring — plus a `SERVICE`
-  seam: a
-  host-injectable `ServiceResolver` that carries **per-service context**
-  (headers, credentials, timeouts, capabilities; deny by default), with the
-  outgoing SPARQL Protocol request built by the deterministic serializer,
-  round-trip-swept over the 823-item vendored corpus (update requests
-  included). Where it stops: PurRDF ships no HTTP client — the exchange is an
-  `HttpTransport` trait the Rust host implements. The CLI, Python and C surfaces
-  install no resolver, and neither do the wasm package's synchronous methods, so
-  `SERVICE` and `LOAD` there fail by name unless written `SILENT`, which
-  succeeds with nothing fetched and is recorded on a governed call's evidence. The wasm
-  package's asynchronous methods take host resolvers: JavaScript
-  `resolveService`/`resolveLoad` handlers the job suspends on through JSPI, or
-  the `fetch`-based ones its Cloudflare adapter builds. Federation is a host
-  composition, not a built-in network client. A host scalar function
-  on the native seam carries SPARQL's expression-error channel: a per-solution
-  domain error eliminates the row under `FILTER` or leaves the variable unbound
-  under `BIND`/`SELECT` instead of aborting the query. Gated by the full W3C
-  SPARQL 1.1 + 1.2 evaluation corpus: **862 passing**, 5 ledgered
-  upstream-errata fixtures. Results in SPARQL JSON/XML/CSV/TSV.
-- **SPARQL extensions outside `purrdf-core`** — capability that arrives through those
-  seams as sibling crates, each registered under IRIs the caller supplies (PurRDF
-  mints none) and each byte-identical natively and on `wasm32-unknown-unknown`:
-  - **Full-text search** (`purrdf-text`) — an in-memory inverted index over RDF
-    1.2 literals (the annotation layer included), Unicode normalization and
-    full case folding (UAX 15, UAX 21) followed by word-boundary segmentation
-    (UAX 29), and BM25 ranking in exact
-    base-10 fixed point with **no floating point in the crate** (denied by
-    lint), so the ranking is a pure function of its input on every target. Two
-    property functions: ranked retrieval
-    (`?doc <iri> ( "needle" ?score ?rank ?lang ?matched )`) and term
-    occurrence (`?doc <iri> ( "term" ?lang ?position )`), from which phrase and
-    proximity queries compose in plain SPARQL.
-  - **GeoSPARQL 1.1** (`purrdf-geo`, OGC 22-047r1) — WKT and GeoJSON literals
-    read as exact rationals, every topological relation of the Simple Features,
-    Egenhofer and RCC8 families over an exact DE-9IM, the accessors and the
-    exactly-computable measures and constructors, with no GEOS, no PROJ and no
-    float arithmetic (the one float boundary is the `xsd:double` result
-    literal). The `geof:` family lands on the scalar seam and the spatial
-    relations rewrite through the property-function seam; `geof:transform`,
-    the buffers, the concave hull, the overlay set operations and the
-    GML/KML/DGGS encodings are registered but **hard-error by name** rather
-    than answering a default (`geof:convexHull` is implemented), and
-    a `metric*` measure answers only in a CRS the caller declared in metres
-    (there is no ellipsoidal geodesic).
-  - **Embedding kNN** — nearest-neighbour search over a
-    [PURREMB](./docs/PURREMB.md) embedding space as a property function
-    (`?neighbour <space> ( ?seed k ?distance )`): an exact search under the
-    metric the artifact declares, binary64 in a pinned accumulation order, and
-    governor charges proportional to the candidates actually scanned.
-  - **Path witnesses** — a property function that binds the *derivation* of a
-    traversal, not just its endpoints:
-    `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`, one row per hop,
-    with every traversed statement an RDF 1.2 triple term that joins straight
-    back into the dataset; every simple-prefix walk or one shortest witness per
-    pair, a content-derived path identifier, and hop limits the caller must
-    state. Reachable from the CLI (`--path-relation`) and Python
-    (`path_relations`); the reference vectors were re-executed against a real
-    Virtuoso `OPTION(TRANSITIVE …)` instance, not transcribed from its manual.
-- **Governed execution** — every query/update entry point has a governed twin
-  running under caller-set ceilings (fuel, answer rows, intermediate cells,
-  scratch bytes, remote requests, deadline) that trips with certified rows
-  rather than a wrong answer, and `--explain` returns a per-algebra-node charge
-  ledger beside the cost planner's estimates. A trip returns `PartialAnswers`
-  classified `Certain` (a lower bound), `AtMost` (an upper bound) or `Unknown`
-  (rows withheld, with a `NonMonotoneBarrier` naming the operator); a governed
-  `UPDATE` has no partial arm — it applied entirely or not at all. Cancellation
-  is cooperative: a latching `StopSignal` (`CancellationFlag`, or a
-  `WallDeadline` that treats an observed clock rewind on wasm32 as expiry)
-  polled every 4,093 fuel, exposed as `CancellationToken` in wasm and Python,
-  `purrdf_cancellation_*` in C and `--deadline` on the CLI. On the CLI a trip
-  exits **3** with the certified rows on stdout and the receipt on stderr, and
-  `validate` writes no report at all on a trip. Where it stops: five of the
-  eight resource dimensions are caller-settable (`--fuel`, `--max-answers` on
-  `query` only, `--max-intermediate-cells`, `--max-scratch-bytes`,
-  `--max-remote-requests`); the UDF depth ceiling is fixed and cannot be
-  relaxed, and the page and byte dimensions are reachable only through
-  `PagedQueryLimits` in Rust. The normative charge schedule and the frozen
-  50-case governor corpus live in
-  [`docs/SPARQL-GOVERNOR-PROFILE.md`](./docs/SPARQL-GOVERNOR-PROFILE.md).
-- **SHACL validation** — a native validator and rules engine for SHACL 1.2:
-  Core (every constraint component the SHACL 1.2 vocabulary declares, the
-  SHACL 1.2 targets, severities and conformance-disallow sets), SPARQL
-  Extensions on the native engine, Node Expressions with the order and
-  multiplicity each expression kind defines, Inference Rules, and the SPARQL
-  1.2 RL rule language, with SHACL rules and SPARQL 1.2 RL both running on
-  `purrdf-datalog`. The SHACL-AF 1.0 spellings parse to the same
-  representation, and a shapes graph that merges the W3C SHACL 1.2
-  vocabularies loads with every built-in bound to its native implementation.
-  **538/544 passing** on the vendored W3C SHACL 1.2 test suite (6 approved
-  results spell a computed decimal non-canonically and are graded by the XSD 1.1
-  canonical spelling, counted apart) and **129/129 passing** on the vendored W3C
-  SHACL 1.0 test suite, zero ledgered in both. The answer is the W3C validation report as a frozen RDF dataset
-  (`ValidationReport::to_dataset()`), so any syntax — and the CLI's
-  `validate --format` — is a serialization of that dataset rather than a text
-  round-trip, with the report's minted blank nodes kept distinct from every
-  blank node the data graph carries. SHACL-SPARQL result annotations
-  (`sh:resultAnnotation`) are copied into every result their query produces,
-  and the SHACL-AF 1.1 `sh:minus` node expression evaluates as `shnex:remove`.
-  Where it stops: a term the shapes graph uses and the engine does not
-  evaluate is a load error naming it. Those terms are the SHACL JavaScript
-  Extensions, which are not part of SHACL 1.2, and `sh:describe` and
-  `sh:update` on a shape, node expression, constraint, validator or rule,
-  where no SHACL 1.2 specification gives them a meaning. A shapes graph's
-  `owl:imports` are never fetched — the caller supplies `--import IRI=FILE`,
-  the same shape `entails` and `shex` take, and the closure is followed
-  transitively from that table. Only an `owl:imports` on the shapes
-  document's own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph`
-  (`sh:RulesGraph` and subclasses included), or on a node naming one of those
-  as its `owl:versionIRI` is an import; on any other node — a node that is only
-  a `sh:DataGraph`, and SHACL's `sh:prefixes/owl:imports*/sh:declare` prefix
-  edges, among them — it is data, and `shapes lint` lists it under
-  `unanchored-imports`. Entailment follows the same rule. An import of the
-  shapes document's own IRI or of a graph already in the shapes graph
-  (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an `owl:versionIRI` naming
-  it) needs no pair; any other unresolved import is
-  refused by name rather than validated against a smaller shapes graph. A
-  data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4, on its
-  `sh:DataGraph` node or its own IRI) are resolved through the same table and
-  unioned into the shapes graph, or refused by name; a prepared product refuses
-  a link it does not hold.
-- **Schema lanes: SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML /
-  TypeScript / GraphQL** (`purrdf-shapes`, **Rust only**) — `compile_schema`
-  lowers a shapes graph (ontology-aware on request, with a coverage report)
-  into a JSON Schema draft 2020-12 document and an OpenAPI 3.1 document sharing
-  its `$defs`, and emits Pydantic v2, LinkML 1.11, TypeScript 7.0 and GraphQL
-  (September 2025) packages from it; each lane has a reverse importer
-  (`purrdf::shapes::import_*`) that lowers the artifact back to shapes with a
-  located loss ledger, and supported emitted SHACL recompiles byte-exactly.
-  Where it stops: JSON Schema and LinkML have native readers of arbitrary
-  input, while the Pydantic, TypeScript and GraphQL importers reverse only
-  intact PurRDF-emitted packages (arbitrary source in those languages has no
-  unique acceptance relation); namespace and datatype configuration is
-  caller-supplied with no `Default`; resource limits are fixed; and none of it
-  reaches the CLI, Python, wasm or C. Gated by first-party
-  exact/lossy/corruption/resource suites in `cargo test` and, outside `make
-  check`, by `make pydantic-oracle` / `linkml-oracle` / `typescript-oracle` /
-  `graphql-oracle`, which execute the emitted packages with the real
-  toolchains.
-- **ShEx 2.1** — a from-scratch ShExC + ShExJ schema layer and validator gated
-  against the official shexTest suite: **1,105/1,105 attempted validation tests,
-  zero expected-failures** (imports and semantic actions included), 99/99 negative
-  syntax, 14/14 negative structure. See [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md).
-- **Entailment** — Simple/RDF/RDFS/OWL-RL/D forward materialization over a
-  deterministic semi-naive fixpoint (**all 78 OWL 2 RL rules** of OWL 2 Profiles
-  §4.3 Tables 4–9 — *rule-table coverage*, which is not the same claim as
-  entailment conformance: on this vendored W3C corpus of OWL 2 RL entailment
-  tests the chase scores **27 of 27 positive and 23 of 23 negative**, the latter meaning no
-  unsoundness was found; all 18 RDF + RDFS patterns, the four existential ones
-  firing through the restricted chase with their surrogate blank nodes withheld at
-  the materialization boundary), an open-world OWL-Direct
-  SHOIQ(D) hypertableau, and RIF-Core rules. **Every closure comes back with a reasoning
-  report** naming what fired, what did not, the boundaries met, the budget
-  consumed, and the contract hash of the calculus that ran — so an incomplete
-  answer can never be delivered as a complete one. One rule fires that no
-  specification table states — `ext-eq-diff-sym`, symmetry of `owl:differentFrom`
-  under `owl-rl` — and it is in neither rule count above; `extensions(regime)`
-  names it, and every report discloses it on an `extension` line. Per-rule
-  inventory:
-  [`docs/book/src/entailment-rules.md`](./docs/book/src/entailment-rules.md).
-- **OWL 2 DL reasoning services** — beyond the consistency decision, a
-  `Reasoner` session over one knowledge base answers class satisfiability,
-  classification, realization, instance retrieval and axiom entailment (eight
-  axiom kinds), and two syntactic services sit beside it: OWL 2 profile
-  certification (EL/QL/RL/DL/Full) and locality-based module extraction
-  (BOT/TOP/STAR). Every answer carries a `DlCertificate`; a search that reaches
-  its step or work cap answers `unknown`, never a guess, and the caps can only
-  be narrowed below the size-derived budget, never raised. `justify` returns
-  one minimal entailing subset by black-box shrinking, `explain_conclusion`
-  returns a chase proof that is checked before it is returned, and an opt-in
-  proof term (`purrdf-dl-proof 1`, seven proof-bearing services) is replayed
-  by an independent checker against the consumer's own clause set.
-  `entails(premise, conclusion)` answers `entailed` / `not-entailed` /
-  `undecided` for the five rule-table regimes, with `verify` re-deciding a
-  warrant without a reasoner and `certain_answers` for a basic graph pattern.
-  Where it stops: classification is a single saturation only inside an
-  EL++-shaped Horn terminology (outside it every residual pair costs a tableau
-  decision, counted in the certificate); profile certification is
-  one-directional (a clean pass proves membership, a violation proves only
-  that the syntactic test failed); modules are sound, not minimal; `justify`
-  returns one justification, not all; `entails` refuses OWL-Direct and RIF by
-  name and reports a match-budget overrun as an error, never a verdict; and
-  `owl:imports` are never fetched — the caller supplies `IRI=FILE`. Reachable
-  from Rust, Python (`entail.*`, `entail.Reasoner`), wasm (`Reasoner`,
-  `entail*`) and C (`purrdf_entail_*`, `purrdf_reasoner_*`); the CLI carries
-  only `consistency` (`--proof`/`--check-proof`), `entails` and `query
-  --entailment`; class satisfiability is Rust-only, and the C session records
-  no proofs.
-- **Entailment-aware SPARQL** — `query_with_entailment` and its governed twin
-  (CLI `query --entailment REGIME`, Python `Store.query_entailment_governed`,
-  wasm `queryEntailmentGoverned`, C `purrdf_query_entailment_governed`) parse,
-  close under one of the seven regimes, evaluate over the closure and hand
-  back the answer together with the reasoning report; path relations
-  (`--path-relation`) are re-derived from the closure so a walk sees the
-  derived edges, and the OWL-Direct lane wraps every binding leaf in a `MINUS`
-  against the chase's witness list before evaluation. Where it stops: a
-  closure relation rebuilder (the host code that re-derives path relations
-  from the closure) supplied to an OWL-Direct run whose restricted chase
-  minted existential witnesses is refused by name
-  (`reasoning-closure-relation-witness`); the closure phase honours only the
-  stop signal (cancellation or wall deadline) while the numeric ceilings reach
-  the query phase alone; and a `ClosureStopped` outcome carries no rows and
-  no report.
-- **GTS graph transport** — a single-file, content-addressed, append-only container
-  for RDF 1.2 graphs and the binaries they reference: BLAKE3-chained CBOR segments,
-  deterministic fold, COSE signing/encryption, pure-Rust crypto (wasm-friendly).
-  Reachable from Rust, the CLI (`--from gts`, read only), Python and C; not
-  exposed by the wasm/JavaScript package. The Rust-library-only extras —
-  streamable compaction certificates, MMR inclusion proofs, content-chain and
-  OpenPGP keyring verification — are described in
-  [the book's GTS chapter](./docs/book/src/gts.md) rather than here: no
-  surface beyond Rust reaches them, and part of that stack has no direct tests
-  in this repository. Spec in
-  [`docs/GTS-SPEC.md`](./docs/GTS-SPEC.md), frozen cross-language conformance
-  vectors in [`vectors/`](./vectors/).
-- **Slices, mappings, and provenance** — a manifest-based slice catalog with
-  content-addressed artifact IDs, an explicit RDF↔GTS **loss ledger**
-  ([`generated/rdf-loss-matrix.json`](./generated/rdf-loss-matrix.json)), SSSOM
-  mapping TSV support and an FnO function-catalog codec (both live in
-  `purrdf-core`, not the slice crate).
-- **First-party foundations** — `purrdf-hash` (BLAKE3, MD5, SHA-1, SHA-3 and CRC-32
-  digests, base16, framing and the table hasher) and `purrdf-events` (the object-safe
-  ingestion seam and the one RDF 1.2 base-direction type) have no runtime
-  dependencies; `purrdf-lex` (the grammar terminals, byte-class scanners, escapers,
-  and the JSON, YAML, CBOR and XML codecs every crate shares) depends on
-  `purrdf-hash` alone, `purrdf-xsd` (XSD 1.1 value space) and `purrdf-iri`
-  (RFC 3987/3986) on `purrdf-lex` and `purrdf-hash`, `purrdf-ed25519` (RFC 8032
-  signatures) on `purrdf-hash` and `sha2`, and `purrdf-cdt` is a `no_std` closed
-  leaf over `purrdf-events`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and
-  `purrdf-hash`.
+Default distance arithmetic pins the accumulation order across native and WASM
+paths. Explicit `Reassociated` arithmetic permits different last bits in exchange
+for different code generation; HNSW artifacts bind that choice to their recorded
+build and execution path. Approximation and arithmetic are separate contracts.
+See [embedding kNN](./docs/design/purrdf-embedding-knn.md),
+[HNSW's recall and build evidence](./crates/hnsw/README.md),
+[retrieval composition](./docs/design/purrdf-retrieval-ladder.md), and
+[SIMD and arithmetic contracts](./docs/design/purrdf-simd.md).
+
+These ranked producer integrations are Rust APIs, also usable by a Rust host
+compiled to WASM. The shipped Python and npm packages expose data-shaped
+property functions and path witnesses; they do not expose the text, spatial or
+vector producer registrations.
+
+## Documents, carriers and storage
+
+**Documents can be graphs of themselves.**
+[`purrdf-markdown`](./crates/markdown/SPEC.md) projects a specified Markdown
+dialect into headings, paragraphs and other structural units over verbatim byte
+spans. [`purrdf-json`](./crates/json/SPEC.md) records ordered JSON occurrences
+and their byte cover. Both require explicit profiles, bind identity to the
+profile's law and source bytes, and reconstruct the source byte for byte.
+The Markdown dialect is specified by the codec; it is not a CommonMark parser.
+
+**Conversions account for loss.** Native codecs cover Turtle, TriG,
+N-Triples, N-Quads, RDF/XML, TriX, HexTuples, JSON-LD and YAML-LD. The JSON-LD
+context lens compiles reusable offline contexts; it supplies expansion,
+compaction and derived-prefix modes, with caller-provided context registries
+and no network loader or framing API. Graph and research-object projections
+include Neo4j CSV, openCypher, GraphML, CSVW, OBO Graphs, SKOS, DCAT, VoID,
+RO-Crate, Croissant, DataCite and Frictionless. Supported reversible carriers
+retain RDF 1.2 through an exact sideband; lossy views report what was lost.
+See [projections](./docs/book/src/concepts/projections.md) and the
+[generated loss matrix](./generated/transcode-loss-matrix.json).
+
+**One canonical columnar projection.**
+[`purrdf-columnar`](./crates/columnar/) supplies the native five-table v1
+contract: `terms`, `quads`, `reifiers`, `annotations` and `blobs`. Python's
+SQLite, DuckDB and Parquet exporters use its canonical IDs and schema, retaining
+scoped blanks, quoted terms, directions, empty named graphs and verified blobs.
+GTS's append-order inspection IDs remain a separate authority.
+
+**Two immutable storage paths.** Eager pack snapshots provide a front-coded
+dictionary, bitmap indexes and content verification. The new
+[`SegmentedSession`](./crates/rdf-core/STORAGE.md) reads a certified persistent
+representation through a host range provider, authenticates admitted blocks,
+and shares a live ledger between sparse caches, pins, evidence and operator
+workspace. It preserves global IDs across sealing and reopening; persisted
+handles identify the exact snapshot.
+
+Resident datasets retain compact four-byte term IDs, sixteen-byte quad rows
+and borrowed term access. Operational reads use typed failures and pinned guards
+through the same `DatasetView` seam. A storage failure discards the operation's
+result at its final checkpoint. Bounded query admission currently covers a plain
+variable-projected `SELECT` over a basic graph pattern; unpriced operational
+forms return a typed refusal. Construction, full certification, host buffers
+and caller-owned outputs have separate memory obligations. The kernel performs
+no filesystem or network I/O. See the [storage contract](./crates/rdf-core/STORAGE.md)
+and [3.0 migration guide](./docs/MIGRATION-3.0.md) for the exact boundaries.
+
+**Graph transport with its payloads.** [GTS](./docs/GTS-SPEC.md) is a
+content-addressed, append-only container with deterministic fold, binary
+payloads, chained CBOR segments, COSE signing/encryption and pure-Rust crypto.
+Its container API reaches Rust, Python and C, and the CLI reads it as an input
+format. The npm / JavaScript package does not expose it. Frozen transport
+vectors are shared with the [authoritative GTS project](https://github.com/Blackcat-Informatics/gmeow-gts).
+
+## Validation, reasoning and accountable execution
+
+SHACL 1.2 covers Core, SPARQL Extensions, Node Expressions, Inference Rules
+and SPARQL 1.2 RL, with SHACL-AF spellings mapped to the shared representation.
+Reports are RDF datasets. ShEx 2.1 supplies ShExC/ShExJ schemas and validation,
+including imports and semantic actions. Imports resolve from explicit host
+registries. The Rust schema compiler also projects shapes into JSON Schema,
+OpenAPI, Pydantic, LinkML, TypeScript and GraphQL, with coverage and loss reports;
+those schema lanes are Rust-only.
+
+The entailment engine implements **all 78 OWL 2 RL rules** and all 18 RDF + RDFS
+patterns. That is rule-table coverage, distinct from entailment conformance:
+on the vendored W3C corpus the chase scores **27 of 27 positive and 23 of 23
+negative**, the latter recording that no unsoundness was found. The additional
+`ext-eq-diff-sym` rule is disclosed in reasoning reports and excluded from those
+rule counts. OWL-Direct supplies an open-world SHOIQ(D) tableau and reasoning
+services with certificates; a capped search returns `unknown`. RIF-Core and
+entailment-aware SPARQL run alongside the materialization regimes. See
+[the rule inventory](./docs/book/src/entailment-rules.md) and
+[reasoning services](./docs/book/src/entailment.md).
+
+Query governors bound execution and return evidence about a trip, including
+which rows can be certified under non-monotone operators. Governed Update
+commits entirely or not at all. Prepared execution and scoped callbacks reuse
+the same evaluator. The charge schedule and the frozen 50-case governor corpus
+are published in the [governor profile](./docs/SPARQL-GOVERNOR-PROFILE.md).
+Structured diagnostics preserve stable codes and readable English, with named
+parameters and exact logical anchors in JSON, SARIF and the C diagnostic record.
 
 ## Quickstart
 
@@ -588,24 +225,25 @@ cargo add purrdf
 ```
 
 ```rust
-use purrdf::{parse_dataset, serialize_dataset, RdfDatasetBuilder, RdfLiteral, SerializeGraph};
+use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
 
-// Build a dataset in interned TermId space.
-let mut b = RdfDatasetBuilder::new();
-let alice = b.intern_iri("https://example.org/alice");
-let knows = b.intern_iri("http://xmlns.com/foaf/0.1/knows");
-let bob = b.intern_iri("https://example.org/bob");
-let name = b.intern_iri("http://xmlns.com/foaf/0.1/name");
-let hi = b.intern_literal(RdfLiteral::simple("Alice"));
-b.push_quad(alice, knows, bob, None);
-b.push_quad(alice, name, hi, None);
-let ds = b.freeze().expect("freeze");
-
-// Serialize to any native codec and parse back, losslessly.
-let ttl = serialize_dataset(&ds, "text/turtle", SerializeGraph::Dataset).unwrap();
-let back = parse_dataset(&ttl, "text/turtle", None).unwrap();
-assert_eq!(back.quad_count(), 2);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+        @prefix ex: <https://example.org/> .
+        ex:alice ex:knows ex:bob .
+    "#;
+    let dataset = parse_dataset(source.as_bytes(), "text/turtle", None)?;
+    assert_eq!(dataset.quad_count(), 1);
+    let turtle = serialize_dataset(&dataset, "text/turtle", SerializeGraph::Dataset)?;
+    let restored = parse_dataset(&turtle, "text/turtle", None)?;
+    assert_eq!(restored.quad_count(), 1);
+    Ok(())
+}
 ```
+
+Use the facade's `sparql`, `shapes`, `shex`, `entail`, `retrieval`, `columnar`,
+`json` and `markdown` modules as your application grows.
+[More Rust examples](./docs/book/src/getting-started/rust.md).
 
 ### Python
 
@@ -617,174 +255,129 @@ pip install purrdf
 import purrdf
 
 quads = purrdf.parse(
-    '<https://example.org/alice> <http://xmlns.com/foaf/0.1/name> "Alice" .',
+    '<https://example.org/alice> <https://example.org/name> "Alice" .',
     purrdf.RdfFormat.TURTLE,
 )
-
-from purrdf import shapes, shex
-
-report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
-print(report["conforms"])
-
-results = shex.validate(my_schema_shexc, my_data_ttl,
-                        [("https://example.org/alice", "https://example.org/PersonShape")])
-print(all(entry["conformant"] for entry in results))
+print(quads)
 ```
 
-Every parse entry point takes an optional `base=` for a document that spells
-relative IRIs (`shapes.validate` takes `shapes_base=`); with none in scope a
-relative reference raises rather than being mis-parsed. `Store.query` and its
-governed/update twins register property functions as data — frozen tables,
-tables read from the store's own graph, and `path_relations` traversals — with
-the GIL released for the whole evaluation.
+Python 3.13+ wheels carry the native extension. `Store` exposes SPARQL and
+Update; `shapes`, `shex` and `entail` expose validation and reasoning. Dataset
+and GTS columnar export use the native projection.
+[Python guide](./bindings/python/README.md).
 
-The Python package also ships an [rdflib compatibility layer](./bindings/python/python/src/purrdf/compat/rdflib/)
-(`from purrdf.compat.rdflib import Graph`) and a GTS fold view
-(`GtsFoldViewNative`, `gts_relational_rows_from_bytes`) that reads a container
-into in-memory relational row dicts (terms, quads, reifiers, annotations,
-blobs). `gts_to_sqlite`, `gts_to_duckdb` and `gts_to_parquet` write those five
-tables out — one row per projection row, in the projection's own order, so the
-same container exports to the same content twice. SQLite needs nothing beyond
-the standard library; the other two take the `[duckdb]` / `[parquet]` extras.
+An explicit compatibility layer is available at `purrdf.compat.rdflib`.
+For applications that need the top-level `rdflib` import name:
 
-For a literal, zero-change `import rdflib`, install the opt-in extra:
-
-```bash
-pip install purrdf[rdflib]
+```sh
+pip install 'purrdf[rdflib]'
 ```
 
-This pulls in the separate [`purrdf-rdflib`](./bindings/python-rdflib-shadow/)
-distribution, whose top-level `rdflib` package re-exports the compat surface, so
-existing third-party code doing `import rdflib` / `from rdflib.namespace import RDF`
-transparently runs on purrdf. **Caveat:** that shadow claims the `rdflib` import
-name and must never be installed alongside the genuine
-[`rdflib`](https://pypi.org/project/rdflib/) — the two cannot co-inhabit one
-environment. It is a separate distribution (never bundled into the main `purrdf`
-wheel) precisely so environments that need the real rdflib simply omit it.
+This installs the separate `purrdf-rdflib` distribution with a matching version.
+Its `rdflib` package and genuine rdflib cannot share one environment; keep real
+rdflib environments separate and omit the shadow extra there.
 
 ### JavaScript / WebAssembly
 
-An [RDF/JS](https://rdf.js.org/)-shaped API (`DataFactory` / `Dataset` / `Stream`)
-over the same engine, including the RDF 1.2 features no incumbent RDF/JS library
-carries — quoted triple terms and base-direction literals:
-
-```js
-import { ready, DataFactory, Dataset } from "@blackcatinformatics/purrdf";
-
-await ready(); // one-time async wasm instantiation
-
-const f = new DataFactory();
-const rtl = f.directionalLiteral("مرحبا", "ar", "rtl");
-
-const ds = new Dataset();
-ds.add(f.quad(f.namedNode("https://ex/s"), f.namedNode("https://ex/says"), rtl));
-
-const nq = ds.serialize("nquads");           // directions survive the round-trip
-const reparsed = Dataset.parse(nq, "nquads"); // Dataset.parse(input, format, base?)
+```sh
+npm install @blackcatinformatics/purrdf
 ```
 
-The same browser bundle also exposes SHACL validation (`shaclValidateToSarif`,
-`shaclEntail`, each taking an optional `shapesBase`), entailment-regime
-materialization, governed SPARQL with explain receipts, and graph identity
-(`Dataset.canonicalize()`, `Dataset.isomorphic()`: RDFC-1.0 over the
-statement layer flattened to plain `rdf:reifies`/annotation triples — the flat
-form, not the `purrdf-rdfc12` profile). See
-[`crates/rdf-wasm`](./crates/rdf-wasm/) (`make wasm-pkg` builds the ESM
-package).
+```javascript
+import { ready, DataFactory, Dataset } from "@blackcatinformatics/purrdf";
 
-### C
+await ready();
+const f = new DataFactory();
+const dataset = new Dataset();
+dataset.add(f.quad(
+  f.namedNode("https://example.org/alice"),
+  f.namedNode("https://example.org/greeting"),
+  f.directionalLiteral("مرحبا", "ar", "rtl"),
+));
+const restored = Dataset.parse(dataset.serialize("nquads"), "nquads");
+console.log(restored.size, dataset.id.toString());
+```
 
-`libpurrdf` ([`crates/rdf-capi`](./crates/rdf-capi/)) exposes parse, serialize,
-pattern iteration, copy-on-write mutation, SPARQL, SHACL validation/entailment,
-and GTS round-trips behind a panic-safe C ABI with a committed, reproducible
-header ([`include/purrdf.h`](./crates/rdf-capi/include/purrdf.h)) that CI checks
-for drift. Built with cargo-c: `make capi-build`.
+The RDF/JS-shaped API also exposes SPARQL, SHACL, reasoning, projections and
+static RDF 1.2 SVG visualization. Asynchronous queries can use host-provided
+`SERVICE` / `LOAD` resolvers through JSPI. In 3.0, dataset identities and
+generations are `bigint`; use decimal strings in JSON.
+[JavaScript guide](./crates/rdf-wasm/js/README.md).
+
+### C and CLI
+
+[`libpurrdf`](./crates/rdf-capi/) exposes parse, serialize, iteration, mutation,
+SPARQL, validation, reasoning and GTS through a panic-safe C ABI. `make capi-build`
+builds the library with cargo-c; `make capi-bundle` prepares a relocatable
+header/library distribution with recipient notices. The committed
+[`purrdf.h`](./crates/rdf-capi/include/purrdf.h) is checked against generated output.
+
+The [CLI](./crates/cli/) provides `convert`, `query`, `update`, `reason`,
+`entails`, `consistency`, `validate`, `shex`, `describe`, `project`, `lift` and
+`pack verify`. Build it from this repository; the CLI crate is not published
+on crates.io. See [CLI usage](./crates/cli/README.md).
+
+Every parsing surface accepts an explicit document base for relative IRIs.
+An unresolved relative IRI is diagnosed when no explicit or in-document base
+is available.
+Network access is host-supplied: synchronous shipped surfaces install no
+federation resolver, and the core ships no HTTP client.
 
 ## Crate map
 
-| Crate | What it is |
+| Crate | Role |
 | --- | --- |
-| [`purrdf`](./crates/purrdf/) | Umbrella facade: the RDF surface at the root, `slice` and `shapes` as modules. Start here. |
-| [`purrdf-rdf`](./crates/rdf/) | RDF 1.2 implementation: native codecs, GTS adapters, describe, canonicalization entry points. |
-| [`purrdf-core`](./crates/rdf-core/) | The kernel: interned IR, diagnostics, store traits, provenance, loss ledger, RDFC-1.0. |
-| [`purrdf-columnar`](./crates/columnar/) | Bidirectional, byte-deterministic five-table Parquet codec for RDF 1.2 and content-addressed blobs. |
-| [`purrdf-gts`](./crates/gts/) | GTS container engine: reader, writer, fold, verify, COSE sign/encrypt. |
-| [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL 1.1/1.2 parser → query algebra AST. |
-| [`purrdf-sparql-eval`](./crates/sparql-eval/) | Multiset SPARQL evaluator in interned `TermId` space, with the caller-keyed extension seams (scalar functions, property functions — including the path-witness and embedding-kNN relations — custom aggregates, and the per-service `ServiceResolver`) and the execution governors. |
-| [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL results JSON/XML/CSV/TSV, plus a provenance-carrying extension. |
-| [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL composite datatypes (`cdt:List`/`cdt:Map`): the value space, an iterative bounded lexical scanner, canonical spelling, and the fifteen-function library. A `no_std` closed leaf over `purrdf-events`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash`; reached through the evaluator, not re-exported by the umbrella. |
-| [`purrdf-stack`](./crates/stack/) | How much stack the running thread has left — natively the operating system's thread limit, read via target-gated `libc`/`windows-sys` declarations with no build-time C toolchain, on wasm32 the shadow stack against a floor the host can install — and the margin the SPARQL evaluator refuses at, typed, instead of overflowing. |
-| [`purrdf-shapes`](./crates/shapes/) | SHACL 1.2 validation and rules engine (Core, SPARQL Extensions, Node Expressions, Inference Rules, SPARQL 1.2 RL). |
-| [`purrdf-shex`](./crates/shex/) | ShEx 2.1: ShExC/ShExJ schemas and validation. |
-| [`purrdf-entail`](./crates/entail/) | Entailment regimes: the RDF/RDFS/OWL-RL/D chase, an OWL-Direct tableau, and RIF-Core rules — each closure returned with a reasoning report. |
-| [`purrdf-geo`](./crates/geo/) | GeoSPARQL 1.1: exact, float-free WKT and GeoJSON geometry, the `geof:` function family over the scalar seam, and feature-level query rewrite over the property-function seam — all under caller-supplied IRIs. |
-| [`purrdf-datalog`](./crates/datalog/) | The fixpoint substrate beneath the chase: a columnar relation store and a deterministic semi-naive evaluator over the DL-clause IR. Re-exported by the umbrella as `purrdf::datalog`, because the entailment surface carries its types. |
-| [`purrdf-text`](./crates/text/) | Deterministic full-text search over RDF 1.2 literals: an in-memory inverted index and exact fixed-point BM25 ranking, reached from SPARQL through caller-supplied property-function IRIs. |
-| [`purrdf-retrieval`](./crates/retrieval/) | The composition layer over the ranked producers: one request planned, admitted, executed and fused into one ordered answer across every ranked relation a caller registered on the property-function seam. Pure-data plans with a canonical BLAKE3 identity, an exact content-addressed fusion law, per-row per-stratum provenance and per-term unserved evidence; producers, strata and weights are caller-supplied and nothing is defaulted. Re-exported by the umbrella as `purrdf::retrieval`. |
-| [`purrdf-validate`](./crates/validate/) | The shared host boundary: SARIF 2.1.0 diagnostics and the entailment-regime string surface the Python/wasm/C bindings call. |
-| [`purrdf-markdown`](./crates/markdown/) | Structural Markdown-to-RDF 1.2 codec under a shipped specification ([SPEC](./crates/markdown/SPEC.md)): a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans and concordance citations, under a caller-supplied vocabulary and a content-addressed profile — and the graph decodes back to the document byte for byte, proven against its own source digest. Re-exported by the umbrella as `purrdf::markdown`. |
-| [`purrdf-jsonschema`](./crates/jsonschema/) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, and the flag/basic/detailed output formats. Numbers retain exact decimal values. ECMA-262 `/u` patterns use `regex` for regular expressions and a bounded explicit-stack matcher for lookaround, backreferences and scoped modifiers, with Unicode 17 property ranges; validation returns typed errors if matching exhausts its budget. Checked against the official JSON-Schema-Test-Suite for all three drafts; depends on `regex`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only, and builds for wasm32. |
-| [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
-| [`purrdf-lex`](./crates/lex/) | Lexical foundations shared by every grammar, over `purrdf-hash` alone: the exact Turtle/SPARQL/XML terminal classes, chunked byte-class scanners that lower to packed compares, literal and IRI escapers, RDF 1.2 term syntax, percent-encoding, Unicode normalization, and the one JSON reader/writer, YAML 1.2 reader/emitter, CBOR codec and XML reader. |
-| [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 signatures (RFC 8032): deterministic signing and strict cofactorless verification, over `purrdf-hash` and `sha2`. |
-| [`purrdf-iri`](./crates/iri/) | IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
-| [`purrdf-xsd`](./crates/xsd/) | XSD 1.1 value space with SPARQL numeric promotion; runtime dependencies are `purrdf-lex` and `purrdf-hash`. |
-| [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
-| [`purrdf-hash`](./crates/hash/) | Zero-dependency BLAKE3, MD5, SHA-1, SHA-3 and CRC-32 digests, streaming and one-shot, plus base16, length framing and the registered hash domains; SHA-1 and CRC-32 run on the processor's SHA and CRC instructions when it has them. |
-| [`purrdf-deflate`](./crates/deflate/) | Native DEFLATE and gzip: a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage or output past a caller's limit, and a deterministic encoder whose bytes depend only on the input and level. Vector match copies and compares on SSE2/AVX2, NEON and wasm simd128; depends on `purrdf-hash` alone. |
-| [`purrdf-wasm`](./crates/rdf-wasm/) | The wasm32 engine behind the `purrdf` ESM package. |
-| [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |
-| [`purrdf-cli`](./crates/cli/) | The `purrdf` command-line tool: `convert`, `query`, `update`, `reason`, `entails`, `consistency`, `validate`, `shex`, `describe`, `project`, `lift`, `pack verify` (unpublished). `convert` takes any number of `--input` sources, merged by deterministic union under a separate blank-node scope per source, and `--transport auto\|none\|gzip\|zstd` detects a gzip or zstd wrapper by its magic bytes before consulting the suffix and decodes it all-or-nothing; a transport is never applied on output and is refused against a pack source. |
-| [`purrdf-sparql-conformance`](./crates/sparql-conformance/) | W3C SPARQL, entailment-regime, and OWL 2 conformance harnesses (unpublished). |
-| [`purrdf-envelope-probe`](./crates/envelope-probe/) | The micro-hardware envelope capture side (unpublished): a fixed, deterministic workload set run per named profile over the public APIs and the keystone fixture corpus, so a release can demonstrate that a constrained deployment class still fits its pinned ceilings. Pass criteria are completion and memory; wall time is recorded evidence, never a gate. |
-| [`purrdf-bench`](./crates/bench/) | Benchmark tooling (unpublished): `bench-corpus`, the deterministic, shardable scale-corpus generator (`purrdf-scale-mixed-v1`). Every IRI is minted purely from its index under a fixed seed across five deliberately adversarial classes, so no single dictionary trick can flatter a capacity claim, and concatenating every shard is byte-identical to one whole run. Driven by `make scale-corpus`. |
+| [`purrdf`](./crates/purrdf/) | Start here: the umbrella facade. |
+| [`purrdf-rdf`](./crates/rdf/) | Native RDF codecs, GTS adapters, projections and canonicalization. |
+| [`purrdf-core`](./crates/rdf-core/) | Interned IR, read sessions, segmented storage, diagnostics, provenance, pack and PURREMB. |
+| [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL parsing and algebra. |
+| [`purrdf-sparql-eval`](./crates/sparql-eval/) | Query/Update evaluation, governors and extension seams. |
+| [`purrdf-sparql-results`](./crates/sparql-results/) | Results JSON, XML, CSV and TSV. |
+| [`purrdf-shapes`](./crates/shapes/) | SHACL validation/rules and schema compilation. |
+| [`purrdf-shex`](./crates/shex/) | ShEx schemas and validation. |
+| [`purrdf-datalog`](./crates/datalog/) | Deterministic semi-naive rule substrate. |
+| [`purrdf-entail`](./crates/entail/) | Materialization, OWL-Direct and RIF-Core. |
+| [`purrdf-text`](./crates/text/) | Exact fixed-point full-text search. |
+| [`purrdf-geo`](./crates/geo/) | Exact GeoSPARQL geometry and relations. |
+| [`purrdf-hnsw`](./crates/hnsw/) | Deterministic approximate nearest-neighbour indexes. |
+| [`purrdf-retrieval`](./crates/retrieval/) | Typed planning, execution and ranked fusion with evidence. |
+| [`purrdf-columnar`](./crates/columnar/) | Canonical five-table Parquet codec. |
+| [`purrdf-gts`](./crates/gts/) | Container, fold, verification and cryptography. |
+| [`purrdf-markdown`](./crates/markdown/) | Structural Markdown codec. |
+| [`purrdf-json`](./crates/json/) | Ordered JSON byte-cover codec. |
+| [`purrdf-jsonschema`](./crates/jsonschema/) | Native JSON Schema drafts 2020-12, 2019-09 and 07. |
+| [`purrdf-slice`](./crates/slice/) | Slice catalogs, artifact ownership and dependencies. |
+| [`purrdf-validate`](./crates/validate/) | Shared validation, governor and diagnostic host boundary. |
+| [`purrdf-iri`](./crates/iri/) | IRI/URI, language tags, base resolution and standard vocabularies. |
+| [`purrdf-xsd`](./crates/xsd/) | XSD value spaces, exact numbers and temporal arithmetic. |
+| [`purrdf-cdt`](./crates/cdt/) | SPARQL composite datatypes and their function library. |
+| [`purrdf-events`](./crates/rdf-events/) | Zero-dependency ingestion protocol and text direction. |
+| [`purrdf-lex`](./crates/lex/) | Shared terminals, Unicode and JSON/YAML/CBOR/XML codecs. |
+| [`purrdf-hash`](./crates/hash/) | Zero-dependency hashes and shared identity kernels. |
+| [`purrdf-deflate`](./crates/deflate/) | Native deterministic DEFLATE/gzip. |
+| [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 signing and strict verification. |
+| [`purrdf-stack`](./crates/stack/) | Native/WASM stack admission. |
+| [`purrdf-wasm`](./crates/rdf-wasm/) | Engine and ESM bindings for JavaScript. |
 
-## Documentation
+The C ABI, CLI, Python extension and test/benchmark tools live in the same
+workspace but are not published as Cargo packages. Shared first-party lexical,
+codec, hashing and signature foundations reduce the external dependency surface;
+each shared job has one enforced home. There are no semantic Cargo features,
+so an install-time feature selection cannot change the carrier's behavior.
 
-- **[RDF-1.2 playground](https://blackcat-informatics.github.io/purrdf/playground/)** —
-  a zero-install browser console: parse, query (SPARQL), validate (SHACL),
-  serialize, and canonicalize/compare RDF-1.2 (quoted triples, directional
-  literals) entirely client-side over the wasm build. No toolchain, no server.
-- **[The PurRDF Book](https://blackcat-informatics.github.io/purrdf/)** — the
-  user guide: getting started in each language, concepts, and every engine
-  (source in [`docs/book/`](./docs/book/), `make book` builds it locally).
-- **API reference** — [docs.rs/purrdf](https://docs.rs/purrdf) for the umbrella
-  crate; every member crate links its own docs.rs page from the crate map above.
-- **Specs & reports** — [GTS spec](./docs/GTS-SPEC.md),
-  [RDF 1.2 canonicalization profile](./docs/RDF12-CANON-PROFILE.md),
-  [PURREMB embedding companion](./docs/PURREMB.md),
-  [SPARQL execution governor profile](./docs/SPARQL-GOVERNOR-PROFILE.md),
-  [conformance scoreboard](./docs/CONFORMANCE.md),
-  [benchmarks](./docs/BENCHMARKS.md), [release process](./docs/RELEASE.md).
-- **Design notes** — why the sibling engines outside `purrdf-core` answer identically on every
-  target: [full-text scoring](./docs/design/purrdf-text-scoring.md),
-  [GeoSPARQL exactness](./docs/design/purrdf-geo-exactness.md),
-  [embedding kNN](./docs/design/purrdf-embedding-knn.md),
-  [the retrieval ladder](./docs/design/purrdf-retrieval-ladder.md); and how the hot
-  paths vectorize without giving that up, site by site with the emitted instructions
-  measured on every target: [SIMD and arithmetic contracts](./docs/design/purrdf-simd.md).
+## Evidence and performance
 
-## Fast by measurement, not by assertion
+The [conformance scoreboard](./docs/CONFORMANCE.md) distinguishes official
+suites, first-party corpora, approved divergences and untested boundaries.
+SPARQL evaluation has **862 passing**, 5 ledgered upstream-errata fixtures.
+SHACL has **129/129 passing** on the vendored W3C SHACL 1.0 test suite, zero ledgered,
+and **538/544 passing** on the vendored W3C SHACL 1.2 test suite (6 approved results
+spell a computed decimal non-canonically and are graded by canonical XSD spelling).
 
-The IR keeps every term **once** in a string arena addressed by copyable
-`NonZeroU32` ids, hashes with the fixed-key `FixedHasher` everywhere hot, and freezes datasets
-into `Box<[QuadRow]>` tables with lazy ordinal permutation indexes (~4 bytes/quad
-per axis). Performance claims are backed by benchmarks rather than
-adjectives — `crates/rdf-core/benches/ir_layout.rs` measures AoS vs. SoA vs.
-predicate-adjacency layouts (allocation counts, high-water mark, end-to-end
-latency), and the shipped layout is whichever wins. Run them with `make bench`.
 
-There is also a report-only Python harness that times the native-backed
-`purrdf.compat.rdflib` drop-in against the real `rdflib` on parse, serialize,
-SPARQL, and triple-pattern iteration over a deterministic `example.org` corpus
-(`make bench-python`). Methodology, how to run, and a representative
-(host-dependent) results table live in [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md).
-Numbers vary by host — reproduce locally rather than trusting a fixed multiplier.
-
-## Conformance
-
-Every engine is gated by its official test suite, vendored and frozen in-repo —
-full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md):
+Conformance gates distinguish official suites, first-party frozen corpora and
+explicitly recorded boundaries. The full scoreboard and commands are in
+[`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md):
 
 | Engine | Suite | Result |
 | --- | --- | --- |
@@ -806,82 +399,66 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | RDF 1.2 canonicalization profile (`purrdf-rdfc12` v2) | first-party vectors (`vectors/rdf12-canon/`) | **12 / 12** |
 | GTS | frozen cross-language vectors (`vectors/`) | **38 / 39** fold byte-exactly into their committed expectation, 1 ledgered divergence |
 
-## How capability grows
+Performance evidence is workload- and host-specific. The benchmark harness
+records distributions and allocation evidence; `make bench` runs the native
+microbenchmarks. Scale-corpus, LUBM and WatDiv comparison lanes are report-only
+and need their documented inputs. Comparative runs need controlled machine
+conditions, matched builds and preserved raw samples. Browser memory caps,
+reader ledgers and physical-device limits establish different facts.
+See [benchmark methodology](./docs/BENCHMARKS.md).
 
-SPARQL breadth grows through caller-keyed extension seams — scalar functions,
-property functions, custom aggregates, and the host-injected service resolver
-— so new capability lands as composition through a seam, never as a Cargo
-feature flag and never as a vocabulary PurRDF mints itself. Quad-form
-`CONSTRUCT`, the SEP-0008 SHA-3 builtins, the SEP-0009 composite datatypes,
-deterministic full-text search, path witnesses, embedding kNN and GeoSPARQL 1.1
-all arrived that way: outside `purrdf-core`, under caller-supplied IRIs, byte-identical
-on every target, and under the same conformance discipline as everything
-above.
+## Direction
 
-## Development
+PurRDF is growing into a foundation for applications that combine graph
+reasoning, retrieval and document data across deployment sizes. The next gains
+should make those capabilities easier to compose and carry into more workflows,
+while keeping identities, resource limits and evidence explicit. The public
+contracts and the implemented surfaces above are the basis for that growth.
+
+## Documentation and development
+
+- [The PurRDF Book](https://blackcat-informatics.github.io/purrdf/): language
+  guides, concepts and engine contracts.
+- [Browser playground](https://blackcat-informatics.github.io/purrdf/playground/):
+  parse, query, validate, serialize and compare graphs locally in the browser.
+- [Migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
+- [GTS](./docs/GTS-SPEC.md), [PURREMB](./docs/PURREMB.md),
+  [RDF 1.2 canonicalization](./docs/RDF12-CANON-PROFILE.md),
+  [storage contracts](./crates/rdf-core/STORAGE.md) and
+  [release process](./docs/RELEASE.md).
 
 ```sh
-make metadata   # regenerate + verify generated artifacts
-make check      # fmt, build, tests, hygiene gates
-make bench      # purrdf_testkit::bench benchmarks
-make scale-corpus  # the deterministic scale corpus, across shards
-make lubm       # the LUBM comparison workload, per entailment regime
-make watdiv     # the WatDiv comparison workload over a frozen dataset
+make metadata      # regenerate and verify projections and license bundles
+make check         # formatting, clippy, build, tests and hygiene
+make bench         # report-only microbenchmarks
+make scale-corpus  # deterministic corpus generation
+make lubm          # comparison lane; pinned network inputs and a JRE
+make watdiv        # comparison lane; frozen network dataset
 ```
 
-The last three are **comparison lanes**, not gates: nothing they print is
-asserted anywhere, and `lubm`/`watdiv` fetch their pinned artifacts over the
-network at the moment of use (nothing is vendored — the LUBM generator is
-GPL-2.0-or-later and WatDiv is citation-ware). `lubm` additionally needs a JRE.
-See [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md).
+Consumers need stable Rust **1.98** or newer. Contributors use the nightly
+analysis toolchain declared in `rust-toolchain.toml`; the source uses no
+nightly-only features. CI separately enforces the stable MSRV and builds every
+published crate for WASM. Release artifacts use stable Rust.
 
-Releases are tag-driven with OIDC trusted publishing (crates.io and PyPI), with
-build-provenance attestations and SPDX SBOMs — see [`docs/RELEASE.md`](./docs/RELEASE.md).
+The Cargo suite, Python distributions and npm package share one coordinated
+version and follow semantic versioning. The C ABI is separately versioned,
+currently **0.8**, with signature checks and `purrdf_abi_version` at runtime.
+See [contributing](./CONTRIBUTING.md) for the verified commit workflow.
 
-## Versioning & MSRV
-
-**Semver from 1.0.0.** From 1.0.0 the suite follows semantic versioning in
-full: a **breaking** change bumps the **major** version — a commit carrying `!`
-or `BREAKING CHANGE:` is a major-bump trigger, and the changelog marks each
-such entry **BREAKING** — a **minor** bump is additive and API-compatible, and a
-**patch** bump is bugfix-only. That is what the number commits to; it is not a
-claim of stability beyond what semver means. All three published surfaces — the
-crates.io crate suite, the PyPI `purrdf` package, and the npm
-`@blackcatinformatics/purrdf` package — share **one** workspace version and are
-released in lockstep, and a version-coherence check in CI fails the build if
-the version sources (`Cargo.toml`, `pyproject.toml`, `package.json`,
-`CITATION.cff`) disagree. The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](./crates/rdf-capi/include/purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.7**), bumped on every exported-signature change, pinned by `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through `purrdf_abi_version`. It is versioned separately from the workspace and stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise about it.
-
-**MSRV policy.** The supported minimum Rust is `rust-version` in the root
-`Cargo.toml` (currently **1.98**) on the **stable** channel, enforced by a dedicated
-CI MSRV job, and release artifacts are built on stable. Raising the MSRV is a
-notable change recorded in the changelog; it rides a **minor** bump and never
-ships in a patch release. The README MSRV badge is maintained by hand and must be bumped together with
-`rust-version`.
-
-Contributors run nightly (`rust-toolchain.toml`) for its sharper clippy and
-rustdoc lint surface and its stronger default borrow checker, but the workspace
-contains **no nightly-only features** — the
-MSRV job is what proves that on every change. Building PurRDF needs nothing beyond
-stable 1.98.
-
-## The GMEOW family
-
-PurRDF is the library layer of a small family of linked-data projects:
-
-- [`gmeow-ontology`](https://github.com/Blackcat-Informatics/gmeow-ontology) — the
-  GMEOW reasoning-centric super-vocabulary and its publishing toolchain (PurRDF's
-  primary consumer).
-- [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) — the GTS
-  specification and its multi-language engines; PurRDF hosts the Rust engine.
-
-Extraction history and source commits: [`PROVENANCE.md`](./PROVENANCE.md).
-Brand assets and usage: [`docs/BRAND.md`](./docs/BRAND.md).
+PurRDF is developed by Blackcat Informatics® Inc. and is the library backbone
+of [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology).
+[Extraction history and provenance](./PROVENANCE.md) record its relationship
+to the [GTS project](https://github.com/Blackcat-Informatics/gmeow-gts).
 
 ## License
 
-Licensed under any one of [MIT](./LICENSE-MIT), [Apache License
-2.0](./LICENSE-APACHE), or [MulanPSL-2.0](./LICENSE-MULAN), at your option, as
-described in [`LICENSING.md`](./LICENSING.md).
+First-party code is offered under [MIT](./LICENSE-MIT),
+[Apache License 2.0](./LICENSE-APACHE), or [MulanPSL-2.0](./LICENSE-MULAN),
+at your option. Separately licensed documentation and third-party material
+retain their own terms. Actual distribution archives include applicable full
+texts, recipient notices and provenance inventories.
+[Licensing guidance](./LICENSING.md) explains the scope and
+[提供中文说明](./docs/LICENSING.zh-Hans.md).
 
-If you use PurRDF in research, please cite it — see [`CITATION.cff`](./CITATION.cff).
+If you use PurRDF in research, please cite [CITATION.cff](./CITATION.cff).

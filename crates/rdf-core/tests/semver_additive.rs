@@ -21,6 +21,10 @@
 //!
 //! This file guards against REMOVAL or RESHAPING of the pinned 2.0.2 surface. It is
 //! not a substitute for review of genuinely new, additive surface.
+//!
+//! The coordinated 3.0 release deliberately widens `PagedDataset::page_count`
+//! to `u64`. That one signature is pinned at its new width below; the other
+//! pre-existing field and variant shapes retain their 2.0.2 checks.
 
 #[path = "support/paged.rs"]
 mod paged;
@@ -245,7 +249,7 @@ fn pagedqueryerror_variant_shapes_are_pinned() {
 fn pageddataset_key_signatures_are_pinned() {
     let (dataset, provider) = two_page_dataset();
 
-    let page_count: usize = dataset.page_count();
+    let page_count: u64 = dataset.page_count();
     let dictionary_ref: &GlobalDictionary = dataset.dictionary();
     let generation: PageGeneration = dataset.generation();
     let translation: Option<&PageTranslation> = dataset.translation(PageId(0));

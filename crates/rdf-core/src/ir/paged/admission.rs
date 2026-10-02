@@ -171,8 +171,8 @@ pub(crate) fn admit_pattern(
 pub(crate) fn estimate_admitted_page(
     summary: &PageSummary,
     local: LocalPattern,
-    quad_count: usize,
-) -> usize {
+    quad_count: u64,
+) -> u64 {
     let axis_counts = [
         local.s.map(|s| summary.base_rows_as_subject(s)),
         local.p.map(|p| summary.base_rows_as_predicate(p)),
@@ -187,9 +187,7 @@ pub(crate) fn estimate_admitted_page(
         .into_iter()
         .flatten()
         .min()
-        .map_or(quad_count, |count| {
-            usize::try_from(count).unwrap_or(usize::MAX)
-        })
+        .unwrap_or(quad_count)
 }
 
 /// A zero-allocation cursor over the candidate `PageId`s for one graph constraint:
@@ -198,7 +196,7 @@ pub(crate) fn estimate_admitted_page(
 /// ([`GraphPageIndex::derive`]). Mirrors the two access shapes of `QuadMatches` in `ir/dataset.rs`.
 pub(crate) enum PageCandidates<'a> {
     /// Every page, ascending — used when the graph axis is unconstrained.
-    All(std::ops::Range<u32>),
+    All(std::ops::Range<u64>),
     /// A graph index posting list, already ascending.
     Listed(std::slice::Iter<'a, PageId>),
 }
@@ -225,7 +223,7 @@ impl Iterator for PageCandidates<'_> {
 /// today's ascending-`PageId` egress order.
 pub(crate) fn candidate_pages(
     graph_index: &GraphPageIndex,
-    page_count: u32,
+    page_count: u64,
     g: GraphMatch<GlobalTermId>,
 ) -> PageCandidates<'_> {
     candidate_pages_for_stream(graph_index, page_count, g, PageStream::Base)
@@ -246,7 +244,7 @@ pub(crate) fn candidate_pages(
 /// nonzero row count there), so it can contribute nothing.
 pub(crate) fn candidate_pages_for_stream(
     graph_index: &GraphPageIndex,
-    page_count: u32,
+    page_count: u64,
     g: GraphMatch<GlobalTermId>,
     stream: PageStream,
 ) -> PageCandidates<'_> {

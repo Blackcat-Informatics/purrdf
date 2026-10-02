@@ -191,6 +191,12 @@ pub enum RemoteError {
     ///
     /// Never silenced, for the reason [`Self::StackExhausted`] is not.
     HostStackExhausted(&'static str),
+    /// An in-process source could not read its admitted dataset snapshot.
+    /// This is an execution failure and is never swallowed by `SERVICE SILENT`.
+    SourceRead(String),
+    /// The asynchronous host cannot allocate another logical exchange identifier.
+    /// This execution failure is never swallowed by `SERVICE SILENT`.
+    ExchangeIdExhausted,
 }
 
 impl core::fmt::Display for RemoteError {
@@ -220,6 +226,8 @@ impl core::fmt::Display for RemoteError {
             Self::HostStackExhausted(construct) => {
                 write!(f, "{}", EvalError::HostStackExhausted { construct })
             }
+            Self::SourceRead(message) => write!(f, "dataset read failed: {message}"),
+            Self::ExchangeIdExhausted => EvalError::ExchangeIdExhausted.fmt(f),
         }
     }
 }
@@ -1079,6 +1087,8 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
         Err(RemoteError::HostStackExhausted(construct)) => {
             return Err(EvalError::HostStackExhausted { construct });
         }
+        Err(RemoteError::SourceRead(message)) => return Err(EvalError::SourceRead(message)),
+        Err(RemoteError::ExchangeIdExhausted) => return Err(EvalError::ExchangeIdExhausted),
         Err(error) => error,
     };
     // Every remaining variant is the invocation failing. Without `SILENT` the failure
@@ -1185,7 +1195,7 @@ fn ingest<D: DatasetView + Sync>(
             }
             crate::row_ingest::IngestVerdict::Admitted => {}
         }
-        let row = ingest.intern_row(ctx, binding);
+        let row = ingest.intern_row(ctx, binding)?;
         rows.push(row);
     }
     if tripped.is_none()
@@ -1215,6 +1225,8 @@ fn remote_error_for(error: EvalError) -> RemoteError {
         EvalError::ServiceHostFault { endpoint, message } => {
             RemoteError::HostFault { endpoint, message }
         }
+        EvalError::SourceRead(message) => RemoteError::SourceRead(message),
+        EvalError::ExchangeIdExhausted => RemoteError::ExchangeIdExhausted,
         EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
         EvalError::HostStackExhausted { construct } => RemoteError::HostStackExhausted(construct),
         other => RemoteError::Decode(other.to_string()),
@@ -1261,7 +1273,7 @@ pub(crate) fn evaluate_in_memory(
     }
     match crate::eval::evaluate_query_evaluated(&parsed, &mut ctx).map_err(remote_error_for)? {
         EvaluatedOutcome::Complete(Outcome::Solutions(seq)) => {
-            let (variables, rows) = materialize_solutions(&seq, &ctx);
+            let (variables, rows) = materialize_solutions(&seq, &ctx).map_err(remote_error_for)?;
             Ok(ResolvedBindings {
                 variables: variables.into_iter().map(Variable::new).collect(),
                 rows,
@@ -1355,7 +1367,7 @@ mod tests {
         let outcome = evaluate_query(&parsed, &mut ctx)?;
         Ok(match outcome {
             Outcome::Solutions(seq) => {
-                let (variables, rows) = materialize_solutions(&seq, &ctx);
+                let (variables, rows) = materialize_solutions(&seq, &ctx)?;
                 let aux = ctx.constructed_dataset(&rows);
                 SparqlResult::Solutions {
                     variables,
@@ -1387,18 +1399,20 @@ mod tests {
         if let Some(source) = source {
             ctx = ctx.with_remote(source);
         }
-        let result = evaluate_query(&parsed, &mut ctx).map(|outcome| match outcome {
-            Outcome::Solutions(seq) => {
-                let (variables, rows) = materialize_solutions(&seq, &ctx);
-                let aux = ctx.constructed_dataset(&rows);
-                SparqlResult::Solutions {
-                    variables,
-                    rows,
-                    aux,
+        let result = evaluate_query(&parsed, &mut ctx).and_then(|outcome| {
+            Ok(match outcome {
+                Outcome::Solutions(seq) => {
+                    let (variables, rows) = materialize_solutions(&seq, &ctx)?;
+                    let aux = ctx.constructed_dataset(&rows);
+                    SparqlResult::Solutions {
+                        variables,
+                        rows,
+                        aux,
+                    }
                 }
-            }
-            Outcome::Boolean(b) => SparqlResult::Boolean(b),
-            Outcome::Graph(g) => SparqlResult::Graph(g),
+                Outcome::Boolean(b) => SparqlResult::Boolean(b),
+                Outcome::Graph(g) => SparqlResult::Graph(g),
+            })
         });
         (result, state.evidence().silenced)
     }
@@ -1692,6 +1706,8 @@ mod tests {
             Err(match name {
                 "transport" => RemoteError::Transport("connection refused".to_owned()),
                 "decode" => RemoteError::Decode("not a results document".to_owned()),
+                "source-read" => RemoteError::SourceRead("snapshot block unavailable".to_owned()),
+                "exchange-id-exhausted" => RemoteError::ExchangeIdExhausted,
                 "disabled" => RemoteError::Disabled,
                 "unconfigured" => RemoteError::Unconfigured("no handler".to_owned()),
                 "denied" => RemoteError::Denied(ServiceDenial::new(
@@ -1716,6 +1732,45 @@ mod tests {
                     });
                 }
             })
+        }
+    }
+
+    #[test]
+    fn source_read_failure_survives_service_silent_and_remote_conversion() {
+        let mapped = remote_error_for(EvalError::SourceRead(
+            "snapshot block unavailable".to_owned(),
+        ));
+        assert!(matches!(mapped, RemoteError::SourceRead(_)));
+        for silent in ["", "SILENT "] {
+            let query = format!(
+                "SELECT ?n WHERE {{ SERVICE {silent}<http://example.org/source-read> {{ ?a ?b ?n }} }}"
+            );
+            let (result, silenced) = run_recorded(&local(), Some(&FailingKinds), &query);
+            assert!(
+                matches!(result, Err(EvalError::SourceRead(message)) if message == "snapshot block unavailable")
+            );
+            assert_eq!(silenced.len(), 0);
+        }
+    }
+
+    #[test]
+    fn exchange_id_exhaustion_survives_service_silent_and_remote_conversion() {
+        assert!(matches!(
+            remote_error_for(EvalError::ExchangeIdExhausted),
+            RemoteError::ExchangeIdExhausted
+        ));
+        for silent in ["", "SILENT "] {
+            let query = format!(
+                "SELECT ?n WHERE {{ SERVICE {silent}<http://example.org/exchange-id-exhausted> {{ ?a ?b ?n }} }}"
+            );
+            let (result, silenced) = run_recorded(&local(), Some(&FailingKinds), &query);
+            let error = result.expect_err("identifier exhaustion is fatal");
+            assert!(matches!(error, EvalError::ExchangeIdExhausted));
+            assert_eq!(
+                error.diagnostic_code(),
+                Some("native-sparql-exchange-id-exhausted")
+            );
+            assert_eq!(silenced.len(), 0);
         }
     }
 

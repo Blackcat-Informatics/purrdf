@@ -1374,7 +1374,9 @@ impl QueryEngine {
         let input = self.input(dataset, AsyncOperationKind::Update, sparql, base.as_deref())?;
         match input.run_offline(None)? {
             JobOutcome::Updated(frozen) => {
-                dataset.replace(frozen);
+                dataset
+                    .replace(frozen)
+                    .map_err(|error| crate::dataset::diag_to_err(&error))?;
                 Ok(())
             }
             other => Err(unexpected_outcome("update", &other)),
@@ -1680,7 +1682,9 @@ impl QueryEngine {
                 // The engine publishes into its own `Arc` only on the applied path, so
                 // there is a base to adopt only then.
                 if let Some(frozen) = frozen {
-                    dataset.replace(frozen);
+                    dataset
+                        .replace(frozen)
+                        .map_err(|error| crate::dataset::diag_to_err(&error))?;
                 }
                 Ok(update_outcome_from_governed(&outcome))
             }
@@ -1915,7 +1919,7 @@ pub(crate) fn query_result_from_sparql(
             kind: QueryResultKind::Graph,
             value: Some(QueryResultValue::Graph(Box::new(Dataset::from_frozen(
                 graph,
-            )))),
+            )?))),
         },
     })
 }
@@ -1934,7 +1938,7 @@ fn select_result_from_sparql(
 
 fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
     match result {
-        SparqlResult::Graph(graph) => Ok(Dataset::from_frozen(graph)),
+        SparqlResult::Graph(graph) => Dataset::from_frozen(graph),
         other => Err(kind_mismatch("CONSTRUCT/DESCRIBE graph", &other)),
     }
 }

@@ -9,9 +9,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ready, Dataset } from "../index.mjs";
+import { ready, Dataset, QueryEngine } from "../index.mjs";
 
 await ready();
+
+test("dataset identities and mutation generations use exact bigint transport", () => {
+  const dataset = new Dataset();
+  const snapshot = dataset.snapshot();
+  assert.equal(typeof dataset.id, "bigint");
+  assert.equal(typeof dataset.generation, "bigint");
+  assert.ok(dataset.id > 0n);
+  assert.notEqual(dataset.id, snapshot.id);
+  assert.equal(dataset.generation, 0n);
+  const identity = dataset.id;
+  new QueryEngine().update(dataset, "INSERT DATA { <https://example.org/s> <https://example.org/p> <https://example.org/o> }");
+  assert.equal(dataset.id, identity);
+  assert.equal(dataset.generation, 1n);
+  assert.equal(snapshot.generation, 0n);
+});
 
 // The SAME graph with different blank-node labels + different statement order.
 const A = `@prefix ex: <http://example.org/> .

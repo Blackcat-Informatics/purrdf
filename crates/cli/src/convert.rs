@@ -87,7 +87,10 @@ struct ConvertOp<'a> {
 impl ViewOp for ConvertOp<'_> {
     type Output = LossLedger;
 
-    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<LossLedger, CliError> {
+    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        self,
+        view: &D,
+    ) -> Result<LossLedger, CliError> {
         sink::write_rdf(
             view,
             self.out,

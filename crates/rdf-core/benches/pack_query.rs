@@ -183,12 +183,15 @@ fn bench_quads_for_pattern(c: &mut Bench) {
 
     let p_id = pack
         .term_id_by_value(&purrdf_core::TermValue::iri("http://example.org/p"))
+        .expect("dictionary read succeeds")
         .expect("predicate interned");
     let s0_id = pack
         .term_id_by_value(&purrdf_core::TermValue::iri("http://example.org/s0"))
+        .expect("dictionary read succeeds")
         .expect("s0 interned");
     let common_id = pack
         .term_id_by_value(&purrdf_core::TermValue::iri("http://example.org/common"))
+        .expect("dictionary read succeeds")
         .expect("common object interned");
 
     let mut group = c.benchmark_group("pack_query_pattern");

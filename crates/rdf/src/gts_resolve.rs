@@ -216,7 +216,7 @@ fn predicate_from_id_depth(
             "gts-predicate-not-iri",
             format!("GTS predicate term must be an IRI, got {:?}", other.kind()),
         )
-        .with_location(location.with_gts_term(term_id))),
+        .with_location(location.with_gts_term(term_id as u64))),
     }
 }
 
@@ -232,14 +232,14 @@ fn term_from_id_depth(
             "gts-term-nesting-limit",
             "GTS term nesting depth limit exceeded",
         )
-        .with_location(location.with_gts_term(term_id)));
+        .with_location(location.with_gts_term(term_id as u64)));
     }
     let term = graph.terms.get(term_id).ok_or_else(|| {
         RdfDiagnostic::error(
             "gts-term-out-of-range",
             format!("GTS term id {term_id} is out of range"),
         )
-        .with_location(location.clone().with_gts_term(term_id))
+        .with_location(location.clone().with_gts_term(term_id as u64))
     })?;
     match term.kind {
         TermKind::Iri => {
@@ -248,7 +248,7 @@ fn term_from_id_depth(
                     "gts-iri-missing-value",
                     "GTS IRI term requires a non-empty value",
                 )
-                .with_location(location.with_gts_term(term_id)));
+                .with_location(location.with_gts_term(term_id as u64)));
             };
             Ok(RdfTerm::iri(iri))
         }
@@ -270,7 +270,7 @@ fn term_from_id_depth(
                                     other.kind()
                                 ),
                             )
-                            .with_location(location.with_gts_term(datatype_id)));
+                            .with_location(location.with_gts_term(datatype_id as u64)));
                         }
                     }
                 }
@@ -299,15 +299,15 @@ fn term_from_id_depth(
                             .to_string(),
                     ),
                 };
-                let mut location = location.with_gts_term(term_id);
+                let mut location = location.with_gts_term(term_id as u64);
                 if let Some(reifier_id) = term.reifier {
-                    location = location.with_gts_reifier(reifier_id);
+                    location = location.with_gts_reifier(reifier_id as u64);
                 }
                 return Err(RdfDiagnostic::error(code, detail).with_location(location));
             };
             let location = match term.reifier {
-                Some(reifier_id) => location.with_gts_reifier(reifier_id),
-                None => location.with_gts_term(term_id),
+                Some(reifier_id) => location.with_gts_reifier(reifier_id as u64),
+                None => location.with_gts_term(term_id as u64),
             };
             Ok(RdfTerm::triple(triple_from_ids_depth(
                 graph,

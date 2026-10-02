@@ -65,30 +65,30 @@ impl Walker {
             Expression::Variable(v) => Ok(schema.index_of(v).and_then(|c| row[c])),
             Expression::Bound(v) => {
                 let bound = schema.index_of(v).and_then(|c| row[c]).is_some();
-                Ok(Some(helpers::intern_boolean(ctx, bound)))
+                Ok(Some(helpers::intern_boolean(ctx, bound).unwrap()))
             }
             Expression::Or(operands) => {
                 let mut value = Some(false);
                 for operand in operands {
                     value = helpers::kleene_or(value, self.ebv(operand, row, schema, ctx)?);
                 }
-                Ok(value.map(|b| helpers::intern_boolean(ctx, b)))
+                Ok(value.map(|b| helpers::intern_boolean(ctx, b).unwrap()))
             }
             Expression::And(operands) => {
                 let mut value = Some(true);
                 for operand in operands {
                     value = helpers::kleene_and(value, self.ebv(operand, row, schema, ctx)?);
                 }
-                Ok(value.map(|b| helpers::intern_boolean(ctx, b)))
+                Ok(value.map(|b| helpers::intern_boolean(ctx, b).unwrap()))
             }
             Expression::Not(a) => {
                 let v = self.ebv(a, row, schema, ctx)?;
-                Ok(v.map(|b| helpers::intern_boolean(ctx, !b)))
+                Ok(v.map(|b| helpers::intern_boolean(ctx, !b).unwrap()))
             }
             Expression::Equal(a, b) => {
                 let ta = self.term(a, row, schema, ctx)?;
                 let tb = self.term(b, row, schema, ctx)?;
-                Ok(helpers::equal_terms(ctx, ta, tb))
+                Ok(helpers::equal_terms(ctx, ta, tb).unwrap())
             }
             Expression::Greater(a, b)
             | Expression::GreaterOrEqual(a, b)
@@ -101,27 +101,31 @@ impl Walker {
                         helpers::compare_terms(ctx, ta, tb, CdtRelation::Greater, |c| {
                             c == Ordering::Greater
                         })
+                        .unwrap()
                     }
                     Expression::GreaterOrEqual(..) => {
                         helpers::compare_terms(ctx, ta, tb, CdtRelation::GreaterOrEqual, |c| {
                             c != Ordering::Less
                         })
+                        .unwrap()
                     }
                     Expression::Less(..) => {
                         helpers::compare_terms(ctx, ta, tb, CdtRelation::Less, |c| {
                             c == Ordering::Less
                         })
+                        .unwrap()
                     }
                     _ => helpers::compare_terms(ctx, ta, tb, CdtRelation::LessOrEqual, |c| {
                         c != Ordering::Greater
-                    }),
+                    })
+                    .unwrap(),
                 })
             }
             Expression::SameTerm(a, b) => {
                 let ta = self.term(a, row, schema, ctx)?;
                 let tb = self.term(b, row, schema, ctx)?;
                 Ok(match (ta, tb) {
-                    (Some(x), Some(y)) => Some(helpers::intern_boolean(ctx, x == y)),
+                    (Some(x), Some(y)) => Some(helpers::intern_boolean(ctx, x == y).unwrap()),
                     _ => None,
                 })
             }
@@ -142,35 +146,38 @@ impl Walker {
                 let Some(target) = self.term(needle, row, schema, ctx)? else {
                     return Ok(None);
                 };
-                let tv = helpers::value_of(ctx, target);
+                let tv = helpers::value_of(ctx, target).unwrap();
                 let mut saw_error = false;
                 for item in haystack {
                     match self.term(item, row, schema, ctx)? {
-                        Some(candidate) => match helpers::in_candidate(ctx, target, &tv, candidate)
-                        {
-                            Some(true) => return Ok(Some(helpers::intern_boolean(ctx, true))),
-                            Some(false) => {}
-                            None => saw_error = true,
-                        },
+                        Some(candidate) => {
+                            match helpers::in_candidate(ctx, target, &tv, candidate).unwrap() {
+                                Some(true) => {
+                                    return Ok(Some(helpers::intern_boolean(ctx, true).unwrap()));
+                                }
+                                Some(false) => {}
+                                None => saw_error = true,
+                            }
+                        }
                         None => saw_error = true,
                     }
                 }
                 Ok(if saw_error {
                     None
                 } else {
-                    Some(helpers::intern_boolean(ctx, false))
+                    Some(helpers::intern_boolean(ctx, false).unwrap())
                 })
             }
             Expression::Exists(pattern) => {
                 let found = helpers::exists(pattern, row, schema, ctx)?;
-                Ok(Some(helpers::intern_boolean(ctx, found)))
+                Ok(Some(helpers::intern_boolean(ctx, found).unwrap()))
             }
             Expression::Arithmetic(first, steps) => {
                 let mut value = self.term(first, row, schema, ctx)?;
                 for (op, operand) in steps {
                     let right = self.term(operand, row, schema, ctx)?;
                     value = match (value, right) {
-                        (Some(ta), Some(tb)) => helpers::arithmetic_step(ctx, *op, ta, tb),
+                        (Some(ta), Some(tb)) => helpers::arithmetic_step(ctx, *op, ta, tb).unwrap(),
                         _ => None,
                     };
                 }
@@ -178,19 +185,11 @@ impl Walker {
             }
             Expression::UnaryPlus(a) => {
                 let ta = self.term(a, row, schema, ctx)?;
-                Ok(helpers::unary_numeric_term(
-                    ctx,
-                    ta,
-                    purrdf_xsd::numeric_unary_plus,
-                ))
+                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::numeric_unary_plus).unwrap())
             }
             Expression::UnaryMinus(a) => {
                 let ta = self.term(a, row, schema, ctx)?;
-                Ok(helpers::unary_numeric_term(
-                    ctx,
-                    ta,
-                    purrdf_xsd::value_unary_minus,
-                ))
+                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::value_unary_minus).unwrap())
             }
             Expression::FunctionCall(function, args) => {
                 self.function(function, args, row, schema, ctx)
@@ -206,7 +205,7 @@ impl Walker {
         ctx: &mut Ctx<'_>,
     ) -> Result<Option<bool>, EvalError> {
         match self.term(expr, row, schema, ctx)? {
-            Some(term) => Ok(helpers::ebv_term(ctx, term)),
+            Some(term) => Ok(helpers::ebv_term(ctx, term).unwrap()),
             None => Ok(None),
         }
     }
@@ -218,13 +217,13 @@ impl Walker {
         build: impl FnOnce() -> TermValue,
     ) -> Option<Term> {
         if ctx.in_substituted_exists {
-            return helpers::intern_leaf(ctx, build());
+            return helpers::intern_leaf(ctx, build()).unwrap();
         }
         let key = std::ptr::from_ref::<Expression>(expr) as usize;
         if let Some(term) = self.consts.get(&key) {
             return *term;
         }
-        let term = helpers::intern_leaf(ctx, build());
+        let term = helpers::intern_leaf(ctx, build()).unwrap();
         self.consts.insert(key, term);
         term
     }
@@ -250,7 +249,7 @@ impl Walker {
                     Function::StrStarts => h.starts_with(n.as_str()),
                     _ => h.ends_with(n.as_str()),
                 };
-                return Ok(Some(helpers::intern_boolean(ctx, holds)));
+                return Ok(Some(helpers::intern_boolean(ctx, holds).unwrap()));
             }
             Function::Regex => {
                 let text = self.string_arg(args.first(), row, schema, ctx)?;
@@ -260,8 +259,9 @@ impl Walker {
                     return Ok(None);
                 };
                 let flags = flags.map_or_default(|(f, _)| f);
-                return Ok(helpers::cached_regex(ctx, &pattern, &flags)
-                    .map(|re| helpers::intern_boolean(ctx, re.as_regex().is_match(&text))));
+                return Ok(helpers::cached_regex(ctx, &pattern, &flags).map(|re| {
+                    helpers::intern_boolean(ctx, re.as_regex().is_match(&text)).unwrap()
+                }));
             }
             Function::LangMatches => {
                 let (Some((tag, _)), Some((range, _))) = (
@@ -270,14 +270,13 @@ impl Walker {
                 ) else {
                     return Ok(None);
                 };
-                return Ok(Some(helpers::intern_boolean(
-                    ctx,
-                    helpers::lang_matches(&tag, &range),
-                )));
+                return Ok(Some(
+                    helpers::intern_boolean(ctx, helpers::lang_matches(&tag, &range)).unwrap(),
+                ));
             }
             Function::Triple if args.len() == 3 && is_triple_constructor(&args[2]) => {
                 let value = self.triple_value(args, row, schema, ctx)?;
-                return Ok(value.and_then(|value| helpers::intern(ctx, value)));
+                return Ok(value.and_then(|value| helpers::intern(ctx, value).unwrap()));
             }
             _ => {}
         }
@@ -285,7 +284,7 @@ impl Walker {
         for a in args {
             vals.push(
                 self.term(a, row, schema, ctx)?
-                    .map(|t| helpers::value_of(ctx, t)),
+                    .map(|t| helpers::value_of(ctx, t).unwrap()),
             );
         }
         helpers::apply_function(function, &vals, ctx, None)
@@ -302,10 +301,10 @@ impl Walker {
     ) -> Result<Option<TermValue>, EvalError> {
         let subject = self
             .term(&args[0], row, schema, ctx)?
-            .map(|t| helpers::value_of(ctx, t));
+            .map(|t| helpers::value_of(ctx, t).unwrap());
         let predicate = self
             .term(&args[1], row, schema, ctx)?
-            .map(|t| helpers::value_of(ctx, t));
+            .map(|t| helpers::value_of(ctx, t).unwrap());
         let object = match &args[2] {
             Expression::FunctionCall(Function::Triple, inner)
                 if is_triple_constructor(&args[2]) =>
@@ -314,7 +313,7 @@ impl Walker {
             }
             object => self
                 .term(object, row, schema, ctx)?
-                .map(|t| helpers::value_of(ctx, t)),
+                .map(|t| helpers::value_of(ctx, t).unwrap()),
         };
         Ok(helpers::triple_value(subject, predicate, object))
     }
@@ -345,7 +344,7 @@ impl Walker {
                     Expression::Literal(lit) => Some(lit.value().to_owned()),
                     other => self
                         .term(other, row, schema, ctx)?
-                        .and_then(|term| helpers::str_lexical_term(ctx, term)),
+                        .and_then(|term| helpers::str_lexical_term(ctx, term).unwrap()),
                 };
                 Ok(lexical.map(|s| (s, None)))
             }
@@ -357,7 +356,7 @@ impl Walker {
                     ),
                     other => self
                         .term(other, row, schema, ctx)?
-                        .and_then(|term| helpers::lang_lexical_term(ctx, term)),
+                        .and_then(|term| helpers::lang_lexical_term(ctx, term).unwrap()),
                 };
                 Ok(lexical.map(|s| (s, None)))
             }
@@ -365,7 +364,7 @@ impl Walker {
                 let Some(term) = self.term(expr, row, schema, ctx)? else {
                     return Ok(None);
                 };
-                Ok(helpers::string_arg_of_term(ctx, term))
+                Ok(helpers::string_arg_of_term(ctx, term).unwrap())
             }
         }
     }
@@ -437,7 +436,8 @@ fn twin<'d>(ds: &'d Arc<RdfDataset>, now: &purrdf_xsd::XsdValue) -> (Ctx<'d>, Ve
         .into_iter()
         .map(|value| {
             ctx.scratch
-                .intern_checked(ctx.dataset, value)
+                .try_intern_checked(ctx.dataset, value)
+                .unwrap()
                 .expect("the palette's tags are well formed")
         })
         .collect();
@@ -447,7 +447,7 @@ fn twin<'d>(ds: &'d Arc<RdfDataset>, now: &purrdf_xsd::XsdValue) -> (Ctx<'d>, Ve
 /// One evaluation's observable outcome for one row.
 fn outcome(ctx: &Ctx<'_>, result: Result<Option<Term>, EvalError>) -> String {
     match result {
-        Ok(Some(term)) => format!("{:?}", helpers::value_of(ctx, term)),
+        Ok(Some(term)) => format!("{:?}", helpers::value_of(ctx, term).unwrap()),
         Ok(None) => "unbound".to_owned(),
         Err(error) => format!("error {error:?}"),
     }
@@ -889,7 +889,7 @@ fn evaluate(expr: &Expression) -> Option<TermValue> {
     let program = Arc::new(ExprProgram::compile(expr));
     let mut linked = Linked::link(program, expr, &schema, &mut ctx);
     let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
-    term.map(|term| helpers::value_of(&ctx, term))
+    term.map(|term| helpers::value_of(&ctx, term).unwrap())
 }
 
 #[test]
@@ -930,7 +930,7 @@ fn a_deep_triple_constructor_chain_interns_its_outermost_term_once() {
         let program = Arc::new(ExprProgram::compile(&expr));
         let mut linked = Linked::link(program, &expr, &schema, &mut ctx);
         let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
-        let value = term.map(|term| helpers::value_of(&ctx, term));
+        let value = term.map(|term| helpers::value_of(&ctx, term).unwrap());
         let computed = ctx.scratch.computed_count();
         drop(linked);
         drop(expr);
@@ -1032,10 +1032,12 @@ fn a_link_resolves_each_variable_once_not_once_per_row() {
     let schema = VarSchema::from_vars([Variable::new("a"), Variable::new("b")]);
     let one = ctx
         .scratch
-        .intern_checked(ctx.dataset, literal("1", "integer"));
+        .try_intern_checked(ctx.dataset, literal("1", "integer"))
+        .unwrap();
     let two = ctx
         .scratch
-        .intern_checked(ctx.dataset, literal("2", "integer"));
+        .try_intern_checked(ctx.dataset, literal("2", "integer"))
+        .unwrap();
     let program = Arc::new(ExprProgram::compile(&expr));
     VarSchema::reset_index_of_calls();
     let mut linked = Linked::link(program, &expr, &schema, &mut ctx);

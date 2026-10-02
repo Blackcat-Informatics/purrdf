@@ -318,6 +318,31 @@ pub(crate) fn iri_to_err(err: &purrdf::IriError) -> JsError {
 /// contends for it.
 static NEXT_DATASET_ID: AtomicU64 = AtomicU64::new(1);
 
+fn mint_dataset_id(counter: &AtomicU64) -> Result<u64, RdfDiagnostic> {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.checked_add(1).ok_or_else(|| {
+            RdfDiagnostic::error(
+                "dataset-identity-exhausted",
+                "dataset identity space exhausted",
+            )
+        })?;
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(id) => return Ok(id),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn next_generation(current: u64) -> Result<u64, RdfDiagnostic> {
+    current.checked_add(1).ok_or_else(|| {
+        RdfDiagnostic::error(
+            "dataset-generation-exhausted",
+            "dataset generation space exhausted; mutation was not applied",
+        )
+    })
+}
+
 /// An RDF/JS `DatasetCore` backed by the engine's COW mutable dataset.
 ///
 /// # Identity and generation
@@ -369,17 +394,17 @@ impl Dataset {
     }
 
     /// A new dataset over `inner`, with a fresh identity at generation zero.
-    pub(crate) fn from_mutable(inner: MutableDataset) -> Self {
-        Self {
+    pub(crate) fn from_mutable(inner: MutableDataset) -> Result<Self, JsError> {
+        Ok(Self {
             inner,
-            id: NEXT_DATASET_ID.fetch_add(1, Ordering::Relaxed),
+            id: mint_dataset_id(&NEXT_DATASET_ID).map_err(|error| diag_to_err(&error))?,
             generation: 0,
             update_in_flight: Rc::new(Cell::new(false)),
-        }
+        })
     }
 
     /// A new dataset over a frozen base, with a fresh identity at generation zero.
-    pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Self {
+    pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Result<Self, JsError> {
         Self::from_mutable(MutableDataset::new(frozen))
     }
 
@@ -395,21 +420,27 @@ impl Dataset {
     /// inferring a change, because only the writer knows: an `add` of a quad already
     /// present changes nothing and must not make an in-flight asynchronous UPDATE's
     /// commit refuse, while an UPDATE that installs a new base always counts.
-    pub(crate) fn mutate<R>(&mut self, write: impl FnOnce(&mut MutableDataset) -> (R, bool)) -> R {
+    pub(crate) fn mutate<R>(
+        &mut self,
+        write: impl FnOnce(&mut MutableDataset) -> (R, bool),
+    ) -> Result<R, RdfDiagnostic> {
+        // Reserve before invoking the writer: exhaustion cannot leave changed content
+        // paired with a reused generation, even when a host catches the refusal.
+        let generation = next_generation(self.generation)?;
         let (result, changed) = write(&mut self.inner);
         if changed {
-            self.generation = self.generation.wrapping_add(1);
+            self.generation = generation;
         }
-        result
+        Ok(result)
     }
 
     /// Replace the whole content with `frozen` — the commit of an UPDATE. Always a
     /// mutation, whether or not the new base happens to equal the old one.
-    pub(crate) fn replace(&mut self, frozen: Arc<RdfDataset>) {
+    pub(crate) fn replace(&mut self, frozen: Arc<RdfDataset>) -> Result<(), RdfDiagnostic> {
         self.mutate(|inner| {
             *inner = MutableDataset::new(frozen);
             ((), true)
-        });
+        })
     }
 
     /// This dataset's identity, as the asynchronous commit compares it.
@@ -437,7 +468,7 @@ impl Dataset {
     /// An empty dataset.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Result<Self, JsError> {
-        Ok(Self::from_mutable(Self::empty_base()?))
+        Self::from_mutable(Self::empty_base()?)
     }
 
     /// `parse(input, format, base?)` → a dataset of the parsed quads.
@@ -451,7 +482,7 @@ impl Dataset {
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
         let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
             .map_err(|e| diag_to_err(&e))?;
-        Ok(Self::from_frozen(dataset))
+        Self::from_frozen(dataset)
     }
 
     /// `serialize(format, base?)` → the dataset rendered in `format` (a UTF-8 string).
@@ -694,11 +725,10 @@ impl Dataset {
 
     /// `id` — this dataset's identity, unique within the wasm instance and never reused.
     ///
-    /// A `number`: identities are minted one at a time from 1, so they stay exact far
-    /// beyond any count of datasets an instance can hold.
+    /// An exact JavaScript `bigint`, including identities above `2^53`.
     #[wasm_bindgen(getter)]
-    pub fn id(&self) -> f64 {
-        self.id as f64
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// `snapshot()` → an independent dataset holding this one's current content, with an
@@ -711,7 +741,7 @@ impl Dataset {
     #[wasm_bindgen(js_name = snapshot)]
     pub fn snapshot(&self) -> Result<Self, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        Ok(Self::from_frozen(frozen))
+        Self::from_frozen(frozen)
     }
 
     /// `generation` — how many mutations this dataset's content has seen.
@@ -720,8 +750,8 @@ impl Dataset {
     /// applied UPDATE; reading, querying and serializing never move it. An asynchronous
     /// UPDATE captures it when it starts and refuses to commit if it has moved since.
     #[wasm_bindgen(getter)]
-    pub fn generation(&self) -> f64 {
-        self.generation as f64
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// `add(quad)` → insert a quad. Returns `true` if the effective set changed.
@@ -737,16 +767,18 @@ impl Dataset {
             Ok(changed) => (Ok(changed), changed),
             Err(error) => (Err(iri_to_err(&error)), false),
         })
+        .map_err(|error| diag_to_err(&error))?
     }
 
     /// `delete(quad)` → remove a quad. Returns `true` if the effective set changed.
     #[wasm_bindgen(js_name = delete)]
     pub fn delete(&mut self, quad: &Quad) -> Result<bool, JsError> {
         let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
-        Ok(self.mutate(|inner| {
+        self.mutate(|inner| {
             let changed = inner.remove(&values);
             (changed, changed)
-        }))
+        })
+        .map_err(|error| diag_to_err(&error))
     }
 
     /// `has(quad)` → whether the quad is in the dataset.
@@ -841,7 +873,7 @@ impl Dataset {
             // unwrap anyway: a panic across the wasm boundary is not a diagnostic.
             out.insert(qv.clone()).map_err(|e| iri_to_err(&e))?;
         }
-        Ok(Self::from_mutable(out))
+        Self::from_mutable(out)
     }
 }
 
@@ -943,6 +975,25 @@ pub(crate) fn serialize_frozen_with_options(
         .map_err(|error| format!("serialization produced non-UTF-8 bytes: {error}"))
 }
 
+#[cfg(all(test, target_arch = "wasm32"))]
+mod identity_fixture {
+    use super::Dataset;
+    use wasm_bindgen::prelude::*;
+
+    /// Unit-test-module fixture only: seed the real exported getters beyond binary64's
+    /// exact integer range without adding a seed operation to the release package.
+    #[wasm_bindgen]
+    pub fn __purrdf_test_large_dataset_identity() -> Result<Dataset, JsError> {
+        let mut dataset = Dataset::new()?;
+        dataset.id = 9_007_199_254_740_993;
+        dataset.generation = 9_007_199_254_740_995;
+        Ok(dataset)
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+pub use identity_fixture::__purrdf_test_large_dataset_identity;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -978,7 +1029,7 @@ mod tests {
             "identities are unique"
         );
         assert!(dataset.identity() > 0 && other.identity() > 0);
-        assert_eq!(dataset.id(), dataset.identity() as f64);
+        assert_eq!(dataset.id(), dataset.identity());
         let id = dataset.identity();
         assert_eq!(dataset.current_generation(), 0);
 
@@ -1015,19 +1066,62 @@ mod tests {
         );
 
         let frozen = dataset.view().freeze().expect("freeze");
-        dataset.replace(frozen);
+        dataset.replace(frozen).unwrap();
         assert_eq!(
             dataset.current_generation(),
             3,
             "installing a base always counts"
         );
-        assert_eq!(dataset.generation(), 3.0);
+        assert_eq!(dataset.generation(), 3);
         assert_eq!(dataset.identity(), id, "mutation never changes identity");
 
         // Reads never move it.
         let _ = dataset.size();
         let _ = dataset.serialize("nquads", None).expect("serialize");
         assert_eq!(dataset.current_generation(), 3);
+    }
+
+    #[test]
+    fn identity_getters_preserve_values_above_binary64_precision() {
+        let mut dataset = Dataset::from_mutable(MutableDataset::new(
+            RdfDatasetBuilder::new().freeze().unwrap(),
+        ))
+        .unwrap();
+        dataset.id = (1 << 53) + 1;
+        dataset.generation = (1 << 53) + 3;
+        assert_eq!(dataset.id(), 9_007_199_254_740_993);
+        assert_eq!(dataset.generation(), 9_007_199_254_740_995);
+        dataset.mutate(|_| ((), true)).unwrap();
+        assert_eq!(dataset.generation(), 9_007_199_254_740_996);
+        assert_eq!(dataset.id(), 9_007_199_254_740_993);
+    }
+
+    #[test]
+    fn exhausted_identity_and_generation_refuse_without_reuse_or_writes() {
+        let counter = AtomicU64::new((1 << 53) + 1);
+        assert_eq!(mint_dataset_id(&counter).unwrap(), (1 << 53) + 1);
+        counter.store(u64::MAX - 1, Ordering::Relaxed);
+        assert_eq!(mint_dataset_id(&counter).unwrap(), u64::MAX - 1);
+        assert_eq!(
+            mint_dataset_id(&counter).unwrap_err().code,
+            "dataset-identity-exhausted"
+        );
+        assert_eq!(
+            mint_dataset_id(&counter).unwrap_err().code,
+            "dataset-identity-exhausted"
+        );
+        let mut dataset = Dataset::new().unwrap();
+        dataset.generation = u64::MAX;
+        let called = Cell::new(false);
+        let error = dataset
+            .mutate(|_| {
+                called.set(true);
+                ((), true)
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "dataset-generation-exhausted");
+        assert!(!called.get(), "refusal precedes mutation");
+        assert_eq!(dataset.generation(), u64::MAX);
     }
 
     /// The synchronous UPDATE goes through the same door.

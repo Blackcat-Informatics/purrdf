@@ -288,11 +288,13 @@ mod fuzz {
         let s = s_sel.map(|i| {
             paged
                 .term_id_by_value(&pool_value(i))
+                .expect("fixture reverse lookup succeeds")
                 .expect("pool term always interned")
         });
         let p = p_sel.map(|i| {
             paged
                 .term_id_by_value(&pool_value(i))
+                .expect("fixture reverse lookup succeeds")
                 .expect("pool term always interned")
         });
         let o = o_sel.map(|i| {
@@ -303,6 +305,7 @@ mod fuzz {
             };
             paged
                 .term_id_by_value(&value)
+                .expect("fixture reverse lookup succeeds")
                 .expect("pool/triple term always interned")
         });
         let g = match g_sel {
@@ -311,6 +314,7 @@ mod fuzz {
             n => GraphMatch::Named(
                 paged
                     .term_id_by_value(&graph_value(n - 2))
+                    .expect("fixture reverse lookup succeeds")
                     .expect("graph term always interned"),
             ),
         };
@@ -359,7 +363,7 @@ mod fuzz {
 
         let mut expected: Vec<QuadIds<GlobalTermId>> = Vec::new();
         for i in 0..variant.page_count() {
-            let page_id = PageId(u32::try_from(i).expect("page count fits u32"));
+            let page_id = PageId(i);
             let translation = variant.translation(page_id).expect("page id in range");
 
             let local_s = match s.map(|id| translation.to_local(id)) {
@@ -386,7 +390,8 @@ mod fuzz {
                 },
             };
 
-            let raw = &raw_pages[page_map[i]];
+            let raw =
+                &raw_pages[page_map[usize::try_from(i).expect("fixture page index fits usize")]];
             for q in raw.quads_for_pattern(local_s, local_p, local_o, local_g) {
                 expected.push(QuadIds {
                     s: translation.to_global(q.s),
@@ -437,6 +442,7 @@ mod fuzz {
             .map(|value| {
                 variant
                     .term_id_by_value(value)
+                    .expect("fixture reverse lookup succeeds")
                     .expect("every generator term is interned on every page")
             })
             .collect()
@@ -576,6 +582,7 @@ mod fuzz {
         keys.insert(
             variant
                 .term_id_by_value(&TermValue::iri("http://example.org/gEmpty"))
+                .expect("fixture reverse lookup succeeds")
                 .expect("gEmpty is interned on every page"),
         );
         for reifier in keys {
@@ -758,7 +765,7 @@ mod fuzz {
         // reordered's PageId(i) == raw_pages[page_count - 1 - i].
         let reversed: Vec<PageId> = (0..page_count)
             .rev()
-            .map(|i| PageId(u32::try_from(i).expect("page count fits u32")))
+            .map(|i| PageId(u64::try_from(i).expect("fixture page index fits u64")))
             .collect();
         let reordered = paged.with_pages(&reversed);
         let reordered_map: Vec<usize> = (0..page_count).rev().collect();
@@ -859,14 +866,15 @@ mod fuzz {
         // Surface 1: `PagedDataset`, read BEFORE anything has walked a row through
         // it, so its per-page cache is as cold as it will ever be.
         let cold_dataset = paged.cardinality_estimate(s, p, o, g);
-        let count = paged.quads_for_pattern(s, p, o, g).count();
+        let count = u64::try_from(paged.quads_for_pattern(s, p, o, g).count())
+            .expect("fixture row count fits u64");
         prop_assert!(
             cold_dataset >= count,
             "PagedDataset estimate {} must upper-bound count {}",
             cold_dataset,
             count
         );
-        let total = paged.quads().count();
+        let total = u64::try_from(paged.quads().count()).expect("fixture row count fits u64");
         prop_assert!(
             cold_dataset <= total,
             "PagedDataset estimate {} must not exceed the whole-dataset row count {}",
@@ -885,7 +893,8 @@ mod fuzz {
         // starts cold again on a freshly constructed view.
         let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
         let cold_view = view.cardinality_estimate(s, p, o, g);
-        let view_count = view.quads_for_pattern(s, p, o, g).count();
+        let view_count = u64::try_from(view.quads_for_pattern(s, p, o, g).count())
+            .expect("fixture row count fits u64");
         prop_assert!(
             cold_view >= view_count,
             "PagedQueryView estimate {} must upper-bound count {}",
@@ -1181,6 +1190,7 @@ fn a_genuinely_empty_graph_selective_answer_is_a_complete_ready_result_not_an_er
     let paged = PagedDataset::from_provider(provider).expect("seal page");
     let g_id = paged
         .term_id_by_value(&iri("gEmpty"))
+        .expect("fixture reverse lookup succeeds")
         .expect("gEmpty interned");
 
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
@@ -1235,7 +1245,7 @@ fn baseline_admitted_pages(
 ) -> Vec<PageId> {
     let mut admitted = Vec::new();
     for i in 0..paged.page_count() {
-        let id = PageId(u32::try_from(i).expect("page count fits u32"));
+        let id = PageId(i);
         let translation = paged.translation(id).expect("page id in range");
         let present =
             |axis: Option<GlobalTermId>| axis.is_none_or(|g| translation.to_local(g).is_some());
@@ -1359,9 +1369,11 @@ fn pinned_cross_page_join_admits_exactly_the_literal_page_sequence() {
 
     let alice = paged
         .term_id_by_value(&iri("alice"))
+        .expect("fixture reverse lookup succeeds")
         .expect("alice interned");
     let knows = paged
         .term_id_by_value(&iri("knows"))
+        .expect("fixture reverse lookup succeeds")
         .expect("knows interned");
 
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
@@ -1430,7 +1442,10 @@ fn pinned_graph_enumeration_admits_no_page_where_the_pre_change_rule_scanned_the
     ];
     let provider = Arc::new(InMemoryPageProvider::new(pages));
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
-    let g1 = paged.term_id_by_value(&iri("g1")).expect("g1 interned");
+    let g1 = paged
+        .term_id_by_value(&iri("g1"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("g1 interned");
 
     // Post-change: enumerate first, and assert the evidence BEFORE the selective read,
     // so the enumeration's own charge is measured on its own.
@@ -1531,9 +1546,11 @@ fn pinned_cross_page_join_never_admits_a_page_that_only_mentions_the_subject_as_
 
     let alice = paged
         .term_id_by_value(&iri("alice"))
+        .expect("fixture reverse lookup succeeds")
         .expect("alice interned");
     let knows = paged
         .term_id_by_value(&iri("knows"))
+        .expect("fixture reverse lookup succeeds")
         .expect("knows interned");
 
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
@@ -1588,6 +1605,7 @@ fn pinned_cross_page_join_never_admits_a_page_that_only_mentions_the_subject_as_
     // still does, and still returns its row.
     let carol = paged
         .term_id_by_value(&iri("carol"))
+        .expect("fixture reverse lookup succeeds")
         .expect("carol interned");
     let reachable = paged
         .quads_for_pattern(Some(carol), Some(knows), Some(alice), GraphMatch::Any)

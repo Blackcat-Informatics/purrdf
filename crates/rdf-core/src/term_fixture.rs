@@ -14,7 +14,7 @@
 use std::cell::Cell;
 use std::sync::Arc;
 
-use crate::ir::{QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef};
+use crate::ir::{QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef};
 use crate::{
     BlankScope, DatasetView, GraphMatch, RdfLiteral, RdfStoreCapabilities, RdfTextDirection,
     TermBox, TermValue, ViewOperationStatus,
@@ -240,18 +240,19 @@ pub struct ForeignDatatypeView {
 
 impl DatasetView for ForeignDatatypeView {
     type Id = TermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = ();
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.inner.quads()
     }
 
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        DatasetView::quad_refs(&*self.inner)
-    }
-
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        match self.inner.resolve(id) {
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok(match self.inner.as_ref().resolve(id) {
             TermRef::Literal {
                 lexical,
                 language,
@@ -264,11 +265,11 @@ impl DatasetView for ForeignDatatypeView {
                 direction,
             },
             other => other,
-        }
+        })
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        self.inner.term_id_by_value(value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok(self.inner.as_ref().term_id_by_value(value))
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
@@ -288,7 +289,7 @@ impl DatasetView for ForeignDatatypeView {
         self.quads_for_pattern(s, p, o, g)
     }
 
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         self.inner.term_count()
     }
 }
@@ -336,6 +337,9 @@ impl RowBudget {
 
     /// Spend one row; `false` (and the view faulted) once none is left.
     pub fn spend(&self) -> bool {
+        if self.faulted.get() {
+            return false;
+        }
         match self.rows.get().checked_sub(1) {
             Some(left) => {
                 self.rows.set(left);
@@ -366,5 +370,29 @@ impl RowBudget {
         } else {
             ViewOperationStatus::Ready { evidence }
         }
+    }
+
+    /// The same typed sticky root returned by point reads after row refusal.
+    #[must_use]
+    pub fn read_error(&self) -> Option<ProbeFault> {
+        self.status().error().cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RowBudget;
+
+    #[test]
+    fn a_refused_row_budget_stays_closed_across_new_streams() {
+        let budget = RowBudget::new(1);
+        assert_eq!(budget.take([1, 2].into_iter()).collect::<Vec<_>>(), [1]);
+        let error = budget.read_error().expect("the second row was refused");
+        assert_eq!(budget.take([3, 4].into_iter()).next(), None);
+        assert_eq!(budget.read_error(), Some(error));
+
+        let failed = RowBudget::faulted();
+        assert_eq!(failed.take(std::iter::once(5)).next(), None);
+        assert!(failed.read_error().is_some());
     }
 }

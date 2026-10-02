@@ -21,6 +21,7 @@
 //! also prepare compiler-produced algebra directly and share its immutable plan
 //! across worker-local engines without retaining a global evaluation lock.
 
+mod bounded_workspace;
 mod graph_build;
 pub use graph_build::{FallibleGraphBuildResult, GraphBuildError, GraphBuildStats};
 
@@ -50,9 +51,9 @@ use crate::plan_memory::{PlanCharge, PlanMemoryObserver};
 use crate::substitute::Prebindings;
 use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
-    BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
-    GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers, PartialSparqlResult,
-    RelationIdentity,
+    BudgetExhausted, CompleteSparqlResult, FallibleScopedResult, FallibleSparqlError,
+    FallibleSparqlResult, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
+    PartialSparqlResult, RelationIdentity,
 };
 use crate::{CacheLimits, CacheStats};
 
@@ -904,53 +905,81 @@ impl NativeSparqlEngine {
         self.query_prepared_view(&**dataset, prepared, substitutions, options)
     }
 
-    /// [`Self::query_prepared`] over any operationally infallible [`DatasetView`]
-    /// backend. The concrete [`Self::query_prepared`] is a thin wrapper that derefs its
+    /// [`Self::query_prepared`] over an operationally infallible [`DatasetView`]. The concrete
+    /// [`Self::query_prepared`] is a thin wrapper that derefs its
     /// `Arc<RdfDataset>` and calls this.
     ///
-    /// Do not use this entry point for a lazy view whose backing storage can fail after
-    /// construction: iterator exhaustion would then be indistinguishable from missing
-    /// data. Use [`Self::query_prepared_fallible_view`] for that contract.
+    /// Operational storage must use [`Self::query_prepared_fallible_view`], which
+    /// retains the typed root cause and exact evidence without an unadmitted
+    /// diagnostic allocation on reporting refusal.
+    ///
+    /// A backend whose reads can fail cannot use this diagnostic-only egress:
+    ///
+    /// ```compile_fail
+    /// use purrdf_core::DatasetView;
+    /// use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery, QueryOptions};
+    /// fn incomplete_contract<D: DatasetView + Sync>(engine: &NativeSparqlEngine, view: &D, plan: &PreparedQuery) {
+    ///     engine.query_prepared_view(view, plan, &[], QueryOptions::EMPTY);
+    /// }
+    /// ```
+    ///
+    /// ```no_run
+    /// use std::convert::Infallible;
+    /// use purrdf_core::{DatasetView, RdfDiagnostic, SparqlResult};
+    /// use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery, QueryOptions};
+    /// fn complete_contract<D: DatasetView<ReadError = Infallible> + Sync>(engine: &NativeSparqlEngine, view: &D, plan: &PreparedQuery) -> Result<SparqlResult, RdfDiagnostic> {
+    ///     engine.query_prepared_view(view, plan, &[], QueryOptions::EMPTY)
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
     /// Propagates evaluation errors as an [`RdfDiagnostic`], and refuses
     /// (`native-sparql-property-function`) a plan prepared against a different registry
     /// than `options` supplies (see [`Self::query_prepared`]).
-    pub fn query_prepared_view<'d, D: DatasetView + Sync>(
+    pub fn query_prepared_view<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         &'d self,
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        check_plan_matches_relations(
-            prepared,
-            options,
-            &crate::DetHashSet::default(),
-            ShaclPrebinding::None,
-        )?;
-        let ctx = self.eval_ctx(dataset);
-        let mut ctx = apply_query_options(ctx, options)?;
-        let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+        checked_query_read(dataset, || {
+            let workspace = bounded_workspace::reserve(
+                dataset,
+                &prepared.query,
+                !substitutions.is_empty(),
+                options,
+            )?;
+            check_plan_matches_relations(
                 prepared,
-                Prebindings::Owned(substitutions),
-                &mut ctx,
-            )?,
-            ShaclPrebinding::None => {
-                evaluate_with_substitutions(prepared, Prebindings::Owned(substitutions), &mut ctx)?
-            }
-        };
-        Ok(materialize(outcome, &ctx))
+                options,
+                &crate::DetHashSet::default(),
+                ShaclPrebinding::None,
+            )?;
+            let mut ctx = self.query_ctx(dataset, options, &workspace)?;
+            let outcome = match options.prebinding {
+                ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                    prepared,
+                    Prebindings::Owned(substitutions),
+                    &mut ctx,
+                )?,
+                ShaclPrebinding::None => evaluate_with_substitutions(
+                    prepared,
+                    Prebindings::Owned(substitutions),
+                    &mut ctx,
+                )?,
+            };
+            materialize(outcome, &ctx)
+        })
     }
 
     /// Evaluate a prepared query over an operationally fallible view and return a
     /// result only after the view supplies a final ready checkpoint.
     ///
-    /// Evaluation is sequential inside this operation so page-request order and exact
-    /// budget boundaries are deterministic. The ordinary resident/pack entry points
-    /// remain unchanged and retain their parallel fast path.
+    /// Operational reads execute sequentially so page-request order and exact budget
+    /// boundaries are deterministic. Resident `Infallible` reads retain native
+    /// parallel execution even through this backend-generic typed entry.
     ///
     /// `options` must name the same property-function registry the plan was prepared
     /// against — the identical requirement [`Self::query_prepared`] states, checked the
@@ -975,6 +1004,8 @@ impl NativeSparqlEngine {
     where
         D: FallibleDatasetView + Sync,
     {
+        preflight_fallible_view(dataset)?;
+        let _reporting = reserve_fallible_reporting(dataset)?;
         self.query_prepared_fallible_view_admitted(
             dataset,
             prepared,
@@ -998,12 +1029,18 @@ impl NativeSparqlEngine {
         preflight_fallible_view(dataset)?;
         let evaluation = {
             (|| {
+                let workspace = bounded_workspace::reserve(
+                    dataset,
+                    &prepared.query,
+                    !substitutions.values.is_empty(),
+                    options,
+                )?;
                 substitutions.parameters.check(prepared, options)?;
-                let ctx = self.eval_ctx(dataset);
-                let mut ctx = apply_query_options(ctx, options)?;
+                let mut ctx = self.query_ctx(dataset, options, &workspace)?;
                 // A fallible lazy view's page request order and exact budget boundary are
                 // observable evidence, so no fork of this evaluation may race requests.
-                ctx.options.force_sequential = true;
+                ctx.options.force_sequential |=
+                    Sequencing::for_view::<D>() == Sequencing::Sequential;
                 let outcome = match options.prebinding {
                     ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
                         prepared,
@@ -1016,7 +1053,7 @@ impl NativeSparqlEngine {
                         &mut ctx,
                     )?,
                 };
-                Ok(materialize(outcome, &ctx))
+                materialize(outcome, &ctx)
             })()
         };
         finish_fallible_query(dataset, evaluation)
@@ -1045,6 +1082,12 @@ impl NativeSparqlEngine {
         D: FallibleDatasetView + Sync,
     {
         preflight_fallible_view(dataset)?;
+        let _reporting = reserve_fallible_reporting(dataset)?;
+        if let Err(diagnostic) =
+            bounded_workspace::check_inputs(dataset, !request.substitutions.is_empty(), options)
+        {
+            return finish_fallible_query(dataset, Err(diagnostic));
+        }
         let substitutions =
             AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
         let prepared = match self.prepare_request(
@@ -1114,25 +1157,30 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
-        let prepared = self.prepare_request(
-            request.query,
-            request.base_iri,
-            options.env,
-            &admitted.parameters,
-        )?;
-        let state = Arc::new(GovernorState::new(governors));
-        self.query_governed_prepared_in_state(
-            dataset,
-            &prepared,
-            &admitted,
-            options,
-            &state,
-            Sequencing::Free,
-        )
+        checked_query_read(dataset, || {
+            let admitted =
+                AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+            let prepared = self.prepare_request(
+                request.query,
+                request.base_iri,
+                options.env,
+                &admitted.parameters,
+            )?;
+            let _reporting =
+                bounded_workspace::reserve_reporting(dataset).map_err(source_read_diagnostic)?;
+            let state = Arc::new(GovernorState::new(governors));
+            self.query_governed_prepared_in_state(
+                dataset,
+                &prepared,
+                &admitted,
+                options,
+                &state,
+                Sequencing::Free,
+            )
+        })
     }
 
-    /// [`Self::query_governed`] over any operationally infallible [`DatasetView`] backend,
+    /// [`Self::query_governed`] over any [`DatasetView`] backend,
     /// for a plan already returned by [`Self::prepare_query`] or
     /// [`Self::prepare_query_with_options`].
     ///
@@ -1149,7 +1197,9 @@ impl NativeSparqlEngine {
     ///
     /// Propagates evaluation errors as an [`RdfDiagnostic`]. A tripped governor is **not**
     /// an error and does not surface here.
-    pub fn query_prepared_governed_view<D: DatasetView + Sync>(
+    pub fn query_prepared_governed_view<
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &self,
         dataset: &D,
         prepared: &PreparedQuery,
@@ -1157,15 +1207,19 @@ impl NativeSparqlEngine {
         options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let state = Arc::new(GovernorState::new(governors));
-        self.query_governed_prepared_in_state(
-            dataset,
-            prepared,
-            &AdmittedSubstitutions::prepared(substitutions),
-            options,
-            &state,
-            Sequencing::Free,
-        )
+        checked_query_read(dataset, || {
+            let _reporting =
+                bounded_workspace::reserve_reporting(dataset).map_err(source_read_diagnostic)?;
+            let state = Arc::new(GovernorState::new(governors));
+            self.query_governed_prepared_in_state(
+                dataset,
+                prepared,
+                &AdmittedSubstitutions::prepared(substitutions),
+                options,
+                &state,
+                Sequencing::Free,
+            )
+        })
     }
 
     /// Open `prepared` — a `SELECT` that projects exactly one property-function call,
@@ -1233,6 +1287,18 @@ impl NativeSparqlEngine {
             })
     }
 
+    /// Construct and configure one query context before evaluation begins. Keeping
+    /// the context and its options in one builder keeps ordinary and governed
+    /// executions on the same options application seam.
+    fn query_ctx<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        options: QueryOptions<'d>,
+        workspace: &impl purrdf_core::WorkspaceReservation<Error = D::ReadError>,
+    ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
+        apply_query_options(self.eval_ctx(dataset, workspace), options)
+    }
+
     /// The context every governed lane evaluates in: governors attached, `options`
     /// applied (a federated source among them, when the request carries one), and
     /// witnessing armed.
@@ -1251,9 +1317,11 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         state: &Arc<GovernorState>,
         options: QueryOptions<'d>,
+        workspace: &impl purrdf_core::WorkspaceReservation<Error = D::ReadError>,
     ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
-        let ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
-        let mut ctx = apply_query_options(ctx, options)?;
+        let mut ctx = self
+            .query_ctx(dataset, options, workspace)?
+            .with_governors(Arc::clone(state));
         ctx.witnessing = true;
         Ok(ctx)
     }
@@ -1281,35 +1349,43 @@ impl NativeSparqlEngine {
         state: &Arc<GovernorState>,
         sequencing: Sequencing,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        substitutions.parameters.check(prepared, options)?;
-        // `prepared.relations` is the registry fingerprint computed once at prepare and
-        // just validated against `options.property_functions()` above — reused rather than
-        // re-derived, so this receipt's identity and the plan cache's key never disagree.
-        let identity = relation_identity(prepared, options.property_functions())?;
-        if let Some(refused) = self.admit_refusal(
-            dataset,
-            &prepared.query,
-            options.property_functions(),
-            state,
-            &identity,
-        ) {
-            return refused.map(GovernedOutcome::BudgetExhausted);
-        }
-        let mut ctx = self.governed_ctx(dataset, state, options)?;
-        ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
-        let evaluated = match options.prebinding {
-            ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
-                prepared,
-                Prebindings::Owned(substitutions.values),
-                &mut ctx,
-            )?,
-            ShaclPrebinding::None => evaluate_governed_with_substitutions(
-                prepared,
-                Prebindings::Owned(substitutions.values),
-                &mut ctx,
-            )?,
-        };
-        Ok(materialize_governed(evaluated, &mut ctx, state, identity))
+        checked_query_read(dataset, || {
+            let workspace = bounded_workspace::reserve(
+                dataset,
+                &prepared.query,
+                !substitutions.values.is_empty(),
+                options,
+            )?;
+            substitutions.parameters.check(prepared, options)?;
+            // `prepared.relations` is the registry fingerprint computed once at prepare and
+            // just validated against `options.property_functions()` above — reused rather than
+            // re-derived, so this receipt's identity and the plan cache's key never disagree.
+            let identity = relation_identity(prepared, options.property_functions())?;
+            if let Some(refused) = self.admit_refusal(
+                dataset,
+                &prepared.query,
+                options.property_functions(),
+                state,
+                &identity,
+            ) {
+                return refused.map(GovernedOutcome::BudgetExhausted);
+            }
+            let mut ctx = self.governed_ctx(dataset, state, options, &workspace)?;
+            ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+            let evaluated = match options.prebinding {
+                ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
+                    prepared,
+                    Prebindings::Owned(substitutions.values),
+                    &mut ctx,
+                )?,
+                ShaclPrebinding::None => evaluate_governed_with_substitutions(
+                    prepared,
+                    Prebindings::Owned(substitutions.values),
+                    &mut ctx,
+                )?,
+            };
+            materialize_governed(evaluated, &mut ctx, state, identity)
+        })
     }
 
     /// [`Self::query_governed`] with a
@@ -1358,7 +1434,10 @@ impl NativeSparqlEngine {
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
     /// is **not** an error and does not surface here.
-    pub fn query_governed_with_source_view<'d, D: DatasetView + Sync>(
+    pub fn query_governed_with_source_view<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
@@ -1409,28 +1488,34 @@ impl NativeSparqlEngine {
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
     /// is **not** an error and does not surface here.
-    pub fn query_governed_in_operation<'d, D: DatasetView + Sync>(
+    pub fn query_governed_in_operation<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
         options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
-        let prepared = self.prepare_request(
-            request.query,
-            request.base_iri,
-            options.env,
-            &admitted.parameters,
-        )?;
-        self.query_governed_prepared_in_state(
-            dataset,
-            &prepared,
-            &admitted,
-            options,
-            state,
-            Sequencing::Free,
-        )
+        checked_query_read(dataset, || {
+            let admitted =
+                AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+            let prepared = self.prepare_request(
+                request.query,
+                request.base_iri,
+                options.env,
+                &admitted.parameters,
+            )?;
+            self.query_governed_prepared_in_state(
+                dataset,
+                &prepared,
+                &admitted,
+                options,
+                state,
+                Sequencing::Free,
+            )
+        })
     }
 
     /// Execute a prepared plan under a caller-owned multi-query operation budget.
@@ -1444,7 +1529,10 @@ impl NativeSparqlEngine {
     /// # Errors
     /// Propagates registry mismatch, admission and evaluation diagnostics. Budget
     /// exhaustion remains a typed [`GovernedOutcome`], never a complete result.
-    pub fn query_prepared_governed_in_operation<'d, D: DatasetView + Sync>(
+    pub fn query_prepared_governed_in_operation<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &'d self,
         dataset: &'d D,
         prepared: &PreparedQuery,
@@ -1502,12 +1590,18 @@ impl NativeSparqlEngine {
     {
         // Built before the preflight so that a view that failed on the way in still
         // reports a (zeroed, honest) governor receipt beside its root cause.
+        let _reporting = reserve_governed_reporting(dataset, governors)?;
         let state = Arc::new(GovernorState::new(governors));
         if let ViewOperationStatus::Failed { error, evidence } = dataset.operation_status() {
             return Err(FallibleSparqlError::Operational {
                 error,
                 evidence: GovernedEvidence::new(evidence, state.evidence()),
             });
+        }
+        if let Err(diagnostic) =
+            bounded_workspace::check_inputs(dataset, !request.substitutions.is_empty(), options)
+        {
+            return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
         }
         let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
         let prepared = match self.prepare_request(
@@ -1527,7 +1621,7 @@ impl NativeSparqlEngine {
             &admitted,
             options,
             &state,
-            Sequencing::Sequential,
+            Sequencing::for_view::<D>(),
         );
         finish_governed_fallible_query(dataset, &state, evaluation)
     }
@@ -1958,14 +2052,26 @@ impl NativeSparqlEngine {
     /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
     /// correct by construction: [`EvalCtx::new`] samples the real host wall clock
     /// and OS entropy itself.
-    fn eval_ctx<'d, D: DatasetView + Sync>(&'d self, dataset: &'d D) -> EvalCtx<'d, D> {
-        let mut ctx = EvalCtx::new(dataset)
-            .with_bounded_order_cache(&self.order_cache)
-            .with_eval_options(self.eval_options);
-        if let Some(predicates) = &self.standpoint_predicates {
+    fn eval_ctx<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        _workspace: &impl purrdf_core::WorkspaceReservation<Error = D::ReadError>,
+    ) -> EvalCtx<'d, D> {
+        let mut ctx = EvalCtx::new(dataset).with_eval_options(self.eval_options);
+        ctx.bounded_workspace = crate::eval::WorkspaceAdmission::Admitted;
+        if dataset.storage_live_budget().is_some() {
+            ctx.options.force_sequential = true;
+        } else {
+            ctx = ctx.with_bounded_order_cache(&self.order_cache);
+        }
+        if dataset.storage_live_budget().is_none()
+            && let Some(predicates) = &self.standpoint_predicates
+        {
             ctx = ctx.with_standpoint_predicates(predicates.clone());
         }
-        if let Some(vocab) = &self.loss_vocabulary {
+        if dataset.storage_live_budget().is_none()
+            && let Some(vocab) = &self.loss_vocabulary
+        {
             ctx = ctx.with_loss_vocabulary(vocab.clone());
         }
         ctx
@@ -2017,7 +2123,7 @@ impl NativeSparqlEngine {
     ///
     /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
     /// fails.
-    pub fn explain_query_view<D: DatasetView + Sync>(
+    pub fn explain_query_view<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         &self,
         dataset: &D,
         query_text: &str,
@@ -2069,7 +2175,9 @@ impl NativeSparqlEngine {
     ///
     /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
     /// fails.
-    pub fn explain_query_with_options_view<D: DatasetView + Sync>(
+    pub fn explain_query_with_options_view<
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &self,
         dataset: &D,
         query_text: &str,
@@ -2156,56 +2264,63 @@ impl NativeSparqlEngine {
         remote: Option<&(dyn crate::remote::ServiceResolver + Sync)>,
         stop: Option<Arc<dyn crate::governor::StopSignal>>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
-        let relations = env.relations();
-        let aggregates = env.aggregates();
-        let prepared = self.prepare_for(query_text, base_iri, env)?;
-        let survey = self.survey_plan(dataset, &prepared.query, relations)?;
-        // The ledger's node table is the survey's tree: the plan about to be evaluated,
-        // numbered in pre-order. No substitutions are applied on this path, so the nodes
-        // the ledger numbers are the nodes the evaluator visits.
-        let ledger = Arc::new(ChargeLedger::for_plan(survey.shape(), &survey.estimates));
-        let governors = match stop {
-            Some(signal) => QueryGovernors::METERED.with_stop_signal(signal),
-            None => QueryGovernors::METERED,
-        };
-        let state = Arc::new(GovernorState::new(&governors));
-        let mut ctx = self
-            .eval_ctx(dataset)
-            .with_governors(Arc::clone(&state))
-            .with_charge_ledger(Arc::clone(&ledger))
-            .with_user_functions(functions)
-            .with_property_functions(relations)
-            .with_aggregates(aggregates);
-        if let Some(source) = remote {
-            ctx = ctx.with_remote(source);
-        }
-        evaluate_query_evaluated_over(&prepared.query, Some(&prepared.plan), &mut ctx).map_err(
-            |e| {
-                RdfDiagnostic::error(
-                    eval_diagnostic_code(&e, "native-sparql-query-explain"),
-                    e.to_string(),
-                )
-            },
-        )?;
-        // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
-        // was registered and not of the order it was registered in. The full descriptor
-        // travels, not just the IRI: arity, declared modes, and volatility are all part of
-        // what a relation IS, and two impls sharing an IRI but disagreeing on any of them
-        // must render as two different receipts.
-        let registered = relations
-            .describe()
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
-        // The exact twin, for the custom-aggregate registry.
-        let registered_aggregates = aggregates
-            .describe()
-            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
-        Ok(QueryExplanation::new(
-            survey.orders,
-            ledger.snapshot(),
-            registered,
-            registered_aggregates,
-            state.evidence(),
-        ))
+        checked_query_read(dataset, || {
+            let relations = env.relations();
+            let aggregates = env.aggregates();
+            let prepared = self.prepare_for(query_text, base_iri, env)?;
+            let workspace = bounded_workspace::reserve(
+                dataset,
+                &prepared.query,
+                false,
+                QueryOptions::EMPTY.with_env(env).with_functions(functions),
+            )?;
+            let survey = self.survey_plan(dataset, &prepared.query, relations)?;
+            // The ledger's node table is the survey's tree: the plan about to be evaluated,
+            // numbered in pre-order. No substitutions are applied on this path, so the nodes
+            // the ledger numbers are the nodes the evaluator visits.
+            let ledger = Arc::new(ChargeLedger::for_plan(survey.shape(), &survey.estimates));
+            let governors = match stop {
+                Some(signal) => QueryGovernors::METERED.with_stop_signal(signal),
+                None => QueryGovernors::METERED,
+            };
+            let state = Arc::new(GovernorState::new(&governors));
+            let mut ctx = self
+                .eval_ctx(dataset, &workspace)
+                .with_governors(Arc::clone(&state))
+                .with_charge_ledger(Arc::clone(&ledger))
+                .with_user_functions(functions)
+                .with_property_functions(relations)
+                .with_aggregates(aggregates);
+            if let Some(source) = remote {
+                ctx = ctx.with_remote(source);
+            }
+            evaluate_query_evaluated_over(&prepared.query, Some(&prepared.plan), &mut ctx)
+                .map_err(|e| {
+                    RdfDiagnostic::error(
+                        eval_diagnostic_code(&e, "native-sparql-query-explain"),
+                        e.to_string(),
+                    )
+                })?;
+            // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
+            // was registered and not of the order it was registered in. The full descriptor
+            // travels, not just the IRI: arity, declared modes, and volatility are all part of
+            // what a relation IS, and two impls sharing an IRI but disagreeing on any of them
+            // must render as two different receipts.
+            let registered = relations.describe().map_err(|e| {
+                RdfDiagnostic::error("native-sparql-property-function", e.to_string())
+            })?;
+            // The exact twin, for the custom-aggregate registry.
+            let registered_aggregates = aggregates.describe().map_err(|e| {
+                RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string())
+            })?;
+            Ok(QueryExplanation::new(
+                survey.orders,
+                ledger.snapshot(),
+                registered,
+                registered_aggregates,
+                state.evidence(),
+            ))
+        })
     }
 
     /// Walk `query`'s plan against `dataset`'s statistics without evaluating it: the join
@@ -2224,25 +2339,27 @@ impl NativeSparqlEngine {
         query: &Query,
         relations: &crate::property_fn::PropertyFunctionRegistry,
     ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
-        let _ = self;
-        let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
-        let tree = crate::plan::Tree::build(query_pattern(query));
-        let mut survey = crate::bgp::PlanSurvey::for_shape(tree.shape());
-        crate::bgp::survey_pattern_plans(
-            dataset,
-            &active_dataset,
-            GraphMatch::Default,
-            query_pattern(query),
-            relations,
-            &mut survey,
-        )
-        .map_err(|e| {
-            RdfDiagnostic::error(
-                eval_diagnostic_code(&e, "native-sparql-query-explain"),
-                e.to_string(),
+        checked_query_read(dataset, || {
+            let _ = self;
+            let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
+            let tree = crate::plan::Tree::build(query_pattern(query));
+            let mut survey = crate::bgp::PlanSurvey::for_shape(tree.shape());
+            crate::bgp::survey_pattern_plans(
+                dataset,
+                &active_dataset,
+                GraphMatch::Default,
+                query_pattern(query),
+                relations,
+                &mut survey,
             )
-        })?;
-        Ok(survey)
+            .map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-query-explain"),
+                    e.to_string(),
+                )
+            })?;
+            Ok(survey)
+        })
     }
 
     /// Decide whether `query` may be evaluated at all under `state`'s ceilings, refusing it
@@ -2347,34 +2464,46 @@ impl NativeSparqlEngine {
     /// # Errors
     ///
     /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_options_view<'d, D: DatasetView + Sync>(
+    pub fn query_with_options_view<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
-        let prepared = self.prepare_request(
-            request.query,
-            request.base_iri,
-            options.env,
-            &admitted.parameters,
-        )?;
-        let ctx = self.eval_ctx(dataset);
-        let mut ctx = apply_query_options(ctx, options)?;
-        let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
-                &prepared,
-                Prebindings::Owned(request.substitutions),
-                &mut ctx,
-            )?,
-            ShaclPrebinding::None => evaluate_with_substitutions(
-                &prepared,
-                Prebindings::Owned(request.substitutions),
-                &mut ctx,
-            )?,
-        };
-        Ok(materialize(outcome, &ctx))
+        checked_query_read(dataset, || {
+            let admitted =
+                AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+            let prepared = self.prepare_request(
+                request.query,
+                request.base_iri,
+                options.env,
+                &admitted.parameters,
+            )?;
+            let workspace = bounded_workspace::reserve(
+                dataset,
+                &prepared.query,
+                !request.substitutions.is_empty(),
+                options,
+            )?;
+            let ctx = self.eval_ctx(dataset, &workspace);
+            let mut ctx = apply_query_options(ctx, options)?;
+            let outcome = match options.prebinding {
+                ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                    &prepared,
+                    Prebindings::Owned(request.substitutions),
+                    &mut ctx,
+                )?,
+                ShaclPrebinding::None => evaluate_with_substitutions(
+                    &prepared,
+                    Prebindings::Owned(request.substitutions),
+                    &mut ctx,
+                )?,
+            };
+            materialize(outcome, &ctx)
+        })
     }
 
     /// Prepare `query` once as a **parameterized execution** that can be bound and
@@ -2562,15 +2691,51 @@ impl NativeSparqlEngine {
     /// parameter is refused rather than treated as unrestricted: running a query
     /// whose focus was never supplied would answer over every subject, which is a
     /// silently wider answer rather than a visible mistake.
-    pub fn execute<'d, D: DatasetView + Sync, R>(
+    pub fn execute<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync, R>(
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
         options: QueryOptions<'d>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
-        self.execute_ungoverned(execution, dataset, options, false, visit)
+        self.execute_ungoverned(execution, dataset, options, false, Sequencing::Free, visit)
             .map(|(answer, _)| answer)
+    }
+
+    /// Run a retained prepared execution over operational storage, keeping the
+    /// scoped visit inside its read/reporting reservation and returning the exact
+    /// final operational evidence beside the visitor's caller-owned value.
+    ///
+    /// Operational reads execute sequentially; resident `Infallible` reads retain
+    /// native parallel capability. Publish visitor output only after this returns
+    /// `Ok`; a failed read during the visit discards its return value.
+    ///
+    /// # Errors
+    /// A typed operational cause outranks parameter, evaluation and visitor-drain
+    /// diagnostics. No result or partial return value escapes an incomplete read.
+    pub fn execute_fallible<'d, D, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> FallibleScopedResult<R, D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        preflight_fallible_view(dataset)?;
+        let _reporting = reserve_fallible_reporting(dataset)?;
+        let evaluated = self
+            .execute_ungoverned(
+                execution,
+                dataset,
+                options,
+                false,
+                Sequencing::for_view::<D>(),
+                visit,
+            )
+            .map(|(value, _)| value);
+        finish_fallible_read(dataset, evaluated)
     }
 
     /// [`Self::execute`], handing back beside `visit`'s answer the
@@ -2597,14 +2762,14 @@ impl NativeSparqlEngine {
     /// # Errors
     ///
     /// As [`Self::execute`], except that a relation's declared shortfall is not one.
-    pub fn execute_witnessed<'d, D: DatasetView + Sync, R>(
+    pub fn execute_witnessed<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync, R>(
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
         options: QueryOptions<'d>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<(R, crate::witness::RelationWitness), RdfDiagnostic> {
-        self.execute_ungoverned(execution, dataset, options, true, visit)
+        self.execute_ungoverned(execution, dataset, options, true, Sequencing::Free, visit)
     }
 
     /// The one body behind [`Self::execute`] and [`Self::execute_witnessed`]:
@@ -2616,48 +2781,61 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         options: QueryOptions<'d>,
         witnessing: bool,
+        sequencing: Sequencing,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<(R, crate::witness::RelationWitness), RdfDiagnostic> {
-        let unbound = execution.unbound();
-        if !unbound.is_empty() {
-            return Err(RdfDiagnostic::error(
-                "native-sparql-execution-parameter",
-                format!("parameters still unbound: {}", unbound.join(", ")),
-            ));
-        }
-        check_prepared_registries_unchanged(&execution.prepared, options)?;
-        let ctx = self.eval_ctx(dataset);
-        let mut ctx = apply_query_options(ctx, options)?;
-        ctx.witnessing = witnessing;
-        // This run's scratch interner comes from the execution's retained workspace
-        // rather than from the context's own lazy one — emptied by the previous run
-        // but still holding its tables. See `execution::ExecutionWorkspace`.
-        ctx.scratch = execution.check_out_workspace();
-        let evaluated = {
-            // The substituted plan, from the execution's own retained tree where it
-            // has one. Both lanes reach it through the same call, so which rewrite
-            // ran is a property of `options` in one place rather than of two call
-            // sites. Scoped so its borrow of `execution` ends before the workspace
-            // goes back.
-            match execution.substituted(options.prebinding) {
-                Ok(substituted) => {
-                    evaluate_query_over(substituted.query(), substituted.plan(), &mut ctx).map_err(
-                        |e| {
-                            RdfDiagnostic::error(
-                                eval_diagnostic_code(&e, "native-sparql-query-eval"),
-                                e.to_string(),
-                            )
-                        },
-                    )
-                }
-                Err(refused) => Err(refused),
+        checked_query_read(dataset, || {
+            let workspace = bounded_workspace::reserve(
+                dataset,
+                &execution.prepared.query,
+                !execution.parameters().is_empty(),
+                options,
+            )?;
+            let unbound = execution.unbound();
+            if !unbound.is_empty() {
+                return Err(RdfDiagnostic::error(
+                    "native-sparql-execution-parameter",
+                    format!("parameters still unbound: {}", unbound.join(", ")),
+                ));
             }
-        };
-        // `visit` runs BEFORE the workspace goes back, because the outcome it reads
-        // resolves `SolutionTerm::Computed` ids through this context's scratch.
-        let answer = evaluated.map(|outcome| visit(borrow_outcome(&outcome, &ctx)));
-        execution.check_in_workspace(&mut ctx.scratch);
-        answer.map(|answer| (answer, core::mem::take(&mut ctx.witness)))
+            check_prepared_registries_unchanged(&execution.prepared, options)?;
+            let ctx = self.eval_ctx(dataset, &workspace);
+            let mut ctx = apply_query_options(ctx, options)?;
+            ctx.witnessing = witnessing;
+            ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+            // This run's scratch interner comes from the execution's retained workspace
+            // rather than from the context's own lazy one — emptied by the previous run
+            // but still holding its tables. See `execution::ExecutionWorkspace`.
+            if dataset.storage_live_budget().is_none() {
+                ctx.scratch = execution.check_out_workspace();
+            }
+            let evaluated = {
+                // The substituted plan, from the execution's own retained tree where it
+                // has one. Both lanes reach it through the same call, so which rewrite
+                // ran is a property of `options` in one place rather than of two call
+                // sites. Scoped so its borrow of `execution` ends before the workspace
+                // goes back.
+                match execution.substituted(options.prebinding) {
+                    Ok(substituted) => {
+                        evaluate_query_over(substituted.query(), substituted.plan(), &mut ctx)
+                            .map_err(|e| {
+                                RdfDiagnostic::error(
+                                    eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                                    e.to_string(),
+                                )
+                            })
+                    }
+                    Err(refused) => Err(refused),
+                }
+            };
+            // `visit` runs BEFORE the workspace goes back, because the outcome it reads
+            // resolves `SolutionTerm::Computed` ids through this context's scratch.
+            let answer = evaluated.map(|outcome| visit(borrow_outcome(&outcome, &ctx)));
+            if dataset.storage_live_budget().is_none() {
+                execution.check_in_workspace(&mut ctx.scratch);
+            }
+            answer.map(|answer| (answer, core::mem::take(&mut ctx.witness)))
+        })
     }
 
     /// [`Self::execute`] under an operation budget: the governed twin, and the entry
@@ -2687,7 +2865,11 @@ impl NativeSparqlEngine {
     /// fails. A tripped governor is **not** an error — it surfaces as
     /// [`InternedGoverned::BudgetExhausted`] carrying its certified partial answers,
     /// and `visit` does not run, exactly as on the `&str` door.
-    pub fn execute_governed_in_operation<'d, D: DatasetView + Sync, R>(
+    pub fn execute_governed_in_operation<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+        R,
+    >(
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
@@ -2695,60 +2877,75 @@ impl NativeSparqlEngine {
         state: &Arc<GovernorState>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
-        let unbound = execution.unbound();
-        if !unbound.is_empty() {
-            return Err(RdfDiagnostic::error(
-                "native-sparql-execution-parameter",
-                format!("parameters still unbound: {}", unbound.join(", ")),
-            ));
-        }
-        check_prepared_registries_unchanged(&execution.prepared, options)?;
-        let prepared = Arc::clone(&execution.prepared);
-        let identity = relation_identity(&prepared, options.property_functions())?;
-        if let Some(refused) = self.admit_refusal(
-            dataset,
-            &prepared.query,
-            options.property_functions(),
-            state,
-            &identity,
-        ) {
-            return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
-        }
-        let mut ctx = self.governed_ctx(dataset, state, options)?;
-        // The retained workspace, exactly as on the ungoverned twin — and taken
-        // here rather than inside `governed_ctx` so both lanes spell it at the same
-        // level, beside the `substituted` call whose borrow it has to sit outside.
-        ctx.scratch = execution.check_out_workspace();
-        let evaluated = match execution.substituted(options.prebinding) {
-            Ok(substituted) => {
-                evaluate_query_evaluated_over(substituted.query(), substituted.plan(), &mut ctx)
-                    .map_err(|e| {
-                        RdfDiagnostic::error(
-                            eval_diagnostic_code(&e, "native-sparql-query-eval"),
-                            e.to_string(),
-                        )
-                    })
+        checked_query_read(dataset, || {
+            let workspace = bounded_workspace::reserve(
+                dataset,
+                &execution.prepared.query,
+                !execution.parameters().is_empty(),
+                options,
+            )?;
+            let unbound = execution.unbound();
+            if !unbound.is_empty() {
+                return Err(RdfDiagnostic::error(
+                    "native-sparql-execution-parameter",
+                    format!("parameters still unbound: {}", unbound.join(", ")),
+                ));
             }
-            Err(refused) => Err(refused),
-        };
-        let answer = evaluated.map(|evaluated| {
-            match resolve_governed(evaluated, &mut ctx, state, identity) {
-                GovernedResolution::Complete {
-                    outcome,
-                    evidence,
-                    relations,
-                } => InternedGoverned::Complete {
-                    value: visit(borrow_outcome(&outcome, &ctx)),
-                    evidence,
-                    relations,
-                },
-                GovernedResolution::Exhausted(exhausted) => {
-                    InternedGoverned::BudgetExhausted(Box::new(exhausted))
+            check_prepared_registries_unchanged(&execution.prepared, options)?;
+            let prepared = Arc::clone(&execution.prepared);
+            let identity = relation_identity(&prepared, options.property_functions())?;
+            if let Some(refused) = self.admit_refusal(
+                dataset,
+                &prepared.query,
+                options.property_functions(),
+                state,
+                &identity,
+            ) {
+                return refused
+                    .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
+            }
+            let mut ctx = self.governed_ctx(dataset, state, options, &workspace)?;
+            // The retained workspace, exactly as on the ungoverned twin — and taken
+            // here rather than inside `governed_ctx` so both lanes spell it at the same
+            // level, beside the `substituted` call whose borrow it has to sit outside.
+            if dataset.storage_live_budget().is_none() {
+                ctx.scratch = execution.check_out_workspace();
+            }
+            let evaluated = match execution.substituted(options.prebinding) {
+                Ok(substituted) => {
+                    evaluate_query_evaluated_over(substituted.query(), substituted.plan(), &mut ctx)
+                        .map_err(|e| {
+                            RdfDiagnostic::error(
+                                eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                                e.to_string(),
+                            )
+                        })
                 }
+                Err(refused) => Err(refused),
+            };
+            let answer = evaluated.and_then(|evaluated| {
+                Ok(
+                    match resolve_governed(evaluated, &mut ctx, state, identity)? {
+                        GovernedResolution::Complete {
+                            outcome,
+                            evidence,
+                            relations,
+                        } => InternedGoverned::Complete {
+                            value: visit(borrow_outcome(&outcome, &ctx)),
+                            evidence,
+                            relations,
+                        },
+                        GovernedResolution::Exhausted(exhausted) => {
+                            InternedGoverned::BudgetExhausted(Box::new(exhausted))
+                        }
+                    },
+                )
+            });
+            if dataset.storage_live_budget().is_none() {
+                execution.check_in_workspace(&mut ctx.scratch);
             }
-        });
-        execution.check_in_workspace(&mut ctx.scratch);
-        answer
+            answer
+        })
     }
 
     /// [`Self::query_with_options_view`] on the **interned** egress: `visit` is
@@ -2770,39 +2967,53 @@ impl NativeSparqlEngine {
     /// into this execution's scratch arena, which dies with the context. Interned
     /// rows therefore do not outlive the evaluation, and a callback running inside
     /// it is the only sound way to lend them. `visit`'s own return value is
-    /// unconstrained and is what this returns.
+    /// unconstrained and is what this returns. The visit remains inside the checked
+    /// read scope: publish its output only after this method returns `Ok`, because
+    /// a term read during the visit can still invalidate the complete drain.
     ///
     /// # Errors
     ///
     /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_interned_view<'d, D: DatasetView + Sync, R>(
+    pub fn query_interned_view<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+        R,
+    >(
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
         options: QueryOptions<'d>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
-        let admitted = RequestParameters::of(
-            Prebindings::Borrowed(request.substitutions),
-            options.prebinding,
-        );
-        let prepared =
-            self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
-        let ctx = self.eval_ctx(dataset);
-        let mut ctx = apply_query_options(ctx, options)?;
-        let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
-                &prepared,
+        checked_query_read(dataset, || {
+            let admitted = RequestParameters::of(
                 Prebindings::Borrowed(request.substitutions),
-                &mut ctx,
-            )?,
-            ShaclPrebinding::None => evaluate_with_substitutions(
-                &prepared,
-                Prebindings::Borrowed(request.substitutions),
-                &mut ctx,
-            )?,
-        };
-        Ok(visit(borrow_outcome(&outcome, &ctx)))
+                options.prebinding,
+            );
+            let prepared =
+                self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
+            let workspace = bounded_workspace::reserve(
+                dataset,
+                &prepared.query,
+                !request.substitutions.is_empty(),
+                options,
+            )?;
+            let ctx = self.eval_ctx(dataset, &workspace);
+            let mut ctx = apply_query_options(ctx, options)?;
+            let outcome = match options.prebinding {
+                ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                    &prepared,
+                    Prebindings::Borrowed(request.substitutions),
+                    &mut ctx,
+                )?,
+                ShaclPrebinding::None => evaluate_with_substitutions(
+                    &prepared,
+                    Prebindings::Borrowed(request.substitutions),
+                    &mut ctx,
+                )?,
+            };
+            Ok(visit(borrow_outcome(&outcome, &ctx)))
+        })
     }
 
     /// [`Self::query_governed_in_operation`] on the **interned** egress.
@@ -2820,7 +3031,11 @@ impl NativeSparqlEngine {
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped
     /// governor is **not** an error and does not surface here.
-    pub fn query_governed_interned_in_operation<'d, D: DatasetView + Sync, R>(
+    pub fn query_governed_interned_in_operation<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+        R,
+    >(
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
@@ -2828,52 +3043,61 @@ impl NativeSparqlEngine {
         state: &Arc<GovernorState>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
-        let admitted = RequestParameters::of(
-            Prebindings::Borrowed(request.substitutions),
-            options.prebinding,
-        );
-        let prepared =
-            self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
-        admitted.check(&prepared, options)?;
-        let identity = relation_identity(&prepared, options.property_functions())?;
-        if let Some(refused) = self.admit_refusal(
-            dataset,
-            &prepared.query,
-            options.property_functions(),
-            state,
-            &identity,
-        ) {
-            return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
-        }
-        let mut ctx = self.governed_ctx(dataset, state, options)?;
-        let evaluated = match options.prebinding {
-            ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
-                &prepared,
+        checked_query_read(dataset, || {
+            let admitted = RequestParameters::of(
                 Prebindings::Borrowed(request.substitutions),
-                &mut ctx,
-            )?,
-            ShaclPrebinding::None => evaluate_governed_with_substitutions(
-                &prepared,
-                Prebindings::Borrowed(request.substitutions),
-                &mut ctx,
-            )?,
-        };
-        Ok(
-            match resolve_governed(evaluated, &mut ctx, state, identity) {
-                GovernedResolution::Complete {
-                    outcome,
-                    evidence,
-                    relations,
-                } => InternedGoverned::Complete {
-                    value: visit(borrow_outcome(&outcome, &ctx)),
-                    evidence,
-                    relations,
+                options.prebinding,
+            );
+            let prepared =
+                self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
+            admitted.check(&prepared, options)?;
+            let workspace = bounded_workspace::reserve(
+                dataset,
+                &prepared.query,
+                !request.substitutions.is_empty(),
+                options,
+            )?;
+            let identity = relation_identity(&prepared, options.property_functions())?;
+            if let Some(refused) = self.admit_refusal(
+                dataset,
+                &prepared.query,
+                options.property_functions(),
+                state,
+                &identity,
+            ) {
+                return refused
+                    .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
+            }
+            let mut ctx = self.governed_ctx(dataset, state, options, &workspace)?;
+            let evaluated = match options.prebinding {
+                ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
+                    &prepared,
+                    Prebindings::Borrowed(request.substitutions),
+                    &mut ctx,
+                )?,
+                ShaclPrebinding::None => evaluate_governed_with_substitutions(
+                    &prepared,
+                    Prebindings::Borrowed(request.substitutions),
+                    &mut ctx,
+                )?,
+            };
+            Ok(
+                match resolve_governed(evaluated, &mut ctx, state, identity)? {
+                    GovernedResolution::Complete {
+                        outcome,
+                        evidence,
+                        relations,
+                    } => InternedGoverned::Complete {
+                        value: visit(borrow_outcome(&outcome, &ctx)),
+                        evidence,
+                        relations,
+                    },
+                    GovernedResolution::Exhausted(exhausted) => {
+                        InternedGoverned::BudgetExhausted(Box::new(exhausted))
+                    }
                 },
-                GovernedResolution::Exhausted(exhausted) => {
-                    InternedGoverned::BudgetExhausted(Box::new(exhausted))
-                }
-            },
-        )
+            )
+        })
     }
 
     /// Like [`SparqlEngine::query`], but with a
@@ -2920,7 +3144,10 @@ impl NativeSparqlEngine {
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_source_view<'d, D: DatasetView + Sync>(
+    pub fn query_with_source_view<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
@@ -2938,6 +3165,28 @@ impl NativeSparqlEngine {
     }
 }
 
+/// Project a source refusal through the legacy diagnostic egress, retaining its
+/// bounded English rendering and fatal machine code without parsing that text.
+fn source_read_diagnostic(error: impl std::fmt::Display) -> RdfDiagnostic {
+    RdfDiagnostic::error(
+        "native-sparql-source-read",
+        crate::EvalError::source_read(error).to_string(),
+    )
+}
+
+/// The publication boundary shared by generic query, materialization and scoped
+/// visitor egresses. A sticky source failure outranks a query diagnostic or trip,
+/// even if the final failing read occurred after the last algebra node. Resident
+/// `Infallible` checks erase when these generic methods are monomorphized.
+fn checked_query_read<D: DatasetView, T>(
+    dataset: &D,
+    evaluate: impl FnOnce() -> Result<T, RdfDiagnostic>,
+) -> Result<T, RdfDiagnostic> {
+    dataset
+        .checked_read(|_| evaluate())
+        .map_err(source_read_diagnostic)?
+}
+
 fn preflight_fallible_view<D>(dataset: &D) -> Result<(), FallibleSparqlError<D::Error, D::Evidence>>
 where
     D: FallibleDatasetView + Sync,
@@ -2950,10 +3199,10 @@ where
     }
 }
 
-fn finish_fallible_query<D>(
+fn finish_fallible_read<D, R>(
     dataset: &D,
-    evaluation: Result<SparqlResult, RdfDiagnostic>,
-) -> FallibleSparqlResult<D::Error, D::Evidence>
+    evaluation: Result<R, RdfDiagnostic>,
+) -> FallibleScopedResult<R, D::Error, D::Evidence>
 where
     D: FallibleDatasetView + Sync,
 {
@@ -2962,13 +3211,46 @@ where
             Err(FallibleSparqlError::Operational { error, evidence })
         }
         ViewOperationStatus::Ready { evidence } => match evaluation {
-            Ok(result) => Ok(CompleteSparqlResult { result, evidence }),
+            Ok(value) => Ok((value, evidence)),
             Err(diagnostic) => Err(FallibleSparqlError::Query {
                 diagnostic,
                 evidence,
             }),
         },
     }
+}
+
+fn reserve_fallible_reporting<D>(
+    dataset: &D,
+) -> Result<
+    impl purrdf_core::WorkspaceReservation<Error = D::ReadError> + '_,
+    FallibleSparqlError<D::Error, D::Evidence>,
+>
+where
+    D: FallibleDatasetView + Sync,
+{
+    bounded_workspace::reserve_reporting(dataset).map_err(|read_error| {
+        match dataset.operation_status() {
+            ViewOperationStatus::Failed { error, evidence } => {
+                FallibleSparqlError::Operational { error, evidence }
+            }
+            ViewOperationStatus::Ready { evidence } => FallibleSparqlError::Operational {
+                error: read_error,
+                evidence,
+            },
+        }
+    })
+}
+
+fn finish_fallible_query<D>(
+    dataset: &D,
+    evaluation: Result<SparqlResult, RdfDiagnostic>,
+) -> FallibleSparqlResult<D::Error, D::Evidence>
+where
+    D: FallibleDatasetView + Sync,
+{
+    finish_fallible_read(dataset, evaluation)
+        .map(|(result, evidence)| CompleteSparqlResult { result, evidence })
 }
 
 /// Report a governed query over a fallible view at its final checkpoint.
@@ -3015,6 +3297,46 @@ where
                 Err(diagnostic) => Err(FallibleSparqlError::Query {
                     diagnostic,
                     evidence,
+                }),
+            }
+        }
+    }
+}
+
+/// The combined root-cause and zero-consumption receipt at reporting admission.
+type GovernedReadFailure<D> = FallibleSparqlError<
+    <D as FallibleDatasetView>::Error,
+    GovernedEvidence<<D as FallibleDatasetView>::Evidence>,
+>;
+
+#[allow(
+    clippy::result_large_err,
+    reason = "the typed refusal retains the same operational and governor receipts as the public governed entry"
+)]
+fn reserve_governed_reporting<'a, D>(
+    dataset: &'a D,
+    governors: &QueryGovernors,
+) -> Result<impl purrdf_core::WorkspaceReservation<Error = D::ReadError> + 'a, GovernedReadFailure<D>>
+where
+    D: FallibleDatasetView + Sync,
+{
+    match bounded_workspace::reserve_reporting(dataset) {
+        Ok(reservation) => Ok(reservation),
+        Err(read_error) => {
+            // This stack-only state has no silenced invocations and allocates nothing.
+            // A tight session can therefore report its typed refusal without first
+            // allocating the very governor owner whose admission it just declined.
+            let zero = GovernorState::new(governors).evidence();
+            match dataset.operation_status() {
+                ViewOperationStatus::Failed { error, evidence } => {
+                    Err(FallibleSparqlError::Operational {
+                        error,
+                        evidence: GovernedEvidence::new(evidence, zero),
+                    })
+                }
+                ViewOperationStatus::Ready { evidence } => Err(FallibleSparqlError::Operational {
+                    error: read_error,
+                    evidence: GovernedEvidence::new(evidence, zero),
                 }),
             }
         }
@@ -3831,6 +4153,20 @@ pub(crate) enum Sequencing {
     Sequential,
 }
 
+impl Sequencing {
+    /// Select once at ingress, preserving resident parallel capability when a
+    /// backend-generic typed API is chosen. No per-term branch is added.
+    fn for_view<D: DatasetView>() -> Self {
+        if std::any::TypeId::of::<D::ReadError>()
+            == std::any::TypeId::of::<std::convert::Infallible>()
+        {
+            Self::Free
+        } else {
+            Self::Sequential
+        }
+    }
+}
+
 pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
     options: QueryOptions<'d>,
@@ -3957,10 +4293,16 @@ fn borrow_outcome<'a, 'd, D: DatasetView + Sync>(
 fn materialize<D: DatasetView + Sync>(
     outcome: Outcome<D::Id>,
     ctx: &EvalCtx<'_, D>,
-) -> SparqlResult {
-    match outcome {
+) -> Result<SparqlResult, RdfDiagnostic> {
+    Ok(match outcome {
         Outcome::Solutions(seq) => {
-            let (variables, rows) = crate::eval::materialize_solutions(&seq, ctx);
+            let (variables, rows) =
+                crate::eval::materialize_solutions(&seq, ctx).map_err(|error| {
+                    RdfDiagnostic::error(
+                        eval_diagnostic_code(&error, "native-sparql-query-eval"),
+                        error.to_string(),
+                    )
+                })?;
             let aux = ctx.constructed_dataset(&rows);
             SparqlResult::Solutions {
                 variables,
@@ -3970,7 +4312,7 @@ fn materialize<D: DatasetView + Sync>(
         }
         Outcome::Graph(graph) => SparqlResult::Graph(graph),
         Outcome::Boolean(value) => SparqlResult::Boolean(value),
-    }
+    })
 }
 
 /// A frozen dataset with nothing in it — the auxiliary graph of a solution set that
@@ -4043,19 +4385,19 @@ fn materialize_governed<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     state: &GovernorState,
     relations: RelationIdentity,
-) -> GovernedOutcome {
-    match resolve_governed(evaluated, ctx, state, relations) {
+) -> Result<GovernedOutcome, RdfDiagnostic> {
+    Ok(match resolve_governed(evaluated, ctx, state, relations)? {
         GovernedResolution::Complete {
             outcome,
             evidence,
             relations,
         } => GovernedOutcome::Complete {
-            result: materialize(outcome, ctx),
+            result: materialize(outcome, ctx)?,
             evidence,
             relations,
         },
         GovernedResolution::Exhausted(exhausted) => GovernedOutcome::BudgetExhausted(exhausted),
-    }
+    })
 }
 
 /// [`materialize_governed`], stopped one step short of the egress model.
@@ -4099,13 +4441,13 @@ fn resolve_governed<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     state: &GovernorState,
     relations: RelationIdentity,
-) -> GovernedResolution<D::Id> {
+) -> Result<GovernedResolution<D::Id>, RdfDiagnostic> {
     let relations = RelationIdentity {
         witness: core::mem::take(&mut ctx.witness),
         ..relations
     };
     let ctx = &*ctx;
-    match evaluated {
+    Ok(match evaluated {
         EvaluatedOutcome::Complete(outcome) => {
             let evidence = state.evidence();
             match evidence.tripped {
@@ -4118,7 +4460,7 @@ fn resolve_governed<D: DatasetView + Sync>(
                     tripped,
                     evidence,
                     relations,
-                    partial: certain_partial(materialize(outcome, ctx), true),
+                    partial: certain_partial(materialize(outcome, ctx)?, true),
                 }),
             }
         }
@@ -4138,7 +4480,7 @@ fn resolve_governed<D: DatasetView + Sync>(
                         .expect("a collapsed bound names the operator that collapsed it"),
                 ),
                 bound => {
-                    let result = materialize(outcome, ctx);
+                    let result = materialize(outcome, ctx)?;
                     if bound == SpineClass::Certain {
                         certain_partial(result, certificate.is_positional_prefix())
                     } else {
@@ -4156,7 +4498,7 @@ fn resolve_governed<D: DatasetView + Sync>(
                 partial,
             })
         }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -4754,7 +5096,7 @@ mod tests {
                 panic!("CONSTRUCT must return a graph");
             };
             let quad = graph.quads().next().expect("exactly one quad");
-            format!("{:?}", graph.resolve(quad.o))
+            format!("{:?}", graph.as_ref().resolve(quad.o))
         };
         assert!(object_for("http://ex/a").contains("http://ex/x"), ":a → :x");
         assert!(object_for("http://ex/b").contains("http://ex/y"), ":b → :y");
@@ -5126,6 +5468,7 @@ mod tests {
             ("blank", TermValue::blank("bn")),
         ] {
             let id = ds
+                .as_ref()
                 .term_id_by_value(&value)
                 .expect("the fixture interns this term");
             let answer = |bind: &dyn Fn(&mut PreparedExecution) -> Result<(), RdfDiagnostic>| {
@@ -5212,7 +5555,7 @@ mod tests {
         };
         assert_eq!(graph.quad_count(), 1);
         let quad = graph.quads().next().expect("one quad");
-        let purrdf_core::TermRef::Blank { label, .. } = graph.resolve(quad.o) else {
+        let purrdf_core::TermRef::Blank { label, .. } = graph.as_ref().resolve(quad.o) else {
             panic!("the object must be the minted blank");
         };
         assert_eq!(
@@ -5735,7 +6078,7 @@ mod tests {
             panic!("CONSTRUCT must return a graph");
         };
         let quad = graph.quads().next().expect("one quad");
-        let purrdf_core::TermRef::Blank { label, .. } = graph.resolve(quad.o) else {
+        let purrdf_core::TermRef::Blank { label, .. } = graph.as_ref().resolve(quad.o) else {
             panic!("the object must be the minted blank");
         };
         assert_eq!(label, "c1", "no prefix ⇒ byte-identical mint labels");
@@ -6050,7 +6393,7 @@ mod tests {
         };
 
         let named = |g: Option<purrdf_core::TermId>| -> Option<String> {
-            g.map(|g| match out.resolve(g) {
+            g.map(|g| match out.as_ref().resolve(g) {
                 purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
                 other => panic!("a graph term must be an IRI, got {other:?}"),
             })
@@ -6184,7 +6527,8 @@ mod tests {
         );
         assert_eq!(ds.quad_count(), 1);
         assert!(
-            ds.term_id_by_value(&TermValue::Iri("http://ex/a".to_owned()))
+            ds.as_ref()
+                .term_id_by_value(&TermValue::Iri("http://ex/a".to_owned()))
                 .is_some()
         );
     }
@@ -6201,7 +6545,8 @@ mod tests {
         // The :knows quad is gone; the :name quad survives.
         assert_eq!(ds.quad_count(), 1);
         assert!(
-            ds.term_id_by_value(&TermValue::Iri("http://ex/knows".to_owned()))
+            ds.as_ref()
+                .term_id_by_value(&TermValue::Iri("http://ex/knows".to_owned()))
                 .is_none()
         );
     }
@@ -6218,11 +6563,13 @@ mod tests {
         );
         // :knows replaced by :met; :name untouched.
         assert!(
-            ds.term_id_by_value(&TermValue::Iri("http://ex/knows".to_owned()))
+            ds.as_ref()
+                .term_id_by_value(&TermValue::Iri("http://ex/knows".to_owned()))
                 .is_none()
         );
         assert!(
-            ds.term_id_by_value(&TermValue::Iri("http://ex/met".to_owned()))
+            ds.as_ref()
+                .term_id_by_value(&TermValue::Iri("http://ex/met".to_owned()))
                 .is_some()
         );
         assert_eq!(ds.quad_count(), 2);
@@ -6244,7 +6591,8 @@ mod tests {
         update(&engine, &mut ds, "LOAD <http://ex/doc>");
         assert_eq!(ds.quad_count(), 1);
         assert!(
-            ds.term_id_by_value(&TermValue::Iri("http://ex/loaded".to_owned()))
+            ds.as_ref()
+                .term_id_by_value(&TermValue::Iri("http://ex/loaded".to_owned()))
                 .is_some()
         );
     }
@@ -6419,6 +6767,7 @@ mod tests {
             .expect("heldIn in an UPDATE WHERE must see the configured standpoint table");
         assert!(
             configured_ds
+                .as_ref()
                 .term_id_by_value(&TermValue::Iri("http://ex/hit".to_owned()))
                 .is_some(),
             "the WHERE matched and the INSERT landed"

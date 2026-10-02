@@ -41,6 +41,8 @@ pub enum TextError {
     /// the answer to a query rather than as a refusal to build. See
     /// [`TextIndex::from_dataset`](crate::TextIndex::from_dataset).
     Data(String),
+    /// The input source refused a term or iterator read. No partial index is published.
+    SourceRead(String),
 
     /// A fixed-point operation overflowed. The arithmetic is exact by
     /// construction, so an intermediate that does not fit is reported rather
@@ -62,6 +64,9 @@ purrdf_lex::constructors! {
         /// Construct a [`TextError::Data`] from any displayable message.
         pub fn data(what) -> Self::Data;
 
+        /// Construct a fatal operational source refusal.
+        pub fn source_read(what) -> Self::SourceRead;
+
         /// Construct a [`TextError::Overflow`] from any displayable message.
         pub fn overflow(what) -> Self::Overflow;
 
@@ -75,6 +80,7 @@ impl core::fmt::Display for TextError {
         match self {
             Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
+            Self::SourceRead(msg) => write!(f, "text-index source read error: {msg}"),
             Self::Overflow(msg) => write!(f, "fixed-point overflow: {msg}"),
             Self::Domain(msg) => write!(f, "fixed-point domain error: {msg}"),
         }
@@ -105,6 +111,7 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
         match err {
             TextError::Config(msg) => Self::config(msg),
             TextError::Data(msg) => Self::data(msg),
+            TextError::SourceRead(msg) => Self::SourceRead(msg),
             TextError::Overflow(msg) => Self::function(format!("fixed-point overflow: {msg}")),
             TextError::Domain(msg) => Self::function(format!("fixed-point domain error: {msg}")),
         }
@@ -148,12 +155,14 @@ mod tests {
         for err in [
             TextError::config("no predicate IRI supplied"),
             TextError::data("predicate absent from the dataset"),
+            TextError::source_read("storage checksum mismatch"),
             TextError::overflow("product exceeds i128"),
             TextError::domain("ln of a non-positive value"),
         ] {
             let rendered = err.to_string();
             let detail = match &err {
                 TextError::Config(m)
+                | TextError::SourceRead(m)
                 | TextError::Data(m)
                 | TextError::Overflow(m)
                 | TextError::Domain(m) => m.clone(),
@@ -177,6 +186,14 @@ mod tests {
         assert!(
             matches!(data, EvalError::Data(_)),
             "Data must map to EvalError::Data, got {data:?}"
+        );
+    }
+
+    #[test]
+    fn source_read_failure_remains_fatal_and_preserves_its_detail() {
+        let converted: EvalError = TextError::source_read("storage checksum mismatch").into();
+        assert!(
+            matches!(&converted, EvalError::SourceRead(message) if message == "storage checksum mismatch")
         );
     }
 

@@ -98,6 +98,10 @@ purrdf-alloc-probe = { workspace = true }
 # manifest.
 purrdf-testkit = { workspace = true }
 
+[[test]]
+name = "segmented"
+harness = false
+
 [[bench]]
 # IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
 # iteration + allocated-bytes/count/peak reporting. Satisfies the RFC gate

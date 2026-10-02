@@ -983,7 +983,7 @@ fn relations_env(registry: &PropertyFunctionRegistry) -> ExtensionEnv {
 
 /// Read `RELATION_QUERY`'s `(?person, ?team)` rows out of an interned outcome as
 /// owned `(String, String)` pairs, in solution order.
-fn person_team_rows<D: purrdf_core::DatasetView + Sync>(
+fn person_team_rows<D: purrdf_core::DatasetView<ReadError = std::convert::Infallible> + Sync>(
     outcome: InternedOutcome<'_, '_, D>,
 ) -> Vec<(String, String)> {
     let InternedOutcome::Solutions(solutions) = outcome else {
@@ -1109,7 +1109,9 @@ fn agg_query() -> String {
     format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{REL_EX}val> ?v }}")
 }
 
-fn total_cell<D: purrdf_core::DatasetView + Sync>(outcome: InternedOutcome<'_, '_, D>) -> i64 {
+fn total_cell<D: purrdf_core::DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    outcome: InternedOutcome<'_, '_, D>,
+) -> i64 {
     let InternedOutcome::Solutions(solutions) = outcome else {
         panic!("expected solutions");
     };

@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use purrdf_datalog::seminaive::{BudgetReport, EvalOptions};
-use purrdf_entail::entails::imports::imported_iris;
 use purrdf_entail::{
     Construct, EntailError, ImportMap, Materialization, QNode, QTriple, ReasoningReport, Regime,
     RuleSet, materialize_combined_until,
@@ -580,7 +579,11 @@ fn close_premise<D: DatasetView>(
 ) -> Result<Closed, ReasoningError> {
     let imports = closure.imports;
     let loaded: Vec<&str> = imports.loaded().collect();
-    if imports.is_empty() && imported_iris(dataset, &loaded).is_empty() {
+    if imports.is_empty()
+        && purrdf_entail::entails::imports::try_imported_iris(dataset, &loaded)
+            .map_err(|error| EntailError::SourceRead(error.to_string()))?
+            .is_empty()
+    {
         return close_lane(dataset, closure.entailment, pattern, &closure.limits, stop);
     }
     let premise = dataset_from_view(dataset)?;
@@ -1687,18 +1690,18 @@ fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<S
     let quad_offends = |quad: &RdfQuad| {
         mentions(&quad.subject)
             || mentions(&quad.object)
-            || quad.graph_name.as_ref().is_some_and(&mentions)
+            || quad.graph_name.as_ref().is_some_and(mentions)
     };
     let reifier_offends = |reifier: &purrdf_rdf::RdfReifier| {
         mentions(&reifier.reifier)
             || mentions(&reifier.statement.subject)
             || mentions(&reifier.statement.object)
-            || reifier.graph.as_ref().is_some_and(&mentions)
+            || reifier.graph.as_ref().is_some_and(mentions)
     };
     let annotation_offends = |annotation: &purrdf_rdf::RdfAnnotation| {
         mentions(&annotation.reifier)
             || mentions(&annotation.object)
-            || annotation.graph.as_ref().is_some_and(&mentions)
+            || annotation.graph.as_ref().is_some_and(mentions)
     };
     let offends = graph.owned_quads().any(|quad| quad_offends(&quad))
         || graph.owned_reifiers().any(|r| reifier_offends(&r))

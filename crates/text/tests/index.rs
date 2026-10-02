@@ -17,11 +17,12 @@
 //! opposite by construction.
 
 use purrdf_core::TermBox;
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, DatasetView, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,
+    BlankScope, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,
 };
 use purrdf_text::{
     Analyzer, FINGERPRINT_BYTES, GraphSelector, PartitionFilter, PartitionKey, TextError,
@@ -74,6 +75,7 @@ fn annotation_layer_literals_are_indexed() {
     // `ex:note` at all, so an index that read only that table would be empty.
     let note_id = dataset
         .term_id_by_value(&TermValue::iri(NOTE))
+        .expect("resident reverse lookup is infallible")
         .expect("ex:note is interned");
     assert_eq!(
         dataset
@@ -178,20 +180,21 @@ struct TripleSubjectView {
 
 impl DatasetView for TripleSubjectView {
     type Id = TermId;
+    type ReadError = Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = <RdfDataset as DatasetView>::ProbePlan;
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         DatasetView::quads(&*self.inner)
     }
 
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        DatasetView::quad_refs(&*self.inner)
-    }
-
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
         if id == self.disguised {
             let (s, p, o) = self.parts;
-            return TermRef::Triple { s, p, o };
+            return Ok(TermRef::Triple { s, p, o });
         }
         DatasetView::resolve(&*self.inner, id)
     }
@@ -206,7 +209,7 @@ impl DatasetView for TripleSubjectView {
         DatasetView::quads_for_pattern(&*self.inner, s, p, o, g)
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
         DatasetView::term_id_by_value(&*self.inner, value)
     }
 
@@ -235,7 +238,7 @@ impl DatasetView for TripleSubjectView {
         DatasetView::quads_for_pattern_with_plan(&*self.inner, plan, s, p, o, g)
     }
 
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         DatasetView::term_count(&*self.inner)
     }
 }

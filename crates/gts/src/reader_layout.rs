@@ -10,8 +10,8 @@ use crate::wire::map_get;
 
 #[derive(Clone, Debug)]
 pub(crate) struct IndexRecord {
-    pub(crate) abs_index: usize,
-    pub(crate) count: usize,
+    pub(crate) abs_index: u64,
+    pub(crate) count: u64,
     pub(crate) head: Vec<u8>,
     pub(crate) mmr: Option<Vec<u8>>,
 }
@@ -28,13 +28,13 @@ pub(crate) fn layout_check(
     g: &mut Graph,
     header: &[(Value, Value)],
     index_records: &[IndexRecord],
-    blob_events: &[(usize, String, bool)],
+    blob_events: &[(u64, String, bool)],
     frame_ids: &[Vec<u8>],
-    index_offset: usize,
+    index_offset: u64,
     sink: &mut Option<&mut dyn StreamingSink>,
 ) -> StreamableInfo {
     let claimed = matches!(map_get(header, "layout"), Some(Value::Text(t)) if t == "streamable");
-    let total = frame_ids.len();
+    let total = frame_ids.len() as u64;
     if !claimed {
         return StreamableInfo::default();
     }
@@ -63,7 +63,13 @@ pub(crate) fn layout_check(
     // The footer must IMMEDIATELY follow the frames it covers (§3.3): a
     // permissive `count <= rel_pos - 1` would let frames sit between the
     // covered prefix and the footer, counted neither as covered nor as tail.
-    if count != rel_pos - 1 || count < 1 || frame_ids[count - 1] != *head {
+    if count != rel_pos - 1
+        || count < 1
+        || usize::try_from(count - 1)
+            .ok()
+            .and_then(|index| frame_ids.get(index))
+            .is_none_or(|id| id != head)
+    {
         push_diagnostic(
             g,
             sink,
@@ -107,7 +113,7 @@ pub(crate) fn check_index_mmr(
     g: &mut Graph,
     index_records: &[IndexRecord],
     frame_ids: &[Vec<u8>],
-    index_offset: usize,
+    index_offset: u64,
     sink: &mut Option<&mut dyn StreamingSink>,
 ) {
     for record in index_records {
@@ -124,16 +130,24 @@ pub(crate) fn check_index_mmr(
                 "index mmr covers {} frame(s), but only {preceding} precede the index",
                 record.count
             ));
-        } else if record.count > frame_ids.len() {
+        } else if record.count > frame_ids.len() as u64 {
             detail = Some(format!(
                 "index mmr covers {} frame(s), but the segment has {} frame id(s)",
                 record.count,
                 frame_ids.len()
             ));
-        } else if record.count > 0 && frame_ids[record.count - 1] != record.head {
+        } else if record.count > 0
+            && usize::try_from(record.count - 1)
+                .ok()
+                .and_then(|index| frame_ids.get(index))
+                .is_none_or(|id| *id != record.head)
+        {
             detail = Some("index mmr head does not match the last covered frame".to_string());
         } else {
-            let computed = mmr::root(&frame_ids[..record.count]);
+            let computed = mmr::root(
+                &frame_ids[..usize::try_from(record.count)
+                    .expect("count admitted against bounded frame table")],
+            );
             if computed != *root {
                 detail = Some("index mmr root does not match the covered frame ids".to_string());
             }

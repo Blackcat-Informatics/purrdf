@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ready, Dataset, QueryEngine, provenanceFromJson, provenanceFromXml } from "../index.mjs";
-import { HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
+import { EVALUATION_STACK_REFUSAL_EXACT, HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
 
 // One-time wasm instantiation before any test runs.
 await ready();
@@ -571,9 +571,6 @@ test("a FILTER nested 10 000 parentheses deep answers what one pair answers, and
 // remedy appended — an asynchronous job runs on a region exactly as large as this lane's
 // shadow stack, so neither lane has more stack to offer, and the native remedy (a thread
 // spawned with more stack) names nothing a JavaScript caller can act on.
-const EVALUATION_STACK_REFUSAL_EXACT =
-  /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\)$/;
-
 // Nesting the parser admits can still be more than a lane can hold. 126 nested `LATERAL`
 // once ran the synchronous lane's 1 MiB shadow stack below its floor — the call trapped
 // ("memory access out of bounds") and left the instance's memory in an unknown state.
@@ -696,8 +693,7 @@ const walkAnswer = (engine, ds, depth) => {
         .sort(),
     };
   } catch (error) {
-    // Far past the limit the host-stack budget refuses before evaluation starts; either
-    // refusal is typed, and the pair below asserts the evaluator's own refusal at the limit.
+    // Whichever stack budget this shape reaches first refuses before a trap.
     assert.match(
       error.message,
       /native-sparql-evaluation-stack-exhausted|native-sparql-host-stack-exhausted/,
@@ -731,15 +727,16 @@ test("nested FILTER NOT EXISTS answers on the synchronous lane as deep as its st
     else refused = mid;
   }
   // The pair at the lane's real end: the deepest level answers what it computes, and one
-  // level more is the evaluator's own refusal — twice, since a trap would have left the
+  // level more is the first stack guard's refusal — twice, since a trap would have left the
   // instance unable to refuse the same way again.
   assert.deepEqual(walkAnswer(engine, ds, deepest).rows, walkByHand(deepest), `${deepest} levels answer`);
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    // The evaluator's refusal keeps its code and its own words, with nothing appended.
-    assert.match(walkAnswer(engine, ds, refused).refused ?? "", EVALUATION_STACK_REFUSAL_EXACT);
+    const refusal = walkAnswer(engine, ds, refused).refused ?? "";
+    assert.match(refusal, ANY_STACK_REFUSAL);
+    assert.match(refusal, /evaluation-stack-exhausted/.test(refusal) ? EVALUATION_STACK_REFUSAL_EXACT : HOST_STACK_REFUSAL);
   }
   assert.equal(refused, deepest + 1);
-  // The depth is the evaluator's shadow-stack guard on the synchronous lane: the module's
+  // Below the host admission ceiling, the depth is the evaluator's shadow-stack guard: the module's
   // 1 MiB shadow stack, less the 64 KiB reserve the guard refuses inside, over the frames
   // one level of this shape takes on the synchronous lane's evaluation path (no stop
   // source, so the ungoverned dispatch). The compiler sizes those frames, so the exact
@@ -864,9 +861,9 @@ test("a snapshot is an independent dataset with its own identity", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const copy = ds.snapshot();
   assert.notEqual(copy.id, ds.id);
-  assert.equal(copy.generation, 0);
+  assert.equal(copy.generation, 0n);
   assert.equal(copy.canonicalize(), ds.canonicalize());
   copy.add(Dataset.parse("<https://example.org/x> <https://example.org/y> <https://example.org/z> .\n", "nquads").quads()[0]);
   assert.equal(copy.size, ds.size + 1, "the copy changed alone");
-  assert.equal(ds.generation, 0);
+  assert.equal(ds.generation, 0n);
 });

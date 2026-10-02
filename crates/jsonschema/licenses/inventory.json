@@ -1,0 +1,73 @@
+{
+  "components": [
+    {
+      "id": "jsonschema-metaschemas",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/jsonschema-metaschemas/0-BSD-3-Clause.txt"
+      ],
+      "paths": [
+        "crates/jsonschema/tests/metaschemas/**"
+      ],
+      "provenance": [
+        "crates/jsonschema/PROVENANCE.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/json-schema-org/json-schema-spec"
+    },
+    {
+      "id": "jsonschema-suite",
+      "license": "MIT",
+      "notices": [
+        "third-party/jsonschema-suite/0-MIT.txt"
+      ],
+      "paths": [
+        "crates/jsonschema/tests/suite/**",
+        "crates/jsonschema/tests/boon_differential_vectors.txt",
+        "crates/jsonschema/tests/pattern_differential_vectors.txt"
+      ],
+      "provenance": [
+        "crates/jsonschema/PROVENANCE.md"
+      ],
+      "scope": "suite schema/instance inputs retained in frozen differential vectors, in addition to verdicts recorded from replaced engines",
+      "source": "https://github.com/json-schema-org/JSON-Schema-Test-Suite/tree/5b0ee1613e45fcc2bddac00e07c19cd49b00d8a8"
+    },
+    {
+      "id": "unicode",
+      "license": "Unicode-3.0",
+      "notices": [
+        "third-party/unicode/0-Unicode-3.0.txt"
+      ],
+      "paths": [
+        "crates/lex/src/unicode_tables.rs",
+        "crates/iri/src/idna_tables.rs",
+        "crates/rdf-core/src/xsd_regex/blocks.rs",
+        "crates/text/src/unicode_tables.rs",
+        "crates/jsonschema/src/ecma/property_tables.rs",
+        "crates/jsonschema/src/ecma/unicode_ranges.rs",
+        "crates/iri/unicode/**",
+        "crates/rdf-core/vendor/unicode/**"
+      ],
+      "provenance": [
+        "crates/iri/unicode/PROVENANCE.md",
+        "LICENSING.md"
+      ],
+      "scope": "generated and vendored Unicode data; terms apply in addition to the first-party grant",
+      "source": "https://www.unicode.org/Public/17.0.0/ucd/"
+    }
+  ],
+  "files": {
+    "CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+    "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+    "NOTICE.txt": "51be40ecd9114c7f8d920650e46398822d75d7e721d3f92b7f679909e12f70f5",
+    "third-party/jsonschema-metaschemas/0-BSD-3-Clause.txt": "d57ac1ad2022def8ddbf253b57452abf7a713465e494443cf52cc1bbd721b323",
+    "third-party/jsonschema-suite/0-MIT.txt": "837402bd25fad9b704265801ca3f92566a98157c1f9a7acd6f446299ba1c305a",
+    "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
+  },
+  "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+  "profile": "purrdf-jsonschema",
+  "schema": 1
+}

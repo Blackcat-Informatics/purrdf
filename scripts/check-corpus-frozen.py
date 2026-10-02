@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import sys
+import subprocess
 from pathlib import Path
 
 # Each guarded root -> its manifest file (repo-relative). A root is frozen whole:
@@ -112,6 +113,17 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def corpus_root(root: Path, corpus_rel: str) -> Path:
+    """Resolve the consumer-acquired XML suite without redistributing payloads."""
+    if corpus_rel == "vectors/xmlconf":
+        subprocess.run(
+            [sys.executable, str(root / "scripts/vendor-xmlconf.py")],
+            check=True,
+        )
+        return root / "target/conformance/xmlconf"
+    return root / corpus_rel
+
+
 def _is_frozen_payload(rel: Path) -> bool:
     """Vendored payload only — skip first-party sidecars so editing them (e.g. a
     provenance README) does not require regenerating the freeze manifest, and
@@ -169,7 +181,7 @@ def update(root: Path) -> int:
         manifest = root / manifest_rel
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(
-            render_manifest(hash_tree(root / corpus_rel)), encoding="utf-8"
+            render_manifest(hash_tree(corpus_root(root, corpus_rel))), encoding="utf-8"
         )
         print(f"wrote {manifest_rel}")
     return 0
@@ -189,7 +201,7 @@ def verify(root: Path) -> int:
             )
             continue
         want = dict(parse_manifest(manifest.read_text(encoding="utf-8")))
-        have = dict(hash_tree(root / corpus_rel))
+        have = dict(hash_tree(corpus_root(root, corpus_rel)))
 
         changed = sorted(r for r in want.keys() & have.keys() if want[r] != have[r])
         missing = sorted(want.keys() - have.keys())

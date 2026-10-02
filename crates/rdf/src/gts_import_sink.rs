@@ -73,13 +73,27 @@ impl SinkImporter<'_> {
     }
 }
 
+fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
+    let scope = u32::try_from(segment_index)
+        .ok()
+        .and_then(|index| index.checked_add(1))
+        .ok_or_else(|| {
+            RdfDiagnostic::error(
+                "gts-scope-limit",
+                "GTS segment count exceeds the blank-node scope capacity",
+            )
+            .with_location(RdfLocation::logical("gts:sink").with_gts_segment(segment_index))
+        })?;
+    Ok(BlankScope(scope))
+}
+
 impl ResolvedSink for SinkImporter<'_> {
     type Id = TermId;
     type Error = RdfDiagnostic;
 
     fn intern_iri(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         gts_id: usize,
         iri: &str,
     ) -> Result<TermId, RdfDiagnostic> {
@@ -91,7 +105,7 @@ impl ResolvedSink for SinkImporter<'_> {
             .with_location(
                 RdfLocation::logical("gts:sink")
                     .with_gts_segment(segment_index)
-                    .with_gts_term(gts_id),
+                    .with_gts_term(gts_id as u64),
             ));
         }
         Ok(self.builder.intern_iri(iri))
@@ -102,11 +116,11 @@ impl ResolvedSink for SinkImporter<'_> {
     // stays reserved for the default/global scope.
     fn intern_blank(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         _gts_id: usize,
         label: &str,
     ) -> Result<TermId, RdfDiagnostic> {
-        let scope = BlankScope(segment_index as u32 + 1);
+        let scope = segment_scope(segment_index)?;
         Ok(self.builder.intern_blank(label, scope))
     }
 
@@ -117,7 +131,7 @@ impl ResolvedSink for SinkImporter<'_> {
     /// path. The datatype id is already resolved; it MUST resolve to an IRI.
     fn intern_literal(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         gts_id: usize,
         lexical: String,
         datatype: Option<TermId>,
@@ -135,7 +149,7 @@ impl ResolvedSink for SinkImporter<'_> {
                     .with_location(
                         RdfLocation::logical("gts:sink")
                             .with_gts_segment(segment_index)
-                            .with_gts_term(gts_id),
+                            .with_gts_term(gts_id as u64),
                     ));
                 }
             },
@@ -155,13 +169,13 @@ impl ResolvedSink for SinkImporter<'_> {
                 language: lang,
                 direction,
             },
-            BlankBinding::Ambient(BlankScope(segment_index as u32 + 1)),
+            BlankBinding::Ambient(segment_scope(segment_index)?),
         )?)
     }
 
     fn intern_triple(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         _gts_id: usize,
         s: TermId,
         p: TermId,
@@ -172,7 +186,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn push_quad(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         s: TermId,
         p: TermId,
         o: TermId,
@@ -184,7 +198,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn push_reifier(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         reifier: TermId,
         s: TermId,
         p: TermId,
@@ -198,7 +212,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn push_annotation(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         reifier: TermId,
         p: TermId,
         o: TermId,
@@ -208,7 +222,7 @@ impl ResolvedSink for SinkImporter<'_> {
         Ok(())
     }
 
-    fn err_dangling_term(&self, segment_index: usize, gts_id: usize, role: &str) -> RdfDiagnostic {
+    fn err_dangling_term(&self, segment_index: u64, gts_id: usize, role: &str) -> RdfDiagnostic {
         RdfDiagnostic::error(
             "rdf-ir-dangling-term-ref",
             format!(
@@ -219,11 +233,11 @@ impl ResolvedSink for SinkImporter<'_> {
         .with_location(
             RdfLocation::logical("gts:sink")
                 .with_gts_segment(segment_index)
-                .with_gts_term(gts_id),
+                .with_gts_term(gts_id as u64),
         )
     }
 
-    fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+    fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> RdfDiagnostic {
         sink_term_error(
             RdfDiagnostic::error(
                 "rdf-ir-term-nesting-limit",
@@ -234,7 +248,7 @@ impl ResolvedSink for SinkImporter<'_> {
         )
     }
 
-    fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+    fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> RdfDiagnostic {
         sink_term_error(
             RdfDiagnostic::error(
                 "rdf-ir-unbound-triple-term",
@@ -245,7 +259,7 @@ impl ResolvedSink for SinkImporter<'_> {
         )
     }
 
-    fn err_missing_reifier(&self, segment_index: usize, reifier: usize) -> RdfDiagnostic {
+    fn err_missing_reifier(&self, segment_index: u64, reifier: usize) -> RdfDiagnostic {
         RdfDiagnostic::error(
             "rdf-ir-missing-reifier-binding",
             format!(
@@ -256,13 +270,13 @@ impl ResolvedSink for SinkImporter<'_> {
         .with_location(
             RdfLocation::logical("gts:sink")
                 .with_gts_segment(segment_index)
-                .with_gts_reifier(reifier),
+                .with_gts_reifier(reifier as u64),
         )
     }
 
     fn suppression(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         suppression: &Suppression,
     ) -> Result<(), RdfDiagnostic> {
         self.lookaside.suppressions.push(RdfSuppressionRecord {
@@ -281,7 +295,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn blob(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         digest: &str,
         meta: Option<&Value>,
     ) -> Result<(), RdfDiagnostic> {
@@ -353,7 +367,7 @@ impl ResolvedSink for SinkImporter<'_> {
         Ok(())
     }
 
-    fn opaque(&mut self, _segment_index: usize, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
+    fn opaque(&mut self, _segment_index: u64, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
         self.lookaside.opaque_nodes.push(RdfOpaqueNodeRecord {
             id: hex::encode(&opaque.id),
             frame_type: opaque.frame_type.clone(),
@@ -366,7 +380,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn signature(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         signature: &Signature,
     ) -> Result<(), RdfDiagnostic> {
         self.lookaside.signatures.push(RdfSignatureRecord {
@@ -378,7 +392,7 @@ impl ResolvedSink for SinkImporter<'_> {
         Ok(())
     }
 
-    fn segment_head(&mut self, segment_index: usize, head: &[u8]) -> Result<(), RdfDiagnostic> {
+    fn segment_head(&mut self, segment_index: u64, head: &[u8]) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
             blobs.segment_head(segment_index, head);
         }
@@ -389,7 +403,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn streamable_layout(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         info: &StreamableInfo,
     ) -> Result<(), RdfDiagnostic> {
         let record = self.ensure_segment_record(segment_index);
@@ -438,7 +452,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
 impl SinkImporter<'_> {
     /// Ensure a [`RdfSegmentRecord`] exists for `segment_index`, returning it.
-    fn ensure_segment_record(&mut self, segment_index: usize) -> &mut RdfSegmentRecord {
+    fn ensure_segment_record(&mut self, segment_index: u64) -> &mut RdfSegmentRecord {
         if let Some(position) = self
             .lookaside
             .segments
@@ -518,20 +532,31 @@ pub(crate) fn import_with_collector<'a>(
 
 /// `diagnostic`, located at segment `segment_index`'s term `gts_id` on the
 /// sink path.
-fn sink_term_error(
-    diagnostic: RdfDiagnostic,
-    segment_index: usize,
-    gts_id: usize,
-) -> RdfDiagnostic {
+fn sink_term_error(diagnostic: RdfDiagnostic, segment_index: u64, gts_id: usize) -> RdfDiagnostic {
     diagnostic.with_location(
         RdfLocation::logical("gts:sink")
             .with_gts_segment(segment_index)
-            .with_gts_term(gts_id),
+            .with_gts_term(gts_id as u64),
     )
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segment_scope_refuses_exhaustion_and_preserves_its_valid_neighbour() {
+        assert_eq!(
+            segment_scope(u64::from(u32::MAX) - 1).unwrap(),
+            BlankScope(u32::MAX)
+        );
+        let error = segment_scope(u64::from(u32::MAX)).unwrap_err();
+        assert_eq!(error.code, "gts-scope-limit");
+        assert_eq!(
+            error.location.unwrap().gts_segment_index,
+            Some(u64::from(u32::MAX))
+        );
+        assert!(segment_scope(u64::MAX).is_err());
+    }
     use purrdf_gts::model::{Graph, Term, Term as GtsTerm, TermKind, TermKind as GtsKind};
     use purrdf_gts::reader::StreamingSink;
     use purrdf_gts::writer::Writer;
@@ -598,7 +623,7 @@ mod tests {
     /// in the test harness, is fine — it is not the hot streaming path.
     struct RecordingSink {
         inner: SinkImporter<'static>,
-        ids: crate::FastMap<(usize, usize), TermId>,
+        ids: crate::FastMap<(u64, usize), TermId>,
     }
 
     impl RecordingSink {
@@ -610,7 +635,7 @@ mod tests {
         }
 
         /// Look up the target id a segment-local gts id resolved to.
-        fn id(&self, segment_index: usize, gts_id: usize) -> Option<TermId> {
+        fn id(&self, segment_index: u64, gts_id: usize) -> Option<TermId> {
             self.ids.get(&(segment_index, gts_id)).copied()
         }
     }
@@ -621,7 +646,7 @@ mod tests {
 
         fn intern_iri(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             gts_id: usize,
             iri: &str,
         ) -> Result<TermId, RdfDiagnostic> {
@@ -632,7 +657,7 @@ mod tests {
 
         fn intern_blank(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             gts_id: usize,
             label: &str,
         ) -> Result<TermId, RdfDiagnostic> {
@@ -643,7 +668,7 @@ mod tests {
 
         fn intern_literal(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             gts_id: usize,
             lexical: String,
             datatype: Option<TermId>,
@@ -664,7 +689,7 @@ mod tests {
 
         fn intern_triple(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             gts_id: usize,
             s: TermId,
             p: TermId,
@@ -677,7 +702,7 @@ mod tests {
 
         fn push_quad(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             s: TermId,
             p: TermId,
             o: TermId,
@@ -688,7 +713,7 @@ mod tests {
 
         fn push_reifier(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             reifier: TermId,
             s: TermId,
             p: TermId,
@@ -700,7 +725,7 @@ mod tests {
 
         fn push_annotation(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             reifier: TermId,
             p: TermId,
             o: TermId,
@@ -711,28 +736,28 @@ mod tests {
 
         fn err_dangling_term(
             &self,
-            segment_index: usize,
+            segment_index: u64,
             gts_id: usize,
             role: &str,
         ) -> RdfDiagnostic {
             self.inner.err_dangling_term(segment_index, gts_id, role)
         }
 
-        fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+        fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> RdfDiagnostic {
             self.inner.err_nesting_limit(segment_index, gts_id)
         }
 
-        fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+        fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> RdfDiagnostic {
             self.inner.err_unbound_triple(segment_index, gts_id)
         }
 
-        fn err_missing_reifier(&self, segment_index: usize, reifier: usize) -> RdfDiagnostic {
+        fn err_missing_reifier(&self, segment_index: u64, reifier: usize) -> RdfDiagnostic {
             self.inner.err_missing_reifier(segment_index, reifier)
         }
 
         fn suppression(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             suppression: &Suppression,
         ) -> Result<(), RdfDiagnostic> {
             self.inner.suppression(segment_index, suppression)
@@ -740,36 +765,32 @@ mod tests {
 
         fn blob(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             digest: &str,
             meta: Option<&Value>,
         ) -> Result<(), RdfDiagnostic> {
             self.inner.blob(segment_index, digest, meta)
         }
 
-        fn opaque(
-            &mut self,
-            segment_index: usize,
-            opaque: &OpaqueNode,
-        ) -> Result<(), RdfDiagnostic> {
+        fn opaque(&mut self, segment_index: u64, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
             self.inner.opaque(segment_index, opaque)
         }
 
         fn signature(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             signature: &Signature,
         ) -> Result<(), RdfDiagnostic> {
             self.inner.signature(segment_index, signature)
         }
 
-        fn segment_head(&mut self, segment_index: usize, head: &[u8]) -> Result<(), RdfDiagnostic> {
+        fn segment_head(&mut self, segment_index: u64, head: &[u8]) -> Result<(), RdfDiagnostic> {
             self.inner.segment_head(segment_index, head)
         }
 
         fn streamable_layout(
             &mut self,
-            segment_index: usize,
+            segment_index: u64,
             info: &StreamableInfo,
         ) -> Result<(), RdfDiagnostic> {
             self.inner.streamable_layout(segment_index, info)

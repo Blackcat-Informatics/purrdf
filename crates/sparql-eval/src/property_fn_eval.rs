@@ -575,7 +575,9 @@ fn eval_call_over<D: DatasetView + Sync>(
         for (slot, column) in plan.slot_seed.iter().enumerate() {
             seed[slot] = column
                 .and_then(|column| mu.get(column).copied().flatten())
-                .map(|term| ctx.scratch.value_of(ctx.dataset, term));
+                .map(|term| ctx.scratch.try_value_of(ctx.dataset, term))
+                .transpose()
+                .map_err(EvalError::source_read)?;
         }
         for (dst, arg) in args.iter_mut().zip(&plan.args) {
             *dst = arg_value(arg, &seed);
@@ -726,7 +728,10 @@ fn eval_call_over<D: DatasetView + Sync>(
                 // answer `unify_row` above gives a row that disagrees, and the
                 // same one `RowIngest::intern_row` documents for a producer that
                 // miscounts its own columns.
-                row[column] = ctx.scratch.intern_checked(ctx.dataset, value);
+                row[column] = ctx
+                    .scratch
+                    .try_intern_checked(ctx.dataset, value)
+                    .map_err(EvalError::source_read)?;
             }
             rows.push(row);
         }
@@ -3179,11 +3184,13 @@ impl CallCursor {
                             .iter()
                             .map(|slot| {
                                 slot.and_then(|slot| self.values[slot].clone())
-                                    .and_then(|value| {
-                                        ctx.scratch.intern_checked(ctx.dataset, value)
-                                    })
+                                    .map(|value| ctx.scratch.try_intern_checked(ctx.dataset, value))
+                                    .transpose()
+                                    .map(Option::flatten)
+                                    .map_err(EvalError::source_read)
                             })
-                            .collect::<Vec<Option<crate::scratch::SolutionTerm<D::Id>>>>();
+                            .collect::<Result<Vec<Option<crate::scratch::SolutionTerm<D::Id>>>, _>>(
+                            )?;
                         let linked = link.get_or_insert_with(|| {
                             crate::vm::Linked::link_without_exists(Arc::clone(program), schema, ctx)
                         });

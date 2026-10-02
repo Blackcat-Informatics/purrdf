@@ -777,7 +777,7 @@ mod tests {
         let graph_names: Vec<_> = decoded
             .dataset
             .named_graphs()
-            .map(|id| match decoded.dataset.resolve(id) {
+            .map(|id| match decoded.dataset.as_ref().resolve(id) {
                 purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
                 _ => panic!("fixture graph names are IRIs"),
             })

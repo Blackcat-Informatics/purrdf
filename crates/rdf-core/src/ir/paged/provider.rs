@@ -23,7 +23,7 @@ use crate::ir::{RdfDataset, TermId, TermRef};
 /// A dense page ordinal. Pages of a [`PagedDataset`](super::PagedDataset) are
 /// numbered `0..page_count` and iterated in ascending [`PageId`] order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct PageId(pub u32);
+pub struct PageId(pub u64);
 
 /// The immutable provider snapshot to which page translations and byte metadata
 /// belong.
@@ -215,7 +215,7 @@ impl PageMaterialization {
 /// infallible re-materialization after sealing.
 pub trait PageProvider: Send + Sync {
     /// The number of dense pages in the current snapshot.
-    fn page_count(&self) -> usize;
+    fn page_count(&self) -> u64;
 
     /// The provider's current immutable snapshot generation.
     fn generation(&self) -> PageGeneration;
@@ -270,8 +270,8 @@ impl InMemoryPageProvider {
 }
 
 impl PageProvider for InMemoryPageProvider {
-    fn page_count(&self) -> usize {
-        self.pages.len()
+    fn page_count(&self) -> u64 {
+        u64::try_from(self.pages.len()).expect("resident page count fits u64")
     }
 
     fn generation(&self) -> PageGeneration {
@@ -279,7 +279,9 @@ impl PageProvider for InMemoryPageProvider {
     }
 
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
-        let index = usize::try_from(page.0).expect("page id fits usize");
+        let index = usize::try_from(page.0).map_err(|_| {
+            PageFault::invalid_data(page, "page does not address a local provider buffer")
+        })?;
         self.pages.get(index).cloned().ok_or_else(|| {
             PageFault::provider(
                 page,
@@ -315,8 +317,8 @@ impl SubsetPageProvider {
 }
 
 impl PageProvider for SubsetPageProvider {
-    fn page_count(&self) -> usize {
-        self.indices.len()
+    fn page_count(&self) -> u64 {
+        u64::try_from(self.indices.len()).expect("resident page count fits u64")
     }
 
     fn generation(&self) -> PageGeneration {
@@ -324,13 +326,15 @@ impl PageProvider for SubsetPageProvider {
     }
 
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
-        let index = usize::try_from(page.0).expect("page id fits usize");
+        let index = usize::try_from(page.0).map_err(|_| {
+            PageFault::invalid_data(page, "page does not address a local provider buffer")
+        })?;
         let Some(&original) = self.indices.get(index) else {
             return Err(PageFault::provider(
                 page,
                 format!(
                     "subset page index {index} out of range 0..{}",
-                    self.indices.len()
+                    u64::try_from(self.indices.len()).expect("resident page count fits u64")
                 ),
             ));
         };
@@ -390,8 +394,8 @@ impl CountingDemandProvider {
 }
 
 impl PageProvider for CountingDemandProvider {
-    fn page_count(&self) -> usize {
-        self.thunks.len()
+    fn page_count(&self) -> u64 {
+        u64::try_from(self.thunks.len()).expect("resident page count fits u64")
     }
 
     fn generation(&self) -> PageGeneration {
@@ -399,7 +403,9 @@ impl PageProvider for CountingDemandProvider {
     }
 
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
-        let index = usize::try_from(page.0).expect("page id fits usize");
+        let index = usize::try_from(page.0).map_err(|_| {
+            PageFault::invalid_data(page, "page does not address a local provider buffer")
+        })?;
         let thunk = self.thunks.get(index).ok_or_else(|| {
             PageFault::provider(
                 page,

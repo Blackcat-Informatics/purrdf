@@ -975,16 +975,16 @@ def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
     log = ""
     if build:
         rc, bout = _run(
-            ["uv", "run", "--group", "dev", "maturin", "develop"], _PY_DIR
+            ["uv", "sync", "--locked", "--group", "dev"], _PY_DIR
         )
         log += bout
         if rc != 0:
             return SuiteResult(
                 "rdflib LSP drop-in gate", "rdflib 7.6 own tests",
-                failed=-1, detail="maturin develop FAILED", ok=False, log=log,
+                failed=-1, detail="editable uv sync FAILED", ok=False, log=log,
             )
     rc, out = _run(
-        ["uv", "run", "python", "-m", "tests.rdflib_suite.runner"], _PY_DIR
+        ["uv", "run", "--locked", "python", "-m", "tests.rdflib_suite.runner"], _PY_DIR
     )
     log += out
     m = re.search(
@@ -1024,16 +1024,16 @@ def _suite_py_compat(build: bool) -> SuiteResult:
     log = ""
     if build:
         rc, bout = _run(
-            ["uv", "run", "--group", "dev", "maturin", "develop"], _PY_DIR
+            ["uv", "sync", "--locked", "--group", "dev"], _PY_DIR
         )
         log += bout
         if rc != 0:
             return SuiteResult(
                 "Python binding suite", "first-party (incl. compat differential vs rdflib)",
-                failed=-1, detail="maturin develop FAILED", ok=False, log=log,
+                failed=-1, detail="editable uv sync FAILED", ok=False, log=log,
             )
     rc, out = _run(
-        ["uv", "run", "--group", "dev", "pytest", "tests", "-q"], _PY_DIR
+        ["uv", "run", "--locked", "--group", "dev", "pytest", "tests", "-q"], _PY_DIR
     )
     log += out
     passed = _int(re.search(r"(\d+) passed", out))
@@ -1944,7 +1944,7 @@ def main() -> int:
     parser.add_argument(
         "--no-build",
         action="store_true",
-        help="skip `maturin develop` before the Python suites (assume prebuilt)",
+        help="skip editable `uv sync` before the Python suites (assume prebuilt)",
     )
     parser.add_argument(
         "--write-doc",

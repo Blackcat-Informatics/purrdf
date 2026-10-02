@@ -129,7 +129,7 @@ struct CollectSink {
     finish_count: usize,
     next_scope: u32,
     break_on_first_quad: bool,
-    frames: Vec<(Vec<u8>, usize, bool)>,
+    frames: Vec<(Vec<u8>, u64, bool)>,
 }
 
 impl CollectSink {
@@ -356,7 +356,7 @@ fn per_segment_blank_scopes_are_distinct() {
 /// A `GtsEventSink` recording only `content_id -> byte-offset` from the frame hook.
 #[derive(Default)]
 struct IndexSink {
-    offsets: HashMap<Vec<u8>, usize, FixedState>,
+    offsets: HashMap<Vec<u8>, u64, FixedState>,
     diagnostics: usize,
 }
 
@@ -436,7 +436,7 @@ fn claimid_offset_index_single_pass() {
 
     let inv = inventory(&data);
     assert!(!inv.has_problems(), "clean inventory");
-    let expected: HashMap<Vec<u8>, usize, FixedState> = inv
+    let expected: HashMap<Vec<u8>, u64, FixedState> = inv
         .segments
         .iter()
         .flat_map(|s| s.frames.iter())
@@ -458,7 +458,7 @@ fn claimid_offset_index_single_pass() {
         .expect("fixture has frames");
     let mut damaged = data.clone();
     let target = last.start + (last.end - last.start) / 2;
-    damaged[target] ^= 0xFF;
+    damaged[usize::try_from(target).unwrap()] ^= 0xFF;
 
     let mut damaged_sink = IndexSink::default();
     let damaged_result =
@@ -516,8 +516,8 @@ fn stream_ids_are_file_order_deterministic() {
         "id assignment must be a deterministic function of file order"
     );
     // And ids really are the dense 0..n minted in order.
-    let minted: Vec<u32> = first.declaration_order.iter().map(|(id, _)| id.0).collect();
-    assert_eq!(minted, (0..minted.len() as u32).collect::<Vec<_>>());
+    let minted: Vec<u64> = first.declaration_order.iter().map(|(id, _)| id.0).collect();
+    assert_eq!(minted, (0..minted.len() as u64).collect::<Vec<_>>());
 }
 
 /// Re-indexing the whole segment(s) a diff fetched yields the same
@@ -547,7 +547,9 @@ fn incremental_reindex_from_diff_fetch() {
     // The fetched bytes are the whole appended segment(s).
     let mut fetched = Vec::new();
     for f in &result.fetch {
-        fetched.extend_from_slice(&remote[f.range.start..f.range.end]);
+        fetched.extend_from_slice(
+            &remote[usize::try_from(f.range.start).unwrap()..usize::try_from(f.range.end).unwrap()],
+        );
     }
     assert!(!fetched.is_empty(), "there is something to fetch");
 
@@ -559,7 +561,7 @@ fn incremental_reindex_from_diff_fetch() {
         !inv_fetched.has_problems(),
         "fetched bytes inventory cleanly"
     );
-    let expected: HashMap<Vec<u8>, usize, FixedState> = inv_fetched
+    let expected: HashMap<Vec<u8>, u64, FixedState> = inv_fetched
         .segments
         .iter()
         .flat_map(|s| s.frames.iter())
@@ -712,7 +714,7 @@ fn dangling_term_ref_is_err() {
 /// segment was previously buffered — resolving its terms/quads/reifiers into
 /// the sink and, per the bounded-memory fix, clearing `reifier_bindings` and
 /// `remaps` — before this segment starts accumulating anything of its own.
-fn open_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: usize) {
+fn open_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: u64) {
     resolver.term(seg, 0, &Term::iri(format!("http://example.org/seg{seg}/s")));
 }
 
@@ -722,7 +724,7 @@ fn open_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>,
 /// terms and 2 reifier bindings per segment, all segment-qualified
 /// (`http://example.org/seg{seg}/...`) so no cross-segment id reuse could
 /// accidentally mask a leak as "the same entry, re-seen".
-fn fill_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: usize) {
+fn fill_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: u64) {
     resolver.term(seg, 1, &Term::iri(format!("http://example.org/seg{seg}/p")));
     resolver.term(seg, 2, &Term::iri(format!("http://example.org/seg{seg}/o")));
     resolver.term(
@@ -769,7 +771,7 @@ fn bounded_memory_across_many_segments() {
         let flushed = seg - 1;
         // Trips the flush of `flushed`; segment `seg` has contributed
         // nothing yet at this point (only its first term is buffered).
-        open_bounded_memory_segment(&mut resolver, seg);
+        open_bounded_memory_segment(&mut resolver, seg as u64);
         assert_eq!(
             resolver.buffered_reifier_binding_count(),
             0,
@@ -793,7 +795,7 @@ fn bounded_memory_across_many_segments() {
              hold only that segment's own {IRIS_PER_SEGMENT} IRIs, not the \
              cumulative total across all segments flushed so far"
         );
-        fill_bounded_memory_segment(&mut resolver, seg);
+        fill_bounded_memory_segment(&mut resolver, seg as u64);
     }
 
     // No StreamingSink callback failure was latched.

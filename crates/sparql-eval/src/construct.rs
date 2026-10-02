@@ -688,7 +688,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
     // graph VARIABLE for a set of cells drawn from all of them.
     if !ctx.constructed.is_empty() {
         let constructed_graph_id = uniform_slot.ground_graph();
-        let (_, rows) = crate::eval::materialize_solutions(seq, ctx);
+        let (_, rows) = crate::eval::materialize_solutions(seq, ctx)?;
         for (s, p, o) in ctx.reachable_constructed(&rows) {
             let s = builder.intern_value(&s);
             let p = builder.intern_value(&p);
@@ -1450,7 +1450,7 @@ mod tests {
         assert_eq!(out.quad_count(), 2);
         // Every emitted quad uses :related, none :knows.
         for q in out.quads() {
-            assert!(matches!(out.resolve(q.p), TermRef::Iri(p) if p == RELATED));
+            assert!(matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == RELATED));
         }
     }
 
@@ -1542,7 +1542,7 @@ mod tests {
                 panic!("CONSTRUCT GRAPH emitted a DEFAULT-graph triple, not a quad")
             });
             assert!(
-                matches!(out.resolve(g), TermRef::Iri(iri) if iri == TARGET_GRAPH),
+                matches!(out.as_ref().resolve(g), TermRef::Iri(iri) if iri == TARGET_GRAPH),
                 "quad landed in the wrong graph"
             );
         }
@@ -1553,7 +1553,7 @@ mod tests {
         );
         let named: Vec<String> = out
             .named_graphs()
-            .map(|g| match out.resolve(g) {
+            .map(|g| match out.as_ref().resolve(g) {
                 TermRef::Iri(iri) => iri.to_owned(),
                 other => panic!("a named graph must be an IRI, got {other:?}"),
             })
@@ -1856,7 +1856,7 @@ mod tests {
         // Collect the distinct blank subjects.
         let mut blanks = BTreeSet::new();
         for q in out.quads() {
-            if let TermRef::Blank { label, .. } = out.resolve(q.s) {
+            if let TermRef::Blank { label, .. } = out.as_ref().resolve(q.s) {
                 blanks.insert(label.to_owned());
             }
         }
@@ -1877,7 +1877,7 @@ mod tests {
         let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
         let mut blanks = BTreeSet::new();
         for q in out.quads() {
-            if let TermRef::Blank { label, .. } = out.resolve(q.s) {
+            if let TermRef::Blank { label, .. } = out.as_ref().resolve(q.s) {
                 blanks.insert(label.to_owned());
             }
         }
@@ -1900,7 +1900,7 @@ mod tests {
         let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
         let mut blanks = BTreeSet::new();
         for q in out.quads() {
-            if let TermRef::Blank { label, .. } = out.resolve(q.s) {
+            if let TermRef::Blank { label, .. } = out.as_ref().resolve(q.s) {
                 blanks.insert(label.to_owned());
             }
         }
@@ -1942,10 +1942,10 @@ mod tests {
         let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
         assert_eq!(out.quad_count(), 1);
         let quad = out.quads().next().expect("one quad");
-        let TermRef::Blank { label: s_label, .. } = out.resolve(quad.s) else {
+        let TermRef::Blank { label: s_label, .. } = out.as_ref().resolve(quad.s) else {
             panic!("the subject must be the data-carried blank");
         };
-        let TermRef::Blank { label: o_label, .. } = out.resolve(quad.o) else {
+        let TermRef::Blank { label: o_label, .. } = out.as_ref().resolve(quad.o) else {
             panic!("the object must be the minted blank");
         };
         assert_eq!(s_label, "c1", "the data blank passes through untouched");
@@ -2289,15 +2289,15 @@ mod tests {
 
         // The asserted triple is present: :alice :age "42".
         let asserted = out.quads().any(|q| {
-            matches!(out.resolve(q.s), TermRef::Iri(s) if s == "http://ex/alice")
-                && matches!(out.resolve(q.p), TermRef::Iri(p) if p == "http://ex/age")
+            matches!(out.as_ref().resolve(q.s), TermRef::Iri(s) if s == "http://ex/alice")
+                && matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == "http://ex/age")
         });
         assert!(asserted, "the asserted (de-reified) triple is emitted");
 
         // A logic:ProjectionLoss declaration of type with the reifier-layer code.
         let has_loss_type = out.quads().any(|q| {
-            matches!(out.resolve(q.p), TermRef::Iri(p) if p == RDF_TYPE_IRI)
-                && matches!(out.resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS)
+            matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == RDF_TYPE_IRI)
+                && matches!(out.as_ref().resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS)
         });
         assert!(has_loss_type, "a logic:ProjectionLoss node is declared");
         assert_eq!(
@@ -2308,8 +2308,8 @@ mod tests {
 
         // logic:lostReifies points at the concrete triple term <<( :alice :age 42 )>>.
         let lost = out.quads().any(|q| {
-            matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOST_REIFIES)
-                && matches!(out.resolve(q.o), TermRef::Triple { .. })
+            matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == LOST_REIFIES)
+                && matches!(out.as_ref().resolve(q.o), TermRef::Triple { .. })
         });
         assert!(lost, "logic:lostReifies carries the dropped triple term");
     }
@@ -2426,7 +2426,7 @@ mod tests {
         );
         let any_loss = out
             .quads()
-            .any(|q| matches!(out.resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS));
+            .any(|q| matches!(out.as_ref().resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS));
         assert!(
             !any_loss,
             "no ProjectionLoss node when the reifier is carried"
@@ -2448,8 +2448,8 @@ mod tests {
         let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
         // No loss triples at all.
         let any_loss = out.quads().any(|q| {
-            matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOSS_CODE)
-                || matches!(out.resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS)
+            matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == LOSS_CODE)
+                || matches!(out.as_ref().resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS)
         });
         assert!(
             !any_loss,
@@ -2489,7 +2489,7 @@ mod tests {
         // No flat quad whose predicate is rdf:reifies must exist.
         let flat_reifies = out
             .quads()
-            .any(|q| matches!(out.resolve(q.p), TermRef::Iri(p) if p == REIFIES));
+            .any(|q| matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == REIFIES));
         assert!(
             !flat_reifies,
             "no flat quad with predicate rdf:reifies — must be in side table"
@@ -2598,13 +2598,13 @@ mod tests {
         );
         for (_, _, g) in out.reifiers_with_graph() {
             assert!(
-                matches!(g.map(|g| out.resolve(g)), Some(TermRef::Iri(iri)) if iri == TARGET_GRAPH),
+                matches!(g.map(|g| out.as_ref().resolve(g)), Some(TermRef::Iri(iri)) if iri == TARGET_GRAPH),
                 "a reifier binding escaped the GRAPH block"
             );
         }
         for (_, _, _, g) in out.annotations_with_graph() {
             assert!(
-                matches!(g.map(|g| out.resolve(g)), Some(TermRef::Iri(iri)) if iri == TARGET_GRAPH),
+                matches!(g.map(|g| out.as_ref().resolve(g)), Some(TermRef::Iri(iri)) if iri == TARGET_GRAPH),
                 "an annotation escaped the GRAPH block"
             );
         }

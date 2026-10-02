@@ -3,10 +3,11 @@
 
 //! PyO3 boundary for the Rust-owned GTS fold view.
 
+use purrdf_columnar::{ColumnarProjection, PhysicalType, ProjectionCell, Repetition, Table};
 use purrdf_gts::model::{Graph, Term, TermKind};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyList};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyTuple};
 
 use crate::gts_view::{ALL_SCOPE, GtsFoldView, GtsFoldViewConfig, PublicValue, RelationalRows};
 
@@ -307,25 +308,128 @@ fn gts_relational_rows_from_bytes<'py>(
     relational_rows_dict(py, rows, directions)
 }
 
-// `gts_to_sqlite` / `gts_to_duckdb` / `gts_to_parquet` are NOT here.
-//
-// They used to be `#[pyfunction]`s that unconditionally raised a
-// `pending reimplementation` ValueError — a callable that always throws, which
-// is documentation by exception. They now live in
-// `python/src/purrdf/_gts_export.py` and are attached to the same public names,
-// so the surface is unchanged for a caller and this stays a 1.x addition.
-//
-// Python, not Rust, because the half that has to be fast and has to agree with
-// the rest of PurRDF — folding the container and dictionary-encoding it — is
-// `gts_relational_rows_from_bytes` above, and it is already here. What remained
-// was schema definition and row insertion for three third-party file formats;
-// doing that in Rust would pull `rusqlite`, `duckdb` and the Arrow/Parquet stack
-// into the workspace to write rows those projects already know how to write.
+/// Authoritative scoped import and canonical native v1 projection.
+///
+/// The first pass discovers inline identities only. It is dropped before the
+/// scope-preserving importer verifies and retains their payloads. This eager
+/// convenience keeps the selected import's explicit 1024-blob/1-GiB bounds.
+fn canonical_gts_projection(data: &[u8]) -> PyResult<ColumnarProjection> {
+    let digests: Vec<_> = purrdf_gts::reader::read(data, true, None)
+        .blobs
+        .into_iter()
+        .map(|(digest, _)| digest)
+        .collect();
+    let selectors: Vec<_> = digests
+        .iter()
+        .map(|digest| crate::GtsBlobSelector::Digest(digest))
+        .collect();
+    let imported = crate::import_gts_events_with_blobs(
+        data,
+        &selectors,
+        crate::GtsBlobLimits::new(256 * 1024 * 1024, 1024 * 1024 * 1024),
+    )
+    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    if !imported.refused.is_empty() {
+        return Err(PyValueError::new_err(
+            "inline blob payload exceeds canonical export budgets",
+        ));
+    }
+    let mut blobs = purrdf_core::ContentStore::new();
+    for blob in imported.blobs {
+        // The selected importer verified the GTS BLAKE3 identity. The native
+        // table uses SHA-256; both identities can be recomputed from these bytes.
+        blobs.insert(blob.bytes.as_ref().to_vec());
+    }
+    purrdf_columnar::project(imported.bundle.dataset.as_ref(), &blobs)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// Native v1 schema and canonical rows, independent of folded GTS term ids.
+#[pyfunction]
+fn gts_columnar_rows_from_bytes<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    let projection = py.detach(|| canonical_gts_projection(data))?;
+    columnar_rows_dict(py, &projection)
+}
+
+pub(crate) fn columnar_rows_dict<'py>(
+    py: Python<'py>,
+    projection: &ColumnarProjection,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    let schemas = PyDict::new(py);
+    for table in Table::ALL {
+        let schema = table.schema();
+        let columns: Vec<_> = schema
+            .columns
+            .iter()
+            .map(|column| {
+                (
+                    column.name,
+                    match column.physical_type {
+                        PhysicalType::Int64 => "integer",
+                        PhysicalType::ByteArray if column.utf8 => "text",
+                        PhysicalType::ByteArray => "bytes",
+                    },
+                    column.repetition == Repetition::Optional,
+                )
+            })
+            .collect();
+        schemas.set_item(table.name(), columns)?;
+        let rows = PyList::empty(py);
+        for row in projection.rows(table) {
+            let mut cells = Vec::with_capacity(row.len());
+            for (cell, column) in row.into_iter().zip(schema.columns) {
+                let value = match cell {
+                    ProjectionCell::Null => py.None(),
+                    ProjectionCell::Int64(value) => value.into_pyobject(py)?.into_any().unbind(),
+                    ProjectionCell::Bytes(bytes) if column.utf8 => {
+                        let value = std::str::from_utf8(bytes)
+                            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+                        value.into_pyobject(py)?.into_any().unbind()
+                    }
+                    ProjectionCell::Bytes(bytes) => PyBytes::new(py, bytes).into_any().unbind(),
+                };
+                cells.push(value);
+            }
+            rows.append(PyTuple::new(py, cells)?)?;
+        }
+        out.set_item(table.name(), rows)?;
+    }
+    out.set_item("schema", schemas)?;
+    Ok(out)
+}
+
+/// First-party native v1 Parquet bytes; the host only writes the resulting files.
+#[pyfunction]
+fn gts_columnar_parquet_from_bytes<'py>(
+    py: Python<'py>,
+    data: &[u8],
+) -> PyResult<Bound<'py, PyDict>> {
+    let encoded = py.detach(|| {
+        canonical_gts_projection(data)?
+            .to_parquet(purrdf_columnar::Compression::Uncompressed)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    })?;
+    columnar_parquet_dict(py, &encoded.files)
+}
+
+pub(crate) fn columnar_parquet_dict<'py>(
+    py: Python<'py>,
+    files: &purrdf_columnar::ParquetFiles,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    for (table, bytes) in files.iter() {
+        out.set_item(table.file_name(), PyBytes::new(py, bytes))?;
+    }
+    Ok(out)
+}
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGtsFoldView>()?;
     m.add("GTS_ALL_SCOPE", ALL_SCOPE)?;
     m.add_function(wrap_pyfunction!(gts_relational_rows_from_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(gts_columnar_rows_from_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(gts_columnar_parquet_from_bytes, m)?)?;
     Ok(())
 }
 

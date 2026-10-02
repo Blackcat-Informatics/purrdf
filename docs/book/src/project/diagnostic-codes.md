@@ -18,6 +18,14 @@ page is stale.
 Codes are kebab-case, prefixed by the family that owns them. They are never
 translated, and a caller should compare the whole string rather than a prefix.
 
+`RdfDiagnostic::presentation()` optionally provides a stable message identity,
+named typed parameters and structured detail. Select a presentation template by
+`message_id()`: one diagnostic code can cover several templates. Read parameter
+values directly instead of extracting them from English text. `to_json()` emits
+the versioned machine record, with logical 64-bit anchors and typed integers as
+exact decimal strings. SARIF retains it in `properties.diagnosticRecord`; C
+callers use the borrowed `purrdf_error_presentation_json` accessor.
+
 ## `iri-*` — IRI parsing and base resolution (`purrdf-iri`)
 
 `IriError::diagnostic_code` is the single owner of these strings for the
@@ -42,6 +50,7 @@ are: one is fixed by supplying a base, the other is not.
 | Code | Meaning | Remedy |
 | --- | --- | --- |
 | `native-codec-parse` | The codec (Turtle family, RDF/XML, TriX, HexTuples) could not parse the input; the location names the line and column. Term nesting past the parser's depth limit is reported under this code too. | Fix the document at the reported position. |
+| `native-codec-limit` | A cumulative source byte/line counter or explicitly bounded local column cannot represent the next position. | Split the source into separately addressed documents, or shorten an oversized line. |
 | `native-codec-utf8` | The input bytes are not valid UTF-8. | Re-encode the document as UTF-8. |
 | `native-codec-panic` | The codec panicked while parsing and the panic guard caught it. This is a defect in PurRDF, never in the input. | Report it with the input that triggered it. |
 | `native-codec-read` | Reading the RDF source through the streaming reader failed with an IO error. | Check the source stream or file. |
@@ -141,6 +150,9 @@ whose terms do not form a well-formed dataset.
 | `native-sparql-update-parse` | The update request does not parse. | Fix the update at the reported position. |
 | `native-sparql-query-explain` | Evaluation under `--explain` failed; the evaluator's error is in the message. | Address the underlying evaluation error. |
 | `native-sparql-query-eval` | Query evaluation failed with an error no more specific code classifies; the evaluator's error is in the message. | Address the underlying evaluation error. |
+| `native-sparql-source-read` | Operational storage refused a forward/reverse lookup or complete row drain. The error is fatal, including inside `SERVICE SILENT`; no partial answer is published. | Repair the source or adjust its explicit resource limits before retrying. |
+| `native-sparql-workspace-unpriced` | A bounded operational view was given an execution shape without a certified working-memory bound, or a raw evaluator entry without a held drain reservation. | Use the engine's fallible projected basic-graph-pattern `SELECT` entry with its default dataset and empty extension configuration, or choose a resident view. |
+| `native-sparql-workspace-bound-overflow` | Certified workspace arithmetic exceeds `u64`. | Reduce the query's intermediate cardinality or pattern count. |
 | `native-sparql-update-eval` | Update evaluation failed with an error no more specific code classifies; the evaluator's error is in the message. | Address the underlying evaluation error. |
 | `native-sparql-algebra` | The query's algebra was refused before evaluation: `Query::validate` refused it, or a prepared plan needs replanning for the registries this evaluation supplies. | Fix the query as the message says, or prepare the changed algebra before executing it. |
 | `native-sparql-construct` | Typed graph building was handed a query that is not a `CONSTRUCT`. | Build graphs from a `CONSTRUCT` query. |

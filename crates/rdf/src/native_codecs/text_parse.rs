@@ -37,6 +37,7 @@ use super::syntax::check_language_tag;
 use std::collections::BTreeMap;
 
 use purrdf_core::collections::{ListVocab, build_rdf_list};
+use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
 use purrdf_iri::scan::find_byte2;
 use purrdf_iri::terminals;
 use purrdf_iri::{BaseOrigin, BaseScope, Iri, IriError, Position};
@@ -63,13 +64,27 @@ use purrdf_xsd::datatype::XSD_DECIMAL;
 use purrdf_xsd::datatype::XSD_DOUBLE;
 use purrdf_xsd::datatype::XSD_INTEGER;
 
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "the named template is interpreted and contract-checked by DiagnosticPresentation"
+)]
 fn err(detail: impl Into<String>) -> RdfDiagnostic {
-    RdfDiagnostic::error("native-codec-parse", detail.into())
+    RdfDiagnostic::error("native-codec-parse", "").with_presentation(
+        DiagnosticPresentation::new(
+            "native-codec-parse.detail",
+            "{detail}",
+            vec![DiagnosticParameter::new(
+                "detail",
+                DiagnosticValue::Text(detail.into()),
+            )],
+        )
+        .expect("codec detail template agrees with its argument"),
+    )
 }
 
 /// Build a located parse diagnostic (1-based line/column).
-fn err_at(detail: impl Into<String>, line: u32, column: u32) -> RdfDiagnostic {
-    RdfDiagnostic::error("native-codec-parse", detail.into()).with_location(RdfLocation {
+fn err_at(detail: impl Into<String>, line: u64, column: u32) -> RdfDiagnostic {
+    err(detail).with_location(RdfLocation {
         line: Some(line),
         column: Some(column),
         ..RdfLocation::default()
@@ -83,8 +98,8 @@ fn err_at(detail: impl Into<String>, line: u32, column: u32) -> RdfDiagnostic {
 /// `iri-not-absolute-by-grammar` cannot drift between this codec and any other. The
 /// message is the error's own `Display`, which already names the offending reference
 /// verbatim and tells the user to add `@base`/`BASE` or pass a base.
-fn iri_err_at(error: &IriError, line: u32, column: u32) -> RdfDiagnostic {
-    RdfDiagnostic::error(error.diagnostic_code(), error.to_string()).with_location(RdfLocation {
+fn iri_err_at(error: &IriError, line: u64, column: u32) -> RdfDiagnostic {
+    RdfDiagnostic::from_iri(error).with_location(RdfLocation {
         line: Some(line),
         column: Some(column),
         ..RdfLocation::default()
@@ -139,7 +154,7 @@ fn trim_ws_start(raw: &str) -> &str {
 fn column_in_raw(raw: &str, trimmed_off: usize) -> u32 {
     let lead = raw.len() - trim_ws_start(raw).len();
     let byte = raw.floor_char_boundary(lead + trimmed_off);
-    u32::try_from(raw[..byte].chars().count() + 1).unwrap_or(u32::MAX)
+    Position::column_after(&raw[..byte]).expect("source line admitted to bounded column space")
 }
 
 /// A parsed RDF term node, mirroring the `from_nquads` `Node` so the
@@ -204,14 +219,24 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
     collector: &mut S,
     prefixes: &mut Vec<(String, String)>,
 ) -> Result<SerGraph, RdfDiagnostic> {
+    if text.len() >= u32::MAX as usize {
+        for (line, raw) in physical_lines(text).enumerate() {
+            check_line_columns(raw.text, line as u64 + 1)?;
+        }
+    }
+    let mut named_graphs = Vec::new();
     let statements = match format {
         // N-Triples / N-Quads admit no relative reference by grammar, so they never
         // consult `base` — they route every IRI through `resolve_absolute_only`. This
         // arm matches the `admits_relative_iri = false` column for those two rows.
         NativeRdfFormat::NTriples => parse_lines(text, false, mode, base, collector)?,
         NativeRdfFormat::NQuads => parse_lines(text, true, mode, base, collector)?,
-        NativeRdfFormat::Turtle => document_statements(text, base, false, collector, prefixes)?,
-        NativeRdfFormat::TriG => document_statements(text, base, true, collector, prefixes)?,
+        NativeRdfFormat::Turtle => {
+            document_statements(text, base, false, collector, prefixes, &mut named_graphs)?
+        }
+        NativeRdfFormat::TriG => {
+            document_statements(text, base, true, collector, prefixes, &mut named_graphs)?
+        }
         NativeRdfFormat::RdfXml => {
             return Err(err("RDF/XML is not a line/Turtle-family format"));
         }
@@ -224,7 +249,7 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
             ));
         }
     };
-    build_gts_graph(&statements)
+    build_gts_graph(&statements, &named_graphs)
 }
 
 /// Run the Turtle/TriG document parser over `text`, leaving `base` holding the base in
@@ -256,11 +281,13 @@ fn document_statements<S: SpanCollector>(
     allow_named_graphs: bool,
     collector: &mut S,
     prefixes: &mut Vec<(String, String)>,
+    named_graphs: &mut Vec<Node>,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     let mut parser = DocParser::new(text, base.clone(), allow_named_graphs, collector);
     let statements = parser.parse();
     *base = parser.base;
     *prefixes = parser.declared_prefixes.into_iter().collect();
+    *named_graphs = parser.named_graphs;
     statements
 }
 
@@ -441,14 +468,14 @@ impl<'a> Iterator for PhysicalLines<'a> {
 /// This is the chunk-parallel path's line-number arithmetic, and it must agree with
 /// [`physical_lines`] exactly: it counts through the same [`eol_width`], so a `#xD#xA`
 /// pair counts ONCE on both sides and neither can drift into counting it twice.
-fn count_line_terminators(text: &str) -> u32 {
+fn count_line_terminators(text: &str) -> u64 {
     let bytes = text.as_bytes();
-    let mut count = 0u32;
+    let mut count = 0u64;
     let mut at = 0usize;
     while let Some(offset) = find_byte2(&bytes[at..], b'\r', b'\n') {
         let start = at + offset;
         at = start + eol_width(bytes, start);
-        count = count.saturating_add(1);
+        count = count.checked_add(1).expect("buffer line count fits u64");
     }
     count
 }
@@ -530,10 +557,12 @@ fn parse_lines_parallel_with_chunk_size(
     // uses, so a `#xD#xA` pair advances the line number by ONE here exactly as it ends
     // one line there.
     let mut base_lines = Vec::with_capacity(chunks.len());
-    let mut next_line = 1u32;
+    let mut next_line = 1u64;
     for chunk in &chunks {
         base_lines.push(next_line);
-        next_line = next_line.saturating_add(count_line_terminators(chunk));
+        next_line = next_line
+            .checked_add(count_line_terminators(chunk))
+            .expect("buffer line count fits u64");
     }
     // Phase 1: parallel per-chunk tokenize+parse (on wasm32 rayon runs this inline).
     let per_chunk: Vec<Result<Vec<Statement>, RdfDiagnostic>> = chunks
@@ -565,7 +594,7 @@ fn parse_lines_parallel_with_chunk_size(
 fn parse_lines_sequential<S: SpanCollector>(
     text: &str,
     allow_graph: bool,
-    base_line: u32,
+    base_line: u64,
     base: &BaseScope,
     collector: &mut S,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
@@ -587,7 +616,9 @@ fn parse_lines_sequential<S: SpanCollector>(
             if S::ENABLED {
                 line_offset += raw.len() + line.terminator;
             }
-            lineno = lineno.saturating_add(1);
+            lineno = lineno.checked_add(1).ok_or_else(|| {
+                RdfDiagnostic::error("native-codec-limit", "source line number exceeds u64::MAX")
+            })?;
             continue;
         };
         // Record the subject's source position when tracking is on. `S::ENABLED` is a
@@ -606,7 +637,9 @@ fn parse_lines_sequential<S: SpanCollector>(
             line_offset += raw.len() + line.terminator;
         }
         statements.push(nodes);
-        lineno = lineno.saturating_add(1);
+        lineno = lineno.checked_add(1).ok_or_else(|| {
+            RdfDiagnostic::error("native-codec-limit", "source line number exceeds u64::MAX")
+        })?;
     }
     Ok(statements)
 }
@@ -742,12 +775,23 @@ fn parse_lines_sequential<S: SpanCollector>(
 ///   diagnostic does not pretend otherwise. A mid-line U+FEFF *adjacent to or inside* a
 ///   token is a different thing entirely — it is part of that name, IRI or literal, and
 ///   it parses.
+fn check_line_columns(raw: &str, line: u64) -> Result<(), RdfDiagnostic> {
+    if raw.len() >= u32::MAX as usize {
+        Position::column_after(raw).map_err(|error| {
+            RdfDiagnostic::error("native-codec-limit", error.to_string())
+                .with_location(RdfLocation::default().with_line(line))
+        })?;
+    }
+    Ok(())
+}
+
 fn parse_one_line(
     raw: &str,
     allow_graph: bool,
-    lineno: u32,
+    lineno: u64,
     base: &BaseScope,
 ) -> Result<Option<Statement>, RdfDiagnostic> {
+    check_line_columns(raw, lineno)?;
     let line = terminals::trim_ws(raw);
     if line.is_empty() || line.starts_with('#') {
         return Ok(None);
@@ -824,7 +868,7 @@ struct TokenCursor<'a> {
     tokens: Vec<Spanned<'a>>,
     pos: usize,
     raw: &'a str,
-    lineno: u32,
+    lineno: u64,
     /// The base in scope, carried for the DIAGNOSTIC only. This grammar admits no
     /// relative reference, so the base is never applied — but a refusal that cannot see
     /// it can only say "no base IRI is in scope", which is false whenever the caller
@@ -833,7 +877,7 @@ struct TokenCursor<'a> {
 }
 
 impl<'a> TokenCursor<'a> {
-    fn new(tokens: Vec<Spanned<'a>>, raw: &'a str, lineno: u32, base: &'a BaseScope) -> Self {
+    fn new(tokens: Vec<Spanned<'a>>, raw: &'a str, lineno: u64, base: &'a BaseScope) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -1078,7 +1122,7 @@ impl<'a> TokenCursor<'a> {
 /// purrdf-gts.
 fn split_lang_direction(
     raw: &str,
-    line_no: u32,
+    line_no: u64,
     column: u32,
 ) -> Result<(String, Option<String>), RdfDiagnostic> {
     if let Some((base, dir)) = raw.rsplit_once("--") {
@@ -1141,7 +1185,7 @@ fn split_lang_direction(
 fn absolute_iri_by_grammar(
     value: &str,
     base: &BaseScope,
-    line_no: u32,
+    line_no: u64,
     column: u32,
 ) -> Result<Iri, RdfDiagnostic> {
     base.resolve_absolute_only(value)
@@ -1196,7 +1240,7 @@ fn absolute_iri_by_grammar(
 /// compose rather than conflict. Genuine garbage is still refused on every
 /// path: `@1`, `@-`, `@9-9` and `@en-` are refused from Turtle, TriG,
 /// N-Triples and N-Quads alike.
-fn validate_language_tag(tag: &str, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
+fn validate_language_tag(tag: &str, line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
     check_language_tag(tag, |error| {
         format!("invalid language tag {tag:?}: {error}")
     })
@@ -1226,14 +1270,14 @@ fn is_literal(node: &Node) -> bool {
 /// A subject position — asserted, or nested inside a triple term — is an IRI or a
 /// blank node in the RDF 1.2 term model, with no per-syntax variation: N-Triples and
 /// N-Quads read the same terms, one of them merely carries a fourth (graph) slot.
-fn validate_subject(node: &Node, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
+fn validate_subject(node: &Node, line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
     if node_is(node, &[is_iri, is_bnode]) {
         return Ok(());
     }
     Err(err_at("invalid subject term", line_no, column))
 }
 
-fn validate_predicate(node: &Node, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
+fn validate_predicate(node: &Node, line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
     if is_iri(node) {
         Ok(())
     } else {
@@ -1244,7 +1288,7 @@ fn validate_predicate(node: &Node, line_no: u32, column: u32) -> Result<(), RdfD
 /// An object position — asserted, or nested inside a triple term — admits every term
 /// kind, and a triple term there carries the term model down into its own components.
 /// This is the ONLY position RDF 1.2 nests a triple term in.
-fn validate_object(node: &Node, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
+fn validate_object(node: &Node, line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
     if node_is(node, &[is_iri, is_bnode, is_literal]) {
         return Ok(());
     }
@@ -1258,7 +1302,7 @@ fn validate_triple(
     s: &Node,
     p: &Node,
     o: &Node,
-    line_no: u32,
+    line_no: u64,
     column: u32,
 ) -> Result<(), RdfDiagnostic> {
     validate_subject(s, line_no, column)?;
@@ -1266,7 +1310,7 @@ fn validate_triple(
     validate_object(o, line_no, column)
 }
 
-fn validate_statement(nodes: &[Node], line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
+fn validate_statement(nodes: &[Node], line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
     validate_subject(&nodes[0], line_no, column)?;
     validate_predicate(&nodes[1], line_no, column)?;
     validate_object(&nodes[2], line_no, column)?;
@@ -1318,6 +1362,7 @@ struct DocParser<'a, 'c, S: SpanCollector> {
     bnode_counter: usize,
     allow_named_graphs: bool,
     statements: Vec<Statement>,
+    named_graphs: Vec<Node>,
     src: &'a str,
     /// Opt-in subject-position sink. For `NoSpans` this is a ZST and every use is
     /// dead code under monomorphization.
@@ -1356,6 +1401,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             bnode_counter: 0,
             allow_named_graphs,
             statements: Vec::new(),
+            named_graphs: Vec::new(),
             src: text,
             collector,
             subject_off: 0,
@@ -1973,6 +2019,9 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 c,
             ));
         }
+        if let Some(name) = graph {
+            self.named_graphs.push(name.clone());
+        }
         while !self.eat(&Token::RBrace) {
             if self.peek().is_none() {
                 let (l, c) = self.loc();
@@ -2189,7 +2238,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// let an unresolved relative IRI reach the frozen IR and be emitted as invalid
     /// N-Triples. With no base and a relative reference this is a hard
     /// `iri-relative-no-base`, located at the offending token.
-    fn resolve_iri(&self, raw: &str, line: u32, column: u32) -> Result<Iri, RdfDiagnostic> {
+    fn resolve_iri(&self, raw: &str, line: u64, column: u32) -> Result<Iri, RdfDiagnostic> {
         self.base
             .resolve(raw)
             .map_err(|e| iri_err_at(&e, line, column))
@@ -2203,7 +2252,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         &self,
         prefix: &str,
         local: &str,
-        line: u32,
+        line: u64,
         col: u32,
     ) -> Result<Node, RdfDiagnostic> {
         match self.prefixes.get(prefix) {
@@ -2229,7 +2278,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// memoized in `self.line_index` (a `OnceCell`), so the FIRST lookup pays one
     /// whole-buffer scan and every subsequent lookup is an `O(log lines)` locate — a
     /// document with many lookups is linear, not quadratic, in the source length.
-    fn loc(&self) -> (u32, u32) {
+    fn loc(&self) -> (u64, u32) {
         let off = self
             .tokens
             .get(self.pos)
@@ -2576,12 +2625,21 @@ impl GraphAccumulator {
 /// Lower the flat statement list into the in-memory [`SerGraph`], reproducing
 /// `from_nquads`'s `build_gts` (the `rdf:reifies` statement-layer shorthand,
 /// first-seen interning, statement-order quads, encounter-order reifiers).
-fn build_gts_graph(statements: &[Statement]) -> Result<SerGraph, RdfDiagnostic> {
+fn build_gts_graph(
+    statements: &[Statement],
+    named_graphs: &[Node],
+) -> Result<SerGraph, RdfDiagnostic> {
     let mut accumulator = GraphAccumulator::new();
     for nodes in statements {
         accumulator.push(nodes)?;
     }
-    Ok(accumulator.finish())
+    let named_graphs = named_graphs
+        .iter()
+        .map(|name| accumulator.interner.atom(name))
+        .collect();
+    let mut graph = accumulator.finish();
+    graph.named_graphs = named_graphs;
+    Ok(graph)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -2614,7 +2672,7 @@ pub(super) struct LineStreamParser {
     /// N-Quads admits a fourth graph term; N-Triples does not.
     allow_graph: bool,
     /// The 1-based document line number of the NEXT line to be pushed.
-    lineno: u32,
+    lineno: u64,
     /// The base in scope, for the diagnostic only — see [`TokenCursor::base`]. The
     /// streaming lane received the caller's base and dropped it on the floor, so it
     /// reported "no base IRI is in scope" to a caller who had supplied one, exactly as
@@ -2655,7 +2713,9 @@ impl LineStreamParser {
         if let Some(nodes) = parse_one_line(raw, self.allow_graph, self.lineno, &self.base)? {
             self.accumulator.push(&nodes)?;
         }
-        self.lineno = self.lineno.saturating_add(1);
+        self.lineno = self.lineno.checked_add(1).ok_or_else(|| {
+            RdfDiagnostic::error("native-codec-limit", "source line number exceeds u64::MAX")
+        })?;
         Ok(())
     }
 
@@ -2686,6 +2746,23 @@ fn set_reifier(reifiers: &mut Vec<(usize, SerTriple3)>, rid: usize, spo: SerTrip
 mod tests {
     use super::*;
     use purrdf_iri::BaseIri;
+
+    #[test]
+    fn streamed_line_locations_cross_u32_and_refuse_terminal_overflow() {
+        let mut parser =
+            LineStreamParser::new(NativeRdfFormat::NTriples, BaseScope::empty()).unwrap();
+        parser.lineno = u64::from(u32::MAX);
+        parser.push_line("# valid neighbour").unwrap();
+        let error = parser.push_line("invalid").unwrap_err();
+        assert_eq!(error.location.unwrap().line, Some(1 << 32));
+        assert_eq!(parser.lineno, 1 << 32);
+        parser.lineno = u64::MAX;
+        assert_eq!(
+            parser.push_line("# valid").unwrap_err().code,
+            "native-codec-limit"
+        );
+        assert_eq!(parser.lineno, u64::MAX);
+    }
 
     /// A base scope rooted at a caller-supplied absolute base, as the library entry
     /// point builds for `parse_dataset(.., Some(base))`.
@@ -2795,8 +2872,8 @@ mod tests {
         .expect("parallel parse");
         assert!(seq == par, "statement lists must be identical");
 
-        let graph_seq = build_gts_graph(&seq).expect("sequential graph");
-        let graph_par = build_gts_graph(&par).expect("parallel graph");
+        let graph_seq = build_gts_graph(&seq, &[]).expect("sequential graph");
+        let graph_par = build_gts_graph(&par, &[]).expect("parallel graph");
         assert!(
             graph_seq.terms == graph_par.terms,
             "term tables (first-seen interning order = ids) must be identical"
@@ -2999,7 +3076,7 @@ mod tests {
             !text.ends_with('\n'),
             "the final line must lack a trailing newline"
         );
-        let expected_line = u32::try_from(VALID_ROWS + 1).expect("line fits u32");
+        let expected_line = u64::try_from(VALID_ROWS + 1).expect("line fits u64");
 
         assert!(
             text.len() >= PARALLEL_MIN_BYTES,
@@ -4083,7 +4160,7 @@ mod tests {
 
     /// The 1-based (line, column) a located diagnostic names.
     #[track_caller]
-    fn located(diagnostic: &RdfDiagnostic) -> (u32, u32) {
+    fn located(diagnostic: &RdfDiagnostic) -> (u64, u32) {
         let location = diagnostic.location.as_ref().expect("located diagnostic");
         (
             location.line.expect("line"),

@@ -1119,7 +1119,10 @@ pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
             match column.and_then(|c| row[c]) {
                 None => unbound += 1,
                 Some(term) if !silent => {
-                    let value = ctx.scratch.value_of(ctx.dataset, term);
+                    let value = ctx
+                        .scratch
+                        .try_value_of(ctx.dataset, term)
+                        .map_err(EvalError::source_read)?;
                     if !matches!(value, TermValue::Iri(_)) {
                         return Err(non_iri_endpoint(&variable, &value));
                     }
@@ -1367,19 +1370,25 @@ fn eval_over_endpoints<D: DatasetView + Sync>(
     // out, so whether one does never depends on the order the endpoints are listed in.
     if !silent {
         for &endpoint in endpoints {
-            let value = ctx.scratch.value_of(ctx.dataset, endpoint);
+            let value = ctx
+                .scratch
+                .try_value_of(ctx.dataset, endpoint)
+                .map_err(EvalError::source_read)?;
             if !matches!(value, TermValue::Iri(_)) {
                 return Err(non_iri_endpoint(variable, &value));
             }
         }
     }
     for &endpoint in endpoints {
-        let value = ctx.scratch.value_of(ctx.dataset, endpoint);
+        let value = ctx
+            .scratch
+            .try_value_of(ctx.dataset, endpoint)
+            .map_err(EvalError::source_read)?;
         let invocation = if matches!(value, TermValue::Iri(_)) {
             // The same substitution a `LATERAL` makes for one solution: the IRI becomes
             // the clause's endpoint and is injected into its body wherever the body names
             // it.
-            let row = crate::expr::outer_bindings_for_substitution(&[Some(endpoint)], &key, ctx);
+            let row = crate::expr::outer_bindings_for_substitution(&[Some(endpoint)], &key, ctx)?;
             let substituted = crate::expr::substitute_pattern(node, &row)?;
             let GraphPattern::Service {
                 name: NamedNodePattern::NamedNode(iri),
@@ -1571,7 +1580,7 @@ mod tests {
         let Outcome::Solutions(seq) = evaluate_query(&parsed, &mut ctx)? else {
             panic!("a SELECT answers solutions");
         };
-        let (variables, rows) = materialize_solutions(&seq, &ctx);
+        let (variables, rows) = materialize_solutions(&seq, &ctx)?;
         let mut out: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -1618,7 +1627,7 @@ mod tests {
         let Outcome::Solutions(seq) = evaluate_query(&parsed, &mut ctx)? else {
             panic!("a SELECT answers solutions");
         };
-        let (variables, rows) = materialize_solutions(&seq, &ctx);
+        let (variables, rows) = materialize_solutions(&seq, &ctx)?;
         let mut out: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -1882,7 +1891,7 @@ mod tests {
         let Outcome::Solutions(seq) = evaluate_query(&parsed, &mut ctx).expect("evaluates") else {
             panic!("a SELECT answers solutions");
         };
-        let (_, ordered) = materialize_solutions(&seq, &ctx);
+        let (_, ordered) = materialize_solutions(&seq, &ctx).expect("fixture terms materialize");
         let ordered: Vec<String> = ordered
             .iter()
             .map(|row| match &row[0] {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! `purrdf_lex::xml` graded against the W3C XML Conformance Test Suite
-//! (`vectors/xmlconf`, vendored by `scripts/vendor-xmlconf.py`, see its
+//! (`target/conformance/xmlconf`, acquired by `scripts/vendor-xmlconf.py`, see its
 //! `PROVENANCE.md`).
 //!
 //! Every `TEST` in the suite's manifests lands in exactly one class, derived
@@ -405,7 +405,13 @@ fn grade(case: &Case) -> Verdict {
 
 #[test]
 fn the_reader_is_graded_against_the_w3c_xml_conformance_suite() {
-    let root = workspace_root().join("vectors/xmlconf");
+    let workspace = workspace_root();
+    let acquired = std::process::Command::new("python3")
+        .arg(workspace.join("scripts/vendor-xmlconf.py"))
+        .status()
+        .expect("the pinned XML corpus acquisition runs");
+    assert!(acquired.success(), "the pinned XML corpus is verified");
+    let root = workspace.join("target/conformance/xmlconf");
     let cases = cases(&root);
     let mut tally: BTreeMap<String, BTreeMap<&'static str, usize>> = BTreeMap::new();
     let mut failures = Vec::new();

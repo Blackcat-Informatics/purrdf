@@ -87,9 +87,9 @@ impl GtsBlobLimits {
 #[derive(Clone, Debug)]
 pub struct GtsBlobMetadataSource {
     /// Segment containing the last explicit public metadata declaration.
-    pub segment_index: usize,
+    pub segment_index: u64,
     /// Frame containing that declaration.
-    pub frame_index: usize,
+    pub frame_index: u64,
     /// Verified frame content id.
     pub frame_id: Vec<u8>,
     /// Original source range of that frame.
@@ -111,9 +111,9 @@ pub struct GtsImportedBlob {
     /// Decoded payload, shared without copying by retained consumer views.
     pub bytes: Arc<[u8]>,
     /// Zero-based segment containing the selected payload occurrence.
-    pub segment_index: usize,
+    pub segment_index: u64,
     /// Zero-based frame within that segment.
-    pub frame_index: usize,
+    pub frame_index: u64,
     /// Exact frame content id verified by the reader.
     pub frame_id: Vec<u8>,
     /// Frame's original byte range in the imported source.
@@ -141,7 +141,7 @@ pub struct GtsRefusedBlob {
     /// Public metadata declared at the refused occurrence.
     pub metadata: Option<Value>,
     /// Zero-based segment containing the refused occurrence.
-    pub segment_index: usize,
+    pub segment_index: u64,
     /// Encoded byte length that was refused.
     pub encoded_len: usize,
     /// Which ceiling fired, in the reader's own words.
@@ -227,8 +227,8 @@ pub fn import_gts_events_with_blobs(
 
 #[derive(Clone, Debug)]
 struct BlobFrame {
-    segment_index: usize,
-    frame_index: usize,
+    segment_index: u64,
+    frame_index: u64,
     frame_id: Vec<u8>,
     range: ByteRange,
 }
@@ -692,7 +692,7 @@ impl<'a> BlobCollector<'a> {
         });
     }
 
-    pub(crate) fn segment_head(&mut self, segment_index: usize, head: &[u8]) {
+    pub(crate) fn segment_head(&mut self, segment_index: u64, head: &[u8]) {
         for blob in self.selected.values_mut() {
             if blob.segment_index == segment_index {
                 blob.segment_head = head.to_vec();

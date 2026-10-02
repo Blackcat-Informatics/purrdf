@@ -49,9 +49,15 @@ fn join_rows<V: DatasetView>(
     a_p: &TermValue,
     b_p: &TermValue,
 ) -> Vec<(TermValue, TermValue)> {
-    let a_s_id = v.term_id_by_value(a_s);
-    let a_p_id = v.term_id_by_value(a_p);
-    let b_p_id = v.term_id_by_value(b_p);
+    let a_s_id = v
+        .term_id_by_value(a_s)
+        .expect("fixture reverse lookup succeeds");
+    let a_p_id = v
+        .term_id_by_value(a_p)
+        .expect("fixture reverse lookup succeeds");
+    let b_p_id = v
+        .term_id_by_value(b_p)
+        .expect("fixture reverse lookup succeeds");
     let mut out: Vec<(TermValue, TermValue)> = Vec::new();
     for q1 in v.quads_for_pattern(a_s_id, a_p_id, None, GraphMatch::Any) {
         let x = q1.o;
@@ -66,7 +72,10 @@ fn join_rows<V: DatasetView>(
 /// Generic list walk: resolve `head` by value, then `DatasetView::members`, mapping
 /// each member id back to its value.
 fn walk_members<V: DatasetView>(v: &V, head: &TermValue) -> Vec<TermValue> {
-    let head_id = v.term_id_by_value(head).expect("head interned");
+    let head_id = v
+        .term_id_by_value(head)
+        .expect("fixture reverse lookup succeeds")
+        .expect("head interned");
     v.members(head_id, GraphMatch::Any)
         .expect("well-formed list")
         .into_iter()
@@ -186,6 +195,7 @@ fn lazy_hook_fires_on_demand() {
     // A value lookup is answered by the shared dictionary — no page is pulled.
     let s1 = paged
         .term_id_by_value(&iri("s1"))
+        .expect("fixture reverse lookup succeeds")
         .expect("s1 interned at seal");
     assert_eq!(
         provider.hits(),
@@ -219,6 +229,7 @@ fn lazy_hook_fires_on_demand() {
     // local TermIds via the per-page translations.
     let o_global = paged
         .term_id_by_value(&iri("o_shared"))
+        .expect("fixture reverse lookup succeeds")
         .expect("o_shared interned");
     let local0 = paged
         .translation(PageId(0))
@@ -268,18 +279,21 @@ fn cross_page_cost_model_is_per_page_sum() {
 
     let dense_g = paged
         .term_id_by_value(&dense)
+        .expect("fixture reverse lookup succeeds")
         .expect("dense predicate interned");
 
     // The paged estimate for (?, dense, ?, Any).
     let paged_estimate = paged.cardinality_estimate(None, Some(dense_g), None, GraphMatch::Any);
 
     // Independently: translate the pattern per page and sum each page's own estimate.
-    let expected: usize = raw_pages
+    let expected: u64 = raw_pages
         .iter()
         .map(|page| {
-            page.term_id_by_value(&dense).map_or(0, |local_p| {
-                page.cardinality_estimate(None, Some(local_p), None, GraphMatch::Any)
-            })
+            page.term_id_by_value(&dense)
+                .expect("fixture reverse lookup succeeds")
+                .map_or(0, |local_p| {
+                    page.cardinality_estimate(None, Some(local_p), None, GraphMatch::Any)
+                })
         })
         .sum();
 
@@ -309,13 +323,16 @@ fn cardinality_estimate_materializes_no_page() {
     ]));
     let paged =
         PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
-    let p_id = paged.term_id_by_value(&p).expect("p interned");
+    let p_id = paged
+        .term_id_by_value(&p)
+        .expect("fixture reverse lookup succeeds")
+        .expect("p interned");
 
     // The seal pass materialized each page exactly once; that is the only charge the
     // whole test should ever record.
     let hits_after_seal = provider.hits();
     assert_eq!(
-        hits_after_seal,
+        u64::try_from(hits_after_seal).expect("fixture page count fits u64"),
         paged.page_count(),
         "seal pass pulls each page once"
     );
@@ -362,7 +379,10 @@ fn cardinality_estimate_is_residency_independent() {
     let page1 = build_page(&[(iri("b0"), p.clone(), iri("o2"))]);
     let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
-    let p_id = paged.term_id_by_value(&p).expect("p interned");
+    let p_id = paged
+        .term_id_by_value(&p)
+        .expect("fixture reverse lookup succeeds")
+        .expect("p interned");
 
     // Surface 1: `PagedDataset` — its own per-page `OnceLock` cache starts cold.
     let cold_dataset_estimate = paged.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
@@ -431,8 +451,14 @@ fn pages_for_pattern_predicts_actual_consumption() {
 
     let provider = Arc::new(InMemoryPageProvider::new(pages));
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
-    let p_id = paged.term_id_by_value(&iri("p")).expect("p interned");
-    let g_id = paged.term_id_by_value(&iri("g")).expect("g interned");
+    let p_id = paged
+        .term_id_by_value(&iri("p"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("p interned");
+    let g_id = paged
+        .term_id_by_value(&iri("g"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("g interned");
 
     let predicted = paged.pages_for_pattern(None, Some(p_id), None, GraphMatch::Named(g_id));
     assert_eq!(
@@ -519,6 +545,7 @@ fn reifier_and_annotation_views_compose_across_pages() {
     // Both annotations aggregate across the two pages for the shared reifier `r`.
     let r_global = paged
         .term_id_by_value(&iri("r"))
+        .expect("fixture reverse lookup succeeds")
         .expect("reifier r interned");
     let mut annos: Vec<(TermValue, TermValue)> = paged
         .annotations_of_with_graph(r_global)
@@ -696,7 +723,10 @@ fn compact_reclaims_dead_ids_deterministically() {
     // The dead terms are still resolvable by value in the oversized dictionary.
     for dead in [iri("dave"), iri("likes"), iri("eve")] {
         assert!(
-            dropped.term_id_by_value(&dead).is_some(),
+            dropped
+                .term_id_by_value(&dead)
+                .expect("fixture reverse lookup succeeds")
+                .is_some(),
             "dead term {dead:?} is retained before compaction"
         );
     }
@@ -710,7 +740,10 @@ fn compact_reclaims_dead_ids_deterministically() {
     );
     for reclaimed in [iri("dave"), iri("likes"), iri("eve")] {
         assert!(
-            compacted.term_id_by_value(&reclaimed).is_none(),
+            compacted
+                .term_id_by_value(&reclaimed)
+                .expect("fixture reverse lookup succeeds")
+                .is_none(),
             "reclaimed term {reclaimed:?} is gone after compaction"
         );
     }
@@ -745,8 +778,12 @@ fn compact_reclaims_dead_ids_deterministically() {
     );
     for value in [iri("alice"), iri("knows"), iri("bob"), iri("carol")] {
         assert_eq!(
-            compacted.term_id_by_value(&value),
-            compacted_again.term_id_by_value(&value),
+            compacted
+                .term_id_by_value(&value)
+                .expect("fixture reverse lookup succeeds"),
+            compacted_again
+                .term_id_by_value(&value)
+                .expect("fixture reverse lookup succeeds"),
             "value {value:?} must get the same GlobalTermId across compactions"
         );
     }
@@ -921,7 +958,7 @@ struct GraphDriftProvider {
 
 impl PageProvider for GraphDriftProvider {
     /// Always one page — the fixture only needs a single page to drift underneath.
-    fn page_count(&self) -> usize {
+    fn page_count(&self) -> u64 {
         1
     }
 
@@ -1031,8 +1068,14 @@ fn graph_drift_fixture_with_an_honest_provider_still_returns_the_right_rows() {
     let provider = Arc::new(InMemoryPageProvider::new(vec![honest]));
     let paged = PagedDataset::from_provider(provider).expect("seal honest page");
 
-    let g1_id = paged.term_id_by_value(&g1).expect("g1 interned");
-    let g2_id = paged.term_id_by_value(&g2).expect("g2 interned");
+    let g1_id = paged
+        .term_id_by_value(&g1)
+        .expect("fixture reverse lookup succeeds")
+        .expect("g1 interned");
+    let g2_id = paged
+        .term_id_by_value(&g2)
+        .expect("fixture reverse lookup succeeds")
+        .expect("g2 interned");
 
     let mut g1_rows: Vec<_> = paged
         .quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
@@ -1105,7 +1148,10 @@ fn a_query_over_a_drifted_warm_restart_refuses_with_typed_sticky_invalid_data() 
         "the honest content (call 0) is what the warm metadata was sealed from"
     );
 
-    let g1_id = warm.term_id_by_value(&g1).expect("g1 interned");
+    let g1_id = warm
+        .term_id_by_value(&g1)
+        .expect("fixture reverse lookup succeeds")
+        .expect("g1 interned");
     let view = warm.query_view(PagedQueryLimits::UNBOUNDED);
 
     assert_eq!(
@@ -1176,8 +1222,14 @@ fn the_same_query_over_an_honest_warm_restart_still_completes() {
     ));
     let warm = warm_restart(provider as Arc<dyn PageProvider>);
 
-    let g1_id = warm.term_id_by_value(&g1).expect("g1 interned");
-    let g2_id = warm.term_id_by_value(&g2).expect("g2 interned");
+    let g1_id = warm
+        .term_id_by_value(&g1)
+        .expect("fixture reverse lookup succeeds")
+        .expect("g1 interned");
+    let g2_id = warm
+        .term_id_by_value(&g2)
+        .expect("fixture reverse lookup succeeds")
+        .expect("g2 interned");
     let view = warm.query_view(PagedQueryLimits::UNBOUNDED);
 
     let mut rows: Vec<_> = view
@@ -1217,7 +1269,7 @@ struct MismatchedGenerationProvider {
 }
 
 impl PageProvider for MismatchedGenerationProvider {
-    fn page_count(&self) -> usize {
+    fn page_count(&self) -> u64 {
         1
     }
 
@@ -1636,8 +1688,14 @@ fn reifier_and_annotation_quads_in_graph_match_the_filtered_whole_table_on_every
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
     let query_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
 
-    let g_owns_paged = paged.term_id_by_value(&g_owns).expect("gOwns interned");
-    let g_none_paged = paged.term_id_by_value(&g_none).expect("gNone interned");
+    let g_owns_paged = paged
+        .term_id_by_value(&g_owns)
+        .expect("fixture reverse lookup succeeds")
+        .expect("gOwns interned");
+    let g_none_paged = paged
+        .term_id_by_value(&g_none)
+        .expect("fixture reverse lookup succeeds")
+        .expect("gNone interned");
     let paged_graphs = [
         GraphMatch::Any,
         GraphMatch::Default,
@@ -1653,8 +1711,14 @@ fn reifier_and_annotation_quads_in_graph_match_the_filtered_whole_table_on_every
         populate_graph_narrow_page_b(&mut b, &g_other);
         b.freeze().expect("single freeze")
     };
-    let g_owns_single = single.term_id_by_value(&g_owns).expect("gOwns interned");
-    let g_none_single = single.term_id_by_value(&g_none).expect("gNone interned");
+    let g_owns_single = single
+        .term_id_by_value(&g_owns)
+        .expect("fixture reverse lookup succeeds")
+        .expect("gOwns interned");
+    let g_none_single = single
+        .term_id_by_value(&g_none)
+        .expect("fixture reverse lookup succeeds")
+        .expect("gNone interned");
     let single_graphs = [
         GraphMatch::Any,
         GraphMatch::Default,
@@ -1732,7 +1796,10 @@ fn reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owni
         PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
     let hits_after_construction = provider.hits();
 
-    let r_global = paged.term_id_by_value(&iri("r")).expect("r interned");
+    let r_global = paged
+        .term_id_by_value(&iri("r"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("r interned");
     let rows: Vec<_> = paged.reifier_quads_of(r_global).collect();
     assert_eq!(
         rows.len(),
@@ -1801,7 +1868,10 @@ fn annotations_of_with_graph_skips_a_page_that_only_mentions_the_term_in_the_rei
         PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
     let hits_after_construction = provider.hits();
 
-    let r_global = paged.term_id_by_value(&iri("r")).expect("r interned");
+    let r_global = paged
+        .term_id_by_value(&iri("r"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("r interned");
     let rows: Vec<_> = paged.annotations_of_with_graph(r_global).collect();
     assert_eq!(
         rows.len(),
@@ -1856,7 +1926,10 @@ fn named_graph_query_skips_the_page_that_declares_it_empty_and_admits_the_page_t
         PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
     let hits_after_construction = provider.hits();
 
-    let g_id = paged.term_id_by_value(&g).expect("g interned");
+    let g_id = paged
+        .term_id_by_value(&g)
+        .expect("fixture reverse lookup succeeds")
+        .expect("g interned");
     let predicted = paged.pages_for_pattern(None, None, None, GraphMatch::Named(g_id));
     assert_eq!(
         predicted,
@@ -1900,6 +1973,7 @@ fn named_graph_side_table_only_content_is_skipped_by_quads_for_pattern_but_still
     let paged = PagedDataset::from_provider(provider).expect("seal page");
     let g_id = paged
         .term_id_by_value(&iri("gReifierOnly"))
+        .expect("fixture reverse lookup succeeds")
         .expect("g interned");
 
     assert_eq!(
@@ -1976,7 +2050,10 @@ fn reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_o
         PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
     let hits_after_construction = provider.hits();
 
-    let g_id = paged.term_id_by_value(&g).expect("g interned");
+    let g_id = paged
+        .term_id_by_value(&g)
+        .expect("fixture reverse lookup succeeds")
+        .expect("g interned");
 
     let rows: Vec<_> = paged
         .reifier_quads_in_graph(GraphMatch::Named(g_id))
@@ -2058,7 +2135,10 @@ fn annotation_quads_in_graph_skips_a_reifier_only_page_and_still_yields_a_page_w
         PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
     let hits_after_construction = provider.hits();
 
-    let g_id = paged.term_id_by_value(&g).expect("g interned");
+    let g_id = paged
+        .term_id_by_value(&g)
+        .expect("fixture reverse lookup succeeds")
+        .expect("g interned");
 
     let rows: Vec<_> = paged
         .annotation_quads_in_graph(GraphMatch::Named(g_id))
@@ -2195,12 +2275,16 @@ fn pages_for_graph_equals_the_graph_only_pattern_for_every_known_graph() {
     // base-quad page", which is the honest answer and not an empty-by-accident one.
     let g_empty = paged
         .term_id_by_value(&iri("gEmpty"))
+        .expect("fixture reverse lookup succeeds")
         .expect("gEmpty known");
     assert!(
         paged.pages_for_graph(g_empty).is_empty(),
         "a declared-empty graph owns no base-quad page"
     );
-    let ga = paged.term_id_by_value(&iri("gA")).expect("gA known");
+    let ga = paged
+        .term_id_by_value(&iri("gA"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("gA known");
     assert_eq!(
         paged.pages_for_graph(ga),
         vec![PageId(0)],
@@ -2223,8 +2307,14 @@ fn retain_graph_keeps_every_page_carrying_the_graph_in_any_stream_and_materializ
     let paged =
         PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
 
-    let ga = paged.term_id_by_value(&iri("gA")).expect("gA known");
-    let gb = paged.term_id_by_value(&iri("gB")).expect("gB known");
+    let ga = paged
+        .term_id_by_value(&iri("gA"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("gA known");
+    let gb = paged
+        .term_id_by_value(&iri("gB"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("gB known");
 
     // The answers gA must still give after eviction, taken BEFORE it.
     let base_before: Vec<_> = paged
@@ -2299,6 +2389,7 @@ fn retain_graph_keeps_every_page_carrying_the_graph_in_any_stream_and_materializ
     // A term that is interned but names no graph carries nothing anywhere.
     let not_a_graph = paged
         .term_id_by_value(&iri("s0"))
+        .expect("fixture reverse lookup succeeds")
         .expect("s0 is interned as a subject");
     assert_eq!(
         paged.retain_graph(not_a_graph).page_count(),
@@ -2321,6 +2412,7 @@ fn retain_graph_keeps_a_declared_empty_graph_that_owns_no_row_anywhere() {
 
     let g_empty = paged
         .term_id_by_value(&iri("gEmpty"))
+        .expect("fixture reverse lookup succeeds")
         .expect("gEmpty is a declared graph of the whole dataset");
     assert!(
         paged.named_graphs().any(|g| g == g_empty),
@@ -2354,7 +2446,10 @@ fn retain_graph_keeps_a_declared_empty_graph_that_owns_no_row_anywhere() {
     );
 
     // The neighbouring valid case: retention is still a real decision, not "keep all".
-    let gb = paged.term_id_by_value(&iri("gB")).expect("gB known");
+    let gb = paged
+        .term_id_by_value(&iri("gB"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("gB known");
     assert!(
         paged.retain_graph(gb).page_count() < paged.page_count(),
         "a graph that only some pages know still evicts the pages that do not"

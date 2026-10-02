@@ -31,6 +31,17 @@ make capi-header                # regenerate the committed include/purrdf.h afte
 The committed header `include/purrdf.h` **is the ABI contract**; CI fails if it
 drifts from the crate (`make capi-check`).
 
+`make capi-bundle` produces a native release tarball with the library, header,
+pkg-config file and recipient license notices. Its pkg-config paths follow the
+extracted bundle: set `PKG_CONFIG_PATH` to its `lib/pkgconfig` directory and use
+`pkg-config --cflags --libs purrdf` to compile a consumer. Set the platform's
+library search path to the bundle's `lib` directory when running the consumer,
+or install the library under your application's normal runtime search path.
+The bundle build uses a private Cargo output directory and checks the installed
+header and libraries against the outputs reported by that build. The bundle gate
+then links and runs the C smoke test from a fresh extraction of the actual tarball,
+including the frozen entailment and import fixtures.
+
 ## Configured JSON-LD and YAML-LD
 
 `purrdf_jsonld_context_compile` decodes the shared versioned options document
@@ -95,6 +106,12 @@ the quad count, and releases every handle. `make capi-check` compiles and
 executes that example against the generated shared library and committed header.
 
 ## ABI contract (every entry point)
+
+`purrdf_error_presentation_json(error)` returns a borrowed, nullable UTF-8 JSON
+record with stable diagnostic message identities, named typed parameters and
+exact logical anchors. It remains valid until `purrdf_error_free(error)`. This
+accessor is included in the unshipped ABI 0.8.0 surface; existing status and
+English-message functions retain their signatures.
 
 - **No unwinding across the boundary.** Every function runs inside
   `catch_unwind`; a caught panic becomes `PURRDF_STATUS_PANIC` (never a process

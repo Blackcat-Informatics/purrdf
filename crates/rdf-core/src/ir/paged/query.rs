@@ -8,7 +8,8 @@
 //! a query engine then samples [`FallibleDatasetView::operation_status`] before it can
 //! publish any internally-computed rows as a complete result.
 
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
+use crate::dataset_view::lock_read_state;
+use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, FallibleDatasetView, GraphMatch, ViewOperationStatus};
@@ -368,14 +369,8 @@ impl<'dataset> PagedQueryView<'dataset> {
         self.limits
     }
 
-    fn state(&self) -> MutexGuard<'_, QueryState> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     fn failed(&self) -> bool {
-        self.state().error.is_some()
+        lock_read_state(&self.state).error.is_some()
     }
 
     fn page(&self, id: PageId) -> Option<&Arc<RdfDataset>> {
@@ -399,7 +394,7 @@ impl<'dataset> PagedQueryView<'dataset> {
         // Hold the operation lock across this first materialization. The public query
         // boundary forces sequential evaluation; the lock additionally makes a
         // misused concurrent view admit each page and update evidence atomically.
-        let mut state = self.state();
+        let mut state = lock_read_state(&self.state);
         if let Some(error) = &state.error {
             return Err(error.clone());
         }
@@ -500,17 +495,19 @@ impl<'dataset> PagedQueryView<'dataset> {
                 ),
             });
         }
-        if materialization.dataset.term_count() != slot.translation.term_count() {
+        if materialization.dataset.as_ref().term_count() != slot.translation.term_count() {
             return Err(PagedQueryError::InvalidData {
                 page: id,
                 message: format!(
                     "term count changed from sealed {} to materialized {}",
                     slot.translation.term_count(),
-                    materialization.dataset.term_count()
+                    materialization.dataset.as_ref().term_count()
                 ),
             });
         }
-        if materialization.dataset.quad_count() != slot.quad_count {
+        if u64::try_from(materialization.dataset.quad_count()).expect("bounded page count fits u64")
+            != slot.quad_count
+        {
             return Err(PagedQueryError::InvalidData {
                 page: id,
                 message: format!(
@@ -583,7 +580,7 @@ impl FallibleDatasetView for PagedQueryView<'_> {
     type Evidence = PagedQueryEvidence;
 
     fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence> {
-        let mut state = self.state();
+        let mut state = lock_read_state(&self.state);
         // A query may require no page at all (for example, a constants-only algebra
         // expression). Check the provider generation at both engine checkpoints so
         // such an operation cannot certify a stale snapshot merely because no lazy
@@ -612,7 +609,27 @@ impl FallibleDatasetView for PagedQueryView<'_> {
 
 impl DatasetView for PagedQueryView<'_> {
     type Id = GlobalTermId;
+    type ReadError = PagedQueryError;
+    type TermGuard<'a>
+        = crate::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = ();
+
+    fn read_error(&self) -> Option<Self::ReadError> {
+        let mut state = lock_read_state(&self.state);
+        if state.error.is_none() {
+            let actual = self.dataset.provider.generation();
+            if actual != self.dataset.generation {
+                state.error = Some(PagedQueryError::StaleGeneration {
+                    page: None,
+                    expected: self.dataset.generation,
+                    actual,
+                });
+            }
+        }
+        state.error.clone()
+    }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         self.dataset.pages.iter().flat_map(move |slot| {
@@ -623,8 +640,11 @@ impl DatasetView for PagedQueryView<'_> {
         })
     }
 
-    fn resolve(&self, id: GlobalTermId) -> crate::ir::TermRef<'_, GlobalTermId> {
-        self.dataset.dictionary.resolve(id)
+    fn resolve(&self, id: GlobalTermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(self.dataset.dictionary.resolve(id))
     }
 
     fn quads_for_pattern(
@@ -638,7 +658,8 @@ impl DatasetView for PagedQueryView<'_> {
         // then apply the full per-axis admission law before `self.page` — the only
         // materialization, and the only thing that can charge this operation's page/byte
         // budget or advance its evidence — runs for a candidate.
-        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
+        let page_count =
+            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
         admission::candidate_pages(self.dataset.graph_index(), page_count, g).flat_map(
             move |page_id| {
                 let index = usize::try_from(page_id.0).expect("page id fits usize");
@@ -657,15 +678,18 @@ impl DatasetView for PagedQueryView<'_> {
         )
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<GlobalTermId> {
-        self.dataset.dictionary.term_id_by_value(value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(self.dataset.dictionary.term_id_by_value(value))
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
         self.dataset.caps
     }
 
-    fn len_hint(&self) -> Option<usize> {
+    fn len_hint(&self) -> Option<u64> {
         Some(self.dataset.total_quads)
     }
 
@@ -695,49 +719,56 @@ impl DatasetView for PagedQueryView<'_> {
         p: Option<GlobalTermId>,
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
-    ) -> usize {
-        // Candidate narrowing mirrors `quads_for_pattern`. The estimate is read
-        // ENTIRELY from sealed `PageSummary` metadata via
-        // `admission::estimate_admitted_page` — deliberately NOT from this
-        // operation's page cache (`self.pages[index].materialization`), so the
-        // result never depends on whether this operation has already admitted the
-        // page. A residency-dependent estimate would let plan choice — and hence
-        // the `requested_pages` sequence a G-clause treats as evidence of what a
-        // query actually touched — depend on incidental cache warmth rather than on
-        // the snapshot and the pattern alone, so two runs of the identical query
-        // against the identical snapshot could pick different plans (and the SAME
-        // operation could see its own plan choice shift mid-evaluation as pages
-        // warm up). Planning therefore still never materializes a page or spends
-        // this operation's page/byte budget: the sealed `quad_count` fallback (no
-        // axis bound) and the per-axis `PageSummary` counts (one or more axes
-        // bound) are both seal-time metadata, never a fresh materialization. For a
-        // pattern with exactly one bound axis the per-page contribution is EXACT.
-        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
-        let mut total = 0_usize;
-        for page_id in admission::candidate_pages(self.dataset.graph_index(), page_count, g) {
-            let index = usize::try_from(page_id.0).expect("page id fits usize");
-            let slot = &self.dataset.pages[index];
-            let PageAdmission::Admit(local) =
-                admission::admit_pattern(&slot.translation, s, p, o, g)
-            else {
-                continue;
-            };
-            let estimate = admission::estimate_admitted_page(
-                slot.translation.summary(),
-                local,
-                slot.quad_count,
-            );
-            total = total.saturating_add(estimate);
+    ) -> u64 {
+        {
+            // Candidate narrowing mirrors `quads_for_pattern`. The estimate is read
+            // ENTIRELY from sealed `PageSummary` metadata via
+            // `admission::estimate_admitted_page` — deliberately NOT from this
+            // operation's page cache (`self.pages[index].materialization`), so the
+            // result never depends on whether this operation has already admitted the
+            // page. A residency-dependent estimate would let plan choice — and hence
+            // the `requested_pages` sequence a G-clause treats as evidence of what a
+            // query actually touched — depend on incidental cache warmth rather than on
+            // the snapshot and the pattern alone, so two runs of the identical query
+            // against the identical snapshot could pick different plans (and the SAME
+            // operation could see its own plan choice shift mid-evaluation as pages
+            // warm up). Planning therefore still never materializes a page or spends
+            // this operation's page/byte budget: the sealed `quad_count` fallback (no
+            // axis bound) and the per-axis `PageSummary` counts (one or more axes
+            // bound) are both seal-time metadata, never a fresh materialization. For a
+            // pattern with exactly one bound axis the per-page contribution is EXACT.
+            let page_count =
+                u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+            let mut total = 0_u64;
+            for page_id in admission::candidate_pages(self.dataset.graph_index(), page_count, g) {
+                let index = usize::try_from(page_id.0).expect("page id fits usize");
+                let slot = &self.dataset.pages[index];
+                let PageAdmission::Admit(local) =
+                    admission::admit_pattern(&slot.translation, s, p, o, g)
+                else {
+                    continue;
+                };
+                let estimate = admission::estimate_admitted_page(
+                    slot.translation.summary(),
+                    local,
+                    slot.quad_count,
+                );
+                total = total.saturating_add(estimate);
+            }
+            total
         }
-        total
     }
 
-    fn term_count(&self) -> usize {
-        self.dataset.dictionary.len()
+    fn term_count(&self) -> u64 {
+        u64::try_from(self.dataset.dictionary.len()).expect("bounded local count fits u64")
     }
 
     fn stats_fingerprint(&self) -> u64 {
-        crate::hash::stats_fingerprint(self.dataset.total_quads, self.dataset.dictionary.len())
+        crate::hash::stats_fingerprint(
+            self.dataset.total_quads,
+            u64::try_from(self.dataset.dictionary.len())
+                .expect("resident dictionary count fits u64"),
+        )
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
@@ -832,7 +863,8 @@ impl DatasetView for PagedQueryView<'_> {
         // chooses pages, it does not replace the row predicate. Goes through
         // `self.page`, so the sticky failure gate and the page/byte budget charging
         // still apply.
-        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
+        let page_count =
+            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
         admission::candidate_pages_for_stream(
             self.dataset.graph_index(),
             page_count,
@@ -860,7 +892,8 @@ impl DatasetView for PagedQueryView<'_> {
         // See `reifier_quads_in_graph` above: same narrowing and the same sticky-gate/
         // budget-charging discipline (via `self.page`), over the ANNOTATION stream's
         // graph postings instead.
-        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
+        let page_count =
+            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
         admission::candidate_pages_for_stream(
             self.dataset.graph_index(),
             page_count,
@@ -937,7 +970,7 @@ mod tests {
     }
 
     impl PageProvider for MutableGenerationProvider {
-        fn page_count(&self) -> usize {
+        fn page_count(&self) -> u64 {
             1
         }
 
@@ -975,7 +1008,7 @@ mod tests {
         let generation_reads_after_seal = provider.generation_reads.load(Ordering::Relaxed);
         let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
 
-        let state = view.state();
+        let state = lock_read_state(&view.state);
         let locked_debug = format!("{view:?}");
         assert!(locked_debug.contains("<locked>"));
         drop(state);

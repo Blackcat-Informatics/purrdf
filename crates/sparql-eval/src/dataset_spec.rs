@@ -71,7 +71,7 @@ fn resolve_graphs<D: DatasetView>(
 ) -> Vec<D::Id> {
     let mut ids: Vec<D::Id> = graphs
         .iter()
-        .filter_map(|n| dataset.term_id_by_value(&named_node_to_value(n)))
+        .filter_map(|n| dataset.term_id_if_ready(&named_node_to_value(n)))
         .collect();
     ids.sort();
     ids.dedup();
@@ -112,12 +112,12 @@ impl<I: ViewTermId> ActiveDataset<I> {
         for u in using {
             match u {
                 UsingClause::Default(n) => {
-                    if let Some(id) = dataset.term_id_by_value(&named_node_to_value(n)) {
+                    if let Some(id) = dataset.term_id_if_ready(&named_node_to_value(n)) {
                         default.push(id);
                     }
                 }
                 UsingClause::Named(n) => {
-                    if let Some(id) = dataset.term_id_by_value(&named_node_to_value(n)) {
+                    if let Some(id) = dataset.term_id_if_ready(&named_node_to_value(n)) {
                         named.push(id);
                     }
                 }
@@ -135,7 +135,7 @@ impl<I: ViewTermId> ActiveDataset<I> {
     /// unrestricted). An absent `g` yields an empty default graph (the WHERE matches
     /// nothing), matching the implicit-existence doctrine.
     pub(crate) fn with_default_graph<D: DatasetView<Id = I>>(dataset: &D, g: &TermValue) -> Self {
-        let ids = dataset.term_id_by_value(g).map_or_default(|id| vec![id]);
+        let ids = dataset.term_id_if_ready(g).map_or_default(|id| vec![id]);
         Self {
             default: DefaultSpec::Merged(ids),
             named: None,

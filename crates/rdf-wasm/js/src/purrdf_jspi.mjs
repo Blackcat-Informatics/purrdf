@@ -138,7 +138,7 @@ let laneRefusal = null;
 let poisonReason = null;
 let maxConcurrentJobs = DEFAULT_MAX_CONCURRENT_JOBS;
 const records = new Map(); // job id -> record
-// Shared SERVICE exchange id -> { promise, controller, settled }: the host call every job
+// Exact bigint SERVICE exchange id -> { promise, controller, settled }: the host call every job
 // waiting on the exchange awaits. Which jobs wait, and when the call is abandoned, is
 // Rust's registry; this is the one table Rust cannot hold.
 const exchanges = new Map();

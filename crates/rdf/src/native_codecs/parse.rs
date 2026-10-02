@@ -292,10 +292,7 @@ pub fn parse_dataset_reporting_failure(
         // codec seam (shared with formats that have no `@prefix`) does not carry. UTF-8
         // is only required by the text tokenizer, so it is validated here.
         let text = std::str::from_utf8(bytes).map_err(|e| {
-            ParseFailure::before_parsing(
-                RdfDiagnostic::error("native-codec-utf8", e.to_string()),
-                base_iri,
-            )
+            ParseFailure::before_parsing(super::stream::utf8_error(&e, 0), base_iri)
         })?;
         let mut base =
             base_scope_for(base_iri).map_err(|e| ParseFailure::before_parsing(e, None))?;
@@ -347,10 +344,7 @@ pub fn parse_dataset_reporting_failure(
         // parser by the same parse — so it is parsed here rather than through the codec
         // seam, which carries no namespaces.
         let text = std::str::from_utf8(bytes).map_err(|e| {
-            ParseFailure::before_parsing(
-                RdfDiagnostic::error("native-codec-utf8", e.to_string()),
-                base_iri,
-            )
+            ParseFailure::before_parsing(super::stream::utf8_error(&e, 0), base_iri)
         })?;
         let mut base =
             base_scope_for(base_iri).map_err(|e| ParseFailure::before_parsing(e, None))?;
@@ -425,8 +419,7 @@ fn parse_dataset_mode(
 ) -> Result<(Arc<RdfDataset>, BaseScope), RdfDiagnostic> {
     let format = classify(media_type)?;
     let mut base = base_scope_for(base_iri)?;
-    let text = std::str::from_utf8(bytes)
-        .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
+    let text = std::str::from_utf8(bytes).map_err(|e| super::stream::utf8_error(&e, 0))?;
 
     // Dispatch to the format's codec (the single `codec_for` chokepoint). Each codec is
     // FIRST-PARTY and panic-guarded: the line/Turtle family parses into the in-memory
@@ -612,6 +605,12 @@ fn dataset_from_ser_graph_impl(
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
     let interner = SerInterner { graph, blanks };
+    if !flatten_to_default_graph {
+        for &name in &graph.named_graphs {
+            let id = interner.intern(&mut builder, name)?;
+            builder.declare_named_graph(id);
+        }
+    }
 
     let mut rows: Vec<FoldRow> =
         Vec::with_capacity(graph.quads.len() + graph.reifiers.len() + graph.annotations.len());

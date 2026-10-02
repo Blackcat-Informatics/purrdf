@@ -41,12 +41,12 @@ use support::iri;
 
 use std::sync::Arc;
 
-use purrdf_testkit::bench::{Bench, bench_group, bench_main};
+use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main};
 
 use purrdf_core::{
     DatasetView, InMemoryPageProvider, PagedDataset, RdfDataset, RdfDatasetBuilder, TermValue,
 };
-use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
 
 /// Entity count. Each entity contributes 3 quads (`knows`/`name`/`age`), so 200
 /// entities is 600 triples — a "few hundred" moderate corpus.
@@ -254,7 +254,7 @@ fn bench_cross_page_bgp(c: &mut Bench) {
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
     assert_eq!(
         paged.page_count(),
-        PAGE_COUNT,
+        u64::try_from(PAGE_COUNT).expect("fixture page count fits u64"),
         "the corpus spans every page"
     );
 
@@ -390,7 +390,11 @@ fn bench_graph_selective_bgp(c: &mut Bench) {
         .collect();
     let provider = Arc::new(InMemoryPageProvider::new(pages));
     let paged = PagedDataset::from_provider(provider).expect("seal graph pages");
-    assert_eq!(paged.page_count(), GRAPH_COUNT, "one page per named graph");
+    assert_eq!(
+        paged.page_count(),
+        u64::try_from(GRAPH_COUNT).expect("fixture page count fits u64"),
+        "one page per named graph"
+    );
 
     let target_graph = match &graphs[0] {
         TermValue::Iri(s) => s.clone(),
@@ -501,7 +505,7 @@ fn bench_graph_var_bgp(c: &mut Bench) {
     let paged = PagedDataset::from_provider(provider).expect("seal graph pages");
     assert_eq!(
         paged.page_count(),
-        GRAPH_COUNT + 1,
+        u64::try_from(GRAPH_COUNT + 1).expect("fixture page count fits u64"),
         "one page per populated named graph, plus the declared-empty page"
     );
     assert_eq!(
@@ -563,11 +567,153 @@ fn bench_graph_var_bgp(c: &mut Bench) {
     group.finish();
 }
 
+/// The persistent read-session companion uses the same evaluator and RDF fixture
+/// as the bounded-query regressions. Corpus construction, preparation, warming,
+/// resident parity and cache-state checks are outside every timed closure.
+fn bench_segmented_selective_bgp(c: &mut Bench) {
+    use purrdf_core::SparqlRequest;
+    use support::segmented::{CEILING, QUERY, fixture, open, open_with_cache};
+
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(QUERY, None)
+        .expect("prepare selective join");
+    let expected = engine
+        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .expect("resident selective join");
+    assert_eq!(row_count(&expected), 1);
+    let request = SparqlRequest {
+        query: QUERY,
+        base_iri: None,
+        substitutions: &[],
+    };
+    let cold = open(&image, CEILING);
+    let cold_answer = engine
+        .query_prepared_fallible_view(&cold, &prepared, &[], QueryOptions::EMPTY)
+        .expect("cold persistent selective join");
+    assert_eq!(row_count(&cold_answer.result), row_count(&expected));
+    assert!(cold_answer.evidence.evictions() > 0);
+    let hot = open_with_cache(&image, CEILING, 256);
+    let hot_answer = engine
+        .query_prepared_fallible_view(&hot, &prepared, &[], QueryOptions::EMPTY)
+        .expect("warm persistent selective join");
+    assert_eq!(row_count(&hot_answer.result), row_count(&expected));
+    let warm_requests = hot.evidence().request_count();
+    let cached = engine
+        .query_fallible_view(&hot, request, QueryOptions::EMPTY)
+        .expect("cached selective join");
+    assert_eq!(row_count(&cached.result), row_count(&expected));
+    assert_eq!(hot.evidence().request_count(), warm_requests);
+    let governors = QueryGovernors::METERED;
+    let governed = engine
+        .query_governed_fallible_view(&hot, request, QueryOptions::EMPTY, &governors)
+        .expect("metered persistent selective join");
+    assert_eq!(row_count(&governed.result), row_count(&expected));
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+        .expect("prepare scoped selective join");
+    let scoped_rows = engine
+        .execute_fallible(&mut execution, &hot, QueryOptions::EMPTY, |outcome| {
+            let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
+                panic!("SELECT returns rows")
+            };
+            rows.rows().len()
+        })
+        .expect("warm scoped persistent join");
+    assert_eq!(scoped_rows.0, 1);
+    assert_eq!(hot.evidence().request_count(), warm_requests);
+
+    let mut group = c.benchmark_group("segmented_selective_bgp");
+    group.bench_function("resident_prepared", |bencher| {
+        bencher.iter(|| {
+            engine
+                .query_prepared(
+                    std::hint::black_box(&resident),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("resident selective join")
+        });
+    });
+    group.bench_function("persistent_cold_prepared", |bencher| {
+        bencher.iter_batched_ref(
+            || open(&image, CEILING),
+            |source| {
+                engine
+                    .query_prepared_fallible_view(
+                        std::hint::black_box(source),
+                        std::hint::black_box(&prepared),
+                        &[],
+                        QueryOptions::EMPTY,
+                    )
+                    .expect("cold persistent selective join")
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("persistent_hot_prepared", |bencher| {
+        bencher.iter(|| {
+            engine
+                .query_prepared_fallible_view(
+                    std::hint::black_box(&hot),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("hot persistent selective join")
+        });
+    });
+    group.bench_function("persistent_hot_cached_request", |bencher| {
+        bencher.iter(|| {
+            engine
+                .query_fallible_view(
+                    std::hint::black_box(&hot),
+                    std::hint::black_box(request),
+                    QueryOptions::EMPTY,
+                )
+                .expect("cached persistent selective join")
+        });
+    });
+    group.bench_function("persistent_hot_metered_request", |bencher| {
+        bencher.iter(|| {
+            engine
+                .query_governed_fallible_view(
+                    std::hint::black_box(&hot),
+                    std::hint::black_box(request),
+                    QueryOptions::EMPTY,
+                    &governors,
+                )
+                .expect("metered persistent selective join")
+        });
+    });
+    group.bench_function("persistent_hot_scoped_prepared", |bencher| {
+        bencher.iter(|| {
+            engine
+                .execute_fallible(
+                    std::hint::black_box(&mut execution),
+                    std::hint::black_box(&hot),
+                    QueryOptions::EMPTY,
+                    |outcome| {
+                        let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
+                            panic!("SELECT returns rows")
+                        };
+                        std::hint::black_box(rows.rows().len())
+                    },
+                )
+                .expect("scoped persistent selective join")
+        });
+    });
+    group.finish();
+}
+
 bench_group!(
     benches,
     bench_cross_page_bgp,
     bench_paged_full_scan,
     bench_graph_selective_bgp,
-    bench_graph_var_bgp
+    bench_graph_var_bgp,
+    bench_segmented_selective_bgp
 );
 bench_main!(benches);

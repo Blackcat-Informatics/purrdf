@@ -34,7 +34,7 @@ use purrdf_xsd::XsdValue;
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::expr::{arg, intern, intern_boolean, intern_integer, xsd_of};
-use crate::scratch::{SolutionTerm, term_id_to_value};
+use crate::scratch::{SolutionTerm, try_term_id_to_value};
 
 use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
 use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
@@ -73,7 +73,7 @@ fn list_length<D: DatasetView + Sync>(
         return Ok(None);
     };
     match walk(ctx, head)? {
-        Some(members) => Ok(Some(intern_integer(ctx, members.len() as i64))),
+        Some(members) => Ok(Some(intern_integer(ctx, members.len() as i64)?)),
         None => Ok(None),
     }
 }
@@ -99,7 +99,9 @@ fn list_get<D: DatasetView + Sync>(
     Ok(members
         .into_iter()
         .nth(idx as usize)
-        .and_then(|value| intern(ctx, value)))
+        .map(|value| intern(ctx, value))
+        .transpose()?
+        .flatten())
 }
 
 /// `listIndexOf(list, value)` → the zero-based index of the first occurrence,
@@ -115,7 +117,7 @@ fn list_index_of<D: DatasetView + Sync>(
         return Ok(None);
     };
     match members.iter().position(|m| m == value) {
-        Some(pos) => Ok(Some(intern_integer(ctx, pos as i64))),
+        Some(pos) => Ok(Some(intern_integer(ctx, pos as i64)?)),
         None => Ok(None),
     }
 }
@@ -135,7 +137,7 @@ fn list_contains<D: DatasetView + Sync>(
     Ok(Some(intern_boolean(
         ctx,
         members.iter().any(|m| m == value),
-    )))
+    )?))
 }
 
 /// `listSlice(list, start, end)` → a fresh `rdf:List` of the members in the
@@ -161,7 +163,7 @@ fn list_slice<D: DatasetView + Sync>(
     let hi = end.clamp(lo, len); // also enforces hi >= lo → inverted ranges are empty
     let slice: Vec<TermValue> = members[lo as usize..hi as usize].to_vec();
     let value = materialize_list(ctx, slice);
-    Ok(intern(ctx, value))
+    intern(ctx, value)
 }
 
 /// `listConcat(listA, listB)` → a fresh `rdf:List` of A's members followed by
@@ -179,7 +181,7 @@ fn list_concat<D: DatasetView + Sync>(
     };
     left.extend(right);
     let value = materialize_list(ctx, left);
-    Ok(intern(ctx, value))
+    intern(ctx, value)
 }
 
 /// Invent a fresh `rdf:List` carrying `members` in order, returning its head term
@@ -266,34 +268,53 @@ fn walk_dataset<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
 ) -> Result<Option<Vec<TermValue>>, EvalError> {
-    let Some(head_id) = ctx.dataset.term_id_by_value(head) else {
+    let Some(head_id) = ctx
+        .dataset
+        .term_id_by_value(head)
+        .map_err(EvalError::source_read)?
+    else {
         return Ok(None);
     };
-    let [first, rest, nil] =
-        [RDF_FIRST, RDF_REST, RDF_NIL].map(|term| ctx.dataset.term_id_by_value(&iri(term)));
+    let first = ctx
+        .dataset
+        .term_id_by_value(&iri(RDF_FIRST))
+        .map_err(EvalError::source_read)?;
+    let rest = ctx
+        .dataset
+        .term_id_by_value(&iri(RDF_REST))
+        .map_err(EvalError::source_read)?;
+    let nil = ctx
+        .dataset
+        .term_id_by_value(&iri(RDF_NIL))
+        .map_err(EvalError::source_read)?;
     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
-    let objects = |cell, predicate: Option<D::Id>| {
-        let mut sole = SoleObject::None;
-        if let Some(predicate) = predicate {
-            scope.for_each_quad(ctx.dataset, Some(cell), Some(predicate), None, |q| {
-                sole = sole.and(q.o);
-            });
-        }
-        sole
-    };
-    let walked = walk_rdf_list(
-        head_id,
-        nil,
-        |cell| objects(cell, first),
-        |cell| objects(cell, rest),
-    );
-    list_members(head_id, walked).map(|members| {
-        members.map(|ids| {
+    let walked = ctx
+        .dataset
+        .checked_read(|dataset| {
+            let objects = |cell, predicate: Option<D::Id>| {
+                let mut sole = SoleObject::None;
+                if let Some(predicate) = predicate {
+                    scope.for_each_quad(dataset, Some(cell), Some(predicate), None, |q| {
+                        sole = sole.and(q.o);
+                    });
+                }
+                sole
+            };
+            walk_rdf_list(
+                head_id,
+                nil,
+                |cell| objects(cell, first),
+                |cell| objects(cell, rest),
+            )
+        })
+        .map_err(EvalError::source_read)?;
+    list_members(head_id, walked)?
+        .map(|ids| {
             ids.into_iter()
-                .map(|id| term_id_to_value(ctx.dataset, id))
+                .map(|id| try_term_id_to_value(ctx.dataset, id))
                 .collect()
         })
-    })
+        .transpose()
 }
 
 /// Walk a list whose cells live only in the per-query constructed buffer

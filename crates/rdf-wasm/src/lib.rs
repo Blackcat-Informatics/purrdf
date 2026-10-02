@@ -109,10 +109,14 @@ mod term;
 
 #[cfg(target_arch = "wasm32")]
 pub use async_query::purrdf_jspi_run;
+#[cfg(all(test, target_arch = "wasm32"))]
+pub use async_query::{__purrdf_test_exchange_terminal, __purrdf_test_open_exchange};
 pub use async_query::{
     AsyncEffect, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind, DeliveryStatus,
     EffectKind, RunStatus, ServiceCatalog, SuspendStatus, async_stack_region_bytes,
 };
+#[cfg(all(test, target_arch = "wasm32"))]
+pub use dataset::__purrdf_test_large_dataset_identity;
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;
 pub use factory::DataFactory;

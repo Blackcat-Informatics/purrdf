@@ -1,36 +1,23 @@
-<!--
-SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-SPDX-License-Identifier: CC-BY-4.0
--->
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
-# Vendored W3C XML Conformance Test Suite
+# Acquired XML conformance suite
 
-Frozen copy of the W3C XML Conformance Test Suite, version 2013-09-23
-(`xmlts20130923`), vendored for `crates/lex/tests/xmlconf.rs`, which grades
-`purrdf_lex::xml` against it. **Do not hand-edit**: the freeze is enforced by
-`scripts/check-corpus-frozen.py` against
-`scripts/conformance-frozen/vectors-xmlconf.sha256`, and the tree is
-regenerated only by `python3 scripts/vendor-xmlconf.py`.
+Tests use the unmodified XML conformance collection `xmlts20130923`, acquired
+by `python3 scripts/vendor-xmlconf.py` into `target/conformance/xmlconf`.
+The source repository and release archives contain no extracted suite payload.
 
-## Source
+The upstream archive is https://www.w3.org/XML/Test/xmlts20130923.tar.gz with
+SHA-256 `9b61db9f5dbffa545f4b8d78422167083a8568c59bd1129f94138f936cf6fc1f`.
+Every one of its 3386 files retains its exact bytes, checked against the
+unchanged `scripts/conformance-frozen/vectors-xmlconf.sha256`. Both the freeze
+gate and the XML test harness verify acquisition; a valid cache works offline.
+The reader scoreboard and all test attributes remain unchanged.
 
-- Upstream: <https://www.w3.org/XML/Test/>
-- Retrieval: `https://www.w3.org/XML/Test/xmlts20130923.tar.gz`
-- Tarball SHA-256: `9b61db9f5dbffa545f4b8d78422167083a8568c59bd1129f94138f936cf6fc1f`
-- The tarball's `xmlconf/` tree is written verbatim (3386 files; the tarball's
-  own layout, file bytes and names are unchanged; only the archive's owner and
-  permission bits are dropped).
-- Licence: the suite is a collection of contributed sub-suites (James Clark's
-  XMLTEST, Sun Microsystems, OASIS/NIST, IBM, Fuji Xerox, the University of
-  Edinburgh), each under the terms stated in its own directory (for example
-  `xmltest/readme.html`) and the W3C test-suite licence at
-  <https://www.w3.org/Consortium/Legal/2008/04-testsuite-copyright.html>. The
-  files are redistributed here unmodified and are test data only: no crate
-  compiles any of it in.
-
-## Contents
-
-`xmlconf.xml` is the master manifest (`TESTSUITE`, one `TESTCASES` per
-sub-suite, each `TEST` naming its document by `URI` with the attributes
-`TYPE`, `VERSION`, `EDITION`, `ENTITIES`, `NAMESPACE`, `RECOMMENDATION` and
-`OUTPUT`). `testcases.dtd` describes those attributes.
+Each contributed sub-suite keeps the terms stated by its original authors.
+In particular, James Clark's XMLTEST readme restricts redistribution to the
+unmodified original `xmltest.zip`; the W3C collection contains later changes
+and is not that original archive. We acquire the W3C collection for local
+verification rather than redistributing its extracted XMLTEST files.
+The [W3C test-suite policy](https://www.w3.org/copyright/test-suites-licenses/)
+does not retroactively replace the licenses of older suites.

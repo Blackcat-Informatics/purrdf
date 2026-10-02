@@ -1281,7 +1281,7 @@ mod tests {
         };
         let lifted = lift_research_object(model, &config).expect("lift");
         for quad in lifted.quads() {
-            let predicate = lifted.resolve(quad.p);
+            let predicate = lifted.as_ref().resolve(quad.p);
             let purrdf_core::TermRef::Iri(predicate) = predicate else {
                 panic!("predicate must be IRI");
             };

@@ -77,15 +77,26 @@ impl GlobalTermId {
     /// The dense index this id addresses in the dictionary's term table.
     ///
     /// The stored value is `index + 1` (id 0 is the niche sentinel), so the dense
-    /// index is one less. Never underflows (the inner is `>= 1`). Uses `try_from`
-    /// rather than an `as` cast so it stays truncation-clean on a 32-bit `usize`
-    /// target (wasm32): a `u64` index that could not fit `usize` cannot address a
-    /// real `Vec`-backed term on that platform, so a hard-fail is correct.
+    /// index is one less. Never underflows (the inner is `>= 1`). This is a
+    /// logical address and is independent of the host's pointer width. Only a
+    /// resident dictionary converts it to a checked local buffer index.
     #[inline]
     #[must_use]
-    pub fn index(self) -> usize {
-        usize::try_from(self.0.get() - 1)
-            .expect("global term id index exceeds usize on this platform")
+    pub const fn index(self) -> u64 {
+        self.0.get() - 1
+    }
+
+    /// Construct an id without overflowing the reserved zero representation.
+    #[inline]
+    #[must_use]
+    pub fn checked_from_index(index: u64) -> Option<Self> {
+        index.checked_add(1).and_then(NonZeroU64::new).map(Self)
+    }
+
+    /// Address a table owned by the bounded resident dictionary.
+    #[inline]
+    fn resident_index(self) -> usize {
+        usize::try_from(self.index()).expect("resident dictionary index fits its buffer")
     }
 
     /// Construct a `GlobalTermId` from a dense table index. Hard-fails (rather than
@@ -116,7 +127,7 @@ impl ViewTermId for GlobalTermId {
     fn encode(self) -> u128 {
         // The dense index is `u64`-bounded, so it fits the low 64 bits with bit 64
         // clear — disjoint from every `encode_computed` image (which sets bit 64).
-        self.index() as u128
+        u128::from(self.index())
     }
 
     #[inline]
@@ -589,7 +600,7 @@ impl GlobalDictionary {
     /// resolve each in turn if their values are needed.
     #[must_use]
     pub fn resolve(&self, id: GlobalTermId) -> TermRef<'_, GlobalTermId> {
-        match &self.terms[id.index()] {
+        match &self.terms[id.resident_index()] {
             GlobalInternedTerm::Iri(iri) => TermRef::Iri(arena_str(&self.arena, *iri)),
             GlobalInternedTerm::Blank { label, scope } => TermRef::Blank {
                 label: arena_str(&self.arena, *label),
@@ -626,7 +637,7 @@ impl GlobalDictionary {
             id,
             &mut (),
             |(), id| {
-                Ok::<_, Infallible>(Nested::Leaf(match &self.terms[id.index()] {
+                Ok::<_, Infallible>(Nested::Leaf(match &self.terms[id.resident_index()] {
                     GlobalInternedTerm::Iri(iri) => {
                         TermValue::Iri(arena_str(&self.arena, *iri).to_owned())
                     }
@@ -636,7 +647,7 @@ impl GlobalDictionary {
                     },
                     GlobalInternedTerm::Literal(lit) => {
                         // A literal's datatype is always an interned IRI (C0.1).
-                        let datatype = match &self.terms[lit.datatype.index()] {
+                        let datatype = match &self.terms[lit.datatype.resident_index()] {
                             GlobalInternedTerm::Iri(iri) => arena_str(&self.arena, *iri).to_owned(),
                             _ => unreachable!("a literal datatype is always an interned IRI"),
                         };
@@ -669,7 +680,7 @@ impl GlobalDictionary {
     /// datatype), for the value-based reverse index. Mirrors the frozen dataset's
     /// `hash_iri_string`.
     fn hash_datatype_iri<H: Hasher>(&self, id: GlobalTermId, state: &mut H) {
-        match &self.terms[id.index()] {
+        match &self.terms[id.resident_index()] {
             GlobalInternedTerm::Iri(iri) => arena_str(&self.arena, *iri).hash(state),
             // Unreachable for a well-formed literal (a datatype is always an IRI);
             // hash the Debug form rather than panic.
@@ -686,7 +697,7 @@ impl GlobalDictionary {
     /// the order [`TermValue`]'s `Hash` feeds them.
     fn hash_term_value<H: Hasher>(&self, id: GlobalTermId, state: &mut H) {
         let ControlFlow::Continue(()) = visit_nested(id, |id| -> ControlFlow<Infallible, _> {
-            ControlFlow::Continue(match &self.terms[id.index()] {
+            ControlFlow::Continue(match &self.terms[id.resident_index()] {
                 GlobalInternedTerm::Iri(iri) => {
                     0u8.hash(state);
                     arena_str(&self.arena, *iri).hash(state);
@@ -722,7 +733,7 @@ impl GlobalDictionary {
     /// mismatch ends the comparison.
     fn term_matches_value(&self, id: GlobalTermId, value: &TermValue) -> bool {
         visit_nested((id, value), |(id, value)| {
-            let matched = match (&self.terms[id.index()], value) {
+            let matched = match (&self.terms[id.resident_index()], value) {
                 (GlobalInternedTerm::Iri(iri), TermValue::Iri(v)) => {
                     arena_str(&self.arena, *iri) == v
                 }
@@ -768,7 +779,7 @@ impl GlobalDictionary {
 
     /// Whether a term known to be an interned IRI equals `expected` (zero-alloc).
     fn iri_matches(&self, id: GlobalTermId, expected: &str) -> bool {
-        matches!(&self.terms[id.index()], GlobalInternedTerm::Iri(iri) if arena_str(&self.arena, *iri) == expected)
+        matches!(&self.terms[id.resident_index()], GlobalInternedTerm::Iri(iri) if arena_str(&self.arena, *iri) == expected)
     }
 
     /// The lazily-built reverse value index (built once, cached).
@@ -844,7 +855,7 @@ mod tests {
         for (iri, id) in iris.iter().zip(ids) {
             assert_eq!(
                 hash_lookup_value(&GlobalTermLookup::Iri(iri)),
-                hash_stored_value(&dict.arena, &dict.terms[id.index()]),
+                hash_stored_value(&dict.arena, &dict.terms[id.resident_index()]),
                 "borrowed and stored IRI hashes differ at length {}",
                 iri.len()
             );
@@ -888,7 +899,7 @@ mod tests {
             let hash = hash_lookup_value(&lookup);
             assert_eq!(
                 hash,
-                hash_stored_value(&dict.arena, &dict.terms[id.index()])
+                hash_stored_value(&dict.arena, &dict.terms[id.resident_index()])
             );
             assert_eq!(dict.intern_lookup(lookup), id);
         }
@@ -1046,13 +1057,13 @@ mod tests {
         ];
 
         let mut first = GlobalDictionary::new();
-        let ids_first: Vec<usize> = sequence
+        let ids_first: Vec<u64> = sequence
             .iter()
             .map(|v| intern(&mut first, v).index())
             .collect();
 
         let mut second = GlobalDictionary::new();
-        let ids_second: Vec<usize> = sequence
+        let ids_second: Vec<u64> = sequence
             .iter()
             .map(|v| intern(&mut second, v).index())
             .collect();
@@ -1130,20 +1141,13 @@ mod tests {
 
     #[test]
     fn global_term_id_index_round_trips() {
-        let widest = u64::try_from(usize::MAX - 1).expect("usize fits u64");
-        for raw in [0u64, 1, 42, widest, u64::MAX - 1] {
+        for raw in [0_u64, 1, 42, u64::from(u32::MAX) + 1, u64::MAX - 1] {
             let id = GlobalTermId::from_index(raw);
-            if usize::try_from(raw).is_ok() {
-                assert_eq!(u64::try_from(id.index()).expect("index fits u64"), raw);
-            } else {
-                // A 32-bit `usize` (wasm32, i686) cannot address this index, and `index`
-                // hard-fails rather than truncating, as documented.
-                assert!(
-                    std::panic::catch_unwind(|| id.index()).is_err(),
-                    "index {raw} does not fit usize and must not be truncated"
-                );
-            }
+            assert_eq!(id.index(), raw);
+            assert_eq!(id.encode(), u128::from(raw));
+            assert_eq!(GlobalTermId::checked_from_index(raw), Some(id));
         }
+        assert_eq!(GlobalTermId::checked_from_index(u64::MAX), None);
     }
 
     #[test]

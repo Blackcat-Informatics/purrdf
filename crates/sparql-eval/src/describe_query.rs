@@ -67,7 +67,7 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
                 (rows, Some(truncation))
             }
         };
-        let (vars, rows) = materialize_solutions(&seq, ctx);
+        let (vars, rows) = materialize_solutions(&seq, ctx)?;
         for (col, name) in vars.iter().enumerate() {
             if !describe_all && !var_targets.contains(&name.as_str()) {
                 continue;
@@ -93,7 +93,8 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
         (None, SolutionSeq::empty(VarSchema::empty_shared()))
     };
 
-    let graph = Describer::new(ctx.dataset)
+    let graph = Describer::try_new(ctx.dataset)
+        .map_err(EvalError::source_read)?
         .describe_iris(subjects.iter().map(String::as_str))
         .map_err(|d| EvalError::internal(format!("DESCRIBE output failed to build: {d:?}")))?;
     // The cap denominates the description's triples, exactly as it does a `CONSTRUCT`'s —

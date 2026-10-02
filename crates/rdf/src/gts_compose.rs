@@ -32,6 +32,7 @@ use crate::{
     TermRef, checkpointed_drain,
 };
 
+use purrdf_core::dataset_view::TermGuard as _;
 /// The `rdf:reifies` predicate IRI (RDF 1.2 statement layer).
 pub use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 use purrdf_xsd::datatype::XSD_STRING;
@@ -516,7 +517,11 @@ impl SnapshotBuilder {
         // ingestion is taken back out, leaving the builder at exactly the state
         // the last fully-accepted ingestion left it in.
         let mark = self.mark();
-        match self.ingest_view_rows(view, default_graph_name, scope) {
+        match view
+            .checked_read(|view| self.ingest_view_rows(view, default_graph_name, scope))
+            .map_err(GtsIngestError::source_read)
+            .and_then(std::convert::identity)
+        {
             Ok(report) => Ok(report),
             Err(err) => {
                 self.rollback_to(mark);
@@ -636,7 +641,7 @@ impl SnapshotBuilder {
             .named_graphs()
             .filter(|graph| !occupied_graphs.contains(graph))
             .map(|graph| render_term(view, graph))
-            .collect();
+            .collect::<Result<_, _>>()?;
         declarations_omitted.sort_unstable();
         declarations_omitted.dedup();
 
@@ -713,10 +718,13 @@ impl SnapshotBuilder {
         // quoted-triple object through the plain-slot guard above.
         for binding in view.reifier_quads() {
             let rid = self.intern_view_term(view, binding.s, scope, "reifier term")?;
-            let TermRef::Triple { s, p, o } = view.resolve(binding.o) else {
+            let guard = view
+                .resolve(binding.o)
+                .map_err(GtsIngestError::source_read)?;
+            let TermRef::Triple { s, p, o } = guard.term() else {
                 return Err(GtsIngestError::UnrepresentableTerm {
                     position: "reifier binding object",
-                    term: render_term(view, binding.o),
+                    term: render_term(view, binding.o)?,
                 });
             };
             let qs = self.intern_view_term(view, s, scope, "reified subject")?;
@@ -770,7 +778,8 @@ impl SnapshotBuilder {
         scope: Option<&str>,
         position: &'static str,
     ) -> Result<usize, GtsIngestError> {
-        match view.resolve(id) {
+        let guard = view.resolve(id).map_err(GtsIngestError::source_read)?;
+        match guard.term() {
             TermRef::Iri(iri) => Ok(self.intern_iri(iri)),
             TermRef::Blank {
                 label,
@@ -782,10 +791,13 @@ impl SnapshotBuilder {
                 language,
                 direction,
             } => {
-                let TermRef::Iri(datatype_iri) = view.resolve(datatype) else {
+                let datatype_guard = view
+                    .resolve(datatype)
+                    .map_err(GtsIngestError::source_read)?;
+                let TermRef::Iri(datatype_iri) = datatype_guard.term() else {
                     return Err(GtsIngestError::UnrepresentableTerm {
                         position: "literal datatype",
-                        term: render_term(view, datatype),
+                        term: render_term(view, datatype)?,
                     });
                 };
                 if let Some(language) = language {
@@ -805,7 +817,7 @@ impl SnapshotBuilder {
             }
             TermRef::Triple { .. } => Err(GtsIngestError::UnrepresentableTerm {
                 position,
-                term: render_term(view, id),
+                term: render_term(view, id)?,
             }),
         }
     }
@@ -817,11 +829,12 @@ impl SnapshotBuilder {
         id: D::Id,
         position: &'static str,
     ) -> Result<usize, GtsIngestError> {
-        match view.resolve(id) {
+        let guard = view.resolve(id).map_err(GtsIngestError::source_read)?;
+        match guard.term() {
             TermRef::Iri(iri) => Ok(self.intern_iri(iri)),
             _ => Err(GtsIngestError::UnrepresentableTerm {
                 position,
-                term: render_term(view, id),
+                term: render_term(view, id)?,
             }),
         }
     }
@@ -1086,16 +1099,21 @@ const RENDER_TERM_DEPTH: usize = 8;
 /// point of the function — a message reading `Triple { s: Id(41), p: Id(7), ... }`
 /// names the offending term in a vocabulary only the view itself speaks, and
 /// leaves the reader unable to find the row it came from.
-fn render_term<D: DatasetView>(view: &D, id: D::Id) -> String {
+fn render_term<D: DatasetView>(view: &D, id: D::Id) -> Result<String, GtsIngestError> {
     render_term_within(view, id, RENDER_TERM_DEPTH)
 }
 
 /// [`render_term`] with the remaining recursion budget carried explicitly.
-fn render_term_within<D: DatasetView>(view: &D, id: D::Id, depth: usize) -> String {
+fn render_term_within<D: DatasetView>(
+    view: &D,
+    id: D::Id,
+    depth: usize,
+) -> Result<String, GtsIngestError> {
     let Some(next) = depth.checked_sub(1) else {
-        return "…".to_owned();
+        return Ok("…".to_owned());
     };
-    match view.resolve(id) {
+    let guard = view.resolve(id).map_err(GtsIngestError::source_read)?;
+    Ok(match guard.term() {
         TermRef::Iri(iri) => iri.to_owned(),
         TermRef::Blank { label, scope } => format!("_:{}", scope.qualify_label(label)),
         TermRef::Literal {
@@ -1121,7 +1139,7 @@ fn render_term_within<D: DatasetView>(view: &D, id: D::Id, depth: usize) -> Stri
                 }
                 (None, _) => {
                     rendered.push_str("^^<");
-                    rendered.push_str(&render_term_within(view, datatype, next));
+                    rendered.push_str(&render_term_within(view, datatype, next)?);
                     rendered.push('>');
                 }
             }
@@ -1129,11 +1147,11 @@ fn render_term_within<D: DatasetView>(view: &D, id: D::Id, depth: usize) -> Stri
         }
         TermRef::Triple { s, p, o } => format!(
             "<<( {} {} {} )>>",
-            render_term_within(view, s, next),
-            render_term_within(view, p, next),
-            render_term_within(view, o, next),
+            render_term_within(view, s, next)?,
+            render_term_within(view, p, next)?,
+            render_term_within(view, o, next)?,
         ),
-    }
+    })
 }
 
 /// Which ingestion boundary sampled a fallible view's operational status.
@@ -1175,6 +1193,11 @@ impl std::fmt::Display for IngestCheckpoint {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GtsIngestError {
+    /// Forward or reverse access to the source dictionary failed.
+    SourceRead {
+        /// The source read failure, rendered without losing the failure category.
+        cause: String,
+    },
     /// The view's operational status was not `Ready` at an ingestion checkpoint,
     /// so the rows read are a truncation, not the view.
     ViewNotReady {
@@ -1223,9 +1246,18 @@ pub enum GtsIngestError {
     },
 }
 
+impl GtsIngestError {
+    fn source_read(error: impl std::fmt::Display) -> Self {
+        Self::SourceRead {
+            cause: error.to_string(),
+        }
+    }
+}
+
 impl std::fmt::Display for GtsIngestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SourceRead { cause } => write!(f, "snapshot source read failed: {cause}"),
             Self::ViewNotReady { checkpoint, cause } => write!(
                 f,
                 "the view reported an operational failure {checkpoint}, so the rows read are \

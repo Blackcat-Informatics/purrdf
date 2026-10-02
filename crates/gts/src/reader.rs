@@ -252,7 +252,7 @@ pub struct StreamingReadResult {
     /// Ordered per-segment streamable-layout state.
     pub segment_streamable: Vec<StreamableInfo>,
     /// Byte offset of a torn trailing CBOR item, if present.
-    pub torn: Option<usize>,
+    pub torn: Option<u64>,
 }
 
 /// Physical provenance of one streamed frame: where its bytes live and what it
@@ -266,9 +266,9 @@ pub struct StreamingReadResult {
 #[derive(Clone, Debug)]
 pub struct FrameContext<'a> {
     /// Zero-based segment index.
-    pub segment_index: usize,
+    pub segment_index: u64,
     /// Zero-based frame index within the segment (excludes the header).
-    pub frame_index: usize,
+    pub frame_index: u64,
     /// Frame content-id: the stored `"id"` when present and self-hash-valid,
     /// else the recomputed id; empty for a non-map placeholder frame.
     pub content_id: &'a [u8],
@@ -288,7 +288,13 @@ impl FrameContext<'_> {
     /// decode as CBOR, or the decoded value is not a map — a damaged frame
     /// never verifies.
     pub fn verify(&self, source: &[u8]) -> bool {
-        let Some(bytes) = source.get(self.range.start..self.range.end) else {
+        let (Ok(start), Ok(end)) = (
+            usize::try_from(self.range.start),
+            usize::try_from(self.range.end),
+        ) else {
+            return false;
+        };
+        let Some(bytes) = source.get(start..end) else {
             return false;
         };
         let Ok(Ok(map)) = cbor::decode(bytes, cbor::Limits::DEFAULT).map(Value::into_map) else {
@@ -308,7 +314,7 @@ impl FrameContext<'_> {
 #[derive(Clone, Copy, Debug)]
 pub struct BlobPayload<'a> {
     /// Zero-based segment containing this occurrence.
-    pub segment_index: usize,
+    pub segment_index: u64,
     /// Declared content digest, or the computed digest when not declared.
     pub digest: &'a str,
     /// Public metadata available at this occurrence, independent of RDF rows.
@@ -340,7 +346,7 @@ pub struct BlobPayload<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct BlobRefusal<'a> {
     /// Zero-based segment containing this occurrence.
-    pub segment_index: usize,
+    pub segment_index: u64,
     /// Declared content digest, when the container published one.
     ///
     /// `None` for a payload with no public digest: refusing happens before the
@@ -371,17 +377,17 @@ pub trait StreamingSink {
     /// Per-frame provenance, fired once per frame before its rows are processed.
     fn frame(&mut self, _ctx: FrameContext<'_>) {}
     /// Accepted term row.
-    fn term(&mut self, _segment_index: usize, _term_id: usize, _term: &Term) {}
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: &Term) {}
     /// Accepted quad row.
-    fn quad(&mut self, _segment_index: usize, _quad: Quad) {}
+    fn quad(&mut self, _segment_index: u64, _quad: Quad) {}
     /// Accepted reifier row.
-    fn reifier(&mut self, _segment_index: usize, _reifier: ReifierRow) {}
+    fn reifier(&mut self, _segment_index: u64, _reifier: ReifierRow) {}
     /// Accepted annotation row.
-    fn annotation(&mut self, _segment_index: usize, _annotation: AnnotationRow) {}
+    fn annotation(&mut self, _segment_index: u64, _annotation: AnnotationRow) {}
     /// Accepted suppression directive.
-    fn suppression(&mut self, _segment_index: usize, _suppression: &Suppression) {}
+    fn suppression(&mut self, _segment_index: u64, _suppression: &Suppression) {}
     /// Accepted inline blob digest and declared metadata.
-    fn blob(&mut self, _segment_index: usize, _digest: &str, _meta: Option<&Value>) {}
+    fn blob(&mut self, _segment_index: u64, _digest: &str, _meta: Option<&Value>) {}
     /// Borrowed blob bytes with their public metadata and codec chain.
     ///
     /// The default is inert: existing sinks neither copy nor decode payloads.
@@ -423,15 +429,15 @@ pub trait StreamingSink {
         None
     }
     /// Opaque frame produced by unknown, encrypted, or damaged payloads.
-    fn opaque(&mut self, _segment_index: usize, _opaque: &OpaqueNode) {}
+    fn opaque(&mut self, _segment_index: u64, _opaque: &OpaqueNode) {}
     /// Signature status observed on a frame.
-    fn signature(&mut self, _segment_index: usize, _signature: &Signature) {}
+    fn signature(&mut self, _segment_index: u64, _signature: &Signature) {}
     /// Reader diagnostic.
     fn diagnostic(&mut self, _diagnostic: &Diagnostic) {}
     /// Completed segment head.
-    fn segment_head(&mut self, _segment_index: usize, _head: &[u8]) {}
+    fn segment_head(&mut self, _segment_index: u64, _head: &[u8]) {}
     /// Completed segment streamable-layout state.
-    fn streamable_layout(&mut self, _segment_index: usize, _info: &StreamableInfo) {}
+    fn streamable_layout(&mut self, _segment_index: u64, _info: &StreamableInfo) {}
 }
 
 /// Resolves a 32-byte content key by COSE recipient `kid`.
@@ -519,7 +525,7 @@ struct Folder<'g, 's, 'k> {
     g: &'g mut Graph,
     sink: Option<&'s mut dyn StreamingSink>,
     content_key: Option<&'k ContentKeyResolver<'k>>,
-    segment_index: usize,
+    segment_index: u64,
     materialize: bool,
     catalog: FastMap<i128, Codec>,
     blob_index: DigestIndex,
@@ -529,12 +535,12 @@ struct Folder<'g, 's, 'k> {
     // arrival (frame index, digest, was-it-described-at-arrival).
     index_records: Vec<IndexRecord>,
     described: FastSet<String>,
-    blob_events: Vec<(usize, String, bool)>,
+    blob_events: Vec<(u64, String, bool)>,
     // Reifier ids seen bound to more than one triple, with the frame index of
     // the rebinding row. Legitimate on its own (§7.1 `tt`); only ambiguous for a
     // legacy `rf`-only quoted-triple term, which is checked once the segment is
     // fully folded (see `report_ambiguous_reifiers`).
-    rebound_reifiers: Vec<(usize, usize)>,
+    rebound_reifiers: Vec<(usize, u64)>,
 }
 
 impl Folder<'_, '_, '_> {
@@ -548,7 +554,7 @@ impl Folder<'_, '_, '_> {
     /// Run after the whole segment is folded so it does not depend on whether
     /// the `terms` frame happened to precede the `reifies` frame.
     fn report_ambiguous_reifiers(&mut self) {
-        let ambiguous: Vec<(usize, usize)> = std::mem::take(&mut self.rebound_reifiers)
+        let ambiguous: Vec<(usize, u64)> = std::mem::take(&mut self.rebound_reifiers)
             .into_iter()
             .filter(|&(rid, _)| {
                 self.g.terms.iter().any(|term| {
@@ -570,13 +576,13 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn with_sink(&mut self, f: impl FnOnce(usize, &mut dyn StreamingSink)) {
+    fn with_sink(&mut self, f: impl FnOnce(u64, &mut dyn StreamingSink)) {
         if let Some(sink) = self.sink.as_deref_mut() {
             f(self.segment_index, sink);
         }
     }
 
-    fn diag(&mut self, code: &str, detail: String, index: Option<usize>) {
+    fn diag(&mut self, code: &str, detail: String, index: Option<u64>) {
         push_diagnostic(
             self.g,
             &mut self.sink,
@@ -740,7 +746,7 @@ impl Folder<'_, '_, '_> {
     ///
     /// Total: a missing capability degrades to an opaque node, and a corrupt
     /// payload degrades to a `damaged` opaque node — the reader never aborts.
-    fn fold_frame(&mut self, frame: &[(Value, Value)], index: usize) {
+    fn fold_frame(&mut self, frame: &[(Value, Value)], index: u64) {
         // Borrowed from `frame` (a parameter, not `self`), so the `&mut self`
         // handler calls below are unaffected and no per-frame `String` is made.
         let ftype = text_or(map_get(frame, "t"), "");
@@ -793,7 +799,7 @@ impl Folder<'_, '_, '_> {
 
     // -- per-type handlers ---------------------------------------------------
 
-    fn h_terms(&mut self, payload: &Value, index: usize) {
+    fn h_terms(&mut self, payload: &Value, index: u64) {
         let Value::Array(rows) = payload else { return };
         for raw in rows {
             let Value::Map(entries) = raw else { continue };
@@ -975,7 +981,7 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn h_quads(&mut self, payload: &Value, index: usize) {
+    fn h_quads(&mut self, payload: &Value, index: u64) {
         let Value::Array(rows) = payload else { return };
         for row in rows {
             let Value::Array(items) = row else { continue };
@@ -1015,7 +1021,7 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn h_reifies(&mut self, payload: &Value, index: usize) {
+    fn h_reifies(&mut self, payload: &Value, index: u64) {
         let Value::Array(rows) = payload else {
             self.diag(
                 "DamagedFrame",
@@ -1062,7 +1068,7 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn h_annot(&mut self, payload: &Value, index: usize) {
+    fn h_annot(&mut self, payload: &Value, index: u64) {
         let Value::Array(rows) = payload else { return };
         for row in rows {
             let annotation = match decode_annotation_row(row, self.g) {
@@ -1084,7 +1090,7 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn h_blob_frame(&mut self, frame: &[(Value, Value)], index: usize) {
+    fn h_blob_frame(&mut self, frame: &[(Value, Value)], index: u64) {
         let d = map_get(frame, "d");
         let declared_metadata = map_get(frame, "pub");
         let pub_meta = declared_metadata
@@ -1298,7 +1304,7 @@ impl Folder<'_, '_, '_> {
     /// Shifts the snapshot's local term ids into the outer id space and
     /// re-dispatches through the normal handlers, so a snapshot gets the SAME
     /// semantic checks as the equivalent streamed frames.
-    fn h_snapshot(&mut self, payload: &Value, index: usize) {
+    fn h_snapshot(&mut self, payload: &Value, index: u64) {
         let Value::Map(entries) = payload else { return };
         let base = self.g.terms.len();
         // Shift a valid local id into the outer space; pass non-ints through
@@ -1398,9 +1404,11 @@ impl Folder<'_, '_, '_> {
     /// The index stays an accelerator for the fold itself; only `count` and
     /// `head` are consumed here, as the covered-region boundary. A payload
     /// without a valid count/head pair is simply not an intact index.
-    fn h_index(&mut self, payload: &Value, index: usize) {
+    fn h_index(&mut self, payload: &Value, index: u64) {
         let Value::Map(entries) = payload else { return };
-        let count = map_get(entries, "count").and_then(as_idx);
+        let count = map_get(entries, "count")
+            .and_then(as_i128)
+            .and_then(|count| u64::try_from(count).ok());
         let head = map_get(entries, "head");
         if let (Some(count), Some(Value::Bytes(head))) = (count, head) {
             let mmr = match map_get(entries, "mmr") {
@@ -1727,7 +1735,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
                  term-ids would silently misfold — §16)",
                 bounds[1]
             ),
-            frame_index: Some(bounds[1]),
+            frame_index: Some(bounds[1] as u64),
         });
         return g;
     }
@@ -1796,20 +1804,29 @@ pub fn read_to_sink_with_options(
 
 struct StreamingCountingReader<R> {
     inner: R,
-    pos: usize,
+    pos: u64,
+    address_exhausted: bool,
 }
 
 impl<R: Read> Read for StreamingCountingReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read = self.inner.read(buf)?;
-        self.pos += read;
+        self.pos = match self.pos.checked_add(read as u64) {
+            Some(position) => position,
+            None => {
+                self.address_exhausted = true;
+                return Err(std::io::Error::other(
+                    "GTS source byte offset exceeds u64::MAX",
+                ));
+            }
+        };
         Ok(read)
     }
 }
 
 fn next_stream_item<R: Read>(
     reader: &mut StreamingCountingReader<R>,
-) -> Result<Option<(Value, usize, usize)>, usize> {
+) -> Result<Option<(Value, u64, u64)>, u64> {
     let start = reader.pos;
     match cbor::read_from(&mut *reader, cbor::Limits::DEFAULT) {
         Ok(Some(item)) => Ok(Some((item, start, reader.pos))),
@@ -1823,25 +1840,25 @@ struct ActiveStreamingSegment {
     header: Vec<(Value, Value)>,
     expected_prev: Vec<u8>,
     frame_ids: Vec<Vec<u8>>,
-    index_offset: usize,
-    segment_index: usize,
+    index_offset: u64,
+    segment_index: u64,
     valid_header: bool,
     catalog: FastMap<i128, Codec>,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
     index_records: Vec<IndexRecord>,
     described: FastSet<String>,
-    blob_events: Vec<(usize, String, bool)>,
+    blob_events: Vec<(u64, String, bool)>,
     // Carried across this segment's frames (each frame gets a fresh `Folder`)
     // so the ambiguity check runs once the whole segment has been seen.
-    rebound_reifiers: Vec<(usize, usize)>,
+    rebound_reifiers: Vec<(usize, u64)>,
 }
 
 impl ActiveStreamingSegment {
     fn new(
         raw_header: &Value,
-        index_offset: usize,
-        segment_index: usize,
+        index_offset: u64,
+        segment_index: u64,
         sink: &mut dyn StreamingSink,
     ) -> Self {
         let mut g = Graph::default();
@@ -1925,9 +1942,9 @@ impl ActiveStreamingSegment {
     fn process_frame<'k>(
         &mut self,
         raw: &Value,
-        abs_index: usize,
-        frame_start: usize,
-        frame_end: usize,
+        abs_index: u64,
+        frame_start: u64,
+        frame_end: u64,
         sink: &mut dyn StreamingSink,
         content_key: Option<&'k ContentKeyResolver<'k>>,
     ) {
@@ -1937,7 +1954,7 @@ impl ActiveStreamingSegment {
         // Captured before any push below — the zero-based index of THIS
         // frame within the segment (mirrors `collect_frames` in
         // `replication.rs`).
-        let frame_index = self.frame_ids.len();
+        let frame_index = self.frame_ids.len() as u64;
         let catalog = std::mem::take(&mut self.catalog);
         let blob_index = std::mem::take(&mut self.blob_index);
         let blob_meta_index = std::mem::take(&mut self.blob_meta_index);
@@ -2142,15 +2159,28 @@ pub fn read_to_sink_from_reader<R: Read>(
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
+        address_exhausted: false,
     };
     let mut result = StreamingReadResult::default();
-    let mut item_index = 0usize;
+    let mut item_index = 0u64;
     let mut current: Option<ActiveStreamingSegment> = None;
     loop {
         let (item, frame_start, frame_end) = match next_stream_item(&mut reader) {
             Ok(Some(item)) => item,
             Ok(None) => break,
             Err(torn) => {
+                if reader.address_exhausted {
+                    push_result_diagnostic(
+                        &mut result,
+                        sink,
+                        Diagnostic {
+                            code: "ResourceLimit".to_owned(),
+                            detail: "GTS source byte offset exceeds u64::MAX".to_owned(),
+                            frame_index: Some(item_index),
+                        },
+                    );
+                    return result;
+                }
                 result.torn = Some(torn);
                 break;
             }
@@ -2190,7 +2220,7 @@ pub fn read_to_sink_from_reader<R: Read>(
             current = Some(ActiveStreamingSegment::new(
                 &item,
                 item_index,
-                result.segment_heads.len(),
+                result.segment_heads.len() as u64,
                 sink,
             ));
         } else if let Some(segment) = current.as_mut() {
@@ -2214,7 +2244,21 @@ pub fn read_to_sink_from_reader<R: Read>(
             );
             return result;
         }
-        item_index += 1;
+        item_index = match item_index.checked_add(1) {
+            Some(next) => next,
+            None => {
+                push_result_diagnostic(
+                    &mut result,
+                    sink,
+                    Diagnostic {
+                        code: "ResourceLimit".to_owned(),
+                        detail: "GTS item ordinal exceeds u64::MAX".to_owned(),
+                        frame_index: Some(item_index),
+                    },
+                );
+                return result;
+            }
+        };
     }
 
     if item_index == 0 {
@@ -2269,7 +2313,7 @@ pub struct FileSegments {
     /// One fold per segment, in file order, each carrying its OWN diagnostics.
     pub segments: Vec<Graph>,
     /// Byte offset of a torn trailing item (§3), if any.
-    pub torn: Option<usize>,
+    pub torn: Option<u64>,
     /// Set when the file never reaches segmentation (empty, or the first item
     /// is not a header) — `segments` is empty in that case.
     pub fatal: Option<Diagnostic>,
@@ -2282,7 +2326,7 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
     if items.is_empty() {
         return FileSegments {
             segments: Vec::new(),
-            torn,
+            torn: torn.map(|offset| offset as u64),
             fatal: Some(Diagnostic {
                 code: "EmptyFile".to_string(),
                 detail: "no CBOR items".to_string(),
@@ -2299,7 +2343,7 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
     if bounds.first() != Some(&0) {
         return FileSegments {
             segments: Vec::new(),
-            torn,
+            torn: torn.map(|offset| offset as u64),
             fatal: Some(Diagnostic {
                 code: "DamagedFrame".to_string(),
                 detail: "first item is not a header".to_string(),
@@ -2312,7 +2356,7 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
     let segments = fold_segments(&items, &ranges, None);
     FileSegments {
         segments,
-        torn,
+        torn: torn.map(|offset| offset as u64),
         fatal: None,
     }
 }
@@ -2335,12 +2379,12 @@ fn fold_segments(
         use rayon::prelude::*;
         ranges
             .par_iter()
-            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a, 0, None, None))
+            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a as u64, 0, None, None))
             .collect()
     } else {
         ranges
             .iter()
-            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a, 0, None, content_key))
+            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a as u64, 0, None, content_key))
             .collect()
     }
 }
@@ -2367,8 +2411,8 @@ fn parallel_content_ids(items: &[(usize, Value)]) -> Vec<Option<Vec<u8>>> {
 
 fn read_segment_with_sink(
     items: &[(usize, Value)],
-    index_offset: usize,
-    segment_index: usize,
+    index_offset: u64,
+    segment_index: u64,
     mut sink: Option<&mut dyn StreamingSink>,
     content_key: Option<&ContentKeyResolver<'_>>,
 ) -> Graph {
@@ -2447,7 +2491,10 @@ fn read_segment_with_sink(
             rebound_reifiers: Vec::new(),
         };
         for (index, (_, raw)) in items[1..].iter().enumerate() {
-            let abs_index = index + 1 + index_offset;
+            let abs_index = (index as u64)
+                .checked_add(1)
+                .and_then(|index| index.checked_add(index_offset))
+                .expect("bounded file item count fits u64");
             let Value::Map(frame) = raw else {
                 folder.diag(
                     "DamagedFrame",
@@ -2542,6 +2589,44 @@ mod transformed_payload_tests {
     use super::read;
     use crate::wire::canonical;
     use crate::writer::Writer;
+
+    #[test]
+    fn streaming_offsets_cross_u32_and_refuse_terminal_overflow() {
+        use super::{StreamingCountingReader, next_stream_item};
+        let mut reader = StreamingCountingReader {
+            inner: std::io::Cursor::new([1u8]),
+            pos: (1 << 32) + 7,
+            address_exhausted: false,
+        };
+        let (_, start, end) = next_stream_item(&mut reader).unwrap().unwrap();
+        assert_eq!(start, (1 << 32) + 7);
+        assert_eq!(end, (1 << 32) + 8);
+        let mut reader = StreamingCountingReader {
+            inner: std::io::Cursor::new([1u8]),
+            pos: u64::MAX,
+            address_exhausted: false,
+        };
+        assert_eq!(next_stream_item(&mut reader).unwrap_err(), u64::MAX);
+        assert!(reader.address_exhausted);
+        assert_eq!(reader.pos, u64::MAX);
+    }
+
+    #[test]
+    fn global_frame_range_refuses_addresses_outside_the_local_buffer() {
+        let context = super::FrameContext {
+            segment_index: 1 << 32,
+            frame_index: 1 << 32,
+            content_id: &[],
+            range: super::ByteRange {
+                start: (1 << 32) + 1,
+                end: (1 << 32) + 2,
+            },
+            frame_type: "terms",
+            valid: false,
+        };
+        assert!(!context.verify(&[1]));
+        assert_eq!(context.range.len(), 1);
+    }
 
     /// A file whose one `terms` frame carries `bytes` through the `gzip`
     /// transform, so the reader decodes them as the frame's payload item.

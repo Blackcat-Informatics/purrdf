@@ -71,9 +71,9 @@ use std::fmt;
 use purrdf_deflate::common_prefix_len;
 use purrdf_iri::IriError;
 
+use crate::TermLookupError;
 use crate::dataset_view::DatasetView;
 use crate::hash::{FastMap, FastSet};
-use crate::ir::composite::owned_value;
 use crate::ir::term::{StrRange, arena_str, canonical_kind_tag};
 use crate::ir::term_walk::{Nested, try_fold_nested};
 use crate::{BlankScope, RdfTextDirection, TermRef, TermValue};
@@ -780,115 +780,132 @@ impl PackDict {
     /// not already collected. A value already present keeps its existing id and is
     /// never duplicated.
     #[must_use]
-    pub fn encode<D: DatasetView>(view: &D) -> EncodedDict {
-        // Step 1: every distinct term id used in ANY base-quad role — subject,
-        // predicate, object, or graph name — collapsed into ONE set (this is
-        // the crux of the single-id-space fix: unlike an HDT-style split, a
-        // predicate and a subject/object share the very same membership test).
-        let mut base_ids: FastSet<D::Id> = FastSet::default();
-        for q in view.quads() {
-            base_ids.insert(q.s);
-            base_ids.insert(q.p);
-            base_ids.insert(q.o);
-            if let Some(g) = q.g {
-                base_ids.insert(g);
-            }
-        }
-        let mut values: Vec<TermValue> = base_ids.iter().map(|&id| owned_value(view, id)).collect();
+    pub fn encode<D: DatasetView<ReadError = Infallible>>(view: &D) -> EncodedDict {
+        Self::try_encode(view).expect("a validated resident view resolves its own terms")
+    }
 
-        // Step 1.5: RDF 1.2 side-table term closure roots. A
-        // reifier row (`reifier, triple-term, graph`) and an annotation row
-        // (`reifier, predicate, object, graph`) may reference terms that hold NO
-        // base-quad role at all — e.g. a reifier resource that is never itself a
-        // triple's subject/object. Collect every such reference here as an
-        // ADDITIONAL root, so [`super::side::SideTables`] always finds a unified
-        // id for every side-table reference it needs to resolve. A referenced
-        // triple term's own `s`/`p`/`o` components are handled transitively by
-        // the shared `while qi < queue.len()` worklist loop below — a
-        // `TermValue::Triple` entry always expands its components there,
-        // whatever put it in the queue.
-        //
-        // The reifier layer arrives through the view seam as the virtual quad
-        // `(reifier, rdf:reifies, triple-term, graph)`, so the binding's own three
-        // roots are its `s`, `o` and `g` slots; the `p` slot is the indirection
-        // predicate, folded in below on the condition it is interned under.
-        let mut has_reifiers = false;
-        for binding in view.reifier_quads() {
-            has_reifiers = true;
-            values.push(owned_value(view, binding.s));
-            values.push(owned_value(view, binding.o));
-            if let Some(g) = binding.g {
-                values.push(owned_value(view, g));
-            }
-        }
-        for annotation in view.annotation_quads() {
-            values.push(owned_value(view, annotation.s));
-            values.push(owned_value(view, annotation.p));
-            values.push(owned_value(view, annotation.o));
-            if let Some(g) = annotation.g {
-                values.push(owned_value(view, g));
-            }
-        }
-        // The `rdf:reifies` indirection predicate itself: see the [`RDF_REIFIES`]
-        // doc comment for why it must be folded in on the SAME condition
-        // (reifiers non-empty) the ingest path uses to intern it.
-        if has_reifiers {
-            values.push(TermValue::Iri(RDF_REIFIES.to_owned()));
-        }
-
-        // Deterministic regardless of hash-set iteration order: `values` is
-        // sorted+deduped here (and again after the closure step below) before
-        // any id is assigned — no hash-iteration order ever reaches the output
-        // (byte-determinism discipline).
-        values.sort();
-        values.dedup();
-
-        // Step 2: closure over auxiliary structural references (literal
-        // datatypes, triple components) not already collected — transitively,
-        // since an auxiliary value can itself be a literal or a nested triple
-        // term.
-        let mut present: FastSet<TermValue> = values.iter().cloned().collect();
-        let mut queue: Vec<TermValue> = values.clone();
-        let mut extra: Vec<TermValue> = Vec::new();
-        let mut qi = 0usize;
-        while qi < queue.len() {
-            // Collect the <= 3 values to enqueue into a small local array while
-            // borrowing the entry, instead of deep-cloning the whole entry (a
-            // nested triple term clones its entire subtree) just to read it.
-            // Components already present are not cloned at all; the loop below
-            // still applies the same membership test, in the same order.
-            let candidates: [Option<TermValue>; 3] = match &queue[qi] {
-                TermValue::Literal { datatype, .. } => {
-                    [Some(TermValue::Iri(datatype.clone())), None, None]
-                }
-                TermValue::Triple { s, p, o } => {
-                    let pick = |comp: &TermValue| (!present.contains(comp)).then(|| comp.clone());
-                    [pick(s), pick(p), pick(o)]
-                }
-                TermValue::Iri(_) | TermValue::Blank { .. } => [None, None, None],
-            };
-            for cand in candidates.into_iter().flatten() {
-                if present.insert(cand.clone()) {
-                    extra.push(cand.clone());
-                    queue.push(cand);
+    /// Encode a read session without publishing a partial source.
+    ///
+    /// # Errors
+    /// Returns the source's typed read refusal or an invalid source term.
+    pub fn try_encode<D: DatasetView>(
+        view: &D,
+    ) -> Result<EncodedDict, TermLookupError<D::ReadError>> {
+        view.checked_read(|view| {
+            // Step 1: every distinct term id used in ANY base-quad role — subject,
+            // predicate, object, or graph name — collapsed into ONE set (this is
+            // the crux of the single-id-space fix: unlike an HDT-style split, a
+            // predicate and a subject/object share the very same membership test).
+            let mut base_ids: FastSet<D::Id> = FastSet::default();
+            for q in view.quads() {
+                base_ids.insert(q.s);
+                base_ids.insert(q.p);
+                base_ids.insert(q.o);
+                if let Some(g) = q.g {
+                    base_ids.insert(g);
                 }
             }
-            qi += 1;
-        }
-        values.extend(extra);
-        values.sort();
-        values.dedup();
+            let mut values: Vec<TermValue> = base_ids
+                .iter()
+                .map(|&id| view.term_value(id))
+                .collect::<Result<_, _>>()?;
 
-        // Step 3: assign unified ids 1..=N in canonical TermValue order.
-        let mut value_to_id: FastMap<TermValue, PackTermId> = FastMap::default();
-        for (i, v) in values.iter().enumerate() {
-            value_to_id.insert(v.clone(), (i + 1) as PackTermId);
-        }
+            // Step 1.5: RDF 1.2 side-table term closure roots. A
+            // reifier row (`reifier, triple-term, graph`) and an annotation row
+            // (`reifier, predicate, object, graph`) may reference terms that hold NO
+            // base-quad role at all — e.g. a reifier resource that is never itself a
+            // triple's subject/object. Collect every such reference here as an
+            // ADDITIONAL root, so [`super::side::SideTables`] always finds a unified
+            // id for every side-table reference it needs to resolve. A referenced
+            // triple term's own `s`/`p`/`o` components are handled transitively by
+            // the shared `while qi < queue.len()` worklist loop below — a
+            // `TermValue::Triple` entry always expands its components there,
+            // whatever put it in the queue.
+            //
+            // The reifier layer arrives through the view seam as the virtual quad
+            // `(reifier, rdf:reifies, triple-term, graph)`, so the binding's own three
+            // roots are its `s`, `o` and `g` slots; the `p` slot is the indirection
+            // predicate, folded in below on the condition it is interned under.
+            let mut has_reifiers = false;
+            for binding in view.reifier_quads() {
+                has_reifiers = true;
+                values.push(view.term_value(binding.s)?);
+                values.push(view.term_value(binding.o)?);
+                if let Some(g) = binding.g {
+                    values.push(view.term_value(g)?);
+                }
+            }
+            for annotation in view.annotation_quads() {
+                values.push(view.term_value(annotation.s)?);
+                values.push(view.term_value(annotation.p)?);
+                values.push(view.term_value(annotation.o)?);
+                if let Some(g) = annotation.g {
+                    values.push(view.term_value(g)?);
+                }
+            }
+            // The `rdf:reifies` indirection predicate itself: see the [`RDF_REIFIES`]
+            // doc comment for why it must be folded in on the SAME condition
+            // (reifiers non-empty) the ingest path uses to intern it.
+            if has_reifiers {
+                values.push(TermValue::Iri(RDF_REIFIES.to_owned()));
+            }
 
-        EncodedDict {
-            n_terms: values.len() as u64,
-            values_bytes: encode_values(&values, &value_to_id),
-        }
+            // Deterministic regardless of hash-set iteration order: `values` is
+            // sorted+deduped here (and again after the closure step below) before
+            // any id is assigned — no hash-iteration order ever reaches the output
+            // (byte-determinism discipline).
+            values.sort();
+            values.dedup();
+
+            // Step 2: closure over auxiliary structural references (literal
+            // datatypes, triple components) not already collected — transitively,
+            // since an auxiliary value can itself be a literal or a nested triple
+            // term.
+            let mut present: FastSet<TermValue> = values.iter().cloned().collect();
+            let mut queue: Vec<TermValue> = values.clone();
+            let mut extra: Vec<TermValue> = Vec::new();
+            let mut qi = 0usize;
+            while qi < queue.len() {
+                // Collect the <= 3 values to enqueue into a small local array while
+                // borrowing the entry, instead of deep-cloning the whole entry (a
+                // nested triple term clones its entire subtree) just to read it.
+                // Components already present are not cloned at all; the loop below
+                // still applies the same membership test, in the same order.
+                let candidates: [Option<TermValue>; 3] = match &queue[qi] {
+                    TermValue::Literal { datatype, .. } => {
+                        [Some(TermValue::Iri(datatype.clone())), None, None]
+                    }
+                    TermValue::Triple { s, p, o } => {
+                        let pick =
+                            |comp: &TermValue| (!present.contains(comp)).then(|| comp.clone());
+                        [pick(s), pick(p), pick(o)]
+                    }
+                    TermValue::Iri(_) | TermValue::Blank { .. } => [None, None, None],
+                };
+                for cand in candidates.into_iter().flatten() {
+                    if present.insert(cand.clone()) {
+                        extra.push(cand.clone());
+                        queue.push(cand);
+                    }
+                }
+                qi += 1;
+            }
+            values.extend(extra);
+            values.sort();
+            values.dedup();
+
+            // Step 3: assign unified ids 1..=N in canonical TermValue order.
+            let mut value_to_id: FastMap<TermValue, PackTermId> = FastMap::default();
+            for (i, v) in values.iter().enumerate() {
+                value_to_id.insert(v.clone(), (i + 1) as PackTermId);
+            }
+
+            Ok(EncodedDict {
+                n_terms: values.len() as u64,
+                values_bytes: encode_values(&values, &value_to_id),
+            })
+        })
+        .map_err(TermLookupError::Read)?
     }
 
     /// Parse and decode a dictionary from [`EncodedDict::to_bytes`]'s output in one

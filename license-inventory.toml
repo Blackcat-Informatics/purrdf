@@ -1,0 +1,203 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# Inherited material: grants and byte-preserved notice evidence.
+# Generated payloads are projections of this ledger and Cargo.lock, never hand edited.
+
+[[material]]
+id = "unicode"
+license = "Unicode-3.0"
+source = "https://www.unicode.org/Public/17.0.0/ucd/"
+scope = "generated and vendored Unicode data; terms apply in addition to the first-party grant"
+paths = ["crates/lex/src/unicode_tables.rs", "crates/iri/src/idna_tables.rs", "crates/rdf-core/src/xsd_regex/blocks.rs", "crates/text/src/unicode_tables.rs", "crates/jsonschema/src/ecma/property_tables.rs", "crates/jsonschema/src/ecma/unicode_ranges.rs", "crates/iri/unicode/**", "crates/rdf-core/vendor/unicode/**"]
+notices = ["LICENSES/Unicode-3.0.txt"]
+provenance = ["crates/iri/unicode/PROVENANCE.md", "LICENSING.md"]
+
+[[material]]
+id = "libyaml-emitter"
+license = "MIT"
+source = "https://github.com/dtolnay/unsafe-libyaml/tree/0.2.11"
+scope = "emitter style/layout decisions reproduced from unsafe-libyaml 0.2.11; retained MIT permission notice"
+paths = ["crates/lex/src/yaml/write.rs"]
+notices = ["LICENSES/unsafe-libyaml-0.2.11-MIT.txt", "LICENSES/libyaml-COPYRIGHT-MIT.txt"]
+provenance = ["crates/lex/PROVENANCE.md"]
+
+[[material]]
+id = "w3c-sparql11"
+license = "LicenseRef-W3C-Test-Suite"
+source = "https://github.com/w3c/rdf-tests"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/sparql-conformance/suite/w3c-sparql11/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "LICENSES/W3C-test-suites-policy.html", "LICENSES/W3C-test-suite-license.html", "LICENSES/W3C-test-suite-BSD.html", "crates/sparql-conformance/suite/w3c-sparql11/LICENSES/LicenseRef-W3C-Test-Suite.txt"]
+provenance = ["crates/sparql-conformance/suite/w3c-sparql11/PROVENANCE.md"]
+
+[[material]]
+id = "w3c-sparql12"
+license = "LicenseRef-W3C-Test-Suite"
+source = "https://github.com/w3c/rdf-tests"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/sparql-conformance/suite/w3c-sparql12/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "LICENSES/W3C-test-suites-policy.html", "LICENSES/W3C-test-suite-license.html", "LICENSES/W3C-test-suite-BSD.html", "crates/sparql-conformance/suite/w3c-sparql12/LICENSES/LicenseRef-W3C-Test-Suite.txt"]
+provenance = ["crates/sparql-conformance/suite/w3c-sparql12/PROVENANCE.md"]
+
+[[material]]
+id = "w3c-owl2"
+license = "LicenseRef-W3C-Test-Suite"
+source = "https://www.w3.org/2007/OWL/testsuite/"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/sparql-conformance/entailment-suite/w3c-owl2/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "LICENSES/W3C-test-suites-policy.html", "LICENSES/W3C-test-suite-license.html", "LICENSES/W3C-test-suite-BSD.html", "crates/sparql-conformance/entailment-suite/w3c-owl2/LICENSES/LicenseRef-W3C-Test-Suite.txt"]
+provenance = ["crates/sparql-conformance/entailment-suite/w3c-owl2/PROVENANCE.md"]
+
+[[material]]
+id = "w3c-owl2-rl"
+license = "LicenseRef-W3C-Test-Suite"
+source = "https://www.w3.org/2007/OWL/testsuite/"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/sparql-conformance/entailment-suite/w3c-owl2-rl/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "LICENSES/W3C-test-suites-policy.html", "LICENSES/W3C-test-suite-license.html", "LICENSES/W3C-test-suite-BSD.html", "crates/sparql-conformance/entailment-suite/w3c-owl2-rl/LICENSES/LicenseRef-W3C-Test-Suite.txt"]
+provenance = ["crates/sparql-conformance/entailment-suite/w3c-owl2-rl/PROVENANCE.md"]
+
+[[material]]
+id = "rdf-w3c"
+license = "LicenseRef-W3C-Test-Suite"
+source = "https://github.com/w3c/rdf-tests"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/rdf/tests/corpus/w3c/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "LICENSES/W3C-test-suites-policy.html", "LICENSES/W3C-test-suite-license.html", "LICENSES/W3C-test-suite-BSD.html", "crates/rdf/tests/corpus/w3c/LICENSE"]
+provenance = ["crates/rdf/tests/corpus/w3c/README.md"]
+
+[[material]]
+id = "jsonld-w3c"
+license = "LicenseRef-W3C-Test-Suite"
+source = "https://github.com/w3c/json-ld-api"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/rdf/tests/fixtures/jsonld-w3c-rec/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "LICENSES/W3C-test-suites-policy.html", "LICENSES/W3C-test-suite-license.html", "LICENSES/W3C-test-suite-BSD.html", "crates/rdf/tests/fixtures/jsonld-w3c-rec/LICENSE.md"]
+provenance = ["LICENSING.md"]
+
+[[material]]
+id = "rdfc"
+license = "W3C-20150513"
+source = "https://github.com/w3c/rdf-canon"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/rdf/tests/fixtures/rdfc/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "crates/rdf/tests/fixtures/rdfc/LICENSE.md"]
+provenance = ["LICENSING.md"]
+
+[[material]]
+id = "csvw"
+license = "LicenseRef-W3C-Document"
+source = "https://github.com/w3c/csvw"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/rdf/tests/fixtures/csvw-w3c/**"]
+notices = ["LICENSES/W3C-document-license.html", "crates/rdf/tests/fixtures/csvw-w3c/LICENSE.md"]
+provenance = ["crates/rdf/tests/fixtures/csvw-w3c/README.md"]
+
+[[material]]
+id = "obographs"
+license = "BSD-3-Clause"
+source = "https://github.com/geneontology/obographs"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/rdf/tests/fixtures/obographs-0.3.2/**"]
+notices = ["crates/rdf/tests/fixtures/obographs-0.3.2/LICENSES/BSD-3-Clause.txt"]
+provenance = ["LICENSING.md"]
+
+[[material]]
+id = "shacl12"
+license = "W3C-20150513"
+source = "https://github.com/w3c/data-shapes"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/shacl12/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "vectors/shacl12/LICENSE.md"]
+provenance = ["vectors/shacl12/PROVENANCE.md"]
+
+[[material]]
+id = "yaml-tests"
+license = "MIT"
+source = "https://github.com/yaml/yaml-test-suite/tree/data-2022-01-17"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/yaml-test-suite/**"]
+notices = ["vectors/yaml-test-suite/LICENSE"]
+provenance = ["vectors/yaml-test-suite/PROVENANCE.md"]
+
+[[material]]
+id = "json-tests"
+license = "MIT"
+source = "https://github.com/nst/JSONTestSuite"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/JSONTestSuite/**"]
+notices = ["vectors/JSONTestSuite/LICENSE"]
+provenance = ["vectors/JSONTestSuite/PROVENANCE.md"]
+
+[[material]]
+id = "wycheproof"
+license = "Apache-2.0"
+source = "https://github.com/C2SP/wycheproof"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/wycheproof/**"]
+notices = ["vectors/wycheproof/LICENSE"]
+provenance = ["vectors/wycheproof/PROVENANCE.md"]
+
+[[material]]
+id = "sparql-cdt"
+license = "Apache-2.0"
+source = "https://github.com/w3c/sparql-dev"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/sparql-cdt/**"]
+notices = ["vectors/sparql-cdt/LICENSE"]
+provenance = ["vectors/sparql-cdt/PROVENANCE.md"]
+
+[[material]]
+id = "rdflib-tests"
+license = "BSD-3-Clause"
+source = "https://github.com/RDFLib/rdflib/tree/7.6.0"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["bindings/python/tests/rdflib_suite/vendor/**"]
+notices = ["bindings/python/tests/rdflib_suite/vendor/LICENSE"]
+provenance = ["bindings/python/tests/rdflib_suite/vendor/PROVENANCE.md"]
+
+[[material]]
+id = "jsonschema-suite"
+license = "MIT"
+source = "https://github.com/json-schema-org/JSON-Schema-Test-Suite/tree/5b0ee1613e45fcc2bddac00e07c19cd49b00d8a8"
+scope = "suite schema/instance inputs retained in frozen differential vectors, in addition to verdicts recorded from replaced engines"
+paths = ["crates/jsonschema/tests/suite/**", "crates/jsonschema/tests/boon_differential_vectors.txt", "crates/jsonschema/tests/pattern_differential_vectors.txt"]
+notices = ["crates/jsonschema/tests/suite/LICENSES/MIT.txt"]
+provenance = ["crates/jsonschema/PROVENANCE.md"]
+
+[[material]]
+id = "jsonschema-metaschemas"
+license = "BSD-3-Clause"
+source = "https://github.com/json-schema-org/json-schema-spec"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["crates/jsonschema/tests/metaschemas/**"]
+notices = ["crates/jsonschema/tests/metaschemas/LICENSES/BSD-3-Clause.txt"]
+provenance = ["crates/jsonschema/PROVENANCE.md"]
+
+[[material]]
+id = "shacl"
+license = "W3C-20150513"
+source = "https://github.com/w3c/data-shapes/tree/08adb3776709a014bc3062ede793c36275b22446"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/shacl/core/**", "vectors/shacl/sparql/**", "crates/shapes/spec/**"]
+notices = ["LICENSES/W3C-software-document-2015.html", "vectors/shacl12/LICENSE.md"]
+provenance = ["vectors/shacl/README.md"]
+
+[[material]]
+id = "shacl-af"
+license = "Apache-2.0"
+source = "https://github.com/RDFLib/pySHACL/tree/5b46638cadde2e32efaed0ee53fc2545d5c0a179"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/shacl/af/**"]
+notices = ["LICENSE-APACHE", "vectors/shacl/af/README.md"]
+provenance = ["vectors/shacl/af/README.md"]
+
+[[material]]
+id = "shex-tests"
+license = "MIT"
+source = "https://github.com/shexSpec/shexTest/tree/8772d2d32c94bfba21a30c09915dfc7662e1539f"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/shexTest/**"]
+notices = ["LICENSES/shexTest-v2.1.0-package.json", "LICENSES/MIT-permission.txt"]
+provenance = ["vectors/shexTest/README.md"]

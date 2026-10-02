@@ -490,16 +490,27 @@ impl PackBuilder {
 /// Scratch is bounded by the source's own dimensions: one dictionary's values, one
 /// partition list, two side-table column sets — the same buffers the flat path
 /// always allocated, with no per-row owned copy retained beyond its use.
+fn source_read_error(error: impl std::fmt::Display) -> PackError {
+    PackError::ViewNotReady {
+        checkpoint: PackCheckpoint::AfterRows,
+        cause: error.to_string(),
+    }
+}
+
 fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
-    let encoded_dict = PackDict::encode(view);
+    let encoded_dict = PackDict::try_encode(view).map_err(source_read_error)?;
     let dict_bytes = encoded_dict.to_bytes();
     let n_terms = encoded_dict.n_terms();
     let dict = PackDict::open(&dict_bytes)?;
 
-    let triples_bytes = Triples::encode(&dict, view).to_bytes();
+    let triples_bytes = Triples::try_encode(&dict, view)
+        .map_err(source_read_error)?
+        .to_bytes();
     let triples_ref = TriplesRef::from_bytes(&triples_bytes).map_err(PackError::Triples)?;
 
-    let side_bytes = SideTables::encode(&dict, view).to_bytes();
+    let side_bytes = SideTables::try_encode(&dict, view)
+        .map_err(source_read_error)?
+        .to_bytes();
     let side_ref = SideTablesRef::from_bytes(&side_bytes).map_err(PackError::Side)?;
 
     let base_named_graphs = triples_ref.named_graph_ids().next().is_some();

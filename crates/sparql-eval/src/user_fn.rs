@@ -1262,7 +1262,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     let result: Option<TermValue> = match (func.kind, outcome) {
         (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::boolean(value)),
         (UserFnBody::Select, Outcome::Solutions(seq)) => {
-            let (variables, rows) = materialize_solutions(&seq, &child);
+            let (variables, rows) = materialize_solutions(&seq, &child)?;
             // A SHACL-AF function SELECT body yields a single result variable; a
             // multi-projection body has no well-defined return value.
             if variables.len() != 1 {

@@ -231,8 +231,8 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
             }
             let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
             row[..in_width].copy_from_slice(mu);
-            if !bind(&mut row, Some(element_col), element_term, ctx)
-                || !bind(&mut row, companion_col, companion_term, ctx)
+            if !bind(&mut row, Some(element_col), element_term, ctx)?
+                || !bind(&mut row, companion_col, companion_term, ctx)?
             {
                 // A target this row already bound incompatibly — see the module
                 // docs' note on a pre-bound target. Not reachable from query text,
@@ -291,7 +291,10 @@ fn composite_of<D: DatasetView + Sync>(
     let Some(term) = expression.term(mu, schema, ctx)? else {
         return Ok(None);
     };
-    let value = ctx.scratch.value_of(ctx.dataset, term);
+    let value = ctx
+        .scratch
+        .try_value_of(ctx.dataset, term)
+        .map_err(EvalError::source_read)?;
     Ok(crate::cdt_fn::as_composite(&value))
 }
 
@@ -352,9 +355,9 @@ fn bind<D: DatasetView + Sync>(
     column: Option<usize>,
     value: Option<TermValue>,
     ctx: &mut EvalCtx<'_, D>,
-) -> bool {
+) -> Result<bool, EvalError> {
     let (Some(column), Some(value)) = (column, value) else {
-        return true;
+        return Ok(true);
     };
     // A produced binding the interner refuses is a binding to something that is
     // not an RDF term — an `UNFOLD` member lifted out of a composite literal's
@@ -378,16 +381,20 @@ fn bind<D: DatasetView + Sync>(
     // nested to any depth costs no machine stack. A nested composite comes back as a
     // single `cdt:`-typed literal, so the only nesting a member carries is that of the
     // triple terms inside it; `purrdf-cdt` bounds that depth by its byte bound alone.
-    let Some(term) = ctx.scratch.intern_checked(ctx.dataset, value) else {
-        return true;
+    let Some(term) = ctx
+        .scratch
+        .try_intern_checked(ctx.dataset, value)
+        .map_err(EvalError::source_read)?
+    else {
+        return Ok(true);
     };
-    match row[column] {
+    Ok(match row[column] {
         None => {
             row[column] = Some(term);
             true
         }
         Some(existing) => existing == term,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -423,14 +430,17 @@ mod tests {
         let mut ctx = EvalCtx::new(&*dataset);
         let mut row: Solution<_> = purrdf_core::smallvec![None; 2];
 
-        assert!(bind(
-            &mut row,
-            Some(0),
-            Some(TermValue::iri("https://example.org/k")),
-            &mut ctx
-        ));
         assert!(
-            bind(&mut row, Some(1), Some(tagged("en us")), &mut ctx),
+            bind(
+                &mut row,
+                Some(0),
+                Some(TermValue::iri("https://example.org/k")),
+                &mut ctx
+            )
+            .unwrap()
+        );
+        assert!(
+            bind(&mut row, Some(1), Some(tagged("en us")), &mut ctx).unwrap(),
             "a refused tag must not drop the row — `false` here erases the key"
         );
         assert!(row[0].is_some(), "the key keeps its binding");
@@ -456,7 +466,7 @@ mod tests {
             "en-x-cantbethislong",
         ] {
             let mut row: Solution<_> = purrdf_core::smallvec![None; 1];
-            assert!(bind(&mut row, Some(0), Some(tagged(tag)), &mut ctx));
+            assert!(bind(&mut row, Some(0), Some(tagged(tag)), &mut ctx).unwrap());
             assert!(row[0].is_some(), "{tag} must still bind");
         }
     }
@@ -469,19 +479,23 @@ mod tests {
         let dataset = RdfDatasetBuilder::new().freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&*dataset);
         let mut row: Solution<_> = purrdf_core::smallvec![None; 1];
-        assert!(bind(
-            &mut row,
-            Some(0),
-            Some(TermValue::iri("https://example.org/a")),
-            &mut ctx
-        ));
+        assert!(
+            bind(
+                &mut row,
+                Some(0),
+                Some(TermValue::iri("https://example.org/a")),
+                &mut ctx
+            )
+            .unwrap()
+        );
         assert!(
             !bind(
                 &mut row,
                 Some(0),
                 Some(TermValue::iri("https://example.org/b")),
                 &mut ctx
-            ),
+            )
+            .unwrap(),
             "two disagreeing bindings for one column is a non-match"
         );
     }

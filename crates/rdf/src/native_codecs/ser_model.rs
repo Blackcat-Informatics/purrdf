@@ -16,7 +16,7 @@ use purrdf_iri::BaseIri;
 use purrdf_lex::literal_escape::{self, Carrier};
 use purrdf_lex::term_syntax::{self, TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN};
 
-use crate::{FastHasher, FastMap, RdfDiagnostic, RdfTextDirection};
+use crate::{FastHasher, FastMap, FastSet, RdfDiagnostic, RdfTextDirection};
 
 /// The kind of a serialization term.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -70,6 +70,8 @@ pub(crate) struct SerGraph {
     pub quads: Vec<SerQuad>,
     pub reifiers: Vec<SerReifierRow>,
     pub annotations: Vec<SerAnnotationRow>,
+    /// Explicit graph declarations; row graph slots also declare their graphs.
+    pub named_graphs: Vec<usize>,
     /// The document base this graph is EMITTED under, or `None` for absolute output.
     ///
     /// `Some` is set by exactly one place —
@@ -222,6 +224,11 @@ impl SerGraph {
             .then_with(|| cmp_graph(self, &index, g1, g2, &mut left, &mut right))
         });
         self.annotations = annotations;
+        let mut named_graphs = std::mem::take(&mut self.named_graphs);
+        named_graphs
+            .sort_by(|&a, &b| cmp_graph(self, &index, Some(a), Some(b), &mut left, &mut right));
+        named_graphs.dedup();
+        self.named_graphs = named_graphs;
     }
 }
 
@@ -742,7 +749,7 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
     // emitted nothing. Sharing the predicate makes the two agree, in the direction of
     // emitting nothing: a document with no statements has no reason to declare
     // prefixes.
-    if !emits_any_statement(g) {
+    if !emits_any_statement(g) && g.named_graphs.is_empty() {
         return;
     }
 
@@ -803,6 +810,21 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
     }
 
     close_graph(out, &mut open_graph);
+    if !g.named_graphs.is_empty() {
+        let present: FastSet<_> = g
+            .quads
+            .iter()
+            .filter_map(|q| q.3)
+            .chain(g.reifiers.iter().filter_map(|q| q.2))
+            .chain(g.annotations.iter().filter_map(|q| q.3))
+            .collect();
+        for &graph in &g.named_graphs {
+            if !present.contains(&graph) {
+                write_trig_term(g, &ix, graph, out);
+                out.push_str(" {}\n");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

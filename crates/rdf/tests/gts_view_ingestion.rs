@@ -39,8 +39,7 @@ use std::sync::Arc;
 
 use purrdf_rdf::dataset_view::ViewOperationStatus;
 use purrdf_rdf::gts_compose::{
-    DEFAULT_RSYNCABLE_THRESHOLD, GtsIngestError, IngestCheckpoint, MediumPlan, RDF_REIFIES,
-    SnapshotBuilder, emit_gts,
+    DEFAULT_RSYNCABLE_THRESHOLD, GtsIngestError, MediumPlan, RDF_REIFIES, SnapshotBuilder, emit_gts,
 };
 // The keystone shape itself lives in the library, so this suite and
 // `benches/gts_ingest.rs` measure ONE fixture rather than two drifting copies.
@@ -866,18 +865,27 @@ impl ProbeView {
 
 impl DatasetView for ProbeView {
     type Id = TermId;
+    type ReadError = ProbeFault;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = ();
+
+    fn read_error(&self) -> Option<Self::ReadError> {
+        self.budget.read_error()
+    }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.budget.take(self.inner.quads())
     }
 
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        self.inner.resolve(id)
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        self.checked_read(|_| self.inner.as_ref().resolve(id))
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        self.inner.term_id_by_value(value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        self.checked_read(|view| view.inner.as_ref().term_id_by_value(value))
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
@@ -900,7 +908,7 @@ impl DatasetView for ProbeView {
         self.quads_for_pattern(s, p, o, g)
     }
 
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         self.inner.term_count()
     }
 
@@ -938,7 +946,8 @@ fn a_view_that_faults_mid_ingestion_never_mints_a_snapshot() {
     let total = a.quads().count();
     assert!(total > 2, "the fixture has rows to truncate");
 
-    // (i) The AFTER checkpoint: Ready at entry, Failed once the rows ran out.
+    // (i) Ready at entry, then row exhaustion faults the same typed read session.
+    // The first term read after truncation must preserve that root failure.
     let mut builder = SnapshotBuilder::new();
     let truncating = ProbeView::budgeted(Arc::clone(&a), total - 2);
     assert!(matches!(
@@ -950,8 +959,7 @@ fn a_view_that_faults_mid_ingestion_never_mints_a_snapshot() {
         .expect_err("a truncated read must never publish as a snapshot");
     assert_eq!(
         err,
-        GtsIngestError::ViewNotReady {
-            checkpoint: IngestCheckpoint::AfterRows,
+        GtsIngestError::SourceRead {
             cause: "the probe view exhausted its row budget".to_owned(),
         }
     );
@@ -960,16 +968,18 @@ fn a_view_that_faults_mid_ingestion_never_mints_a_snapshot() {
     // (ii) The BEFORE checkpoint: a view that has already failed is refused
     // before a single row is read.
     let mut early = SnapshotBuilder::new();
+    let pre_faulted = ProbeView::pre_faulted(Arc::clone(&a));
+    let before_status = pre_faulted.operation_status();
     let err = early
-        .add_view(&ProbeView::pre_faulted(Arc::clone(&a)))
+        .add_view(&pre_faulted)
         .expect_err("an already-failed view is refused at entry");
-    assert!(matches!(
+    assert_eq!(
         err,
-        GtsIngestError::ViewNotReady {
-            checkpoint: IngestCheckpoint::BeforeRows,
-            ..
+        GtsIngestError::SourceRead {
+            cause: "the probe view exhausted its row budget".to_owned(),
         }
-    ));
+    );
+    assert_eq!(pre_faulted.operation_status(), before_status);
 
     // THE NEIGHBOURING CASE: the same probe view with budget for every row
     // ingests, and mints exactly the flat carrier's snapshot.

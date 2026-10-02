@@ -383,6 +383,7 @@ fn assert_probe_pattern_matrix(
 
     let id = |local| {
         view.term_id_by_value(&TermValue::iri(format!("https://example.org/{local}")))
+            .expect("resident dictionary read")
             .expect("IRI")
     };
     let subjects = [id("focus"), id("original")];
@@ -391,6 +392,7 @@ fn assert_probe_pattern_matrix(
         .quads()
         .map(|q| {
             view.term_id_by_value(&source.term_value(q.o))
+                .expect("resident dictionary read")
                 .expect("object")
         })
         .collect::<BTreeSet<_>>()
@@ -401,6 +403,7 @@ fn assert_probe_pattern_matrix(
         .map(|q| {
             let map = |term| {
                 view.term_id_by_value(&source.term_value(term))
+                    .expect("resident dictionary read")
                     .expect("term")
             };
             (

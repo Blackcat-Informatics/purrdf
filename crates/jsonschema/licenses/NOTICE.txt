@@ -1,0 +1,33 @@
+PurRDF recipient notices
+========================
+
+Copyright 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0 (choose any one option).
+The three complete first-party license texts accompany this notice.
+Third-party and derived material retains its own terms, in addition to
+the chosen first-party license. Documentation with CC-BY-4.0 headers
+retains that grant. No trademark rights are granted.
+
+This inventory preserves notices for the source material and resolved
+build inputs described below. Platform alternatives and build inputs
+need not occur in every compiled binary. Test data is source-only.
+
+jsonschema-metaschemas: BSD-3-Clause
+Scope: source-only conformance data; original notices remain authoritative
+Source: https://github.com/json-schema-org/json-schema-spec
+Evidence: crates/jsonschema/PROVENANCE.md
+Notice: third-party/jsonschema-metaschemas/0-BSD-3-Clause.txt
+
+jsonschema-suite: MIT
+Scope: suite schema/instance inputs retained in frozen differential vectors, in addition to verdicts recorded from replaced engines
+Source: https://github.com/json-schema-org/JSON-Schema-Test-Suite/tree/5b0ee1613e45fcc2bddac00e07c19cd49b00d8a8
+Evidence: crates/jsonschema/PROVENANCE.md
+Notice: third-party/jsonschema-suite/0-MIT.txt
+
+unicode: Unicode-3.0
+Scope: generated and vendored Unicode data; terms apply in addition to the first-party grant
+Source: https://www.unicode.org/Public/17.0.0/ucd/
+Evidence: crates/iri/unicode/PROVENANCE.md
+Evidence: LICENSING.md
+Notice: third-party/unicode/0-Unicode-3.0.txt
+

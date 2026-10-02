@@ -8,9 +8,9 @@
 #pragma once
 
 /* WARNING: generated file — edit crates/rdf-capi instead. */
-#define PURRDF_MAJOR 2
+#define PURRDF_MAJOR 3
 #define PURRDF_MINOR 0
-#define PURRDF_PATCH 2
+#define PURRDF_PATCH 0
 
 
 #include <stdarg.h>
@@ -76,7 +76,7 @@
  * recompiled once for all of them; splitting would have broken the same consumer four
  * times for one reason.
  *
- * # `0.7.0` → `0.8.0`: seventeen added symbols, eight changed ones and appended statuses
+ * # `0.7.0` → `0.8.0`: eighteen added symbols, eight changed ones and appended statuses
  *
  * The prepared-shapes-product surface exports eight new entry points —
  * `purrdf_shapes_product_encode`, `_open`, `_admit`, `_admit_expecting`, `_rebuild`,
@@ -100,7 +100,7 @@
  *
  * It bumps anyway, and the reason is the sentence at the top of this comment rather
  * than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
- * `2.0.0`, `2.0.1` and `2.0.2` libraries, which export seventeen fewer symbols than this
+ * `2.0.0`, `2.0.1` and `2.0.2` libraries, which export eighteen fewer symbols than this
  * one does. Leaving the triple still would mean two different shippable libraries
  * answering `purrdf_abi_version` identically while exporting different surfaces, so a
  * host that compiled against this header and loaded the older library would be told
@@ -192,6 +192,10 @@
  * after `import_count`, matching `purrdf_shacl_validate_to_sarif`; and
  * `purrdf_shacl_eval_node_expr` gained a nullable `PurrdfBuffer **out_diagnostics`
  * before `out_error`, as the rules entry points did.
+ *
+ * The same unshipped bump adds `purrdf_error_presentation_json`, a borrowed
+ * nullable JSON record accessor over an opaque error handle. Existing status,
+ * English-message and release functions keep their established signatures.
  *
  * One of them is worth a second look regardless: appending a status is sound, but
  * RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
@@ -2113,6 +2117,17 @@ int32_t purrdf_error_code(const PurrdfError *err);
  * Same contract as [`purrdf_error_code`].
  */
 const char *purrdf_error_message(const PurrdfError *err);
+
+/**
+ * Return a borrowed JSON record of the original RDF diagnostic, including its
+ * stable code, optional message identity, typed parameters and logical anchors. Exact integers are decimal strings with type labels.
+ * Returns null when the error carries no RDF diagnostic or `err` is null.
+ * The pointer remains valid until `purrdf_error_free(err)`.
+ *
+ * # Safety
+ * Same contract as [`purrdf_error_code`].
+ */
+const char *purrdf_error_presentation_json(const PurrdfError *err);
 
 /**
  * Release an error handle. No-op on null. Idempotent only in the sense that the

@@ -311,7 +311,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "helper-census"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "proc-macro2",
  "purrdf-hash",
@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-columnar",
  "purrdf-core",
@@ -434,11 +434,11 @@ dependencies = [
 
 [[package]]
 name = "purrdf-alloc-probe"
-version = "2.0.2"
+version = "3.0.0"
 
 [[package]]
 name = "purrdf-bench"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-iri",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-capi"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf",
  "purrdf-core",
@@ -464,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-cdt"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-events",
  "purrdf-hash",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-cli"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "clap",
  "libc",
@@ -502,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-columnar"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-core",
  "purrdf-stack",
@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-core"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "hashbrown",
  "purrdf-alloc-probe",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-datalog"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "hashbrown",
  "purrdf-core",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-deflate"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-hash",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-ed25519"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-lex",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-entail"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "hashbrown",
  "purrdf-core",
@@ -578,23 +578,25 @@ dependencies = [
 
 [[package]]
 name = "purrdf-envelope-probe"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-rdf",
  "purrdf-shapes",
  "purrdf-sparql-eval",
+ "wasm-bindgen",
 ]
 
 [[package]]
 name = "purrdf-events"
-version = "2.0.2"
+version = "3.0.0"
 
 [[package]]
 name = "purrdf-geo"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-core",
  "purrdf-hash",
@@ -611,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-gts"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "aes-gcm",
  "fastrand",
@@ -633,14 +635,14 @@ dependencies = [
 
 [[package]]
 name = "purrdf-hash"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-alloc-probe",
 ]
 
 [[package]]
 name = "purrdf-hash-conformance"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-testkit",
@@ -648,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-hnsw"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-core",
  "purrdf-hash",
@@ -661,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-iri"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-lex",
@@ -670,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-json"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
@@ -683,7 +685,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-jsonschema"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-iri",
@@ -696,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-lex"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-stack",
@@ -705,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-markdown"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-core",
  "purrdf-hash",
@@ -715,9 +717,10 @@ dependencies = [
 
 [[package]]
 name = "purrdf-python"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf",
+ "purrdf-columnar",
  "purrdf-core",
  "purrdf-gts",
  "purrdf-shapes",
@@ -731,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-rdf"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "hashbrown",
  "proc-macro2",
@@ -758,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-retrieval"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
@@ -773,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-shapes"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "proc-macro2",
  "purrdf-alloc-probe",
@@ -799,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-shex"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-core",
  "purrdf-iri",
@@ -812,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-slice"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-core",
  "purrdf-gts",
@@ -829,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-algebra"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-cdt",
@@ -844,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-conformance"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf",
  "purrdf-cdt",
@@ -863,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-eval"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "getrandom",
  "hashbrown",
@@ -886,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-results"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
@@ -898,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-stack"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "libc",
  "purrdf-testkit",
@@ -907,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-testkit"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "regex",
@@ -918,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-text"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-core",
  "purrdf-hash",
@@ -932,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-validate"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-core",
  "purrdf-datalog",
@@ -951,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-wasm"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf",
  "purrdf-core",
@@ -969,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-xsd"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-lex",
@@ -1252,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-link"
-version = "2.0.2"
+version = "3.0.0"
 dependencies = [
  "purrdf-hash",
  "wasm-encoder",

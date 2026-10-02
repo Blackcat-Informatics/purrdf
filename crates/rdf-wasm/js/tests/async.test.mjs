@@ -828,7 +828,7 @@ test("every async twin evaluates", async () => {
   const control = engine.update(twinData(), INSERT);
   assert.ok(target.isomorphic(control));
   assert.equal(target.size, 6);
-  assert.equal(target.generation, generation + 1);
+  assert.equal(target.generation, generation + 1n);
   const governedTarget = twinData();
   const applied = await engine.updateGovernedAsync(governedTarget, INSERT, { fuel: 1_000_000 });
   const governedControl = twinData();
@@ -840,7 +840,7 @@ test("every async twin evaluates", async () => {
   const tripped = await engine.updateGovernedAsync(trippedTarget, INSERT, { fuel: 0 });
   assert.equal(tripped.isApplied, false, "a tripped update applies nothing");
   assert.equal(trippedTarget.size, 4);
-  assert.equal(trippedTarget.generation, 0);
+  assert.equal(trippedTarget.generation, 0n);
 
   // Kind mismatches and parse errors carry the synchronous messages.
   for (const [asyncCall, syncCall] of [
@@ -1234,7 +1234,7 @@ test("LOAD resolves through resolveLoad", async () => {
     assert.ok(requests[0].signal instanceof AbortSignal);
     const loaded = engine.select(target, `SELECT ?o WHERE { GRAPH <${EX}g> { <${EX}s> <${EX}p> ?o } }`);
     assert.deepEqual(rowsOf(loaded), [`o=${expected[shape]}`], shape);
-    assert.equal(target.generation, 1, "the committed LOAD advanced the generation once");
+    assert.equal(target.generation, 1n, "the committed LOAD advanced the generation once");
   }
 });
 
@@ -1365,7 +1365,7 @@ test("a LOAD parse error is the LOAD's decode failure", async () => {
   const silentTarget = new Dataset();
   assert.equal(await engine.updateAsync(silentTarget, `LOAD SILENT <${DOC}>`, { resolveLoad }), silentTarget);
   assert.equal(silentTarget.size, 0);
-  assert.equal(silentTarget.generation, 1, "the SILENT update committed (an empty change)");
+  assert.equal(silentTarget.generation, 1n, "the SILENT update committed (an empty change)");
 });
 
 test("INSERT WHERE federates through resolveService", async () => {
@@ -1396,7 +1396,7 @@ test("dataset mutation during an async update is refused", async () => {
   const pending = engine.updateAsync(target, FEDERATED_INSERT, { resolveService: deferred.resolveService });
   await turnUntil(() => deferred.pending.length === 1, "the update suspending on its SERVICE");
   target.delete(target.quads()[0]);
-  assert.equal(target.generation, 1);
+  assert.equal(target.generation, 1n);
   deferred.pending[0].resolve(REMOTE_OX);
   const error = await rejection(pending);
   assert.equal(
@@ -1415,11 +1415,11 @@ test("dataset mutation during an async update is refused", async () => {
   });
   await turnUntil(() => neighbourDeferred.pending.length === 1, "the neighbour suspending");
   untouched.add(untouched.quads()[0]);
-  assert.equal(untouched.generation, 0);
+  assert.equal(untouched.generation, 0n);
   neighbourDeferred.pending[0].resolve(REMOTE_OX);
   assert.equal(await neighbourPending, untouched);
   assert.equal(untouched.size, 4);
-  assert.equal(untouched.generation, 1);
+  assert.equal(untouched.generation, 1n);
 });
 
 test("commitUpdate refuses a different dataset", async () => {
@@ -1438,11 +1438,11 @@ test("commitUpdate refuses a different dataset", async () => {
     const error = syncThrow(() => job.commitUpdate(other));
     assert.match(error.message, /commit targets a different dataset/);
     assert.equal(other.size, 2);
-    assert.equal(other.generation, 0);
+    assert.equal(other.generation, 0n);
     // The neighbour: the dataset the job was begun on accepts the commit.
     job.commitUpdate(target);
     assert.equal(target.size, 3);
-    assert.equal(target.generation, 1);
+    assert.equal(target.generation, 1n);
   } finally {
     job.finish();
     job.free();
@@ -1459,7 +1459,7 @@ test("queries see a snapshot; mutation during a query is allowed", async () => {
   // A third row whose object the remote side also knows — visible only to a later query.
   data.add(Dataset.parse(`<${EX}c> <${EX}p> <${EX}o1> .\n`, "nquads").quads()[0]);
   assert.equal(data.size, 3);
-  assert.equal(data.generation, 1);
+  assert.equal(data.generation, 1n);
   deferred.pending[0].resolve(REMOTE_OX);
   assert.deepEqual(rowsOf(await pending), JOINED, "the in-flight query answered over its snapshot");
   // The neighbour: a query begun after the mutation sees the new row.
@@ -1489,7 +1489,7 @@ test("refusal pair: an update begun while another update of the dataset is in fl
   assert.deepEqual(rowsOf(await engine.queryAsync(shared, joinQuery(), { resolveService: async () => REMOTE_OX })), JOINED);
   first.pending[0].resolve(REMOTE_OX);
   await firstPending;
-  assert.equal(shared.generation, 1, "only the first applied");
+  assert.equal(shared.generation, 1n, "only the first applied");
   assert.equal(shared.size, 4);
 
   // The neighbour: the same update, begun once the first has finished, applies.
@@ -1497,7 +1497,7 @@ test("refusal pair: an update begun while another update of the dataset is in fl
   await turnUntil(() => second.pending.length === 1, "the sequential update suspending");
   second.pending[0].resolve(REMOTE_OX);
   assert.equal(await sequential, shared);
-  assert.equal(shared.generation, 2, "both applied, one generation each");
+  assert.equal(shared.generation, 2n, "both applied, one generation each");
   assert.equal(shared.size, 6);
 
   // The neighbour: two datasets — both updates are in flight at once.
@@ -1516,8 +1516,8 @@ test("refusal pair: an update begun while another update of the dataset is in fl
   onRight.pending[0].resolve(REMOTE_OX);
   onLeft.pending[0].resolve(REMOTE_OX);
   await Promise.all(pair);
-  assert.equal(left.generation, 1);
-  assert.equal(right.generation, 1);
+  assert.equal(left.generation, 1n);
+  assert.equal(right.generation, 1n);
 });
 
 // ---------------------------------------------------------------------------
@@ -1817,7 +1817,7 @@ test("refusal pair: a localServices value that is not a Dataset is refused; a Da
   assert.deepEqual(rowsOf(answered), JOINED);
   // The job served a snapshot: the caller's dataset is untouched and still usable.
   assert.equal(remote.size, 2);
-  assert.equal(remote.generation, 0);
+  assert.equal(remote.generation, 0n);
 });
 
 test("refusal pair: a catalog that is not a ServiceCatalog is refused; a ServiceCatalog governs, and stays usable", async () => {

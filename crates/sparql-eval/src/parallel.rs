@@ -1460,17 +1460,19 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
     main: &mut ScratchInterner,
     dataset: &D,
     prow: Vec<Option<PortableTerm<D::Id>>>,
-) -> Solution<D::Id> {
+) -> Result<Solution<D::Id>, EvalError> {
     prow.into_iter()
         .map(|cell| match cell {
-            None => None,
-            Some(PortableTerm::Parent(term)) => Some(term),
+            None => Ok(None),
+            Some(PortableTerm::Parent(term)) => Ok(Some(term)),
             // The child's own scratch already put this value through the same
             // gate to mint the id being re-interned, and the verdict is a pure
             // function of the value, so this call cannot refuse what the child
             // accepted. Propagating the `Option` rather than asserting keeps the
             // cell shape honest if that ever stops being true.
-            Some(PortableTerm::Fresh(value)) => main.intern_checked(dataset, value),
+            Some(PortableTerm::Fresh(value)) => main
+                .try_intern_checked(dataset, value)
+                .map_err(EvalError::source_read),
         })
         .collect()
 }
@@ -1527,9 +1529,9 @@ pub(crate) fn reintern_minted_row<D: DatasetView>(
     main: &mut ScratchInterner,
     dataset: &D,
     row: MintedRow<D::Id>,
-) -> Solution<D::Id> {
+) -> Result<Solution<D::Id>, EvalError> {
     match row {
-        MintedRow::Direct(solution) => solution,
+        MintedRow::Direct(solution) => Ok(solution),
         MintedRow::Portable(prow) => reintern_portable_row(main, dataset, prow),
     }
 }
@@ -2443,7 +2445,7 @@ mod tests {
         assert_eq!(prow[1], Some(PortableTerm::Parent(pre_fork_term)));
         assert_eq!(prow[2], Some(PortableTerm::Fresh(fresh_value.clone())));
 
-        let reinterned = reintern_portable_row(&mut parent.scratch, &ds, prow);
+        let reinterned = reintern_portable_row(&mut parent.scratch, &ds, prow).unwrap();
         assert_eq!(reinterned[0], None);
         // The pre-fork term passes through unchanged and still resolves in the
         // parent (which already owned it).
@@ -2477,8 +2479,8 @@ mod tests {
         let prow_a = portable_row(&child_a.scratch, base, &row_a);
         let prow_b = portable_row(&child_b.scratch, base, &row_b);
 
-        let reinterned_a = reintern_portable_row(&mut parent.scratch, &ds, prow_a);
-        let reinterned_b = reintern_portable_row(&mut parent.scratch, &ds, prow_b);
+        let reinterned_a = reintern_portable_row(&mut parent.scratch, &ds, prow_a).unwrap();
+        let reinterned_b = reintern_portable_row(&mut parent.scratch, &ds, prow_b).unwrap();
 
         assert_eq!(
             reinterned_a[0], reinterned_b[0],

@@ -474,71 +474,85 @@ impl GeoIndex {
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
     ) -> Result<Self, GeoError> {
-        let Some(graph) = config.graph().resolve(dataset) else {
-            // The configured named graph is not interned, so the dataset holds no
-            // quad in it and nothing can match. The empty projection is built
-            // through the ordinary steps — an empty entry table, one empty
-            // asserted vector per relation so `asserted` stays in bounds, and the
-            // same `fingerprint` call — rather than a second construction path
-            // that could drift from the first.
-            let entries: Vec<GeoEntry> = Vec::new();
-            let asserted: Vec<Vec<(TermValue, TermValue)>> =
-                vec![Vec::new(); SpatialRelation::ALL.len()];
-            let source_fingerprint = fingerprint(config, &entries, &asserted);
-            return Ok(Self {
-                config: config.clone(),
-                entries,
-                asserted,
-                source_fingerprint,
-            });
-        };
-        let datatypes = Datatypes::of(vocab);
-
-        // Step 1 — the geometry nodes, keyed by dataset id so step 2 can join
-        // against them without resolving anything twice.
-        let mut by_node: BTreeMap<D::Id, Vec<Keyed>> = BTreeMap::new();
-        for property in config.serializations() {
-            let Some(predicate) = dataset.term_id_by_value(property) else {
-                // A conformance class may name `geo:asGeoJSON` over a dataset
-                // that holds only WKT. That is an ordinary empty match, not a
-                // configuration error.
-                continue;
-            };
-            for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
-                let object = resolve_value(dataset, quad.o)?;
-                let literal = parse_serialization(&object, property, &datatypes, vocab)?;
-                by_node
-                    .entry(quad.s)
-                    .or_default()
-                    .push(Keyed::of(literal, vocab));
-            }
-        }
-
-        // Steps 2 and 3 — every geometry node is an entry in its own right, and
-        // every default-geometry subject inherits its geometries.
-        let mut by_subject = by_node.clone();
-        for term in [GeoTerm::HasDefaultGeometry, GeoTerm::DefaultGeometry] {
-            let iri = TermValue::iri(vocab.term(term));
-            let Some(predicate) = dataset.term_id_by_value(&iri) else {
-                continue;
-            };
-            for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
-                let Some(inherited) = by_node.get(&quad.o).cloned() else {
-                    continue;
+        dataset
+            .checked_read(|dataset| {
+                let Some(graph) = config
+                    .graph()
+                    .resolve(dataset)
+                    .map_err(|error| GeoError::source_read(error.to_string()))?
+                else {
+                    // The configured named graph is not interned, so the dataset holds no
+                    // quad in it and nothing can match. The empty projection is built
+                    // through the ordinary steps — an empty entry table, one empty
+                    // asserted vector per relation so `asserted` stays in bounds, and the
+                    // same `fingerprint` call — rather than a second construction path
+                    // that could drift from the first.
+                    let entries: Vec<GeoEntry> = Vec::new();
+                    let asserted: Vec<Vec<(TermValue, TermValue)>> =
+                        vec![Vec::new(); SpatialRelation::ALL.len()];
+                    let source_fingerprint = fingerprint(config, &entries, &asserted);
+                    return Ok(Self {
+                        config: config.clone(),
+                        entries,
+                        asserted,
+                        source_fingerprint,
+                    });
                 };
-                by_subject.entry(quad.s).or_default().extend(inherited);
-            }
-        }
+                let datatypes = Datatypes::of(vocab);
 
-        let entries = finish_entries(dataset, by_subject)?;
-        let asserted = collect_asserted(dataset, vocab, graph)?;
-        let source_fingerprint = fingerprint(config, &entries, &asserted);
-        Ok(Self {
-            config: config.clone(),
-            entries,
-            asserted,
-            source_fingerprint,
-        })
+                // Step 1 — the geometry nodes, keyed by dataset id so step 2 can join
+                // against them without resolving anything twice.
+                let mut by_node: BTreeMap<D::Id, Vec<Keyed>> = BTreeMap::new();
+                for property in config.serializations() {
+                    let Some(predicate) = dataset
+                        .term_id_by_value(property)
+                        .map_err(|error| GeoError::source_read(error.to_string()))?
+                    else {
+                        // A conformance class may name `geo:asGeoJSON` over a dataset
+                        // that holds only WKT. That is an ordinary empty match, not a
+                        // configuration error.
+                        continue;
+                    };
+                    for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
+                        let object = resolve_value(dataset, quad.o)?;
+                        let literal = parse_serialization(&object, property, &datatypes, vocab)?;
+                        by_node
+                            .entry(quad.s)
+                            .or_default()
+                            .push(Keyed::of(literal, vocab));
+                    }
+                }
+
+                // Steps 2 and 3 — every geometry node is an entry in its own right, and
+                // every default-geometry subject inherits its geometries.
+                let mut by_subject = by_node.clone();
+                for term in [GeoTerm::HasDefaultGeometry, GeoTerm::DefaultGeometry] {
+                    let iri = TermValue::iri(vocab.term(term));
+                    let Some(predicate) = dataset
+                        .term_id_by_value(&iri)
+                        .map_err(|error| GeoError::source_read(error.to_string()))?
+                    else {
+                        continue;
+                    };
+                    for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
+                        let Some(inherited) = by_node.get(&quad.o).cloned() else {
+                            continue;
+                        };
+                        by_subject.entry(quad.s).or_default().extend(inherited);
+                    }
+                }
+
+                let entries = finish_entries(dataset, by_subject)?;
+                let asserted = collect_asserted(dataset, vocab, graph)?;
+                let source_fingerprint = fingerprint(config, &entries, &asserted);
+                Ok(Self {
+                    config: config.clone(),
+                    entries,
+                    asserted,
+                    source_fingerprint,
+                })
+            })
+            .map_err(|error| GeoError::source_read(error.to_string()))?
     }
 
     /// The configuration this index was built under.
@@ -805,9 +819,12 @@ fn parse_serialization(
 /// wiring, so the refusal names it rather than indexing a term with an invented
 /// datatype.
 fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, GeoError> {
-    dataset
-        .term_value(id)
-        .map_err(|error| GeoError::config(format!("the dataset view is inconsistent: {error}")))
+    dataset.term_value(id).map_err(|error| match error {
+        foreign @ purrdf_core::TermLookupError::ForeignId => {
+            GeoError::config(format!("the dataset view is inconsistent: {foreign}"))
+        }
+        purrdf_core::TermLookupError::Read(error) => GeoError::source_read(error.to_string()),
+    })
 }
 
 /// Turn the id-keyed accumulation into the sorted, deduplicated entry table.
@@ -920,7 +937,10 @@ fn collect_asserted<D: DatasetView>(
             relation.local_name()
         ));
         let mut pairs: Vec<(TermValue, TermValue)> = Vec::new();
-        if let Some(predicate) = dataset.term_id_by_value(&iri) {
+        if let Some(predicate) = dataset
+            .term_id_by_value(&iri)
+            .map_err(|error| GeoError::source_read(error.to_string()))?
+        {
             for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
                 pairs.push((
                     resolve_value(dataset, quad.s)?,

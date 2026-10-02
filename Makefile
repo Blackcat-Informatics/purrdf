@@ -77,6 +77,7 @@ help: ## Show this help.
 metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 	cargo metadata --no-deps --format-version 1 >/dev/null
 	bash scripts/check-generated.sh --write
+	$(MAKE) license-bundles
 
 fmt: ## Auto-format the workspace.
 	cargo fmt --all
@@ -113,6 +114,12 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-licenses.py --self-test
 	python3 scripts/check-licenses.py
 	python3 scripts/fetch-locked-deps.py
+	python3 scripts/package-licenses.py --self-test
+	python3 scripts/capi-header.py --self-test
+	python3 scripts/build-capi-bundle.py --self-test
+	python3 scripts/build-private-wasm.py --self-test
+	python3 bindings/python/purrdf_build_backend.py --self-test
+	python3 scripts/package-licenses.py --check
 	python3 scripts/check-banned-deps.py --self-test
 	python3 scripts/check-banned-deps.py
 	python3 scripts/check-banned-deps.py --ledger-complete
@@ -134,6 +141,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-publish-order.py
 	bash scripts/check-crates-io-records.sh --self-test
 	bash scripts/publish-release-crates.sh --self-test
+	python3 scripts/publish-npm.py --self-test
 	bash scripts/bootstrap-crates-io.sh --self-test
 	python3 scripts/check-wasm-js-exports.py
 	python3 scripts/check-entailment-surface.py
@@ -204,6 +212,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	@test -z "$$(git status --porcelain)" || { echo "ERROR: working tree is dirty — commit the release bump + changelog first"; exit 1; }
 	@branch=$$(git branch --show-current); test "$$branch" = "main" || { echo "ERROR: release tags must be cut from main (currently on $$branch)"; exit 1; }
 	@python3 scripts/check-versions.py
+	@bash scripts/check-crates-io-records.sh --require-all
 	@tree_version=$$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])"); \
 		test "$$tree_version" = "$(VERSION)" || { echo "ERROR: VERSION=$(VERSION) does not match the tree version $$tree_version — run 'make bump VERSION=$(VERSION)' first"; exit 1; }
 	@# Pre-tag guard: the CHANGELOG.md section is the release notes the cargo
@@ -226,7 +235,9 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	@$(MAKE) check
 	@$(MAKE) capi-check
 	@$(MAKE) pytest
+	@$(MAKE) python-release-check
 	@$(MAKE) wasm-pkg-test
+	@$(MAKE) capi-bundle
 	@test -z "$$(git status --porcelain)" || { echo "ERROR: full release preflight changed the working tree"; exit 1; }
 	@branch=$$(git branch --show-current); test "$$branch" = "main" || { echo "ERROR: branch changed during release preflight (currently on $$branch)"; exit 1; }
 	@git fetch --quiet origin main
@@ -422,7 +433,7 @@ bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NO
 
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
 	python3 scripts/check-python-binding-tests.py
-	cd bindings/python && uv run maturin develop && uv run pytest tests
+	cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
 
 miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
 	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised
@@ -762,7 +773,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		bash scripts/check-wasm-test-runner.sh \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
+			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated --test stack_refusal --test query_completion \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-hnsw --test wasm_reassociated \
@@ -770,7 +781,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
+			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated --test stack_refusal --test query_completion \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
@@ -810,12 +821,12 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-hash-conformance --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-core --test csv_scan_wasm \
+			-p purrdf-core --test csv_scan_wasm --test segmented \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-core --test csv_scan_wasm \
+			-p purrdf-core --test csv_scan_wasm --test segmented \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-deflate --test deflate_conformance \
@@ -852,12 +863,16 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# byte size depended on the operator's USERNAME. Both varying roots are
 	@# remapped onto fixed tokens. CARGO_HOME may be relocated, so its default is
 	@# only a fallback.
-	RUSTFLAGS="$${RUSTFLAGS} -D warnings -C target-feature=+simd128 --remap-path-prefix=$(CURDIR)=/purrdf --remap-path-prefix=$${CARGO_HOME:-$$HOME/.cargo}=/cargo" \
-		cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
 	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
-	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
-		"$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm" \
-		--out-dir crates/rdf-wasm/js/pkg --target web
+	@# Shared target paths can be published by another Cargo flag variant after a
+	@# build returns. Capture Cargo's registered link output from a new private
+	@# target directory and bindgen that exact file; never discover it in the shared target.
+	@capture=$$(mktemp -d); \
+		RUSTFLAGS="$${RUSTFLAGS} -D warnings -C target-feature=+simd128 --remap-path-prefix=$(CURDIR)=/purrdf --remap-path-prefix=$${CARGO_HOME:-$$HOME/.cargo}=/cargo" \
+		python3 scripts/build-private-wasm.py "$$capture/purrdf_wasm.wasm" purrdf_wasm \
+			-p purrdf-wasm --lib --crate-type cdylib --target wasm32-unknown-unknown --release --locked && \
+		PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen "$$capture/purrdf_wasm.wasm" \
+			--out-dir crates/rdf-wasm/js/pkg --target web
 	@# The asynchronous lane's suspending import comes from ./purrdf_jspi.mjs, which the
 	@# glue imports by relative path and wires into the instance's import object as is.
 	@# The module ships next to the glue; a glue that does not import it would leave
@@ -903,6 +918,7 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 
 wasm-pkg-test: wasm-pkg ## Build and test the optimized npm/wasm package.
 	cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
+	./scripts/check-wasm-dataset-identity.sh
 
 wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput and poison-gate benchmarks (report-only; never a gate).
 	cd crates/rdf-wasm/js && node bench/parse.bench.mjs && node bench/gate.bench.mjs
@@ -911,19 +927,34 @@ wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throug
 # published ESM package — the exact tree the Pages deploy ships at /playground. The app
 # is zero-dependency vanilla ESM; "assembly" is just a copy, no bundler.
 PLAYGROUND_OUT := $(CARGO_TARGET_DIR)/playground
-playground: wasm-pkg ## Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/playground (serve it to preview).
+playground: ## Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/playground (serve it to preview).
 	@# Ship exactly the app shell + a FRESH copy of the published package. The
 	@# smoke/ Node tests and any local docs/playground/purrdf/ preview copy are
 	@# deliberately NOT shipped — the package is (re)built here from source.
-	@rm -rf "$(PLAYGROUND_OUT)"
-	@mkdir -p "$(PLAYGROUND_OUT)/purrdf"
+	@# Bind runtime notices to this build, including a cached registered compiler
+	@# output. Capture before the sequential build and refuse a changed compiler.
+	@compiler=$$(mktemp); after=$$(mktemp); \
+		trap 'rm -f "$$compiler" "$$after"' EXIT; \
+		python3 scripts/package-licenses.py --compiler-record "$$compiler" && \
+		$(MAKE) wasm-pkg && \
+		python3 scripts/package-licenses.py --compiler-record "$$after" && \
+		cmp "$$after" "$$compiler" && \
+		rm -rf "$(PLAYGROUND_OUT)" && \
+		mkdir -p "$(PLAYGROUND_OUT)/purrdf" && \
+		cp "$$compiler" "$(PLAYGROUND_OUT)/purrdf/build-compiler.txt"
+	python3 scripts/fetch-locked-deps.py
+	python3 scripts/package-licenses.py --profile npm --check
 	@cp docs/playground/index.html docs/playground/app.mjs docs/playground/engine.worker.mjs \
 		docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
 		docs/playground/manifest.webmanifest \
 		"$(PLAYGROUND_OUT)/"
 	@cp -R docs/playground/examples "$(PLAYGROUND_OUT)/examples"
-	@cp crates/rdf-wasm/js/index.mjs "$(PLAYGROUND_OUT)/purrdf/index.mjs"
+	@cp crates/rdf-wasm/js/index.mjs crates/rdf-wasm/js/package.json "$(PLAYGROUND_OUT)/purrdf/"
 	@cp -R crates/rdf-wasm/js/pkg "$(PLAYGROUND_OUT)/purrdf/pkg"
+	@cp -R crates/rdf-wasm/js/licenses "$(PLAYGROUND_OUT)/purrdf/licenses"
+	python3 scripts/package-licenses.py --runtime-dir "$(PLAYGROUND_OUT)/purrdf/licenses/runtime"
+	python3 scripts/package-licenses.py --profile npm --audit-directory "$(PLAYGROUND_OUT)" \
+		--recipient-root purrdf --receipt "$(CARGO_TARGET_DIR)/license-evidence-playground.json"
 	@echo "OK: console assembled at $(PLAYGROUND_OUT)"
 	@echo "    preview: (cd $(PLAYGROUND_OUT) && python3 -m http.server 8080) then open http://localhost:8080/"
 
@@ -934,23 +965,26 @@ capi-build: ## Build libpurrdf (cdylib + staticlib + header + pkg-config) via ca
 	cargo capi build -p purrdf-capi
 
 capi-header: ## Regenerate the committed purrdf.h ABI contract from the crate.
-	@touch crates/rdf-capi/src/lib.rs  # cargo-c only re-runs cbindgen when the crate recompiles
-	cargo capi build -p purrdf-capi
-	@hdr=$$(find -H "$(CARGO_TARGET_DIR)" -path '*/include/purrdf/purrdf.h' | head -1); \
-	  test -n "$$hdr" || { echo "FAIL: cargo-c did not emit purrdf.h"; exit 1; }; \
-	  cp "$$hdr" $(CAPI_HEADER); echo "regenerated $(CAPI_HEADER)"
+	python3 scripts/capi-header.py --write $(CAPI_HEADER)
 
 capi-check: ## Verify the committed purrdf.h is current + the C smoke links and runs.
-	@touch crates/rdf-capi/src/lib.rs  # force cbindgen to re-run so a cached build cannot serve a stale header
-	cargo capi build -p purrdf-capi
-	@hdr=$$(find -H "$(CARGO_TARGET_DIR)" -path '*/include/purrdf/purrdf.h' | head -1); \
-	  test -n "$$hdr" || { echo "FAIL: cargo-c did not emit purrdf.h"; exit 1; }; \
-	  if ! diff -q "$$hdr" $(CAPI_HEADER) >/dev/null; then \
-	    echo "FAIL: $(CAPI_HEADER) is STALE — run 'make capi-header' and commit the ABI header"; \
-	    diff $(CAPI_HEADER) "$$hdr" | head -40; exit 1; \
-	  fi; \
-	  echo "OK: committed purrdf.h matches the libpurrdf ABI surface"
+	python3 scripts/capi-header.py --self-test
+	python3 scripts/capi-header.py --check $(CAPI_HEADER)
 	cargo test -p purrdf-capi --test c_smoke --locked
 
 capi-install: ## Install libpurrdf + purrdf.pc + header to PREFIX (default /usr/local).
+	python3 scripts/package-licenses.py --profile c --check
 	cargo capi install -p purrdf-capi --prefix="$(if $(PREFIX),$(PREFIX),/usr/local)"
+	install -d "$(if $(PREFIX),$(PREFIX),/usr/local)/share/purrdf/licenses"
+	cp -R crates/rdf-capi/licenses/. "$(if $(PREFIX),$(PREFIX),/usr/local)/share/purrdf/licenses/"
+
+.PHONY: capi-bundle license-bundles python-release-check
+python-release-check: ## Build, audit and jointly install both exact Python distributions.
+	bash scripts/check-python-release-artifacts.sh
+
+license-bundles: ## Regenerate recipient license texts, notice inventories and dependency evidence.
+	python3 scripts/fetch-locked-deps.py
+	python3 scripts/package-licenses.py --write
+
+capi-bundle: ## Build and audit the native C distribution, including all recipient notices.
+	python3 scripts/build-capi-bundle.py

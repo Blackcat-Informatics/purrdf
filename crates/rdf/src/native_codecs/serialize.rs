@@ -54,7 +54,7 @@ use crate::ir::TermRef;
 use crate::{DatasetView, FastHasher, FastMap, RdfDiagnostic, SerializeGraph};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::{TextSink, WriterDrain};
-use purrdf_core::{Nested, try_fold_nested};
+use purrdf_core::{Nested, TermGuard as _, try_fold_nested};
 use purrdf_iri::BaseIri;
 
 /// The blank-node label alphabet the TARGET format's codec can legally emit —
@@ -313,6 +313,27 @@ fn serialize_dataset_into_sink<D: DatasetView>(
     options: &SerializeOptions<'_>,
     out: &mut TextSink<'_>,
 ) -> Result<SerializeReport, RdfDiagnostic> {
+    dataset
+        .checked_read(|dataset| {
+            serialize_dataset_read_into_sink(dataset, format, base_iri, options, out)
+        })
+        .map_err(source_read_failure)?
+}
+
+fn source_read_failure(error: impl std::fmt::Display) -> RdfDiagnostic {
+    RdfDiagnostic::error(
+        "source-read",
+        format!("native serialization source read failed: {error}"),
+    )
+}
+
+fn serialize_dataset_read_into_sink<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    options: &SerializeOptions<'_>,
+    out: &mut TextSink<'_>,
+) -> Result<SerializeReport, RdfDiagnostic> {
     if options.jsonld_options.is_some()
         && !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd)
     {
@@ -331,7 +352,7 @@ fn serialize_dataset_into_sink<D: DatasetView>(
     let directional_literals_dropped = if format.carries_direction() {
         0
     } else {
-        count_directional_object_literals(dataset)
+        count_directional_object_literals(dataset)?
     };
 
     // Independent of BOTH the star layer and the direction surface: a caller who asked
@@ -674,19 +695,21 @@ fn jsonld_options_unused(format: NativeRdfFormat) -> RdfDiagnostic {
 /// direction. Used to record declared loss when serializing to a format with no
 /// direction surface (TriX / HexTuples) — the drop is the realized count the caller
 /// attaches to the loss ledger, never a silent loss.
-fn count_directional_object_literals<D: DatasetView>(dataset: &D) -> usize {
-    dataset
-        .quads()
-        .filter(|q| {
-            matches!(
-                dataset.resolve(q.o),
-                TermRef::Literal {
-                    direction: Some(_),
-                    ..
-                }
-            )
-        })
-        .count()
+fn count_directional_object_literals<D: DatasetView>(dataset: &D) -> Result<usize, RdfDiagnostic> {
+    let mut count = 0;
+    for q in dataset.quads() {
+        let guard = dataset.resolve(q.o).map_err(source_read_failure)?;
+        if matches!(
+            guard.term(),
+            TermRef::Literal {
+                direction: Some(_),
+                ..
+            }
+        ) {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 /// Count every row a single-graph target's flattening discards: base quads asserted in
@@ -725,16 +748,52 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
     include_statement_layer: bool,
     base: Option<BaseIri>,
 ) -> Result<SerGraph, RdfDiagnostic> {
-    let mut interner =
-        SerGraphInterner::with_capacity(dataset.term_count(), blank_label_alphabet(format));
+    dataset
+        .checked_read(|dataset| {
+            build_ser_graph_read(dataset, format, selection, include_statement_layer, base)
+        })
+        .map_err(source_read_failure)?
+}
+
+fn build_ser_graph_read<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    selection: SerializeGraph<'_>,
+    include_statement_layer: bool,
+    base: Option<BaseIri>,
+) -> Result<SerGraph, RdfDiagnostic> {
+    let term_capacity = usize::try_from(dataset.term_count()).map_err(|_| {
+        RdfDiagnostic::error(
+            "native-codec-capacity",
+            "term table exceeds local materialization capacity",
+        )
+    })?;
+    let row_capacity = usize::try_from(dataset.len_hint().unwrap_or(0)).map_err(|_| {
+        RdfDiagnostic::error(
+            "native-codec-capacity",
+            "row hint exceeds local materialization capacity",
+        )
+    })?;
+    if term_capacity
+        .checked_mul(1024)
+        .is_none_or(|bytes| bytes > isize::MAX as usize)
+        || std::alloc::Layout::array::<super::ser_model::SerQuad>(row_capacity).is_err()
+    {
+        return Err(RdfDiagnostic::error(
+            "native-codec-capacity",
+            "materialization exceeds local allocation address space",
+        ));
+    }
+    let mut interner = SerGraphInterner::with_capacity(term_capacity, blank_label_alphabet(format));
 
     // Which quad rows to emit, and whether the statement layer (reifiers/annotations)
     // participates, per the [`SerializeGraph`] filter contract.
     let mut graph = SerGraph {
         terms: Vec::new(),
-        quads: Vec::with_capacity(dataset.len_hint().unwrap_or(0)),
+        quads: Vec::with_capacity(row_capacity),
         reifiers: Vec::new(),
         annotations: Vec::new(),
+        named_graphs: Vec::new(),
         base,
     };
 
@@ -775,7 +834,9 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
             }
         }
         SerializeGraph::Named(name) => {
-            let target = dataset.term_id_by_value(name);
+            let target = dataset
+                .term_id_by_value(name)
+                .map_err(source_read_failure)?;
             for quad in dataset.quads() {
                 if quad.g != target {
                     continue;
@@ -789,6 +850,11 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
         }
     }
 
+    if matches!(selection, SerializeGraph::Dataset) && format.supports_datasets() {
+        for name in dataset.named_graphs() {
+            graph.named_graphs.push(interner.intern(dataset, name)?);
+        }
+    }
     graph.terms = std::mem::take(&mut interner.terms);
     // The interner rows already carry the serialization row-array's graph slot (`None`
     // = default graph): a reifier/annotation declared inside a `GRAPH g { … }` block
@@ -943,7 +1009,8 @@ impl<I: ViewTermId> SerGraphInterner<I> {
         // The emitted shape is built ONCE and is what the memo probes against. On a
         // miss it becomes the `terms` entry; on a hit it is dropped. Either way the
         // term's text is allocated once, never twice.
-        let idx = match dataset.resolve(id) {
+        let guard = dataset.resolve(id).map_err(source_read_failure)?;
+        let idx = match guard.term() {
             TermRef::Iri(iri) => self.intern_shaped(SerTerm {
                 kind: SerTermKind::Iri,
                 value: Some(iri.to_owned()),
@@ -976,7 +1043,13 @@ impl<I: ViewTermId> SerGraphInterner<I> {
             } => {
                 // Borrowed twin of `iri_of`: the comparison and the intern both read
                 // the IRI, neither keeps it, so no owned copy is needed here.
-                let datatype_iri = iri_str_of(dataset, datatype)?;
+                let datatype_guard = dataset.resolve(datatype).map_err(source_read_failure)?;
+                let TermRef::Iri(datatype_iri) = datatype_guard.term() else {
+                    return Err(RdfDiagnostic::error(
+                        "native-codec-datatype-not-iri",
+                        "literal datatype is not an IRI",
+                    ));
+                };
                 // A plain literal (xsd:string, no language) and a language-tagged
                 // literal carry no explicit datatype term — the serializer defaults
                 // them, so emitting one would change the round-trip text.
@@ -1059,16 +1132,22 @@ impl<I: ViewTermId> SerGraphInterner<I> {
         dataset: &D,
         triple: D::Id,
     ) -> Result<(usize, usize, usize), RdfDiagnostic> {
-        match dataset.resolve(triple) {
-            TermRef::Triple { s, p, o } => {
+        let term = dataset
+            .with_term(triple, |term| match term {
+                TermRef::Triple { s, p, o } => Some((s, p, o)),
+                _ => None,
+            })
+            .map_err(source_read_failure)?;
+        match term {
+            Some((s, p, o)) => {
                 let s = self.intern(dataset, s)?;
                 let p = self.intern(dataset, p)?;
                 let o = self.intern(dataset, o)?;
                 Ok((s, p, o))
             }
-            other => Err(RdfDiagnostic::error(
+            None => Err(RdfDiagnostic::error(
                 "native-codec-reifier-not-triple",
-                format!("a reifier must bind a triple term, got {other:?}"),
+                "a reifier must bind a triple term",
             )),
         }
     }
@@ -1089,22 +1168,6 @@ impl<I: ViewTermId> SerGraphInterner<I> {
 fn shape_hash(term: &SerTerm) -> u64 {
     use core::hash::BuildHasher;
     FastHasher::default().hash_one(term)
-}
-
-/// The IRI straight out of the view, for callers that only compare it or copy it into
-/// the term table.
-///
-/// There is no owning twin. The one that existed served the interner's value memo,
-/// which allocated an owned copy of every datatype IRI purely to build a key — the
-/// duplication that memo no longer performs.
-fn iri_str_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<&str, RdfDiagnostic> {
-    match dataset.resolve(id) {
-        TermRef::Iri(iri) => Ok(iri),
-        other => Err(RdfDiagnostic::error(
-            "native-codec-datatype-not-iri",
-            format!("a literal datatype must be an IRI, got {other:?}"),
-        )),
-    }
 }
 
 #[cfg(test)]

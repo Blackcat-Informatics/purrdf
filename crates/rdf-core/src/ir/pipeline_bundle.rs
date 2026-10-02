@@ -619,9 +619,13 @@ fn finish(hasher: Sha256) -> ContentDigest {
 fn iri_named_graphs<D: DatasetView>(view: &D) -> Vec<HandleKey> {
     let mut out: Vec<HandleKey> = view
         .named_graphs()
-        .filter_map(|id| match view.resolve(id) {
-            TermRef::Iri(iri) => Some(iri.to_owned()),
-            _ => None,
+        .filter_map(|id| {
+            view.with_term(id, |term| match term {
+                TermRef::Iri(iri) => Some(iri.to_owned()),
+                _ => None,
+            })
+            .ok()
+            .flatten()
         })
         .collect();
     out.sort_unstable();
@@ -721,13 +725,39 @@ struct ResidueView<'a, D>(&'a D);
 
 impl<D: DatasetView> ResidueView<'_, D> {
     fn keeps(&self, g: Option<D::Id>) -> bool {
-        g.is_none_or(|id| !matches!(self.0.resolve(id), TermRef::Iri(_)))
+        g.is_none_or(|id| {
+            self.0
+                .with_term(id, |term| !matches!(term, TermRef::Iri(_)))
+                .unwrap_or(false)
+        })
     }
 }
 
 impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
     type Id = D::Id;
+    type ReadError = D::ReadError;
+    type TermGuard<'a>
+        = D::TermGuard<'a>
+    where
+        Self: 'a;
     type ProbePlan = ();
+
+    fn reserve_workspace(
+        &self,
+        bytes: u64,
+    ) -> Result<impl crate::WorkspaceReservation<Error = Self::ReadError> + '_, Self::ReadError>
+    {
+        self.0.reserve_workspace(bytes)
+    }
+    fn max_owned_term_bytes(&self) -> Option<u64> {
+        self.0.max_owned_term_bytes()
+    }
+    fn storage_live_budget(&self) -> Option<u64> {
+        self.0.storage_live_budget()
+    }
+    fn read_error(&self) -> Option<Self::ReadError> {
+        self.0.read_error()
+    }
 
     /// A residue holds a subset of the inner view's quads.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
@@ -738,11 +768,11 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
         self.0.quads().filter(|q| self.keeps(q.g))
     }
 
-    fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
         self.0.resolve(id)
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id> {
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
         self.0.term_id_by_value(value)
     }
 
@@ -770,7 +800,7 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
         self.quads_for_pattern(s, p, o, g)
     }
 
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         self.0.term_count()
     }
 
@@ -2686,6 +2716,7 @@ mod residue_graph_seam_tests {
     fn graph_id(paged: &PagedDataset, value: &TermValue) -> GlobalTermId {
         paged
             .term_id_by_value(value)
+            .expect("the dictionary read succeeds")
             .expect("the graph name is interned by the sealed pages")
     }
 

@@ -208,7 +208,7 @@ impl Default for ScopeId {
 /// This is deliberately NOT the IR engine's dataset-local `TermId`: the protocol owns
 /// its own id space so neither side leaks identity into the other.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct EventTermId(pub u32);
+pub struct EventTermId(pub u64);
 
 /// RDF 1.2 base direction for directional language-tagged literals.
 ///
@@ -373,9 +373,9 @@ pub struct EventQuad {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct SourceSpan {
     /// Byte offset from the start of the input.
-    pub byte_offset: usize,
+    pub byte_offset: u64,
     /// 1-based line number.
-    pub line: u32,
+    pub line: u64,
     /// 1-based column number.
     pub column: u32,
 }
@@ -393,7 +393,7 @@ impl SourceSpan {
     /// assert_eq!(span.line, 3);
     /// assert_eq!(span.column, 7);
     /// ```
-    pub fn new(byte_offset: usize, line: u32, column: u32) -> Self {
+    pub fn new(byte_offset: u64, line: u64, column: u32) -> Self {
         Self {
             byte_offset,
             line,
@@ -441,6 +441,8 @@ pub enum EventError {
         /// The id at which the cycle was detected (the id already being resolved).
         id: EventTermId,
     },
+    /// The drive-global identifier space is exhausted; no identifier is reused.
+    IdSpaceExhausted,
     /// Any other protocol failure, carried as a message (e.g. a sink-specific freeze
     /// failure surfaced through the seam).
     Message(String),
@@ -485,6 +487,7 @@ impl core::fmt::Display for EventError {
                 "cyclic triple term: event term id {} (directly or transitively) references itself",
                 id.0
             ),
+            Self::IdSpaceExhausted => f.write_str("event term identifier space exhausted"),
             Self::Message(msg) => f.write_str(msg),
         }
     }
@@ -821,6 +824,15 @@ pub trait RdfEventSource {
 mod tests {
     use super::*;
 
+    #[test]
+    fn logical_source_spans_are_exact_above_u32_and_binary64() {
+        let span = SourceSpan::new((1 << 53) + 1, (1 << 32) + 1, u32::MAX);
+        assert_eq!(span.byte_offset, 9_007_199_254_740_993);
+        assert_eq!(span.line, 4_294_967_297);
+        assert_eq!(span.column, u32::MAX);
+        assert_eq!(EventTermId((1 << 53) + 1).0, span.byte_offset);
+    }
+
     /// Only the exact lowercase tokens name a direction; a case variant, a
     /// padded token and the empty string are refused.
     #[test]
@@ -956,6 +968,7 @@ mod tests {
     #[test]
     fn error_display_is_descriptive() {
         let cases = [
+            EventError::IdSpaceExhausted,
             EventError::RedeclaredId {
                 id: EventTermId(3),
                 scope: ScopeId(1),

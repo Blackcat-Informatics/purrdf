@@ -153,7 +153,7 @@ impl GraphInterner {
                         "gts-missing-reifier-binding",
                         format!("GTS triple term references missing reifier {reifier_id}"),
                     )
-                    .with_location(self.location(gts_id).with_gts_reifier(reifier_id)));
+                    .with_location(self.location(gts_id).with_gts_reifier(reifier_id as u64)));
                 };
                 components
             }
@@ -202,13 +202,13 @@ impl GraphInterner {
                 "rdf-ir-dangling-term-ref",
                 format!("GTS {role} references term id {gts_id}, which no term introduced"),
             )
-            .with_location(location.clone().with_gts_term(gts_id)));
+            .with_location(location.clone().with_gts_term(gts_id as u64)));
         }
         self.intern(gts_id, 0)
     }
 
     fn location(&self, gts_id: usize) -> RdfLocation {
-        RdfLocation::logical("gts:graph").with_gts_term(gts_id)
+        RdfLocation::logical("gts:graph").with_gts_term(gts_id as u64)
     }
 }
 
@@ -266,7 +266,7 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
 
     // Quads, resolved through the remap; a dangling id hard-fails.
     for (index, (s, p, o, g)) in quads.iter().copied().enumerate() {
-        let location = RdfLocation::logical("gts:quad").with_gts_quad(index);
+        let location = RdfLocation::logical("gts:quad").with_gts_quad(index as u64);
         let s = interner.resolve_row_term(s, "quad subject", &location)?;
         let p = interner.resolve_row_term(p, "quad predicate", &location)?;
         let o = interner.resolve_row_term(o, "quad object", &location)?;
@@ -281,7 +281,7 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
     // Reifier bindings: bind the reifier resource to the interned triple term, carrying
     // the reifier declaration's own named graph (`None` = default graph).
     for (reifier_id, (s, p, o), graph) in reifiers.iter().copied() {
-        let location = RdfLocation::logical("gts:reifier").with_gts_reifier(reifier_id);
+        let location = RdfLocation::logical("gts:reifier").with_gts_reifier(reifier_id as u64);
         let reifier = interner.resolve_row_term(reifier_id, "reifier", &location)?;
         let s = interner.resolve_row_term(s, "reified subject", &location)?;
         let p = interner.resolve_row_term(p, "reified predicate", &location)?;
@@ -295,7 +295,7 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
 
     // Annotations `(reifier, predicate, value, graph?)`.
     for (r, p, v, graph) in annotations.iter().copied() {
-        let location = RdfLocation::logical("gts:annotation").with_gts_reifier(r);
+        let location = RdfLocation::logical("gts:annotation").with_gts_reifier(r as u64);
         let r = interner.resolve_row_term(r, "annotation reifier", &location)?;
         let p = interner.resolve_row_term(p, "annotation predicate", &location)?;
         let v = interner.resolve_row_term(v, "annotation object", &location)?;
@@ -389,7 +389,10 @@ mod tests {
                 .expect("the location identifies a GTS row");
             assert_eq!(
                 bundle.dataset.resolve(quad.s),
-                TermRef::Iri(&original_subjects[original]),
+                TermRef::Iri(
+                    &original_subjects
+                        [usize::try_from(original).expect("the source row fits its input vector")]
+                ),
                 "a source location must identify a matching input statement"
             );
         }

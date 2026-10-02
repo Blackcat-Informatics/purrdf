@@ -141,7 +141,10 @@ fn build_fixture() -> Arc<RdfDataset> {
 /// engine's public generic entry point — the exact seam the SPARQL evaluator uses
 /// for a `PackView` (id type [`purrdf_core::PackId`]) as well as for the production
 /// `RdfDataset` (id type [`purrdf_core::TermId`]).
-fn run<D: DatasetView + Sync>(dataset: &D, query: &str) -> SparqlResult {
+fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    dataset: &D,
+    query: &str,
+) -> SparqlResult {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(query, None).expect("prepare");
     engine

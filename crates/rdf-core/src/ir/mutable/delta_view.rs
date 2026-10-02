@@ -73,6 +73,7 @@ impl DeltaDatasetView {
         stats.retain(&base);
         stats.retain(&delta);
         stats.auxiliary_bytes = delta
+            .as_ref()
             .term_count()
             .saturating_mul(
                 size_of::<DeltaViewId>()
@@ -87,7 +88,7 @@ impl DeltaDatasetView {
         limits.check(&stats)?;
         let mut lookup = FastMap::default();
         let mut base_to_delta = FastMap::default();
-        let delta_ids = (0..delta.term_count())
+        let delta_ids = (0..delta.as_ref().term_count())
             .map(|index| {
                 let id =
                     TermId::from_index(u32::try_from(index).expect("native term index fits u32"));
@@ -119,7 +120,7 @@ impl DeltaDatasetView {
             work: Arc::default(),
         };
         view.work.add(crate::ViewWork {
-            copied_terms: view.delta.term_count(),
+            copied_terms: view.delta.as_ref().term_count(),
             copied_rows: view.delta.rdf_row_count(),
             freezes: 1,
             materializations: 0,
@@ -164,7 +165,7 @@ impl DeltaDatasetView {
 
     /// Canonical handles of every term retained by this snapshot.
     pub fn term_ids(&self) -> impl Iterator<Item = DeltaViewId> + '_ {
-        (0..self.base.term_count())
+        (0..self.base.as_ref().term_count())
             .map(|index| {
                 DeltaViewId::Base(TermId::from_index(
                     u32::try_from(index).expect("native index fits u32"),
@@ -205,7 +206,7 @@ impl DeltaDatasetView {
     pub fn materialize(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
         let result = crate::ir::pack::dataset_from_view(self)?;
         self.work.add(crate::ViewWork {
-            copied_terms: result.term_count(),
+            copied_terms: result.as_ref().term_count(),
             copied_rows: result.rdf_row_count(),
             freezes: 1,
             materializations: 1,
@@ -547,6 +548,11 @@ struct Pattern {
 
 impl DatasetView for DeltaDatasetView {
     type Id = DeltaViewId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = QuadProbePlan;
 
     /// The wider bound of the base and the delta.
@@ -572,39 +578,53 @@ impl DatasetView for DeltaDatasetView {
             .chain(self.delta.quads().map(|q| self.map_delta(q)))
     }
 
-    fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
-        match id {
-            DeltaViewId::Base(id) => self.base.resolve(id).map_ids(DeltaViewId::Base),
-            DeltaViewId::Delta(id) => self.delta.resolve(id).map_ids(|id| self.delta_id(id)),
-        }
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok({
+            match id {
+                DeltaViewId::Base(id) => self.base.as_ref().resolve(id).map_ids(DeltaViewId::Base),
+                DeltaViewId::Delta(id) => self
+                    .delta
+                    .as_ref()
+                    .resolve(id)
+                    .map_ids(|id| self.delta_id(id)),
+            }
+        })
     }
 
-    fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id> {
-        self.base
-            .term_id_by_value(value)
-            .map(DeltaViewId::Base)
-            .or_else(|| {
-                self.delta
-                    .term_id_by_value(value)
-                    .map(|id| self.delta_id(id))
-            })
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok({
+            self.base
+                .as_ref()
+                .term_id_by_value(value)
+                .map(DeltaViewId::Base)
+                .or_else(|| {
+                    self.delta
+                        .as_ref()
+                        .term_id_by_value(value)
+                        .map(|id| self.delta_id(id))
+                })
+        })
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
         self.base.capabilities().union(self.delta.capabilities())
     }
 
-    fn len_hint(&self) -> Option<usize> {
+    fn len_hint(&self) -> Option<u64> {
         None
     }
 
-    fn term_count(&self) -> usize {
-        self.base.term_count() + self.delta.term_count() - self.base_to_delta.len()
+    fn term_count(&self) -> u64 {
+        u64::try_from({
+            self.base.as_ref().term_count() + self.delta.as_ref().term_count()
+                - self.base_to_delta.len()
+        })
+        .expect("bounded local count fits u64")
     }
 
     fn stats_fingerprint(&self) -> u64 {
         // Cost-ranking discriminator only, never content or cache authority.
-        (self.stats.retained_rows as u64).rotate_left(32) ^ self.term_count() as u64
+        (self.stats.retained_rows as u64).rotate_left(32) ^ self.term_count()
     }
 
     fn probe_plan(
@@ -651,18 +671,22 @@ impl DatasetView for DeltaDatasetView {
         p: Option<Self::Id>,
         o: Option<Self::Id>,
         g: GraphMatch<Self::Id>,
-    ) -> usize {
-        // Cost ranking is an upper bound. Native index estimates need no result
-        // scan; retained metadata bounds any annotations exposed by deletion.
-        let base = self.local_pattern(s, p, o, g, Layer::Base).map_or(0, |q| {
-            self.base
-                .cardinality_estimate(q.s, q.p, q.o, q.g)
-                .saturating_add(self.base.rdf_row_count() - self.base.quad_count())
-        });
-        let delta = self
-            .local_pattern(s, p, o, g, Layer::Delta)
-            .map_or(0, |q| self.delta.cardinality_estimate(q.s, q.p, q.o, q.g));
-        base.saturating_add(delta)
+    ) -> u64 {
+        u64::try_from({
+            // Cost ranking is an upper bound. Native index estimates need no result
+            // scan; retained metadata bounds any annotations exposed by deletion.
+            let base = self.local_pattern(s, p, o, g, Layer::Base).map_or(0, |q| {
+                self.base
+                    .as_ref()
+                    .cardinality_estimate(q.s, q.p, q.o, q.g)
+                    .saturating_add(self.base.rdf_row_count() - self.base.quad_count())
+            });
+            let delta = self.local_pattern(s, p, o, g, Layer::Delta).map_or(0, |q| {
+                self.delta.as_ref().cardinality_estimate(q.s, q.p, q.o, q.g)
+            });
+            base.saturating_add(delta)
+        })
+        .expect("bounded local count fits u64")
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
@@ -1131,10 +1155,12 @@ mod tests {
         assert_eq!(first.delta().quad_count(), 1);
         assert_surface_equal(&first, &mutation.freeze().unwrap());
         assert_eq!(
-            first.term_id_by_value(&iri("b")),
-            base.term_id_by_value(&iri("b")).map(DeltaViewId::Base)
+            first.term_id_by_value(&iri("b")).unwrap(),
+            base.as_ref()
+                .term_id_by_value(&iri("b"))
+                .map(DeltaViewId::Base)
         );
-        let new_id = first.term_id_by_value(&iri("new")).unwrap();
+        let new_id = first.term_id_by_value(&iri("new")).unwrap().unwrap();
         assert!(matches!(new_id, DeltaViewId::Delta(_)));
         assert!(new_id.encode() < DeltaViewId::encode_computed(0));
         assert!(mutation.insert(row("a", "b")).unwrap());
@@ -1143,9 +1169,12 @@ mod tests {
         assert_surface_equal(&second, &mutation.freeze().unwrap());
         assert_eq!(first.quads().count(), 1);
         assert_eq!(second.quads().count(), 1);
-        assert!(first.term_id_by_value(&iri("new")).is_some());
-        assert!(second.term_id_by_value(&iri("new")).is_none());
-        assert_ne!(first.quad_refs().next(), second.quad_refs().next());
+        assert!(first.term_id_by_value(&iri("new")).unwrap().is_some());
+        assert!(second.term_id_by_value(&iri("new")).unwrap().is_none());
+        assert_ne!(
+            first.term_value(first.quads().next().unwrap().o),
+            second.term_value(second.quads().next().unwrap().o),
+        );
     }
 
     #[test]
@@ -1169,7 +1198,7 @@ mod tests {
             .unwrap();
         let view = mutation.snapshot_view().unwrap();
         let terms: Vec<_> = ["s0", "s1", "p", "new", "g", "new-graph"]
-            .map(|s| view.term_id_by_value(&iri(s)).unwrap())
+            .map(|s| view.term_id_by_value(&iri(s)).unwrap().unwrap())
             .into_iter()
             .collect();
         let choices: Vec<_> = std::iter::once(None)
@@ -1204,7 +1233,7 @@ mod tests {
                             indexed,
                             view.quads_for_pattern(s, p, o, g).collect::<Vec<_>>()
                         );
-                        assert!(view.cardinality_estimate(s, p, o, g) >= scan.len());
+                        assert!(view.cardinality_estimate(s, p, o, g) >= scan.len() as u64);
                     }
                 }
             }
@@ -1253,7 +1282,7 @@ mod tests {
         let view = mutation.snapshot_view().unwrap();
         assert_eq!(view.reifier_quads().count(), 1);
         assert_eq!(view.annotation_quads().count(), 2);
-        let r = view.term_id_by_value(&iri("reifier")).unwrap();
+        let r = view.term_id_by_value(&iri("reifier")).unwrap().unwrap();
         assert_eq!(view.reifier_quads_of(r).count(), 1);
         assert_eq!(view.annotations_of_with_graph(r).count(), 2);
         assert_eq!(view.named_graphs().count(), 2);

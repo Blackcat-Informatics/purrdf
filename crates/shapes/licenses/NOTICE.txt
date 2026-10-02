@@ -1,0 +1,21 @@
+PurRDF recipient notices
+========================
+
+Copyright 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0 (choose any one option).
+The three complete first-party license texts accompany this notice.
+Third-party and derived material retains its own terms, in addition to
+the chosen first-party license. Documentation with CC-BY-4.0 headers
+retains that grant. No trademark rights are granted.
+
+This inventory preserves notices for the source material and resolved
+build inputs described below. Platform alternatives and build inputs
+need not occur in every compiled binary. Test data is source-only.
+
+shacl: W3C-20150513
+Scope: source-only conformance data; original notices remain authoritative
+Source: https://github.com/w3c/data-shapes/tree/08adb3776709a014bc3062ede793c36275b22446
+Evidence: vectors/shacl/README.md
+Notice: third-party/shacl/0-W3C-software-document-2015.html
+Notice: third-party/shacl/1-LICENSE.md
+

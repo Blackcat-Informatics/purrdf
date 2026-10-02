@@ -1,0 +1,54 @@
+PurRDF recipient notices
+========================
+
+Copyright 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0 (choose any one option).
+The three complete first-party license texts accompany this notice.
+Third-party and derived material retains its own terms, in addition to
+the chosen first-party license. Documentation with CC-BY-4.0 headers
+retains that grant. No trademark rights are granted.
+
+This inventory preserves notices for the source material and resolved
+build inputs described below. Platform alternatives and build inputs
+need not occur in every compiled binary. Test data is source-only.
+
+csvw: LicenseRef-W3C-Document
+Scope: source-only conformance data; original notices remain authoritative
+Source: https://github.com/w3c/csvw
+Evidence: crates/rdf/tests/fixtures/csvw-w3c/README.md
+Notice: third-party/csvw/0-W3C-document-license.html
+Notice: third-party/csvw/1-LICENSE.md
+
+jsonld-w3c: LicenseRef-W3C-Test-Suite
+Scope: source-only conformance data; original notices remain authoritative
+Source: https://github.com/w3c/json-ld-api
+Evidence: LICENSING.md
+Notice: third-party/jsonld-w3c/0-W3C-software-document-2015.html
+Notice: third-party/jsonld-w3c/1-W3C-test-suites-policy.html
+Notice: third-party/jsonld-w3c/2-W3C-test-suite-license.html
+Notice: third-party/jsonld-w3c/3-W3C-test-suite-BSD.html
+Notice: third-party/jsonld-w3c/4-LICENSE.md
+
+obographs: BSD-3-Clause
+Scope: source-only conformance data; original notices remain authoritative
+Source: https://github.com/geneontology/obographs
+Evidence: LICENSING.md
+Notice: third-party/obographs/0-BSD-3-Clause.txt
+
+rdf-w3c: LicenseRef-W3C-Test-Suite
+Scope: source-only conformance data; original notices remain authoritative
+Source: https://github.com/w3c/rdf-tests
+Evidence: crates/rdf/tests/corpus/w3c/README.md
+Notice: third-party/rdf-w3c/0-W3C-software-document-2015.html
+Notice: third-party/rdf-w3c/1-W3C-test-suites-policy.html
+Notice: third-party/rdf-w3c/2-W3C-test-suite-license.html
+Notice: third-party/rdf-w3c/3-W3C-test-suite-BSD.html
+Notice: third-party/rdf-w3c/4-LICENSE
+
+rdfc: W3C-20150513
+Scope: source-only conformance data; original notices remain authoritative
+Source: https://github.com/w3c/rdf-canon
+Evidence: LICENSING.md
+Notice: third-party/rdfc/0-W3C-software-document-2015.html
+Notice: third-party/rdfc/1-LICENSE.md
+

@@ -89,7 +89,7 @@ pub trait ResolvedSink {
     /// Intern a resolved IRI term, returning its target id.
     fn intern_iri(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         gts_id: usize,
         iri: &str,
     ) -> Result<Self::Id, Self::Error>;
@@ -98,7 +98,7 @@ pub trait ResolvedSink {
     /// returning its target id.
     fn intern_blank(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         gts_id: usize,
         label: &str,
     ) -> Result<Self::Id, Self::Error>;
@@ -108,7 +108,7 @@ pub trait ResolvedSink {
     /// datatype-must-be-IRI check and base-direction parsing.
     fn intern_literal(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         gts_id: usize,
         lexical: String,
         datatype: Option<Self::Id>,
@@ -119,7 +119,7 @@ pub trait ResolvedSink {
     /// Intern a resolved quoted-triple term from its resolved components.
     fn intern_triple(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         gts_id: usize,
         s: Self::Id,
         p: Self::Id,
@@ -129,7 +129,7 @@ pub trait ResolvedSink {
     /// Push a resolved quad row (`g` is `None` for the default graph).
     fn push_quad(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         s: Self::Id,
         p: Self::Id,
         o: Self::Id,
@@ -140,7 +140,7 @@ pub trait ResolvedSink {
     /// in graph `g`.
     fn push_reifier(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         reifier: Self::Id,
         s: Self::Id,
         p: Self::Id,
@@ -152,7 +152,7 @@ pub trait ResolvedSink {
     /// `g`.
     fn push_annotation(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         reifier: Self::Id,
         p: Self::Id,
         o: Self::Id,
@@ -161,19 +161,19 @@ pub trait ResolvedSink {
 
     /// Build the error for a gts id that no `term` event ever introduced —
     /// a genuinely dangling reference. `role` names the referencing position.
-    fn err_dangling_term(&self, segment_index: usize, gts_id: usize, role: &str) -> Self::Error;
+    fn err_dangling_term(&self, segment_index: u64, gts_id: usize, role: &str) -> Self::Error;
 
     /// Build the error for exceeding [`purrdf_events::MAX_TERM_NESTING_DEPTH`] while
     /// resolving nested quoted triples.
-    fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> Self::Error;
+    fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
     /// Build the error for a quoted-triple term that states neither its own
     /// `(s, p, o)` nor a reifier id to resolve them through.
-    fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> Self::Error;
+    fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
     /// Build the error for a triple term whose reifier no `reifies` event ever
     /// bound.
-    fn err_missing_reifier(&self, segment_index: usize, reifier: usize) -> Self::Error;
+    fn err_missing_reifier(&self, segment_index: u64, reifier: usize) -> Self::Error;
 
     /// Per-frame provenance passthrough (default no-op).
     fn frame(&mut self, _ctx: FrameContext<'_>) -> Result<(), Self::Error> {
@@ -183,7 +183,7 @@ pub trait ResolvedSink {
     /// Inline blob digest + declared metadata passthrough (default no-op).
     fn blob(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         _digest: &str,
         _meta: Option<&Value>,
     ) -> Result<(), Self::Error> {
@@ -216,33 +216,33 @@ pub trait ResolvedSink {
     }
 
     /// Opaque frame passthrough (default no-op).
-    fn opaque(&mut self, _segment_index: usize, _node: &OpaqueNode) -> Result<(), Self::Error> {
+    fn opaque(&mut self, _segment_index: u64, _node: &OpaqueNode) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Signature observation passthrough (default no-op).
-    fn signature(&mut self, _segment_index: usize, _sig: &Signature) -> Result<(), Self::Error> {
+    fn signature(&mut self, _segment_index: u64, _sig: &Signature) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Suppression directive passthrough (default no-op).
     fn suppression(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         _suppression: &Suppression,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Completed segment-head passthrough (default no-op).
-    fn segment_head(&mut self, _segment_index: usize, _head: &[u8]) -> Result<(), Self::Error> {
+    fn segment_head(&mut self, _segment_index: u64, _head: &[u8]) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Completed streamable-layout passthrough (default no-op).
     fn streamable_layout(
         &mut self,
-        _segment_index: usize,
+        _segment_index: u64,
         _info: &StreamableInfo,
     ) -> Result<(), Self::Error> {
         Ok(())
@@ -265,26 +265,26 @@ pub struct SegmentResolver<S: ResolvedSink> {
     sink: S,
     /// RAW per-segment terms buffered during the streaming phase, keyed by
     /// `(segment_index, gts_id)`, resolved and drained at segment close.
-    raw_terms: FastMap<(usize, usize), Term>,
+    raw_terms: FastMap<(u64, usize), Term>,
     /// Per-segment memo from `(segment_index, gts_id)` to the target id,
     /// populated as the currently buffered segment's terms resolve (so a term
     /// referenced twice — e.g. as both a quad subject and a reifier subject —
     /// interns once) and cleared at the end of [`Self::resolve_buffered`]:
     /// segment-local ids never cross a segment boundary, so retaining this
     /// past segment close would grow it O(total terms across ALL segments).
-    remaps: FastMap<(usize, usize), S::Id>,
+    remaps: FastMap<(u64, usize), S::Id>,
     /// Per-segment reifier bindings `(segment_index, reifier) → (s, p, o)` gts
     /// ids, recorded from `reifier` events so a Triple term (any order) can
     /// recover its components.
-    reifier_bindings: FastMap<(usize, usize), Triple3>,
+    reifier_bindings: FastMap<(u64, usize), Triple3>,
     /// RAW quad rows `(segment_index, (s, p, o, g) gts ids)`.
-    raw_quads: Vec<(usize, Quad)>,
+    raw_quads: Vec<(u64, Quad)>,
     /// RAW reifier rows `(segment_index, reifier, (s, p, o), graph?)`.
-    raw_reifiers: Vec<(usize, usize, Triple3, Option<usize>)>,
+    raw_reifiers: Vec<(u64, usize, Triple3, Option<usize>)>,
     /// RAW annotation rows `(segment_index, (r, p, v), graph?)`.
-    raw_annotations: Vec<(usize, Triple3, Option<usize>)>,
+    raw_annotations: Vec<(u64, Triple3, Option<usize>)>,
     /// The segment currently being buffered; a higher incoming index flushes it.
-    current_segment: Option<usize>,
+    current_segment: Option<u64>,
     /// First latched error. Streaming callbacks are infallible, so a failure is
     /// parked here and surfaced after the reader returns.
     error: Option<S::Error>,
@@ -379,7 +379,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     /// Note an incoming buffering event's segment. When it advances past the
     /// segment currently buffered, flush the completed segment (latching any
     /// error) before accepting the new one.
-    fn advance_segment(&mut self, segment_index: usize) {
+    fn advance_segment(&mut self, segment_index: u64) {
         match self.current_segment {
             Some(current) if segment_index > current => {
                 if let Err(error) = self.resolve_buffered() {
@@ -400,7 +400,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
         // Resolve every introduced term (idempotent through `remaps`). Iterate
         // in a deterministic order so the target's interner allocation order —
         // and thus any frozen term order — is reproducible for a fixed stream.
-        let mut keys: Vec<(usize, usize)> = self.raw_terms.keys().copied().collect();
+        let mut keys: Vec<(u64, usize)> = self.raw_terms.keys().copied().collect();
         keys.sort_unstable();
         for (segment_index, gts_id) in keys {
             self.resolve_term(segment_index, gts_id, "term", 0)?;
@@ -465,7 +465,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     /// introduced is a genuinely dangling reference and hence an [`Err`].
     fn resolve_term(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         gts_id: usize,
         role: &str,
         depth: usize,
@@ -496,7 +496,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     /// just removed from `raw_terms`) and MOVES its owned strings into the target.
     fn intern_raw_term(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         gts_id: usize,
         term: Term,
         depth: usize,
@@ -571,7 +571,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     /// reference and hence an [`Err`].
     fn resolve_triple_components(
         &mut self,
-        segment_index: usize,
+        segment_index: u64,
         reifier: usize,
         depth: usize,
     ) -> Result<ResolvedComponents<S>, S::Error> {
@@ -598,7 +598,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         }
     }
 
-    fn term(&mut self, segment_index: usize, term_id: usize, term: &Term) {
+    fn term(&mut self, segment_index: u64, term_id: usize, term: &Term) {
         if self.error.is_some() {
             return;
         }
@@ -613,7 +613,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
             .insert((segment_index, term_id), term.clone());
     }
 
-    fn quad(&mut self, segment_index: usize, quad: Quad) {
+    fn quad(&mut self, segment_index: u64, quad: Quad) {
         if self.error.is_some() {
             return;
         }
@@ -624,7 +624,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         self.raw_quads.push((segment_index, quad));
     }
 
-    fn reifier(&mut self, segment_index: usize, reifier: crate::model::ReifierRow) {
+    fn reifier(&mut self, segment_index: u64, reifier: crate::model::ReifierRow) {
         if self.error.is_some() {
             return;
         }
@@ -650,7 +650,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
             .push((segment_index, reifier_id, triple, graph));
     }
 
-    fn annotation(&mut self, segment_index: usize, annotation: crate::model::AnnotationRow) {
+    fn annotation(&mut self, segment_index: u64, annotation: crate::model::AnnotationRow) {
         if self.error.is_some() {
             return;
         }
@@ -664,7 +664,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
             .push((segment_index, (reifier, predicate, value), graph));
     }
 
-    fn suppression(&mut self, segment_index: usize, suppression: &Suppression) {
+    fn suppression(&mut self, segment_index: u64, suppression: &Suppression) {
         if self.error.is_some() {
             return;
         }
@@ -673,7 +673,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         }
     }
 
-    fn blob(&mut self, segment_index: usize, digest: &str, meta: Option<&Value>) {
+    fn blob(&mut self, segment_index: u64, digest: &str, meta: Option<&Value>) {
         if self.error.is_some() {
             return;
         }
@@ -712,7 +712,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         }
     }
 
-    fn opaque(&mut self, segment_index: usize, opaque: &OpaqueNode) {
+    fn opaque(&mut self, segment_index: u64, opaque: &OpaqueNode) {
         if self.error.is_some() {
             return;
         }
@@ -721,7 +721,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         }
     }
 
-    fn signature(&mut self, segment_index: usize, signature: &Signature) {
+    fn signature(&mut self, segment_index: u64, signature: &Signature) {
         if self.error.is_some() {
             return;
         }
@@ -739,7 +739,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         }
     }
 
-    fn segment_head(&mut self, segment_index: usize, head: &[u8]) {
+    fn segment_head(&mut self, segment_index: u64, head: &[u8]) {
         if self.error.is_some() {
             return;
         }
@@ -748,7 +748,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         }
     }
 
-    fn streamable_layout(&mut self, segment_index: usize, info: &StreamableInfo) {
+    fn streamable_layout(&mut self, segment_index: u64, info: &StreamableInfo) {
         if self.error.is_some() {
             return;
         }

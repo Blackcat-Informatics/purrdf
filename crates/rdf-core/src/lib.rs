@@ -167,11 +167,14 @@ pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{
     DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch,
-    GraphMatchValue, GraphSelector, TermLookupError, ViewOperationStatus, ViewTermId,
-    checkpointed_drain,
+    GraphMatchValue, GraphSelector, NoopReservation, ResolvedQuad, TermGuard, TermLookupError,
+    ViewOperationStatus, ViewTermId, WorkspaceReservation, checkpointed_drain,
 };
 pub use describe::{Describer, describe};
-pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
+pub use diagnostic::{
+    DiagnosticParameter, DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue,
+    RdfDiagnostic, RdfLocation, RdfSeverity,
+};
 pub use fno::{
     FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
@@ -184,6 +187,12 @@ pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 /// Deterministic embedding companions bound to exact PurRDF packs.
 pub use ir::embedding;
 pub use ir::embedding::*;
+pub use ir::segmented::{
+    SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError, SegmentedEvidence,
+    SegmentedExportError, SegmentedHandle, SegmentedImage, SegmentedProvider, SegmentedReadLimits,
+    SegmentedReceipt, SegmentedReceiptAuthority, SegmentedRequest, SegmentedReservation,
+    SegmentedSession, SegmentedSnapshot, SegmentedTermGuard,
+};
 pub use ir::{
     BlankScope, BudgetExceeded, BundleDigestWork, CANON_CORPUS_DIGEST,
     CANON_PRESENTATION_FLAT_ASSERTION_ID, CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
@@ -203,7 +212,7 @@ pub use ir::{
     blank_count_view, canonical_relabel, canonical_relabel_with_mapping, canonicalize,
     canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
     check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
-    deskolemize, fold_term, graph_digest_view, skolemize, try_canonicalize,
+    deskolemize, fold_term, graph_digest_view, skolemize, try_blank_count_view, try_canonicalize,
     try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
     try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
     try_graph_digest_view, visit_nested,

@@ -609,7 +609,7 @@ pub struct PathSnapshotFingerprint {
     /// module decides anything on it.
     pub stats_fingerprint: u64,
     /// The source view's [`DatasetView::term_count`] at snapshot time. Informational.
-    pub term_count: usize,
+    pub term_count: u64,
     /// The number of distinct nodes participating in at least one edge.
     pub node_count: usize,
     /// The number of edges recorded across every adjacency list.
@@ -802,7 +802,7 @@ impl PathGraph {
         // The canonical edge set, and the digest that identifies it. Both come from the
         // one walk [`Self::assert_matches`] re-runs, so a snapshot and a later check of
         // that snapshot can never disagree about what "the edges" were.
-        let raw = canonical_edges(dataset, step, graph);
+        let raw = canonical_edges(dataset, step, graph)?;
         let content_digest = edge_set_digest(&raw);
 
         let mut nodes: Vec<TermValue> = Vec::with_capacity(raw.len() * 2);
@@ -959,7 +959,7 @@ impl PathGraph {
         dataset: &D,
         graph: GraphMatch<D::Id>,
     ) -> Result<(), EvalError> {
-        let observed_edges = canonical_edges(dataset, &self.step, graph);
+        let observed_edges = canonical_edges(dataset, &self.step, graph)?;
         let observed_digest = edge_set_digest(&observed_edges);
         if observed_digest == self.fingerprint.content_digest {
             return Ok(());
@@ -1076,64 +1076,81 @@ fn canonical_edges<D: DatasetView>(
     dataset: &D,
     step: &PathStep,
     graph: GraphMatch<D::Id>,
-) -> Vec<(TermValue, TermValue, TermValue)> {
-    let mut raw: Vec<(TermValue, TermValue, TermValue)> = Vec::new();
-    for (predicate, direction) in &step.alternatives {
-        // A predicate the dataset never interned names no statement in it, so this
-        // alternative contributes no edges — indistinguishable, in the snapshot, from an
-        // interned predicate with no in-scope quad. See `from_dataset`'s docs for why the
-        // two must not be told apart here.
-        let Some(predicate_id) = dataset.term_id_by_value(predicate) else {
-            continue;
-        };
-        // One recording rule for both layers: whichever table a `(subject, object)` pair
-        // came out of, the statement is the asserted triple and the direction decides
-        // which end the hop arrives at.
-        let mut record = |subject: TermValue, object: TermValue| {
-            let statement = TermValue::Triple {
-                s: TermBox::new(subject.clone()),
-                p: TermBox::new(predicate.clone()),
-                o: TermBox::new(object.clone()),
+) -> Result<Vec<(TermValue, TermValue, TermValue)>, EvalError> {
+    dataset
+        .checked_read(|dataset| {
+        let mut raw: Vec<(TermValue, TermValue, TermValue)> = Vec::new();
+        for (predicate, direction) in &step.alternatives {
+            // A predicate the dataset never interned names no statement in it, so this
+            // alternative contributes no edges — indistinguishable, in the snapshot, from an
+            // interned predicate with no in-scope quad. See `from_dataset`'s docs for why the
+            // two must not be told apart here.
+            let Some(predicate_id) = dataset
+                .term_id_by_value(predicate)
+                .map_err(EvalError::source_read)?
+            else {
+                continue;
             };
-            let (from, to) = match direction {
-                PathDirection::Forward => (subject, object),
-                PathDirection::Inverse => (object, subject),
+            // One recording rule for both layers: whichever table a `(subject, object)` pair
+            // came out of, the statement is the asserted triple and the direction decides
+            // which end the hop arrives at.
+            let mut record = |subject: TermValue, object: TermValue| {
+                let statement = TermValue::Triple {
+                    s: TermBox::new(subject.clone()),
+                    p: TermBox::new(predicate.clone()),
+                    o: TermBox::new(object.clone()),
+                };
+                let (from, to) = match direction {
+                    PathDirection::Forward => (subject, object),
+                    PathDirection::Inverse => (object, subject),
+                };
+                raw.push((from, to, statement));
             };
-            raw.push((from, to, statement));
-        };
-        for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
-            record(
-                crate::scratch::term_id_to_value(dataset, quad.s),
-                crate::scratch::term_id_to_value(dataset, quad.o),
-            );
-        }
-        // The statement layer, under the same probe. The reifier table is worth touching
-        // only when this alternative's predicate IS `rdf:reifies`, since every reifier row
-        // carries exactly that predicate; the annotation table is always narrowed by the
-        // predicate residually.
-        statement_layer::visit_quads(
-            dataset,
-            StatementProbe {
-                s: None,
-                p: Some(predicate_id),
-                o: None,
-                graph,
-                scan_reifier_rows: matches!(predicate, TermValue::Iri(iri) if iri == RDF_REIFIES),
-            },
-            |quad| {
+            for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
                 record(
-                    crate::scratch::term_id_to_value(dataset, quad.s),
-                    crate::scratch::term_id_to_value(dataset, quad.o),
+                    crate::scratch::try_term_id_to_value(dataset, quad.s)?,
+                    crate::scratch::try_term_id_to_value(dataset, quad.o)?,
                 );
-            },
-        );
-    }
-    raw.sort_unstable();
-    // Two alternatives can name the same statement in the same direction only by naming
-    // the same predicate twice, which `PathStep::new` refuses — but the adjacency build
-    // deduplicates anyway, so the digest must see the same collapsed set the graph does.
-    raw.dedup();
-    raw
+            }
+            // The statement layer, under the same probe. The reifier table is worth touching
+            // only when this alternative's predicate IS `rdf:reifies`, since every reifier row
+            // carries exactly that predicate; the annotation table is always narrowed by the
+            // predicate residually.
+            let mut visit_error = None;
+            statement_layer::visit_quads(
+                dataset,
+                StatementProbe {
+                    s: None,
+                    p: Some(predicate_id),
+                    o: None,
+                    graph,
+                    scan_reifier_rows: matches!(predicate, TermValue::Iri(iri) if iri == RDF_REIFIES),
+                },
+                |quad| {
+                    if visit_error.is_some() {
+                        return;
+                    }
+                    match (
+                        crate::scratch::try_term_id_to_value(dataset, quad.s),
+                        crate::scratch::try_term_id_to_value(dataset, quad.o),
+                    ) {
+                        (Ok(subject), Ok(object)) => record(subject, object),
+                        (Err(error), _) | (_, Err(error)) => visit_error = Some(error),
+                    }
+                },
+            );
+            if let Some(error) = visit_error {
+                return Err(error);
+            }
+        }
+        raw.sort_unstable();
+        // Two alternatives can name the same statement in the same direction only by naming
+        // the same predicate twice, which `PathStep::new` refuses — but the adjacency build
+        // deduplicates anyway, so the digest must see the same collapsed set the graph does.
+        raw.dedup();
+        Ok(raw)
+        })
+        .map_err(EvalError::source_read)?
 }
 
 /// The full, untruncated SHA-256 identifying a canonical edge set.

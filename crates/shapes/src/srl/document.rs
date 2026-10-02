@@ -69,7 +69,7 @@ pub enum SrlError {
         /// for an imported one.
         document: Option<String>,
         /// 1-based line.
-        line: u32,
+        line: u64,
         /// 1-based column.
         column: u32,
         /// What the grammar refused.
@@ -185,7 +185,7 @@ pub struct SrlRule {
     /// The document it was written in: `None` for the parsed document, else the import.
     document: Option<String>,
     /// 1-based line of its `RULE` keyword.
-    line: u32,
+    line: u64,
     /// 1-based column of its `RULE` keyword.
     column: u32,
 }

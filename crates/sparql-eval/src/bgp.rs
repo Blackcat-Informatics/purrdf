@@ -199,7 +199,10 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     // and needs no dependency (same shape as `SINGLETON` in `plan_or_cached_order`).
     static REIFIES: std::sync::OnceLock<purrdf_core::TermValue> = std::sync::OnceLock::new();
     let reifies_value = REIFIES.get_or_init(|| purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
-    let reifies_id = ctx.dataset.term_id_by_value(reifies_value);
+    let reifies_id = ctx
+        .dataset
+        .term_id_by_value(reifies_value)
+        .map_err(EvalError::source_read)?;
 
     // Whether this execution charges fuel at all. Read once, outside the pattern loop:
     // an ungoverned run (and a run whose caller set only a deadline or only an answer
@@ -704,7 +707,7 @@ fn base_cardinality<D: DatasetView>(
     dataset: &D,
     cp: &CompiledPattern<D::Id>,
     scope: &GraphScope<D::Id>,
-) -> usize {
+) -> u64 {
     let s = constant_of(&cp.s);
     let p = constant_of(&cp.p);
     let o = constant_of(&cp.o);
@@ -1142,12 +1145,18 @@ fn compile_term<D: DatasetView>(
                 }
             } else {
                 let value = ground_term_pattern_to_value(term, "a BGP")?;
-                Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
+                Ok(dataset
+                    .term_id_by_value(&value)
+                    .map_err(EvalError::source_read)?
+                    .map(Pos::Bound))
             }
         }
         TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
             let value = ground_term_pattern_to_value(term, "a BGP")?;
-            Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
+            Ok(dataset
+                .term_id_by_value(&value)
+                .map_err(EvalError::source_read)?
+                .map(Pos::Bound))
         }
     }
 }
@@ -1270,14 +1279,20 @@ fn compile_triple_pos<D: DatasetView>(
                         continue;
                     }
                     let value = ground_term_pattern_to_value(term, "a BGP")?;
-                    match dataset.term_id_by_value(&value) {
+                    match dataset
+                        .term_id_by_value(&value)
+                        .map_err(EvalError::source_read)?
+                    {
                         Some(id) => Pos::Bound(id),
                         None => return Ok(None),
                     }
                 }
                 TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
                     let value = ground_term_pattern_to_value(term, "a BGP")?;
-                    match dataset.term_id_by_value(&value) {
+                    match dataset
+                        .term_id_by_value(&value)
+                        .map_err(EvalError::source_read)?
+                    {
                         Some(id) => Pos::Bound(id),
                         None => return Ok(None),
                     }
@@ -1327,7 +1342,7 @@ fn compile_predicate<D: DatasetView>(
                 .expect("every slot key was registered in pass 1"),
         )),
         NamedNodePattern::NamedNode(n) => dataset
-            .term_id_by_value(&named_node_to_value(n))
+            .term_id_if_ready(&named_node_to_value(n))
             .map(Pos::Bound),
     }
 }
@@ -1438,8 +1453,15 @@ fn bind_pos<D: DatasetView>(
                     None => out[*col] = Some(value),
                 }
             }
-            Pos::Triple(t) => match dataset.resolve(id) {
-                TermRef::Triple { s, p, o } => pending.extend([(&t.o, o), (&t.p, p), (&t.s, s)]),
+            Pos::Triple(t) => match dataset
+                .with_term(id, |term| match term {
+                    TermRef::Triple { s, p, o } => Some((s, p, o)),
+                    _ => None,
+                })
+                .ok()
+                .flatten()
+            {
+                Some((s, p, o)) => pending.extend([(&t.o, o), (&t.p, p), (&t.s, s)]),
                 // The candidate term is not a quoted triple, so a structural triple
                 // pattern cannot match it.
                 _ => return false,
@@ -1519,7 +1541,9 @@ fn object_can_be_triple_term<D: DatasetView>(pos: &Pos<D::Id>, dataset: &D) -> b
         Pos::Slot(_) | Pos::Triple(_) => true,
         // A bound constant is worth scanning only if the constant is itself a triple
         // term; an IRI/literal/blank object can never match a reifier row.
-        Pos::Bound(id) => matches!(dataset.resolve(*id), TermRef::Triple { .. }),
+        Pos::Bound(id) => dataset
+            .with_term(*id, |term| matches!(term, TermRef::Triple { .. }))
+            .unwrap_or(false),
     }
 }
 
@@ -1802,7 +1826,7 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             GraphPattern::Graph { name, inner } => {
                 let inner_graph = match name {
                     NamedNodePattern::NamedNode(n) => dataset
-                        .term_id_by_value(&named_node_to_value(n))
+                        .term_id_if_ready(&named_node_to_value(n))
                         .map_or(GraphMatch::Default, GraphMatch::Named),
                     NamedNodePattern::Variable(_) => GraphMatch::Any,
                 };
@@ -2923,12 +2947,13 @@ mod tests {
 /// 128 KiB stack.
 #[cfg(test)]
 mod term_walk_tests {
+    use purrdf_core::dataset_view::TermGuard as _;
     use std::cell::RefCell;
     use std::hash::{Hash, Hasher};
     use std::sync::Arc;
 
     use purrdf_core::{
-        DatasetView, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+        DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
         RdfStoreCapabilities, TermId, TermRef, TermValue, ViewTermId,
     };
     use purrdf_sparql_algebra::{
@@ -3089,12 +3114,18 @@ mod term_walk_tests {
                     }
                 } else {
                     let value = ground_term_pattern_to_value(term, "a BGP")?;
-                    Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
+                    Ok(dataset
+                        .term_id_by_value(&value)
+                        .map_err(EvalError::source_read)?
+                        .map(Pos::Bound))
                 }
             }
             TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
                 let value = ground_term_pattern_to_value(term, "a BGP")?;
-                Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
+                Ok(dataset
+                    .term_id_by_value(&value)
+                    .map_err(EvalError::source_read)?
+                    .map(Pos::Bound))
             }
         }
     }
@@ -3134,14 +3165,17 @@ mod term_walk_tests {
                     }
                 }
             }
-            Pos::Triple(t) => match dataset.resolve(id) {
-                TermRef::Triple { s, p, o } => {
-                    reference_bind_pos(out, &t.s, s, dataset)
-                        && reference_bind_pos(out, &t.p, p, dataset)
-                        && reference_bind_pos(out, &t.o, o, dataset)
+            Pos::Triple(t) => {
+                let guard = dataset.resolve(id).unwrap();
+                match guard.term() {
+                    TermRef::Triple { s, p, o } => {
+                        reference_bind_pos(out, &t.s, s, dataset)
+                            && reference_bind_pos(out, &t.p, p, dataset)
+                            && reference_bind_pos(out, &t.o, o, dataset)
+                    }
+                    _ => false,
                 }
-                _ => false,
-            },
+            }
         }
     }
 
@@ -3198,26 +3232,31 @@ mod term_walk_tests {
 
     impl DatasetView for Recording<'_> {
         type Id = TermId;
+        type ReadError = std::convert::Infallible;
+        type TermGuard<'a>
+            = TermRef<'a, Self::Id>
+        where
+            Self: 'a;
         type ProbePlan = ();
 
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
             self.inner.quads()
         }
 
-        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-            self.inner.quad_refs()
+        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            Ok({
+                self.log
+                    .borrow_mut()
+                    .push(format!("resolve {}", id.index()));
+                self.inner.resolve(id)
+            })
         }
 
-        fn resolve(&self, id: TermId) -> TermRef<'_> {
-            self.log
-                .borrow_mut()
-                .push(format!("resolve {}", id.index()));
-            self.inner.resolve(id)
-        }
-
-        fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-            self.log.borrow_mut().push(format!("lookup {value:?}"));
-            self.inner.term_id_by_value(value)
+        fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+            Ok({
+                self.log.borrow_mut().push(format!("lookup {value:?}"));
+                self.inner.term_id_by_value(value)
+            })
         }
 
         fn capabilities(&self) -> RdfStoreCapabilities {
@@ -3237,8 +3276,8 @@ mod term_walk_tests {
             self.inner.quads_for_pattern(s, p, o, g)
         }
 
-        fn term_count(&self) -> usize {
-            self.inner.term_count()
+        fn term_count(&self) -> u64 {
+            u64::try_from({ self.inner.term_count() }).expect("bounded local count fits u64")
         }
     }
 
@@ -3269,35 +3308,41 @@ mod term_walk_tests {
 
     impl DatasetView for Chain {
         type Id = TermId;
+        type ReadError = std::convert::Infallible;
+        type TermGuard<'a>
+            = TermRef<'a, Self::Id>
+        where
+            Self: 'a;
         type ProbePlan = ();
 
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
             std::iter::empty()
         }
 
-        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-            std::iter::empty()
-        }
-
-        fn resolve(&self, id: TermId) -> TermRef<'_> {
-            let index = u32::try_from(id.index()).expect("the index fits");
-            match index {
-                0 => TermRef::Iri(&self.leaf),
-                1 => TermRef::Iri(&self.predicate),
-                _ => TermRef::Triple {
-                    s: TermId::from_index(0),
-                    p: TermId::from_index(1),
-                    o: if index == self.depth + 1 {
-                        TermId::from_index(0)
-                    } else {
-                        TermId::from_index(index + 1)
+        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            Ok({
+                let index = u32::try_from(id.index()).expect("the index fits");
+                match index {
+                    0 => TermRef::Iri(&self.leaf),
+                    1 => TermRef::Iri(&self.predicate),
+                    _ => TermRef::Triple {
+                        s: TermId::from_index(0),
+                        p: TermId::from_index(1),
+                        o: if index == self.depth + 1 {
+                            TermId::from_index(0)
+                        } else {
+                            TermId::from_index(index + 1)
+                        },
                     },
-                },
-            }
+                }
+            })
         }
 
-        fn term_id_by_value(&self, _value: &TermValue) -> Option<TermId> {
-            None
+        fn term_id_by_value(
+            &self,
+            _value: &TermValue,
+        ) -> Result<Option<Self::Id>, Self::ReadError> {
+            Ok(None)
         }
 
         fn capabilities(&self) -> RdfStoreCapabilities {
@@ -3317,8 +3362,9 @@ mod term_walk_tests {
             std::iter::empty()
         }
 
-        fn term_count(&self) -> usize {
-            usize::try_from(self.depth).expect("the depth fits") + 2
+        fn term_count(&self) -> u64 {
+            u64::try_from({ usize::try_from(self.depth).expect("the depth fits") + 2 })
+                .expect("bounded local count fits u64")
         }
     }
 
@@ -3995,6 +4041,7 @@ mod survey_tests {
                 let inner_graph = match name {
                     NamedNodePattern::NamedNode(n) => dataset
                         .term_id_by_value(&crate::convert::named_node_to_value(n))
+                        .unwrap()
                         .map_or(GraphMatch::Default, GraphMatch::Named),
                     NamedNodePattern::Variable(_) => GraphMatch::Any,
                 };

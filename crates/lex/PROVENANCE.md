@@ -59,3 +59,8 @@ permission notice of that work applies to them.
 `src/yaml/tests.rs` carries a table of JSON values and the YAML bytes
 `serde_yaml_ng` 0.10 wrote for them, captured from that crate over the same
 values; the emitter reproduces each row.
+
+The complete MIT permission texts and the original libyaml copyright notice
+are included in the generated recipient payload. The Rust translation’s README
+identifies original libyaml revision `2c891fc7a770e8ba2fec34fc6b545c672beb37e6`;
+`LICENSES/PROVENANCE.md` records the pinned notice sources and digests.

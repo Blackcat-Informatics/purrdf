@@ -44,7 +44,7 @@ use std::sync::Arc;
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    TermId, TermRef, TermValue,
+    TermGuard as _, TermId, TermRef, TermValue,
 };
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
@@ -433,6 +433,17 @@ fn bench_iterate(c: &mut Bench) {
     group.finish();
 }
 
+fn generic_resolve_len<D: DatasetView<Id = TermId, ReadError = core::convert::Infallible>>(
+    ds: &D,
+    q: QuadIds,
+) -> usize {
+    let inspect = |id| {
+        let guard = ds.resolve(id).unwrap_or_else(|never| match never {});
+        term_ref_len(guard.term())
+    };
+    inspect(q.s) + inspect(q.p) + inspect(q.o) + q.g.map_or(0, inspect)
+}
+
 fn bench_resolve(c: &mut Bench) {
     let ds = build_dataset();
     let mut group = c.benchmark_group("ir_resolve");
@@ -445,7 +456,275 @@ fn bench_resolve(c: &mut Bench) {
             std::hint::black_box(acc)
         });
     });
+    group.bench_function("generic_pinned_resolve", |b| {
+        b.iter(|| {
+            let mut acc = 0usize;
+            for q in DatasetView::quads(ds.as_ref()) {
+                acc = acc.wrapping_add(generic_resolve_len(ds.as_ref(), q));
+            }
+            std::hint::black_box(acc)
+        });
+    });
+    group.bench_function("generic_resolved_rows", |b| {
+        b.iter(|| {
+            let mut acc = 0usize;
+            for q in DatasetView::quad_refs(ds.as_ref()) {
+                let q = q.unwrap_or_else(|never| match never {});
+                let q = q.as_ref();
+                acc = acc.wrapping_add(
+                    term_ref_len(q.s)
+                        + term_ref_len(q.p)
+                        + term_ref_len(q.o)
+                        + q.g.map_or(0, term_ref_len),
+                );
+            }
+            std::hint::black_box(acc)
+        });
+    });
     group.finish();
+}
+
+/// The resident and provider-backed forward lookup inspect the same fixed IRIs.
+/// The cold case opens outside the timed region and forces sparse-cache eviction;
+/// the hot case warms every dictionary/reverse block before sampling.
+fn bench_segmented_dictionary(c: &mut Bench) {
+    use purrdf_core::{
+        SegmentedBuildLimits, SegmentedBuilder, SegmentedReadLimits, SegmentedSession,
+    };
+    use purrdf_testkit::bench::BatchSize;
+    let values: Vec<_> = (0..256)
+        .map(|n| {
+            TermValue::iri(format!(
+                "http://example.org/dictionary/shared-prefix/{n:04}"
+            ))
+        })
+        .collect();
+    let mut resident = RdfDatasetBuilder::new();
+    let resident_ids: Vec<_> = values
+        .iter()
+        .map(|value| resident.intern_iri(value.as_iri().unwrap()))
+        .collect();
+    for &object in &resident_ids {
+        resident.push_quad(resident_ids[0], resident_ids[1], object, None);
+    }
+    let resident = resident.freeze().expect("resident benchmark fixture");
+    let limits = SegmentedBuildLimits::new(512, 65536, 256, 1024, 8)
+        .unwrap()
+        .with_first_term_index(1_u64 << 33)
+        .unwrap();
+    let mut builder = SegmentedBuilder::new(limits);
+    let mut ids = Vec::with_capacity(values.len());
+    builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+    for &object in &ids {
+        builder
+            .push_quad(QuadIds {
+                s: ids[0],
+                p: ids[1],
+                o: object,
+                g: None,
+            })
+            .unwrap();
+    }
+    let image = builder.seal().unwrap();
+    let provider = Arc::new(image.provider());
+    let open = |cache| {
+        SegmentedSession::open(
+            provider.clone(),
+            image.receipt(),
+            SegmentedReadLimits::new(16_777_216, cache, 8192, 16_777_216, 1),
+        )
+        .unwrap()
+    };
+    let warm = open(128);
+    warm.resolve_batch(&ids, |_, _| {}).unwrap();
+    warm.lookup_batch(&values, |_, _| {}).unwrap();
+    let reads = warm.evidence().request_count();
+    let cold_probe = open(2);
+    cold_probe.resolve_batch(&ids, |_, _| {}).unwrap();
+    assert!(
+        cold_probe.evidence().evictions() > 0,
+        "cold fixture performs real block eviction"
+    );
+    drop(cold_probe);
+    let mut group = c.benchmark_group("ir_segmented_dictionary");
+    group.bench_function("resident_borrowed_forward_256", |b| {
+        b.iter(|| {
+            let mut bytes = 0_usize;
+            for &id in &resident_ids {
+                bytes += pinned_iri_len(resident.as_ref(), id);
+            }
+            std::hint::black_box(bytes)
+        });
+    });
+    group.bench_function("segmented_hot_forward_256", |b| {
+        b.iter(|| {
+            let mut bytes = 0_usize;
+            for &id in &ids {
+                bytes += pinned_iri_len(&warm, id);
+            }
+            std::hint::black_box(bytes)
+        });
+    });
+    group.bench_function("resident_borrowed_reverse_256", |b| {
+        b.iter(|| {
+            let mut count = 0_usize;
+            for value in &values {
+                count += usize::from(
+                    DatasetView::term_id_by_value(resident.as_ref(), value)
+                        .unwrap()
+                        .is_some(),
+                );
+            }
+            std::hint::black_box(count)
+        });
+    });
+    group.bench_function("segmented_hot_reverse_256", |b| {
+        b.iter(|| {
+            let mut count = 0_usize;
+            for value in &values {
+                count += usize::from(warm.term_id_by_value(value).unwrap().is_some());
+            }
+            std::hint::black_box(count)
+        });
+    });
+    group.bench_function("segmented_cold_forward_cache2_256", |b| {
+        b.iter_batched_ref(
+            || open(2),
+            |read| {
+                let mut bytes = 0_usize;
+                for &id in &ids {
+                    bytes += pinned_iri_len(read, id);
+                }
+                std::hint::black_box(bytes)
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.finish();
+    assert_eq!(
+        warm.evidence().request_count(),
+        reads,
+        "hot cases perform no provider I/O"
+    );
+    bench_segmented_storage(c, resident.as_ref(), &image, &ids);
+}
+
+/// Reopen includes receipt authentication and sparse-session admission; cold scan
+/// and export open their sessions outside sampling. The immutable byte provider is
+/// prepared once, so these cases measure the portable storage engine, not host I/O.
+fn bench_segmented_storage(
+    c: &mut Bench,
+    resident: &RdfDataset,
+    image: &purrdf_core::SegmentedImage,
+    ids: &[purrdf_core::GlobalTermId],
+) {
+    use purrdf_core::{SegmentedError, SegmentedReadLimits, SegmentedSession};
+    use purrdf_testkit::bench::BatchSize;
+
+    let provider = Arc::new(image.provider());
+    let open = |cache| {
+        SegmentedSession::open(
+            provider.clone(),
+            image.receipt(),
+            SegmentedReadLimits::new(16_777_216, cache, 8192, 16_777_216, 2),
+        )
+        .unwrap()
+    };
+    let pinned = |cache| {
+        let read = open(cache);
+        let guard = read.resolve(ids[0]).unwrap();
+        (read, guard)
+    };
+    // The second term is in another dictionary block. With one cache slot the
+    // first live guard prevents eviction; two slots admit the neighboring block.
+    let allowed = pinned(2);
+    assert!(allowed.0.resolve(ids[8]).is_ok());
+    drop(allowed);
+    let refused = pinned(1);
+    assert!(matches!(
+        refused.0.resolve(ids[8]),
+        Err(SegmentedError::PinnedBlocks)
+    ));
+    drop(refused);
+
+    let warm = open(128);
+    warm.resolve_batch(ids, |_, _| {}).unwrap();
+    assert_eq!(checked_quad_count(&warm), ids.len());
+    let exported = segmented_export_bytes(&warm);
+    assert!(exported > 0);
+    let warm_requests = warm.evidence().request_count();
+    let mut group = c.benchmark_group("ir_segmented_storage");
+    group.bench_function("metadata_only_reopen", |b| {
+        b.iter(|| std::hint::black_box(open(2)));
+    });
+    group.bench_function("held_pin_neighbor_admitted", |b| {
+        b.iter_batched_ref(
+            || pinned(2),
+            |read| std::hint::black_box(pinned_iri_len(&read.0, ids[8])),
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("held_pin_neighbor_refused", |b| {
+        b.iter_batched_ref(
+            || pinned(1),
+            |read| {
+                std::hint::black_box(matches!(
+                    read.0.resolve(ids[8]),
+                    Err(SegmentedError::PinnedBlocks)
+                ))
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("resident_scan_256", |b| {
+        b.iter(|| std::hint::black_box(checked_quad_count(resident)));
+    });
+    group.bench_function("segmented_hot_scan_256", |b| {
+        b.iter(|| std::hint::black_box(checked_quad_count(&warm)));
+    });
+    group.bench_function("segmented_cold_scan_cache2_256", |b| {
+        b.iter_batched_ref(
+            || open(2),
+            |read| std::hint::black_box(checked_quad_count(read)),
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("segmented_hot_streamed_export_256", |b| {
+        b.iter(|| std::hint::black_box(segmented_export_bytes(&warm)));
+    });
+    group.bench_function("segmented_cold_streamed_export_cache2_256", |b| {
+        b.iter_batched_ref(
+            || open(2),
+            |read| std::hint::black_box(segmented_export_bytes(read)),
+            BatchSize::LargeInput,
+        );
+    });
+    group.finish();
+    assert_eq!(
+        warm.evidence().request_count(),
+        warm_requests,
+        "hot scan/export perform no provider I/O"
+    );
+}
+
+fn checked_quad_count<D: DatasetView>(view: &D) -> usize {
+    view.checked_read(|read| read.quads().count())
+        .expect("valid admitted scan")
+}
+
+fn segmented_export_bytes(view: &purrdf_core::SegmentedSession) -> u64 {
+    let mut measure = purrdf_core::sink::Measure::new();
+    view.export_trig_lines(&mut measure)
+        .expect("valid admitted streamed export");
+    measure.bytes()
+}
+
+fn pinned_iri_len<D: DatasetView>(view: &D, id: D::Id) -> usize {
+    let guard = view.resolve(id).expect("valid admitted dictionary lookup");
+    let TermRef::Iri(iri) = guard.term() else {
+        panic!("dictionary fixture contains only IRIs")
+    };
+    iri.len()
 }
 
 fn bench_value_lookup(c: &mut Bench) {
@@ -454,10 +733,10 @@ fn bench_value_lookup(c: &mut Bench) {
     let iri_id = ds.term_id_by_iri(iri).expect("representative IRI");
     let sample = ds
         .quads()
-        .find(|q| q.s == iri_id && matches!(ds.resolve(q.o), TermRef::Triple { .. }))
+        .find(|q| q.s == iri_id && matches!(ds.as_ref().resolve(q.o), TermRef::Triple { .. }))
         .expect("representative quoted triple");
     let triple_id = sample.o;
-    let TermRef::Triple { s, p, o } = ds.resolve(triple_id) else {
+    let TermRef::Triple { s, p, o } = ds.as_ref().resolve(triple_id) else {
         unreachable!("sample object is a triple term")
     };
 
@@ -476,6 +755,25 @@ fn bench_value_lookup(c: &mut Bench) {
     });
     group.bench_function("borrowed_triple", |b| {
         b.iter(|| std::hint::black_box(ds.term_id_by_triple(s, p, o)));
+    });
+    // These paired paths share a prepared key, excluding key construction from
+    // the timed region so only the central resident session seam is compared.
+    let prepared_iri = TermValue::iri(iri);
+    group.bench_function("prepared_iri_value", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                ds.as_ref()
+                    .term_id_by_value(std::hint::black_box(&prepared_iri)),
+            )
+        });
+    });
+    group.bench_function("generic_prepared_iri_value", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                DatasetView::term_id_by_value(ds.as_ref(), std::hint::black_box(&prepared_iri))
+                    .unwrap_or_else(|never| match never {}),
+            )
+        });
     });
     group.finish();
 }
@@ -692,6 +990,7 @@ bench_group!(
     bench_iterate,
     bench_resolve,
     bench_value_lookup,
+    bench_segmented_dictionary,
     bench_pattern_warm,
     bench_reifier_lookup,
     bench_pattern_cold,

@@ -148,6 +148,8 @@ impl fmt::Display for DrainError {
     }
 }
 
+impl std::error::Error for DrainError {}
+
 /// The infallible append target every text writer emits into, defined in the
 /// lexical layer beside the term-spelling writers ([`purrdf_lex::iri_escape`],
 /// [`purrdf_lex::literal_escape`], [`purrdf_lex::term_syntax`]) and implemented

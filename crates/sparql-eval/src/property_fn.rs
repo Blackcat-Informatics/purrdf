@@ -2920,7 +2920,10 @@ impl MemoryRelation {
     ) -> Result<Self, EvalError> {
         let arity = PfArity::new(subject_arity, object_arity);
         let width = arity.total();
-        let Some(head_id) = dataset.term_id_by_value(head) else {
+        let Some(head_id) = dataset
+            .term_id_by_value(head)
+            .map_err(EvalError::source_read)?
+        else {
             return Err(EvalError::data(format!(
                 "property-function table head {head:?} is not present in the dataset"
             )));
@@ -2946,8 +2949,8 @@ impl MemoryRelation {
             rows.push(
                 cells
                     .into_iter()
-                    .map(|id| crate::scratch::term_id_to_value(dataset, id))
-                    .collect(),
+                    .map(|id| crate::scratch::try_term_id_to_value(dataset, id))
+                    .collect::<Result<_, _>>()?,
             );
         }
 

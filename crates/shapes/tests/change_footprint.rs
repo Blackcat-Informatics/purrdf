@@ -1131,9 +1131,11 @@ ex:PersonShape a sh:NodeShape ;
     // Half one: the demotion is real. The row is gone from the plain table…
     let alice = snapshot
         .term_id_by_value(&TermValue::iri(ex("alice")))
+        .expect("resident dictionary read")
         .expect("the base interned ex:alice");
     let name = snapshot
         .term_id_by_value(&TermValue::iri(ex("name")))
+        .expect("resident dictionary read")
         .expect("the base interned ex:name");
     assert_eq!(
         snapshot

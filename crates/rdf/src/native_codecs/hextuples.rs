@@ -139,7 +139,7 @@ fn line_fields(line: &str) -> Result<Vec<String>, String> {
 /// whichever way the document arrived.
 fn parse_hextuples_line(
     line: &str,
-    lineno: usize,
+    lineno: u64,
     base: &purrdf_iri::BaseScope,
 ) -> Result<Option<ClassicRow>, RdfDiagnostic> {
     if is_blank_json_line(line) {
@@ -176,7 +176,7 @@ fn parse_hextuples_line(
 pub(super) struct HexTuplesStreamParser {
     rows: Vec<ClassicRow>,
     /// The 1-based document line number of the NEXT line to be pushed.
-    lineno: usize,
+    lineno: u64,
     /// The base in scope, carried for the DIAGNOSTIC only — see [`validate_iri`].
     base: purrdf_iri::BaseScope,
 }
@@ -195,7 +195,9 @@ impl HexTuplesStreamParser {
         if let Some(row) = parse_hextuples_line(line, self.lineno, &self.base)? {
             self.rows.push(row);
         }
-        self.lineno += 1;
+        self.lineno = self.lineno.checked_add(1).ok_or_else(|| {
+            RdfDiagnostic::error("native-codec-limit", "source line number exceeds u64::MAX")
+        })?;
         Ok(())
     }
 
@@ -240,7 +242,7 @@ fn node_term(value: &str, base: &purrdf_iri::BaseScope) -> Result<ClassicTerm, R
 /// per-line diagnostics carry — HexTuples is NDJSON, so the line number is the
 /// whole of the position information it has (there is no column: the parser is
 /// a JSON read over a whole line and records no intra-line span).
-fn validate_language_tag(language: &str, lineno: usize) -> Result<(), RdfDiagnostic> {
+fn validate_language_tag(language: &str, lineno: u64) -> Result<(), RdfDiagnostic> {
     check_language_tag(language, |error| {
         format!("HexTuples: line {lineno}: invalid language tag {language:?}: {error}")
     })
@@ -255,7 +257,7 @@ fn object_term(
     datatype: &str,
     language: &str,
     base: &purrdf_iri::BaseScope,
-    lineno: usize,
+    lineno: u64,
 ) -> Result<ClassicTerm, RdfDiagnostic> {
     match datatype {
         GLOBAL_ID => {

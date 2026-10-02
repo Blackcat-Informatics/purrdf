@@ -691,10 +691,10 @@ impl AsyncEffect {
     /// `SERVICE` and a wait on an exchange: the shared exchange the answer is delivered
     /// to.
     #[wasm_bindgen(getter, js_name = exchangeId)]
-    pub fn exchange_id(&self) -> Option<f64> {
+    pub fn exchange_id(&self) -> Option<u64> {
         match &self.payload {
             EffectPayload::Service { exchange, .. } | EffectPayload::AwaitExchange { exchange } => {
-                Some(*exchange as f64)
+                Some(*exchange)
             }
             _ => None,
         }
@@ -1807,7 +1807,10 @@ impl HttpTransport for JspiTransport {
         let deadline_at_ms = self.watch.deadline_at_ms;
         let abandon = self.watch.abandonment(effect.timeout_ms);
         let joined = find_exchange(&key, deadline_at_ms);
-        let exchange = joined.unwrap_or_else(next_exchange_id);
+        let exchange = match joined {
+            Some(exchange) => exchange,
+            None => next_exchange_id()?,
+        };
         let payload = match joined {
             Some(_) => EffectPayload::AwaitExchange { exchange },
             None => EffectPayload::Service {
@@ -2102,13 +2105,23 @@ thread_local! {
     static LAST_EXCHANGE_ID: Cell<u64> = const { Cell::new(0) };
 }
 
-/// A fresh exchange id.
-fn next_exchange_id() -> u64 {
-    LAST_EXCHANGE_ID.with(|last| {
-        let id = last.get() + 1;
-        last.set(id);
-        id
-    })
+/// Mint the last identifier once, then refuse without wrapping or changing the counter.
+fn mint_exchange_id(last: &Cell<u64>) -> Result<u64, RemoteError> {
+    let id = last
+        .get()
+        .checked_add(1)
+        .ok_or(RemoteError::ExchangeIdExhausted)?;
+    last.set(id);
+    Ok(id)
+}
+
+/// A fresh exchange id. Zero is reserved for an absent exchange.
+fn next_exchange_id() -> Result<u64, RemoteError> {
+    LAST_EXCHANGE_ID.with(mint_exchange_id)
+}
+
+fn exchange_is_open(id: u64) -> bool {
+    EXCHANGES.with(|exchanges| exchanges.borrow().contains_key(&id))
 }
 
 /// The open exchange a job with `key` and `deadline_at_ms` may wait on.
@@ -2620,7 +2633,7 @@ impl JobInner {
             ));
         }
         if let Some(frozen) = self.pending_commit.borrow_mut().take() {
-            dataset.replace(frozen);
+            dataset.replace(frozen).map_err(JobError::diagnostic)?;
         }
         Ok(())
     }
@@ -2911,7 +2924,10 @@ impl AsyncJob {
     /// last waiter left, or it was already answered.
     #[wasm_bindgen(js_name = deliverExchangeBindings)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn deliver_exchange_bindings(exchange: f64, bytes: Vec<u8>) -> DeliveryStatus {
+    pub fn deliver_exchange_bindings(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] exchange: JsValue,
+        bytes: Vec<u8>,
+    ) -> DeliveryStatus {
         let Some(id) = exchange_id(exchange) else {
             return DeliveryStatus::Finished;
         };
@@ -2922,7 +2938,11 @@ impl AsyncJob {
     /// `"denied"` or `"fault"`; any other kind is delivered as a fault naming it. Each
     /// waiting job's effect fails as its own invocation's failure. Closes the exchange.
     #[wasm_bindgen(js_name = deliverExchangeFailure)]
-    pub fn deliver_exchange_failure(exchange: f64, kind: &str, message: String) -> DeliveryStatus {
+    pub fn deliver_exchange_failure(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] exchange: JsValue,
+        kind: &str,
+        message: String,
+    ) -> DeliveryStatus {
         let Some(id) = exchange_id(exchange) else {
             return DeliveryStatus::Finished;
         };
@@ -2937,7 +2957,10 @@ impl AsyncJob {
     /// — and close the exchange. Each waiter's effect fails as its own invocation's
     /// failure; no job's fault is latched.
     #[wasm_bindgen(js_name = faultExchange)]
-    pub fn fault_exchange(exchange: f64, message: &str) -> DeliveryStatus {
+    pub fn fault_exchange(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] exchange: JsValue,
+        message: &str,
+    ) -> DeliveryStatus {
         let Some(id) = exchange_id(exchange) else {
             return DeliveryStatus::Finished;
         };
@@ -2953,9 +2976,10 @@ impl AsyncJob {
     /// Whether shared exchange `exchange` is still open: some job waits on its answer.
     /// Once it closes without an answer, the host aborts its call.
     #[wasm_bindgen(js_name = exchangeIsOpen)]
-    pub fn exchange_is_open(exchange: f64) -> bool {
-        exchange_id(exchange)
-            .is_some_and(|id| EXCHANGES.with(|exchanges| exchanges.borrow().contains_key(&id)))
+    pub fn exchange_is_open(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] exchange: JsValue,
+    ) -> bool {
+        exchange_id(exchange).is_some_and(exchange_is_open)
     }
 
     /// Latch `message` as the job's fault: a host bug the job cannot continue past. The
@@ -3213,11 +3237,13 @@ impl AsyncJob {
     }
 }
 
-/// An exchange id as JavaScript passes it back: the `number` [`AsyncEffect::exchange_id`]
-/// gave it. `None` for any other number, which names no exchange.
-fn exchange_id(exchange: f64) -> Option<u64> {
-    (exchange.is_finite() && exchange.fract() == 0.0 && (1.0..=2f64.powi(53)).contains(&exchange))
-        .then_some(exchange as u64)
+/// Accept exactly the unsigned nonzero `bigint` identity the getter returned.
+/// Validate before conversion: a generated `u64` ABI alone wraps out-of-range bigints.
+fn exchange_id(exchange: JsValue) -> Option<u64> {
+    if !exchange.is_bigint() {
+        return None;
+    }
+    u64::try_from(exchange).ok().filter(|id| *id != 0)
 }
 
 /// A job's frames ran past the base of its region: the bytes below it belong to other
@@ -4535,6 +4561,9 @@ impl QueryEngine {
     }
 }
 
+#[cfg(all(test, target_arch = "wasm32"))]
+pub use tests::{__purrdf_test_exchange_terminal, __purrdf_test_open_exchange};
+
 #[cfg(test)]
 mod tests {
     use purrdf_core::SparqlEngine as _;
@@ -5634,7 +5663,7 @@ mod tests {
         );
         assert!(effect.silent());
         assert!(!effect.cacheable());
-        assert_eq!(effect.exchange_id(), Some(1.0));
+        assert_eq!(effect.exchange_id(), Some(1));
         assert_eq!(effect.abandon_after_ms(), Some(1.0));
         assert_eq!(effect.max_intermediate_cells(), Some(10));
         assert_eq!(effect.headers(), vec!["Authorization", "Bearer secret"]);
@@ -5862,6 +5891,61 @@ mod tests {
 
     // ── Shared SERVICE exchanges ────────────────────────────────────────────────────
 
+    #[test]
+    fn the_last_exchange_identifier_is_issued_once_without_wrapping() {
+        let last = Cell::new(u64::MAX - 1);
+        assert_eq!(mint_exchange_id(&last).expect("last identifier"), u64::MAX);
+        for _ in 0..2 {
+            assert!(matches!(
+                mint_exchange_id(&last),
+                Err(RemoteError::ExchangeIdExhausted)
+            ));
+            assert_eq!(
+                last.get(),
+                u64::MAX,
+                "a refusal leaves the terminal counter intact"
+            );
+        }
+    }
+
+    /// Actual ABI fixtures belong only to the unit-test module, never the package.
+    /// Seed the real allocator temporarily so adjacent large IDs can be settled from JS.
+    #[cfg(all(test, target_arch = "wasm32"))]
+    #[wasm_bindgen]
+    pub fn __purrdf_test_open_exchange(id: u64) -> AsyncEffect {
+        let issued = LAST_EXCHANGE_ID.with(|last| {
+            let saved = last.replace(id.checked_sub(1).expect("nonzero fixture identifier"));
+            let issued = next_exchange_id().expect("fixture identifier available");
+            last.set(saved);
+            issued
+        });
+        let owner = Arc::new(slots());
+        let payload = EffectPayload::Service {
+            effect: Box::new(service_effect()),
+            exchange: issued,
+        };
+        let seq = owner.issue(payload, None).expect("fixture effect issued");
+        let effect = owner.take_effect().expect("fixture effect posted");
+        open_exchange(issued, key(1, false), None, (owner, seq));
+        effect
+    }
+
+    /// Seed the terminal counter once, then exercise its real typed refusal through JS.
+    #[cfg(all(test, target_arch = "wasm32"))]
+    #[wasm_bindgen]
+    pub fn __purrdf_test_exchange_terminal(seed: bool) -> Result<u64, JsValue> {
+        if seed {
+            LAST_EXCHANGE_ID.with(|last| last.set(u64::MAX - 1));
+        }
+        next_exchange_id().map_err(|error| {
+            let eval = purrdf_sparql_eval::EvalError::ExchangeIdExhausted;
+            coded_error(
+                &error.to_string(),
+                eval.code().expect("typed exhaustion code"),
+            )
+        })
+    }
+
     fn key(handler: u32, silent: bool) -> ExchangeKey {
         let mut effect = service_effect();
         effect.silent = silent;
@@ -5873,7 +5957,7 @@ mod tests {
     #[test]
     fn a_job_joins_only_an_exchange_asking_the_same_question_by_its_deadline() {
         let owner = Arc::new(slots());
-        let id = next_exchange_id();
+        let id = next_exchange_id().expect("identifier available");
         open_exchange(id, key(1, false), Some(60_000.0), (Arc::clone(&owner), 1));
         assert_eq!(find_exchange(&key(1, false), Some(30_000.0)), Some(id));
         assert_eq!(find_exchange(&key(1, false), Some(60_000.0)), Some(id));
@@ -5886,9 +5970,9 @@ mod tests {
             "handler"
         );
         leave_exchange(id, owner.job);
-        assert!(!AsyncJob::exchange_is_open(id as f64));
+        assert!(!exchange_is_open(id));
 
-        let unbounded = next_exchange_id();
+        let unbounded = next_exchange_id().expect("identifier available");
         open_exchange(unbounded, key(1, false), None, (Arc::clone(&owner), 2));
         assert_eq!(find_exchange(&key(1, false), None), Some(unbounded));
         assert_eq!(
@@ -5906,11 +5990,11 @@ mod tests {
         let second = Arc::new(JobSlots::new(102, slots().bounds));
         let first_seq = first.issue(service_payload(), None).expect("issued");
         let second_seq = second.issue(service_payload(), None).expect("issued");
-        let id = next_exchange_id();
+        let id = next_exchange_id().expect("identifier available");
         open_exchange(id, key(1, false), None, (Arc::clone(&first), first_seq));
         add_waiter(id, (Arc::clone(&second), second_seq));
         assert_eq!(
-            AsyncJob::deliver_exchange_bindings(id as f64, SRJ.to_vec()),
+            settle_exchange(id, &Delivered::Bindings(Arc::from(SRJ))),
             DeliveryStatus::Accepted
         );
         assert!(matches!(
@@ -5921,9 +6005,9 @@ mod tests {
             second.resume(second_seq),
             Some(Delivered::Bindings(_))
         ));
-        assert!(!AsyncJob::exchange_is_open(id as f64));
+        assert!(!exchange_is_open(id));
         assert_eq!(
-            AsyncJob::deliver_exchange_bindings(id as f64, SRJ.to_vec()),
+            settle_exchange(id, &Delivered::Bindings(Arc::from(SRJ))),
             DeliveryStatus::Finished,
             "a closed exchange takes nothing"
         );
@@ -5932,14 +6016,17 @@ mod tests {
         let leaving = Arc::new(JobSlots::new(104, slots().bounds));
         let staying_seq = staying.issue(service_payload(), None).expect("issued");
         let leaving_seq = leaving.issue(service_payload(), None).expect("issued");
-        let id = next_exchange_id();
+        let id = next_exchange_id().expect("identifier available");
         open_exchange(id, key(1, false), None, (Arc::clone(&staying), staying_seq));
         add_waiter(id, (Arc::clone(&leaving), leaving_seq));
         leaving.wait_on(id);
         drop(leaving.resume(leaving_seq));
-        assert!(AsyncJob::exchange_is_open(id as f64), "one job still waits");
+        assert!(exchange_is_open(id), "one job still waits");
         assert_eq!(
-            AsyncJob::deliver_exchange_failure(id as f64, "transport", "down".to_owned()),
+            settle_exchange(
+                id,
+                &FailureKind::delivered("transport", "down".to_owned(), &format!("exchange {id}"))
+            ),
             DeliveryStatus::Accepted
         );
         assert!(matches!(
@@ -5953,14 +6040,11 @@ mod tests {
 
         let only = Arc::new(JobSlots::new(105, slots().bounds));
         let seq = only.issue(service_payload(), None).expect("issued");
-        let id = next_exchange_id();
+        let id = next_exchange_id().expect("identifier available");
         open_exchange(id, key(1, false), None, (Arc::clone(&only), seq));
         only.wait_on(id);
         drop(only.resume(seq));
-        assert!(
-            !AsyncJob::exchange_is_open(id as f64),
-            "the last waiter left"
-        );
+        assert!(!exchange_is_open(id), "the last waiter left");
     }
 
     /// A host fault in the shared call — the handler threw, or answered with a kind the
@@ -5972,11 +6056,14 @@ mod tests {
         let second = Arc::new(JobSlots::new(112, slots().bounds));
         let first_seq = first.issue(service_payload(), None).expect("issued");
         let second_seq = second.issue(service_payload(), None).expect("issued");
-        let id = next_exchange_id();
+        let id = next_exchange_id().expect("identifier available");
         open_exchange(id, key(1, false), None, (Arc::clone(&first), first_seq));
         add_waiter(id, (Arc::clone(&second), second_seq));
         assert_eq!(
-            AsyncJob::deliver_exchange_failure(id as f64, "nope", "?".to_owned()),
+            settle_exchange(
+                id,
+                &FailureKind::delivered("nope", "?".to_owned(), &format!("exchange {id}"))
+            ),
             DeliveryStatus::Accepted
         );
         for (slots, seq) in [(&first, first_seq), (&second, second_seq)] {
@@ -5997,10 +6084,16 @@ mod tests {
         }
         let third = Arc::new(JobSlots::new(113, slots().bounds));
         let seq = third.issue(service_payload(), None).expect("issued");
-        let id = next_exchange_id();
+        let id = next_exchange_id().expect("identifier available");
         open_exchange(id, key(1, false), None, (Arc::clone(&third), seq));
         assert_eq!(
-            AsyncJob::fault_exchange(id as f64, "resolveService threw: boom"),
+            settle_exchange(
+                id,
+                &Delivered::Failure {
+                    kind: FailureKind::Fault,
+                    message: "resolveService threw: boom".to_owned()
+                }
+            ),
             DeliveryStatus::Accepted
         );
         assert!(third.fault().is_none());

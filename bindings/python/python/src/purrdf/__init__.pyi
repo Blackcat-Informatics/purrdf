@@ -1371,18 +1371,21 @@ class GtsFoldViewNative:
 
 def gts_relational_rows_from_bytes(data: bytes) -> GtsRelationalRows: ...
 
-# The relational EXPORT writers, layered in pure Python over
-# `gts_relational_rows_from_bytes` (python/src/purrdf/_gts_export.py). Five tables
-# — terms, quads, reifiers, annotations, blobs — written in the projection's own
-# row order, so exporting the same container twice produces the same content.
-#
-# `gts_to_sqlite` uses the standard library and needs nothing extra. The other two
-# need an optional dependency and raise `ModuleNotFoundError` naming the extra
-# when it is absent: `pip install 'purrdf[duckdb]'` / `'purrdf[parquet]'`.
+class ColumnarRows(TypedDict):
+    schema: dict[str, list[tuple[str, str, bool]]]
+    terms: list[tuple[int | str | bytes | None, ...]]
+    quads: list[tuple[int | str | bytes | None, ...]]
+    reifiers: list[tuple[int | str | bytes | None, ...]]
+    annotations: list[tuple[int | str | bytes | None, ...]]
+    blobs: list[tuple[int | str | bytes | None, ...]]
+
+def gts_columnar_rows_from_bytes(data: bytes) -> ColumnarRows: ...
+def gts_columnar_parquet_from_bytes(data: bytes) -> dict[str, bytes]: ...
+
+# Writers use the canonical native v1 schema, with its own dense value-order ids.
+# SQLite needs no extra, DuckDB needs [duckdb], and Parquet uses the native codec.
 def gts_to_sqlite(data: bytes, path: str) -> str: ...
 def gts_to_duckdb(data: bytes, path: str) -> str: ...
-
-# Returns one path per table, in the fixed table order rather than directory order.
 def gts_to_parquet(data: bytes, out_dir: str) -> list[str]: ...
 
 # A Python handle to a frozen, immutable RDF 1.2 dataset.
@@ -1410,6 +1413,8 @@ class RdfDataset:
         yaml_schema_url: str | None = ...,
     ) -> str: ...
     def to_gts(self, profile: str = ...) -> bytes: ...
+    def columnar_rows(self) -> ColumnarRows: ...
+    def to_parquet_files(self) -> dict[str, bytes]: ...
 
 # ── Native SSSOM codec (bindings/python/src/py_sssom.rs) ───────────────────────
 # Parse + validate + RDF serialize for PurRDF SSSOM TSV mapping artifacts — the

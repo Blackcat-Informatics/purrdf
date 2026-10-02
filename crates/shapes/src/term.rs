@@ -262,7 +262,7 @@ pub(crate) trait TermResolve {
 impl<D: ShaclRead + ?Sized> TermResolve for D {
     #[inline]
     fn resolve_id(&self, id: TermId) -> TermRef<'_> {
-        ::purrdf::DatasetView::resolve(self, id)
+        self.resolve_term(id)
     }
 }
 
@@ -1195,7 +1195,7 @@ pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
                 language,
                 direction,
             } => {
-                let datatype_iri = match dataset.resolve(datatype) {
+                let datatype_iri = match dataset.resolve_term(datatype) {
                     TermRef::Iri(iri) => iri.to_owned(),
                     other => {
                         unreachable!("a literal datatype must resolve to an IRI, got {other:?}")
@@ -1227,7 +1227,7 @@ pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
             id,
             &mut (),
             |(), id| {
-                Ok::<_, Infallible>(match dataset.resolve(id) {
+                Ok::<_, Infallible>(match dataset.resolve_term(id) {
                     TermRef::Triple { s, p, o } => Nested::Triple(s, p, o),
                     resolved => Nested::Leaf(leaf(dataset, resolved)),
                 })
@@ -1244,7 +1244,7 @@ pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
 /// Convert a resolved IR term id into a native [`Term`].
 #[inline]
 pub fn term_id_to_native(dataset: &impl ShaclRead, id: TermId) -> Term {
-    term_ref_to_native(dataset, dataset.resolve(id))
+    term_ref_to_native(dataset, dataset.resolve_term(id))
 }
 
 /// Convert a dataset-independent [`TermValue`] (e.g. a SPARQL egress binding) into a
@@ -1569,7 +1569,7 @@ mod tests {
         let mut kinds = [false; 4];
         for index in 0..dataset.term_count() {
             let id = TermId::from_index(u32::try_from(index).expect("fixture fits in u32"));
-            kinds[match ::purrdf::DatasetView::resolve(dataset.as_ref(), id) {
+            kinds[match dataset.as_ref().resolve(id) {
                 TermRef::Iri(_) => 0,
                 TermRef::Blank { .. } => 1,
                 TermRef::Literal { .. } => 2,
@@ -1824,7 +1824,7 @@ pub(crate) mod term_walk_tests {
             let dataset = builder.freeze().expect("a generated term freezes");
             let object = dataset.quads().next().expect("one quad").o;
             assert_eq!(
-                term_ref_to_native(&*dataset, dataset.resolve(object)),
+                term_ref_to_native(&*dataset, dataset.as_ref().resolve(object)),
                 reference_from_ref(&dataset, object),
                 "seed {seed}"
             );

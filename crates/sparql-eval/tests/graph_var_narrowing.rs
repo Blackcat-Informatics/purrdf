@@ -45,8 +45,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_core::{
     CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageProvider,
-    PagedDataset, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetBuilder,
-    RdfStoreCapabilities, TermId, TermRef, TermValue,
+    PagedDataset, QuadIds, QuadProbePlan, RdfDataset, RdfDatasetBuilder, RdfStoreCapabilities,
+    TermId, TermValue,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
@@ -398,6 +398,11 @@ impl ProbeCountingView {
 
 impl DatasetView for ProbeCountingView {
     type Id = TermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = purrdf_core::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = QuadProbePlan;
 
     /// Forwards to the inner view unchanged; not part of what this type measures.
@@ -406,13 +411,8 @@ impl DatasetView for ProbeCountingView {
     }
 
     /// Forwards to the inner view unchanged; not part of what this type measures.
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        DatasetView::quad_refs(&*self.inner)
-    }
-
-    /// Forwards to the inner view unchanged; not part of what this type measures.
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        DatasetView::resolve(&*self.inner, id)
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok(self.inner.as_ref().resolve(id))
     }
 
     /// Forwards to the inner view unchanged and deliberately UNCOUNTED — per the
@@ -430,8 +430,8 @@ impl DatasetView for ProbeCountingView {
     }
 
     /// Forwards to the inner view unchanged; not part of what this type measures.
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        DatasetView::term_id_by_value(&*self.inner, value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok(self.inner.as_ref().term_id_by_value(value))
     }
 
     /// Forwards to the inner view unchanged; not part of what this type measures.
@@ -440,7 +440,7 @@ impl DatasetView for ProbeCountingView {
     }
 
     /// Forwards to the inner view unchanged; not part of what this type measures.
-    fn len_hint(&self) -> Option<usize> {
+    fn len_hint(&self) -> Option<u64> {
         DatasetView::len_hint(&*self.inner)
     }
 
@@ -478,12 +478,12 @@ impl DatasetView for ProbeCountingView {
         p: Option<TermId>,
         o: Option<TermId>,
         g: GraphMatch,
-    ) -> usize {
+    ) -> u64 {
         DatasetView::cardinality_estimate(&*self.inner, s, p, o, g)
     }
 
     /// Forwards to the inner view unchanged; not part of what this type measures.
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         DatasetView::term_count(&*self.inner)
     }
 
@@ -710,7 +710,7 @@ fn graph_var_materializes_only_the_pages_that_own_a_named_graph() {
     let hits_after_seal = provider.hits();
     assert_eq!(
         hits_after_seal,
-        view.page_count(),
+        usize::try_from(view.page_count()).expect("bounded fixture pages"),
         "the seal pass pulls each of the six pages once"
     );
 
@@ -773,6 +773,7 @@ fn retaining_a_declared_empty_graph_keeps_it_bound_by_graph_var() {
 
     let gempty1 = view
         .term_id_by_value(&iri("gempty1"))
+        .expect("resident read")
         .expect("gempty1 is interned");
     let retained = view.retain_graph(gempty1);
 
@@ -791,6 +792,7 @@ fn retaining_a_declared_empty_graph_keeps_it_bound_by_graph_var() {
     // on a different page, so retaining it must NOT keep the declared-empty page.
     let gside = view
         .term_id_by_value(&iri("gside"))
+        .expect("resident read")
         .expect("gside interned");
     let (_, rows) = solutions(
         engine

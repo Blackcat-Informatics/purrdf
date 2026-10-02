@@ -38,7 +38,7 @@ use core::ops::ControlFlow;
 
 use super::dataset::TermRef;
 use super::term::TermValue;
-use crate::dataset_view::DatasetView;
+use crate::dataset_view::{DatasetView, TermGuard};
 use purrdf_lex::walk::{Dismantle, Nested as NestedBox, Tok, WorkList, write_debug};
 
 /// One boxed component of a triple term.
@@ -276,18 +276,36 @@ impl TermValue {
 /// # Errors
 ///
 /// The first error `leaf` or `triple` returns.
-pub fn fold_term<D: DatasetView + ?Sized, T, E>(
+pub fn fold_term<D: DatasetView<ReadError = Infallible> + ?Sized, T, E>(
     view: &D,
     id: D::Id,
     mut leaf: impl FnMut(D::Id, TermRef<'_, D::Id>) -> Result<T, E>,
     mut triple: impl FnMut(D::Id, T, T, T) -> Result<T, E>,
 ) -> Result<T, E> {
+    try_fold_term(view, id, &mut leaf, &mut triple, |error| match error {})
+}
+
+/// Fallible bottom-up term fold. A term pin is released before visiting its
+/// children, and the caller maps a typed read failure into its own error channel.
+///
+/// # Errors
+/// Returns the first read, leaf or triple-combination error.
+pub fn try_fold_term<D: DatasetView + ?Sized, T, E>(
+    view: &D,
+    id: D::Id,
+    mut leaf: impl FnMut(D::Id, TermRef<'_, D::Id>) -> Result<T, E>,
+    mut triple: impl FnMut(D::Id, T, T, T) -> Result<T, E>,
+    mut read_error: impl FnMut(D::ReadError) -> E,
+) -> Result<T, E> {
     try_fold_nested(
         id,
         &mut (),
-        |(), id| match view.resolve(id) {
-            TermRef::Triple { s, p, o } => Ok(Nested::Triple(s, p, o)),
-            resolved => leaf(id, resolved).map(Nested::Leaf),
+        |(), id| {
+            let guard = view.resolve(id).map_err(&mut read_error)?;
+            match guard.term() {
+                TermRef::Triple { s, p, o } => Ok(Nested::Triple(s, p, o)),
+                resolved => leaf(id, resolved).map(Nested::Leaf),
+            }
         },
         |(), id, s, p, o| triple(id, s, p, o),
     )

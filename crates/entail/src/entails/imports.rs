@@ -103,7 +103,9 @@ use purrdf_core::RdfDataset;
 use crate::EntailError;
 use crate::rif_xml::RifImport;
 
-pub use purrdf_core::imports::{ImportClosure, ImportMap, imported_iris, unresolved_imports};
+pub use purrdf_core::imports::{
+    ImportClosure, ImportMap, imported_iris, try_imported_iris, unresolved_imports,
+};
 
 /// `map` as a resolver for [`resolve_rif_imports`](crate::resolve_rif_imports).
 ///

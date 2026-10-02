@@ -22,12 +22,14 @@
 #   * otherwise                              -> `cargo publish --locked`,
 #     VERIFIED, then wait until crates.io serves the version.
 #
-# This is the three-way interleave that lets a release carry brand-new crates:
+# The historical dry-run fixtures below exercise the three-way interleave:
 # the trusted lane publishes up to the first dependent of a ledger crate and
 # stops; the token creates the ledger crate's record (its dependencies now
 # exist); the maintainer enables Trusted Publishing on the new record; the tag
 # run is re-run and resumes. docs/RELEASE.md, "Outstanding bootstrap", is the
-# step-by-step procedure with the expected stop messages.
+# historical procedure with the expected stop messages. Functional publication
+# now requires every record and publishing lock before the first upload;
+# empty 0.0.0 bootstrap packages are prepared independently beforehand.
 #
 # The stop condition is computed from `cargo metadata`, never hand-listed, and
 # over EVERY dependency kind, dev-dependencies included: the publish verifies,
@@ -609,6 +611,24 @@ PY
     fi
   fi
 
+  # Even a fully populated mock cannot authorize the real publication mode.
+  # All versions are present here, so a broken guard would skip every upload;
+  # the test cannot accidentally attempt a network publication.
+  mock="${tmp}/publication-mock"; mkdir -p "$mock"
+  for crate in "${crates[@]}"; do
+    printf '200\n{"crate":{"name":"%s","trustpub_only":true}}\n' "$crate" > "${mock}/${crate}"
+    present "$crate"
+  done
+  status=0
+  out="$(PURRDF_CRATES_IO_MOCK="${mock}" CARGO_REGISTRY_TOKEN="synthetic-self-test-only" \
+    bash "${BASH_SOURCE[0]}" "$VERSION" 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]] && grep -qF "Refusing functional publication with a mock registry" <<<"$out"; then
+    echo "  ok      mock registry cannot authorize functional publication"
+  else
+    echo "  FAILED  mock registry publication guard"
+    failures=$((failures + 1))
+  fi
+
   if [[ "$failures" -gt 0 ]]; then
     echo "publish-release-crates.sh self-test: ${failures} arm(s) FAILED" >&2
     return 1
@@ -622,6 +642,16 @@ case "$mode" in
     if [[ "$mode" == "publish" && -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
       echo "CARGO_REGISTRY_TOKEN is not set (use --dry-run to see the decisions without publishing)" >&2
       exit 1
+    fi
+    # Apply the same fail-before-upload law when invoked directly, not only
+    # through the workflow. Historical mock dry-runs exercise resume/STOP
+    # decisions, but a mock registry can never authorize a real publication.
+    if [[ "$mode" == "publish" && -n "${PURRDF_CRATES_IO_MOCK:-}" ]]; then
+      echo "Refusing functional publication with a mock registry" >&2
+      exit 1
+    fi
+    if [[ "$mode" == "publish" || -z "${PURRDF_CRATES_IO_MOCK:-}" ]]; then
+      PURRDF_RELEASE_VERSION="$VERSION" bash "${repo}/scripts/check-crates-io-records.sh" --require-all
     fi
     cd "${repo}"
     run_loop

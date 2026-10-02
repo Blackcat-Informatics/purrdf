@@ -79,3 +79,44 @@ test("missingPackedFiles names an exports target the tarball lacks", () => {
 test("missingPackedFiles refuses a pack record without a file list", () => {
   assert.throws(() => missingPackedFiles(manifest, packument), /lists no files/);
 });
+
+test("missingPackedFiles accepts nested contents of an explicit directory promise", () => {
+  assert.deepEqual(
+    missingPackedFiles(
+      { files: ["licenses/"] },
+      packedPaths("licenses/third-party/unicode/Unicode-3.0.txt"),
+    ),
+    [],
+  );
+});
+
+test("missingPackedFiles refuses an empty directory marker", () => {
+  assert.deepEqual(
+    missingPackedFiles({ files: ["licenses/"] }, packedPaths("licenses/")),
+    ["licenses/"],
+  );
+});
+
+test("missingPackedFiles refuses a directory prefix lookalike", () => {
+  assert.deepEqual(
+    missingPackedFiles({ files: ["licenses/"] }, packedPaths("licenses-old/LICENSE")),
+    ["licenses/"],
+  );
+});
+
+test("missingPackedFiles keeps exact file promises strict", () => {
+  assert.deepEqual(
+    missingPackedFiles({ files: ["index.mjs"] }, packedPaths("index.mjs/nested")),
+    ["index.mjs"],
+  );
+});
+
+test("missingPackedFiles never turns an export target into a directory promise", () => {
+  assert.deepEqual(
+    missingPackedFiles(
+      { files: ["licenses/"], exports: { "./notice": "./licenses/" } },
+      packedPaths("licenses/LICENSE-MIT"),
+    ),
+    ["licenses/"],
+  );
+});

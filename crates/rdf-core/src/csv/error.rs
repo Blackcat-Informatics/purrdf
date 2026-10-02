@@ -14,7 +14,7 @@ pub struct CsvPosition {
     /// read counts, skipped, comment and header rows included.
     pub row: u64,
     /// The 1-based line: one plus the number of LINE FEEDs before `byte`.
-    pub line: u32,
+    pub line: u64,
     /// The 1-based column, in Unicode scalar values from the line start (bytes
     /// that are not UTF-8 count one scalar per replacement character).
     pub column: u32,
@@ -25,16 +25,18 @@ pub struct CsvPosition {
 impl CsvPosition {
     /// Resolve `byte` in `input` for source row `row`. Runs on the error path
     /// only: it scans the input prefix once.
-    pub(crate) fn locate(input: &[u8], row: u64, byte: usize) -> Self {
+    pub(crate) fn locate(input: &[u8], row: u64, byte: usize) -> Result<Self, CsvErrorKind> {
         let byte = byte.min(input.len());
         let prefix = String::from_utf8_lossy(&input[..byte]);
-        let position = LineIndex::new(&prefix).locate(&prefix, prefix.len());
-        Self {
+        let position = LineIndex::new(&prefix)
+            .try_locate(&prefix, prefix.len())
+            .map_err(|_| CsvErrorKind::ColumnLimit)?;
+        Ok(Self {
             row,
             line: position.line,
             column: position.column,
             byte: byte as u64,
-        }
+        })
     }
 }
 
@@ -42,6 +44,10 @@ impl CsvPosition {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CsvErrorKind {
+    /// The next source row would exceed `u64::MAX`.
+    SourceRowExhausted,
+    /// An error position exceeds the bounded `u32` Unicode-scalar column space.
+    ColumnLimit,
     /// A cell of the row is not UTF-8. `field` is its 0-based index in the row
     /// as parsed (skipped columns included); `valid_up_to` is how many of the
     /// cell's bytes (after quote and escape removal) are valid UTF-8.
@@ -99,6 +105,8 @@ pub enum CsvErrorKind {
 impl fmt::Display for CsvErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SourceRowExhausted => f.write_str("CSV source row exceeds u64::MAX"),
+            Self::ColumnLimit => f.write_str("CSV source column exceeds u32::MAX"),
             Self::NotUtf8 { field, valid_up_to } => write!(
                 f,
                 "field {field} is not UTF-8 (valid for its first {valid_up_to} bytes)"

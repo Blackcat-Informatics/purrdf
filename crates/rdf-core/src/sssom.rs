@@ -660,11 +660,11 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
     // so a diagnostic reports the true line even when a comment is interleaved
     // between data rows (passing a flat offset shifted every later row's line).
     let mut body = String::new();
-    let mut line_numbers: Vec<u32> = Vec::new();
+    let mut line_numbers: Vec<u64> = Vec::new();
     for (offset, line) in table_and_suffix.iter().enumerate() {
         if line.starts_with('#') {
             if offset >= suffix_start {
-                let line_no = (header_idx + offset + 1) as u32;
+                let line_no = (header_idx + offset + 1) as u64;
                 let comment = SssomSetComment::from_raw(
                     (*line).to_owned(),
                     SssomCommentPlacement::AfterTable,
@@ -687,7 +687,7 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
         if is_blank(line) {
             continue;
         }
-        line_numbers.push((header_idx + offset + 1) as u32);
+        line_numbers.push((header_idx + offset + 1) as u64);
         body.push_str(line);
         body.push('\n');
     }
@@ -708,7 +708,7 @@ fn parse_header(lines: &[&str]) -> Result<(SssomMeta, Vec<SssomSetComment>), Rdf
     let mut in_curie_map = false;
 
     for (offset, raw) in lines.iter().enumerate() {
-        let line_no = (offset + 1) as u32;
+        let line_no = (offset + 1) as u64;
         // Strip the leading '#'. A bare '#' line is an empty comment; skip it.
         let body = raw.strip_prefix('#').unwrap_or(raw);
         // SSSOM: "the `#` character MAY be followed by one or several space
@@ -859,7 +859,7 @@ fn split_key_value(scalar: &str) -> Option<(&str, &str)> {
 /// position regardless of how many `#` comment lines were filtered out upstream.
 fn parse_body(
     body: &str,
-    line_numbers: &[u32],
+    line_numbers: &[u64],
 ) -> Result<(SssomColumnLayout, Vec<SssomMapping>), RdfDiagnostic> {
     if is_blank(body) {
         return Err(RdfDiagnostic::error(
@@ -911,7 +911,7 @@ fn parse_body(
 fn parse_row(
     columns: &[String],
     record: &crate::csv::StringRecord,
-    line_no: u32,
+    line_no: u64,
 ) -> Result<SssomMapping, RdfDiagnostic> {
     let mut mapping = SssomMapping::default();
     for (col, value) in columns.iter().zip(record.iter()) {

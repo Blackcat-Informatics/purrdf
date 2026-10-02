@@ -5,8 +5,8 @@
 
 use purrdf_core::ir::QuadProbePlan;
 use purrdf_core::{
-    BlankScope, DatasetView, FallibleDatasetView, GraphMatch, QuadIds, QuadRef, RdfDataset,
-    RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, SparqlResult, TermId, TermRef, TermValue,
+    BlankScope, DatasetView, FallibleDatasetView, GraphMatch, QuadIds, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, SparqlResult, TermId, TermValue,
     ViewOperationStatus,
 };
 use purrdf_sparql_algebra::Child;
@@ -173,18 +173,20 @@ struct FinalFailure {
 }
 impl DatasetView for FinalFailure {
     type Id = TermId;
+    type ReadError = SourceFailure;
+    type TermGuard<'a>
+        = purrdf_core::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
     type ProbePlan = QuadProbePlan;
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.data.quads()
     }
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        self.data.quad_refs()
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok({ self.data.as_ref().resolve(id) })
     }
-    fn resolve(&self, id: TermId) -> TermRef<'_> {
-        self.data.resolve(id)
-    }
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        self.data.term_id_by_value(value)
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok({ self.data.as_ref().term_id_by_value(value) })
     }
     fn capabilities(&self) -> RdfStoreCapabilities {
         self.data.capabilities()
@@ -202,7 +204,7 @@ impl DatasetView for FinalFailure {
     ) -> impl Iterator<Item = QuadIds> + '_ {
         self.data.quads_for_pattern_with_plan(plan, s, p, o, g)
     }
-    fn term_count(&self) -> usize {
+    fn term_count(&self) -> u64 {
         self.data.term_count()
     }
 }

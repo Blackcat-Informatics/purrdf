@@ -489,7 +489,10 @@ impl<'a> Rows<'a> {
     }
 
     fn error(&self, kind: CsvErrorKind, row: u64, byte: usize) -> CsvError {
-        CsvError::at(kind, CsvPosition::locate(self.input, row, byte))
+        match CsvPosition::locate(self.input, row, byte) {
+            Ok(position) => CsvError::at(kind, position),
+            Err(limit) => CsvError::new(limit),
+        }
     }
 
     /// The next row's event and source row number, or `None` at the end.
@@ -498,11 +501,18 @@ impl<'a> Rows<'a> {
             return Err(refused.clone());
         }
         loop {
+            if self.pos >= self.input.len() {
+                return Ok(None);
+            }
+            let Some(number) = self.last_row.checked_add(1) else {
+                let refused = CsvError::new(CsvErrorKind::SourceRowExhausted);
+                self.refused = Some(refused.clone());
+                return Err(refused);
+            };
             let Some(content) = self.read_row()? else {
                 return Ok(None);
             };
-            self.last_row += 1;
-            let number = self.last_row;
+            self.last_row = number;
             let comment = self
                 .comment_prefix
                 .as_deref()
@@ -806,5 +816,38 @@ impl<'a> Rows<'a> {
             record.push_field(self.trim(&cells.text[range.clone()]));
         }
         record
+    }
+}
+
+#[cfg(test)]
+mod source_width_tests {
+    use super::{CsvErrorKind, Dialect, Rows};
+
+    #[test]
+    fn source_rows_cross_u32_without_truncation() {
+        let mut rows = Rows::new(&Dialect::RFC4180, b"value\n");
+        rows.last_row = u64::from(u32::MAX);
+        let (number, _) = rows.next_event().unwrap().unwrap();
+        assert_eq!(number, u64::from(u32::MAX) + 1);
+        assert!(rows.next_event().unwrap().is_none());
+    }
+
+    #[test]
+    fn terminal_source_row_is_issued_once_and_then_refused_before_consumption() {
+        let mut rows = Rows::new(&Dialect::RFC4180, b"value\nnext\n");
+        rows.last_row = u64::MAX - 1;
+        let (number, _) = rows.next_event().unwrap().unwrap();
+        assert_eq!(number, u64::MAX);
+        let stopped_at = rows.pos;
+        for _ in 0..2 {
+            assert_eq!(
+                rows.next_event()
+                    .err()
+                    .expect("source row exhausted")
+                    .kind(),
+                &CsvErrorKind::SourceRowExhausted
+            );
+            assert_eq!(rows.pos, stopped_at);
+        }
     }
 }

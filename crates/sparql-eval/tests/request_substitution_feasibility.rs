@@ -328,7 +328,7 @@ fn solutions(result: SparqlResult) -> Vec<Vec<Option<TermValue>>> {
     }
 }
 
-fn interned_rows<D: purrdf_core::DatasetView + Sync>(
+fn interned_rows<D: purrdf_core::DatasetView<ReadError = std::convert::Infallible> + Sync>(
     outcome: InternedOutcome<'_, '_, D>,
 ) -> Vec<Vec<Option<TermValue>>> {
     match outcome {

@@ -179,11 +179,21 @@ self_test() {
     "bootstrap pending for: ${last}" \
     "scripts/bootstrap-crates-io.sh"
 
+  local out status=0
+  out="$(PURRDF_CRATES_IO_MOCK="${mock}" PURRDF_RELEASE_CRATES_FILE="$(ledger_file strict "$last")" \
+    bash "${BASH_SOURCE[0]}" --require-all 2>&1)" && status=0 || status=$?
+  if [[ "$status" -ne 0 ]] && grep -qF "Refusing functional publication" <<<"$out"; then
+    echo "  ok      strict functional preflight refuses ledgered missing record"
+  else
+    echo "  FAILED  strict functional preflight accepted missing record"
+    failures=$((failures + 1))
+  fi
+
   # 2b. A ledgered crate whose record exists AT the release version: created
   #     by this release's token step — tolerated when the version is known...
   mock="${tmp}/created"; mkdir -p "$mock"; all_locked "$mock"
   printf '200\n{"version":{"crate":"%s","num":"%s"}}\n' "$last" "${VERSION}" > "${mock}/${last}@${VERSION}"
-  local out status=0
+  status=0
   out="$(PURRDF_CRATES_IO_MOCK="${mock}" PURRDF_RELEASE_CRATES_FILE="$(ledger_file created "$last")" \
     PURRDF_RELEASE_VERSION="rust-v${VERSION}" bash "${BASH_SOURCE[0]}" 2>&1)" || status=$?
   if [[ "$status" -eq 0 ]] && grep -qF "created  ${last} (ledgered, but its ${VERSION} record exists: created by this release's token step" <<<"$out"; then
@@ -257,6 +267,11 @@ self_test() {
 
 ledger=()
 check_ledger=false
+require_all=false
+if [[ "${1:-}" == "--require-all" ]]; then
+  require_all=true
+  shift
+fi
 if [[ "$#" -gt 0 && "$1" == "--self-test" ]]; then
   self_test
   exit
@@ -340,7 +355,7 @@ if [[ "$check_ledger" == "true" ]]; then
   for entry in "${ledger[@]}"; do
     for crate in "${present[@]}"; do
       [[ "$entry" == "$crate" ]] || continue
-      if [[ -n "$version" ]]; then
+      if [[ -n "$version" && "$require_all" == "false" ]]; then
         state="$(crates_io_version_state "$crate" "$version" "${user_agent}")"
         case "$state" in
           present)
@@ -424,29 +439,31 @@ create the record; creating one is the ONE thing an API token still does for
 this workspace (it cannot publish a new version of any existing crate — they
 are all locked). Add the crate to PURRDF_UNBOOTSTRAPPED_CRATES in
 scripts/release-crates.sh and to the "Outstanding bootstrap" section of
-docs/RELEASE.md, re-tag, and follow the interleave that section describes:
-the lane publishes up to the crate's first dependent and stops, then
+docs/RELEASE.md, then create every missing record before tagging:
 
-    scripts/bootstrap-crates-io.sh --plan          # the preflight and plan, no token
-    CARGO_REGISTRY_TOKEN="\${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh
+    scripts/bootstrap-crates-io.sh --plan
+    scripts/bootstrap-crates-io.sh --publish
 
-creates the record, you add its Trusted Publisher entry and enable "Require
-trusted publishing", and the workflow run is re-run.
+The isolated empty packages create records. Add every Trusted Publisher entry,
+enable "Require trusted publishing", clear the completed ledger, and tag the
+functional release only after the strict preflight passes.
 EOF
   exit 1
 fi
 
 if [[ "${#pending[@]}" -gt 0 ]]; then
+  if [[ "$require_all" == "true" ]]; then
+    echo "Refusing functional publication: bootstrap records still missing: ${pending[*]}. Run scripts/bootstrap-crates-io.sh --publish before tagging; configure every publisher and lock, then clear the completed ledger." >&2
+    exit 1
+  fi
   cat <<EOF
 
 bootstrap pending for: ${pending[*]}
 
-Each is in PURRDF_UNBOOTSTRAPPED_CRATES and has no crates.io record. The publish
-loop (scripts/publish-release-crates.sh) skips each of them, publishes every
-crate that does not depend on one, and STOPS cleanly at the first crate that
-does — naming the token step, scripts/bootstrap-crates-io.sh, as what comes
-next. The set is not complete until every one has been created and this
-workflow run has been re-run (docs/RELEASE.md, "Outstanding bootstrap").
+Each is in PURRDF_UNBOOTSTRAPPED_CRATES and has no crates.io record. Use
+scripts/bootstrap-crates-io.sh --publish before tagging. Configure every Trusted
+Publisher and publishing lock, then clear the completed ledger. Functional
+release preflight uses --require-all and refuses every remaining missing record.
 EOF
   exit 0
 fi

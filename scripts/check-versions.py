@@ -77,6 +77,37 @@ def pyproject_version(root: Path) -> str:
     return data["project"]["version"]
 
 
+def python_release_violations(root: Path, version: str) -> list[str]:
+    """Both distributions and their reciprocal pins form one Python release."""
+    main = tomllib.loads((root / "bindings/python/pyproject.toml").read_text())["project"]
+    shadow = tomllib.loads((root / "bindings/python-rdflib-shadow/pyproject.toml").read_text())["project"]
+    problems = []
+    if shadow["version"] != version:
+        problems.append(f"purrdf-rdflib version {shadow['version']} != suite {version}")
+    if main["optional-dependencies"]["rdflib"] != [f"purrdf-rdflib=={version}"]:
+        problems.append(f"purrdf[rdflib] must pin purrdf-rdflib=={version}")
+    if shadow["dependencies"] != [f"purrdf=={version}"]:
+        problems.append(f"purrdf-rdflib must pin purrdf=={version}")
+    lock = tomllib.loads((root / "bindings/python/uv.lock").read_text())
+    for name in ("purrdf", "purrdf-rdflib"):
+        packages = [item for item in lock["package"] if item["name"] == name]
+        if len(packages) != 1 or packages[0]["version"] != version:
+            problems.append(f"uv.lock must contain exactly one {name} at {version}")
+            continue
+        other = "purrdf-rdflib" if name == "purrdf" else "purrdf"
+        requirements = [item for item in packages[0].get("metadata", {}).get("requires-dist", []) if item["name"] == other]
+        if name == "purrdf":
+            # uv records a source override as its directory, replacing the
+            # registry specifier. The project pin and locked local version above
+            # together prove exact coherence; demand uv's actual normalized form.
+            valid = len(requirements) == 1 and requirements[0].get("directory") == "../python-rdflib-shadow" and requirements[0].get("marker") == "extra == 'rdflib'"
+        else:
+            valid = len(requirements) == 1 and requirements[0].get("specifier") == f"=={version}"
+        if not valid:
+            problems.append(f"uv.lock {name} does not preserve the coordinated {other} requirement")
+    return problems
+
+
 def npm_version(root: Path) -> str:
     data = json.loads(
         (root / "crates" / "rdf-wasm" / "js" / "package.json").read_text(
@@ -291,6 +322,7 @@ def main() -> int:
         for source, value in versions.items():
             failures.append(f"    {value:<12} {source}")
     version = next(iter(versions.values()))
+    failures.extend(python_release_violations(root, version))
 
     # 2. Publish-list completeness against the publishable set.
     meta = workspace_metadata(root)

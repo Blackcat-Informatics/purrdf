@@ -27,6 +27,7 @@ mod files;
 mod parquet;
 #[doc(hidden)]
 pub mod plain_bench;
+mod projection;
 mod reader;
 pub mod schema;
 mod writer;
@@ -34,6 +35,7 @@ mod writer;
 pub use error::ColumnarError;
 pub use files::ParquetFiles;
 pub use parquet::Compression;
+pub use projection::{ColumnarProjection, ProjectionCell, ProjectionRows};
 pub use reader::{ColumnarRead, read};
 pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
-pub use writer::{ColumnarWrite, write};
+pub use writer::{ColumnarWrite, project, write};

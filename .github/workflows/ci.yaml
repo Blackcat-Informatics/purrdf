@@ -140,6 +140,21 @@ jobs:
       - name: Fetch all locked platform dependencies for the offline audit
         run: python3 scripts/fetch-locked-deps.py
 
+      - name: Check the packaged-license audit can still fail
+        run: python3 scripts/package-licenses.py --self-test
+
+      - name: Check C artifact capture refuses stale and mismatched outputs
+        run: python3 scripts/build-capi-bundle.py --self-test
+
+      - name: Check WebAssembly capture refuses stale and ambiguous outputs
+        run: python3 scripts/build-private-wasm.py --self-test
+
+      - name: Check Python distribution license metadata and wheel integrity
+        run: python3 bindings/python/purrdf_build_backend.py --self-test
+
+      - name: Check all generated recipient notices against provenance and resolved inputs
+        run: python3 scripts/package-licenses.py --check
+
       - name: Check the banned-dependency gate can still fail
         run: python3 scripts/check-banned-deps.py --self-test
 
@@ -200,10 +215,13 @@ jobs:
       - name: Check the crates.io record preflight refuses every wrong registry state (offline)
         run: bash scripts/check-crates-io-records.sh --self-test
 
-      - name: Check the release publish loop runs the bootstrap interleave to completion (offline)
+      - name: Check release publication guards and resumable decisions (offline)
         run: bash scripts/publish-release-crates.sh --self-test
 
-      - name: Check the crates.io bootstrap refuses existing records and defers missing dependencies (offline)
+      - name: Check exact npm tarball publication guards (offline)
+        run: python3 scripts/publish-npm.py --self-test
+
+      - name: Check isolated empty bootstrap verification and registry refusals (offline)
         run: bash scripts/bootstrap-crates-io.sh --self-test
 
       - name: Check every wasm-bindgen free function is re-exported from the npm package root
@@ -1153,14 +1171,43 @@ jobs:
       - name: Python binding tests (maturin build + pytest)
         working-directory: bindings/python
         run: |
-          uv run maturin develop
-          uv run pytest tests -q
+          uv sync --locked --group dev
+          uv run --locked pytest tests -q
 
       - name: Pydantic emitter schema oracle
         run: make pydantic-oracle
 
       - name: LinkML emitter schema oracle
         run: make linkml-oracle
+
+  # Publisher tooling has its own Python/platform lock and never needs release
+  # credentials to run its regressions. Every identity/signing/HTTP path in
+  # these tests is mocked; a network request from a test fails immediately.
+  python-publisher:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+          architecture: x64
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
+
+      - name: Verify the locked tooling and offline publisher regressions
+        run: |
+          publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
+          uv venv --python 3.13 "$publisher_env"
+          uv pip sync --python "$publisher_env/bin/python" --require-hashes --only-binary :all: \
+            scripts/python-publisher-requirements.txt
+          "$publisher_env/bin/python" -I scripts/publish-python.py --self-test
 
   # The small vector's inline storage is uninitialised memory moved with raw
   # pointer copies, so its tests run under Miri on every push: Stacked and Tree

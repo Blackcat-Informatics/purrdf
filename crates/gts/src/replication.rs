@@ -23,13 +23,13 @@ use crate::wire::{
 #[derive(Clone, Debug)]
 pub struct FrameInventory {
     /// Absolute CBOR sequence item index.
-    pub item_index: usize,
+    pub item_index: u64,
     /// Zero-based frame index within the segment.
-    pub frame_index: usize,
+    pub frame_index: u64,
     /// Start byte offset in the original file.
-    pub start: usize,
+    pub start: u64,
     /// End byte offset, exclusive.
-    pub end: usize,
+    pub end: u64,
     /// Stored frame id when present, otherwise the computed content id.
     pub id: Vec<u8>,
     /// Wire frame `"t"` value.
@@ -46,21 +46,21 @@ pub struct FrameInventory {
 #[derive(Clone, Debug)]
 pub struct SegmentInventory {
     /// Zero-based segment index.
-    pub index: usize,
+    pub index: u64,
     /// Absolute CBOR item index of the segment header.
-    pub item_start: usize,
+    pub item_start: u64,
     /// Absolute CBOR item index one past the segment.
-    pub item_end: usize,
+    pub item_end: u64,
     /// Start byte offset of the segment.
-    pub start: usize,
+    pub start: u64,
     /// End byte offset, exclusive.
-    pub end: usize,
+    pub end: u64,
     /// Segment profile from the header.
     pub profile: String,
     /// Segment head id, when the segment was foldable.
     pub head: Option<Vec<u8>>,
     /// Number of frames after the header.
-    pub frame_count: usize,
+    pub frame_count: u64,
     /// Computed layout/streamability state.
     pub layout: StreamableInfo,
     /// Diagnostics produced while folding this segment.
@@ -77,11 +77,11 @@ pub struct Inventory {
     /// Fatal file-level diagnostic, if no segment inventory can be trusted.
     pub fatal: Option<Diagnostic>,
     /// Offset of a torn trailing CBOR item.
-    pub torn: Option<usize>,
+    pub torn: Option<u64>,
     /// End offset of the last complete CBOR item.
-    pub clean_end: usize,
+    pub clean_end: u64,
     /// Number of complete CBOR items parsed before any torn append.
-    pub item_count: usize,
+    pub item_count: u64,
 }
 
 /// Result category for a replication missing-range query.
@@ -183,10 +183,10 @@ fn collect_frames(
         let frame_index = item_index - start - 1;
         let Value::Map(frame) = &items[item_index].1 else {
             frames.push(FrameInventory {
-                item_index,
-                frame_index,
-                start: item_start,
-                end: item_end,
+                item_index: item_index as u64,
+                frame_index: frame_index as u64,
+                start: item_start as u64,
+                end: item_end as u64,
                 id: Vec::new(),
                 frame_type: "<non-map>".to_string(),
                 valid: false,
@@ -213,10 +213,10 @@ fn collect_frames(
         let id = stored_id.clone().unwrap_or_else(|| computed.clone());
         expected_prev = stored_id.unwrap_or(computed);
         frames.push(FrameInventory {
-            item_index,
-            frame_index,
-            start: item_start,
-            end: item_end,
+            item_index: item_index as u64,
+            frame_index: frame_index as u64,
+            start: item_start as u64,
+            end: item_end as u64,
             id,
             frame_type: map_get(frame, "t")
                 .and_then(Value::as_text)
@@ -238,9 +238,9 @@ pub fn inventory(data: &[u8]) -> Inventory {
         return Inventory {
             segments: Vec::new(),
             fatal: fs.fatal,
-            torn,
-            clean_end,
-            item_count: items.len(),
+            torn: torn.map(|offset| offset as u64),
+            clean_end: clean_end as u64,
+            item_count: items.len() as u64,
         };
     }
 
@@ -254,9 +254,9 @@ pub fn inventory(data: &[u8]) -> Inventory {
         return Inventory {
             segments: Vec::new(),
             fatal: fs.fatal,
-            torn,
-            clean_end,
-            item_count: items.len(),
+            torn: torn.map(|offset| offset as u64),
+            clean_end: clean_end as u64,
+            item_count: items.len() as u64,
         };
     }
 
@@ -279,18 +279,18 @@ pub fn inventory(data: &[u8]) -> Inventory {
                 clean_end
             };
             SegmentInventory {
-                index,
-                item_start: start_item,
-                item_end: end_item,
-                start,
-                end,
+                index: index as u64,
+                item_start: start_item as u64,
+                item_end: end_item as u64,
+                start: start as u64,
+                end: end as u64,
                 profile: graph
                     .segment_profiles
                     .first()
                     .cloned()
                     .unwrap_or_else(|| header_profile(&items[start_item].1)),
                 head: graph.segment_heads.first().cloned(),
-                frame_count: end_item.saturating_sub(start_item + 1),
+                frame_count: end_item.saturating_sub(start_item + 1) as u64,
                 layout: graph
                     .segment_streamable
                     .first()
@@ -305,9 +305,9 @@ pub fn inventory(data: &[u8]) -> Inventory {
     Inventory {
         segments,
         fatal: fs.fatal,
-        torn,
-        clean_end,
-        item_count: items.len(),
+        torn: torn.map(|offset| offset as u64),
+        clean_end: clean_end as u64,
+        item_count: items.len() as u64,
     }
 }
 
@@ -467,10 +467,10 @@ pub fn segments_json(inventory: &Inventory) -> String {
 /// the trust rule used throughout this module: only a validated chain
 /// position counts as a known head.
 fn find_frame(inventory: &Inventory, id: &[u8]) -> Option<(usize, usize)> {
-    for segment in &inventory.segments {
-        for frame in &segment.frames {
+    for (segment_index, segment) in inventory.segments.iter().enumerate() {
+        for (frame_index, frame) in segment.frames.iter().enumerate() {
             if frame.valid && frame.id.as_slice() == id {
-                return Some((segment.index, frame.frame_index));
+                return Some((segment_index, frame_index));
             }
         }
     }
@@ -593,7 +593,13 @@ pub fn resume_after<'a>(data: &'a [u8], frame_id: &[u8]) -> Result<&'a [u8], Str
     for segment in &inventory.segments {
         for frame in &segment.frames {
             if frame.valid && frame.id.as_slice() == frame_id {
-                return Ok(&data[frame.end..inventory.clean_end]);
+                let start = usize::try_from(frame.end)
+                    .map_err(|_| "frame end exceeds local address space".to_owned())?;
+                let end = usize::try_from(inventory.clean_end)
+                    .map_err(|_| "file end exceeds local address space".to_owned())?;
+                return data
+                    .get(start..end)
+                    .ok_or_else(|| "frame range is outside buffered source".to_owned());
             }
         }
     }
@@ -617,7 +623,7 @@ pub enum DiffStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentFetch {
     /// Index of the segment in the *remote* inventory that this range covers.
-    pub remote_index: usize,
+    pub remote_index: u64,
     /// Byte range within the remote file to copy.
     pub range: ByteRange,
     /// Remote segment head, when known.
@@ -634,7 +640,7 @@ pub struct DiffResult {
     /// Byte offset in the *local* file where the fetched suffix is appended.
     ///
     /// `None` when the result cannot be spliced (`Diverged`/`Error`).
-    pub splice_offset: Option<usize>,
+    pub splice_offset: Option<u64>,
     /// True when the fetch (if any) forms an unbroken extension of local.
     pub continuous: bool,
     /// Human-readable explanation, set for `Diverged` and `Error`.
@@ -906,23 +912,29 @@ pub fn splice(
     let offset = result
         .splice_offset
         .ok_or_else(|| "diff result has no splice offset".to_string())?;
-    if offset > local_bytes.len() {
+    if offset > local_bytes.len() as u64 {
         return Err(format!(
             "splice offset {offset} exceeds local length {}",
             local_bytes.len()
         ));
     }
 
+    let offset = usize::try_from(offset)
+        .map_err(|_| "splice offset exceeds local address space".to_owned())?;
     let mut out = local_bytes[..offset].to_vec();
     for fetch in &result.fetch {
         let start = fetch.range.start;
         let end = fetch.range.end;
-        if start > end || end > remote_bytes.len() {
+        if start > end || end > remote_bytes.len() as u64 {
             return Err(format!(
                 "fetch range {start}..{end} exceeds remote length {}",
                 remote_bytes.len()
             ));
         }
+        let start = usize::try_from(start)
+            .map_err(|_| "fetch start exceeds local address space".to_owned())?;
+        let end =
+            usize::try_from(end).map_err(|_| "fetch end exceeds local address space".to_owned())?;
         out.extend_from_slice(&remote_bytes[start..end]);
     }
 
@@ -1031,8 +1043,8 @@ mod tests {
         assert_eq!(
             result.ranges,
             vec![ByteRange {
-                start: a.len(),
-                end: data.len()
+                start: a.len() as u64,
+                end: data.len() as u64
             }]
         );
     }

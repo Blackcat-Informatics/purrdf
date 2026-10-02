@@ -488,7 +488,7 @@ fn rebind_chains_three_deep() {
         BaseIri::parse("http://example.org/a/b/c").expect("absolute base"),
         BaseOrigin::Caller,
     );
-    for (line, directive) in [(2u32, "d/"), (3, "e/"), (4, "../f/")] {
+    for (line, directive) in [(2u64, "d/"), (3, "e/"), (4, "../f/")] {
         scope
             .rebind(directive, BaseOrigin::Directive { line, column: 1 })
             .expect("directive rebinds");

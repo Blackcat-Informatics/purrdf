@@ -1094,26 +1094,33 @@ impl DatasetSurvey {
     /// moment both are settled, rather than draining the rest of the dataset. The import
     /// question is the kernel's rule, which costs one term lookup and no pass at all for a
     /// dataset that never mentions `owl:imports`.
-    fn of<D: DatasetView>(ds: &D) -> Self {
-        let mut survey = Self {
-            ontology_import: !purrdf_core::imports::imported_iris(ds, &[]).is_empty(),
-            ..Self::default()
-        };
-        for quad in ds.quad_refs() {
-            if quad.g.is_some() {
-                survey.named_graph = true;
+    fn of<D: DatasetView>(ds: &D) -> Result<Self, crate::EntailError> {
+        ds.checked_read(|ds| {
+            let mut survey = Self {
+                ontology_import: !purrdf_core::imports::try_imported_iris(ds, &[])
+                    .map_err(crate::EntailError::source_read)?
+                    .is_empty(),
+                ..Self::default()
+            };
+            for quad in ds.quad_refs() {
+                let pinned = quad.map_err(crate::EntailError::source_read)?;
+                let quad = pinned.as_ref();
+                if quad.g.is_some() {
+                    survey.named_graph = true;
+                }
+                if matches!(quad.s, TermRef::Triple { .. })
+                    || matches!(quad.p, TermRef::Triple { .. })
+                    || matches!(quad.o, TermRef::Triple { .. })
+                {
+                    survey.triple_term = true;
+                }
+                if survey.named_graph && survey.triple_term {
+                    break;
+                }
             }
-            if matches!(quad.s, TermRef::Triple { .. })
-                || matches!(quad.p, TermRef::Triple { .. })
-                || matches!(quad.o, TermRef::Triple { .. })
-            {
-                survey.triple_term = true;
-            }
-            if survey.named_graph && survey.triple_term {
-                break;
-            }
-        }
-        survey
+            Ok(survey)
+        })
+        .map_err(crate::EntailError::source_read)?
     }
 }
 
@@ -1242,7 +1249,11 @@ impl ReasoningReport {
     }
 
     /// Assemble the report for a run of `regime` over `ds` that measured `stats`.
-    pub(crate) fn of_run<D: DatasetView>(ds: &D, regime: Regime, stats: &RunStats) -> Self {
+    pub(crate) fn of_run<D: DatasetView>(
+        ds: &D,
+        regime: Regime,
+        stats: &RunStats,
+    ) -> Result<Self, crate::EntailError> {
         Self::of_chase_run(ds, regime, stats, None)
     }
 
@@ -1265,7 +1276,7 @@ impl ReasoningReport {
         regime: Regime,
         stats: &RunStats,
         witness: InconsistencyWitness,
-    ) -> Self {
+    ) -> Result<Self, crate::EntailError> {
         Self::of_chase_run(ds, regime, stats, Some(witness))
     }
 
@@ -1279,19 +1290,19 @@ impl ReasoningReport {
         regime: Regime,
         stats: &RunStats,
         inconsistency: Option<InconsistencyWitness>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, crate::EntailError> {
+        Ok(Self {
             contract_hash: calculus_contract_hash_with(regime, &stats.options),
             ..Self::new(
                 regime,
                 fired_rules(regime, stats),
-                boundaries(ds, regime, stats),
+                boundaries(ds, regime, stats)?,
                 stats.budget,
                 inconsistency,
                 stats.surrogate_drops,
                 stats.termination,
             )
-        }
+        })
     }
 
     /// Assemble the report for an `OWL-Direct` run that met `boundaries`.
@@ -1688,14 +1699,18 @@ fn fired_rules(regime: Regime, stats: &RunStats) -> Vec<(RuleId, u64)> {
 /// `Simple` meets none of them: the identity closure copies every quad of every graph
 /// faithfully, triple terms and literals included, so there is nothing it failed to
 /// handle. That is also what keeps [`Completeness::Exact`] honest for that regime.
-fn boundaries<D: DatasetView>(ds: &D, regime: Regime, stats: &RunStats) -> Vec<Boundary> {
+fn boundaries<D: DatasetView>(
+    ds: &D,
+    regime: Regime,
+    stats: &RunStats,
+) -> Result<Vec<Boundary>, crate::EntailError> {
     let survey = match regime {
-        Regime::Rdf | Regime::Rdfs | Regime::OwlRl | Regime::D => DatasetSurvey::of(ds),
+        Regime::Rdf | Regime::Rdfs | Regime::OwlRl | Regime::D => DatasetSurvey::of(ds)?,
         // Not this chase's lanes: `Simple` copies faithfully, and the other two never
         // reach here (`materialize` refuses them).
-        Regime::Simple | Regime::OwlDirect | Regime::Rif => return Vec::new(),
+        Regime::Simple | Regime::OwlDirect | Regime::Rif => return Ok(Vec::new()),
     };
-    Construct::ALL
+    Ok(Construct::ALL
         .into_iter()
         .filter(|construct| match construct {
             Construct::NamedGraph => survey.named_graph,
@@ -1739,7 +1754,7 @@ fn boundaries<D: DatasetView>(ds: &D, regime: Regime, stats: &RunStats) -> Vec<B
             | Construct::NonHornTBox => false,
         })
         .map(Boundary::of)
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -1863,7 +1878,9 @@ mod tests {
             b.push_quad(s, imports, o, None);
             let ds = b.freeze().expect("freeze");
             assert!(
-                !DatasetSurvey::of(&ds).ontology_import,
+                !DatasetSurvey::of(&ds)
+                    .expect("survey fixture")
+                    .ontology_import,
                 "an owl:imports with a {what} object names no document"
             );
         }
@@ -1879,7 +1896,11 @@ mod tests {
         let o = b.intern_iri(&format!("{NS}other"));
         b.push_quad(s, imports, o, None);
         let ds = b.freeze().expect("freeze");
-        assert!(DatasetSurvey::of(&ds).ontology_import);
+        assert!(
+            DatasetSurvey::of(&ds)
+                .expect("survey fixture")
+                .ontology_import
+        );
     }
 
     /// `DatasetSurvey::of` reports each of its three flags independently of the other two,
@@ -1943,7 +1964,7 @@ mod tests {
                     }
 
                     let ds = b.freeze().expect("freeze");
-                    let survey = DatasetSurvey::of(&ds);
+                    let survey = DatasetSurvey::of(&ds).expect("survey fixture");
                     assert_eq!(
                         survey.named_graph, named_graph,
                         "named_graph for (named_graph={named_graph}, \

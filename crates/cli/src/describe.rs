@@ -145,8 +145,13 @@ struct DescribeOp<'a> {
 impl ViewOp for DescribeOp<'_> {
     type Output = Arc<RdfDataset>;
 
-    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
-        Ok(Describer::new(view).describe_iris(self.iris.iter().map(String::as_str))?)
+    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        self,
+        view: &D,
+    ) -> Result<Self::Output, CliError> {
+        let describer = Describer::try_new(view)
+            .map_err(|error| CliError::Runtime(format!("dataset source read failed: {error}")))?;
+        Ok(describer.describe_iris(self.iris.iter().map(String::as_str))?)
     }
 }
 

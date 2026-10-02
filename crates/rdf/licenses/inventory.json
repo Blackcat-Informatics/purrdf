@@ -1,0 +1,115 @@
+{
+  "components": [
+    {
+      "id": "csvw",
+      "license": "LicenseRef-W3C-Document",
+      "notices": [
+        "third-party/csvw/0-W3C-document-license.html",
+        "third-party/csvw/1-LICENSE.md"
+      ],
+      "paths": [
+        "crates/rdf/tests/fixtures/csvw-w3c/**"
+      ],
+      "provenance": [
+        "crates/rdf/tests/fixtures/csvw-w3c/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/csvw"
+    },
+    {
+      "id": "jsonld-w3c",
+      "license": "LicenseRef-W3C-Test-Suite",
+      "notices": [
+        "third-party/jsonld-w3c/0-W3C-software-document-2015.html",
+        "third-party/jsonld-w3c/1-W3C-test-suites-policy.html",
+        "third-party/jsonld-w3c/2-W3C-test-suite-license.html",
+        "third-party/jsonld-w3c/3-W3C-test-suite-BSD.html",
+        "third-party/jsonld-w3c/4-LICENSE.md"
+      ],
+      "paths": [
+        "crates/rdf/tests/fixtures/jsonld-w3c-rec/**"
+      ],
+      "provenance": [
+        "LICENSING.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/json-ld-api"
+    },
+    {
+      "id": "obographs",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/obographs/0-BSD-3-Clause.txt"
+      ],
+      "paths": [
+        "crates/rdf/tests/fixtures/obographs-0.3.2/**"
+      ],
+      "provenance": [
+        "LICENSING.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/geneontology/obographs"
+    },
+    {
+      "id": "rdf-w3c",
+      "license": "LicenseRef-W3C-Test-Suite",
+      "notices": [
+        "third-party/rdf-w3c/0-W3C-software-document-2015.html",
+        "third-party/rdf-w3c/1-W3C-test-suites-policy.html",
+        "third-party/rdf-w3c/2-W3C-test-suite-license.html",
+        "third-party/rdf-w3c/3-W3C-test-suite-BSD.html",
+        "third-party/rdf-w3c/4-LICENSE"
+      ],
+      "paths": [
+        "crates/rdf/tests/corpus/w3c/**"
+      ],
+      "provenance": [
+        "crates/rdf/tests/corpus/w3c/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/rdf-tests"
+    },
+    {
+      "id": "rdfc",
+      "license": "W3C-20150513",
+      "notices": [
+        "third-party/rdfc/0-W3C-software-document-2015.html",
+        "third-party/rdfc/1-LICENSE.md"
+      ],
+      "paths": [
+        "crates/rdf/tests/fixtures/rdfc/**"
+      ],
+      "provenance": [
+        "LICENSING.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/rdf-canon"
+    }
+  ],
+  "files": {
+    "CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+    "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+    "NOTICE.txt": "910456f69ec81892400afa50e54652618ea77907fe32eb9ccedf19bed0e18464",
+    "third-party/csvw/0-W3C-document-license.html": "1ce63a482b3fe34cf19bab6846d179f7b5a5e0fdf1e995c43031962591713d55",
+    "third-party/csvw/1-LICENSE.md": "e7b710c5c57e14969bfc5ea371f0859769e11016cd9d99e6c6f6def9dddb535a",
+    "third-party/jsonld-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/jsonld-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+    "third-party/jsonld-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+    "third-party/jsonld-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+    "third-party/jsonld-w3c/4-LICENSE.md": "a13d29acf165699ae8c57ef9eac2f489560d2753dd84a684c735a4c7c7a15d64",
+    "third-party/obographs/0-BSD-3-Clause.txt": "f24d1328dbfffe7bf66aa877957db75e60629358357d8c366ccab616fef487ab",
+    "third-party/rdf-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/rdf-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+    "third-party/rdf-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+    "third-party/rdf-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+    "third-party/rdf-w3c/4-LICENSE": "7fa36904d5d6d32848307af7b22d416b708aaa0b98f5c719b26adb5ed3594b2a",
+    "third-party/rdfc/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727"
+  },
+  "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "package_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "profile": "purrdf-rdf",
+  "schema": 1
+}

@@ -15,6 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { EVALUATION_STACK_REFUSAL_EXACT, HOST_STACK_REFUSAL } from "./fixtures/nesting.mjs";
 
 import {
   Dataset,
@@ -2172,14 +2173,12 @@ test("refusal pair: an operation this endpoint misconfigured is a 500 InternalEr
   assert.equal(errors.length, 1);
 });
 
-// The query's own evaluation failure keeps its 500, now with the engine's code as `code`
-// (never "Error") and the engine's words as `detail`: nothing in them is the host's. A
-// request nested one level deeper than the stack the endpoint's job runs on holds is one
-// — nested `FILTER NOT EXISTS`, which the evaluator refuses once its frames reach the
-// region's reserve. The endpoint's real end is found by bisection: the deepest level
-// answers 200, one level more is the 500 carrying the job lane's own refusal, word for
-// word; a shallow neighbour answers too.
-test("refusal pair: an evaluation failure is a 500 with the engine's code and words; the shallow neighbour answers 200", async () => {
+// The first stack guard reached determines the status: evaluator exhaustion is 500,
+// host admission is 400. Smaller evaluator frames can reach host admission first.
+// Both keep the job's typed code and exact statement, and the endpoint stays usable.
+// The prepared-query 192 KiB test separately exercises physical evaluator exhaustion
+// on actual scalar and SIMD wasm stacks.
+test("refusal pair: the first stack guard keeps its status, code and words; the shallow neighbour answers 200", async () => {
   const data = [1, 2, 3, 4]
     .map((n) => `<${EX}s${n}> <${EX}p> <${EX}o${n}> .`)
     .concat([`<${EX}s1> <${EX}q> <${EX}o1> .`])
@@ -2205,17 +2204,21 @@ test("refusal pair: an evaluation failure is a 500 with the engine's code and wo
   assert.equal(await status(deepest), 200, `${deepest} levels answer`);
 
   let jobRefusal;
+  let jobCode;
   await assert.rejects(new QueryEngine().queryGovernedAsync(options.dataset, nested(refused), GOVERNORS), (error) => {
     jobRefusal = error.message;
+    jobCode = error.code;
+    assert.ok(["native-sparql-evaluation-stack-exhausted", "native-sparql-host-stack-exhausted"].includes(jobCode));
+    assert.match(jobRefusal, jobCode === "native-sparql-evaluation-stack-exhausted" ? EVALUATION_STACK_REFUSAL_EXACT : HOST_STACK_REFUSAL);
     return true;
   });
   const exhausted = await handleSparqlRequest(httpRequest({ query: q(nested(refused)) }), options);
-  assert.equal(exhausted.status, 500, `${refused} levels are the evaluator's refusal`);
+  assert.equal(exhausted.status, jobCode === "native-sparql-evaluation-stack-exhausted" ? 500 : 400, `${refused} levels reach ${jobCode}`);
   const body = await problemOf(exhausted);
-  assert.equal(body.code, "native-sparql-evaluation-stack-exhausted");
-  assert.match(body.detail, /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /);
+  assert.equal(body.code, jobCode);
   assert.equal(body.detail, jobRefusal, "the endpoint's detail is the job lane's refusal");
   assert.equal(body.correlationId, undefined);
+  assert.equal(refused, deepest + 1);
 
   const shallow = await handleSparqlRequest(httpRequest({ query: q(nested(3)) }), options);
   assert.equal(shallow.status, 200);

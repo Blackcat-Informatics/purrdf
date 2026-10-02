@@ -103,10 +103,12 @@ impl std::fmt::Display for PackDigest {
 /// Reconstruct the RDF surface through the shared typed import. Each source
 /// term is transferred once, without an intermediate owned term tree. The
 /// source view is independent of the claimed certificate being checked.
-fn reconstruct<D: DatasetView>(view: &D) -> RdfDatasetBuilder {
+fn reconstruct<D: DatasetView>(view: &D) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
-    DatasetImporter::new(&mut builder, view).append();
-    builder
+    DatasetImporter::try_new(&mut builder, view)
+        .and_then(|mut importer| importer.try_append())
+        .map_err(|error| RdfDiagnostic::error("source-read", error.to_string()))?;
+    Ok(builder)
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +145,7 @@ fn reconstruct<D: DatasetView>(view: &D) -> RdfDatasetBuilder {
 /// carries. For a well-formed source view this cannot trip; the `Result` exists so
 /// an untrusted or hand-assembled view fails closed rather than panicking.
 pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    reconstruct(view).freeze()
+    reconstruct(view)?.freeze()
 }
 
 /// Open a succinct dataset pack and restore its complete RDF 1.2 value into a
@@ -215,7 +217,8 @@ pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
 pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
     let view = PackView::from_bytes(bytes)?;
 
-    let builder = reconstruct(&view);
+    let builder =
+        reconstruct(&view).map_err(|_| PackError::Malformed("pack reconstruction failed"))?;
     let reconstructed = builder.freeze().map_err(|_| {
         PackError::Malformed("verify_pack: reconstructed dataset failed structural validation")
     })?;

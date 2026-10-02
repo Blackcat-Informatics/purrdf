@@ -42,3 +42,14 @@ purrdf-rdf = { workspace = true }
 purrdf-sparql-eval = { workspace = true }
 # SHACL validation workload (governed entry points).
 purrdf-shapes = { workspace = true }
+
+[dev-dependencies]
+# Qualification-only browser bridge and the independently pinned receipt digest.
+# This crate and its examples are unpublished; shipping bindings remain unchanged.
+purrdf-hash = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[[example]]
+name = "wasm_storage_qualification"
+path = "examples/wasm_storage_qualification.rs"
+crate-type = ["cdylib"]

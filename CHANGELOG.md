@@ -6,9 +6,21 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
-## [Unreleased]
+## [3.0.0] - 2026-10-01
 
 ### Breaking Changes
+
+The [3.0 migration guide](docs/MIGRATION-3.0.md) documents the new read, identity,
+diagnostic and export boundaries. Generic `DatasetView` term access now returns
+typed results and pinned guards; logical global addresses/counts use `u64`.
+Resident datasets retain compact IDs, borrowed access and native parallel
+execution. Diagnostic-only engine conveniences require an `Infallible` reader;
+operational storage uses the typed fallible query and scoped execution APIs.
+JavaScript dataset identities, generations and asynchronous exchange IDs are
+`bigint`; settlement methods accept those exact BigInt IDs. Construct diagnostics
+through their validated constructors rather than external struct literals.
+Python SQL/Parquet exports now use native canonical five-table IDs and schemas;
+folded inspection IDs remain a separate authority.
 
 Every job the workspace does now has one implementation, named in
 `helpers-ledger.toml`. The consequences a consumer sees are listed here; the
@@ -345,6 +357,19 @@ under Changed and Fixed where a longer account helps.
   `ASK boolean` or `graph`.
 
 ### Added
+
+- **core:** certified provider-backed segmented snapshots with stable term IDs,
+  front-coded dictionaries, authenticated sparse indexes, explicit empty graphs,
+  pinned reads, shared live-memory admission and exact bounded request evidence.
+  Persisted receipts require an explicit trusted certification authority. Bounded
+  projected BGP queries and streaming TriG exports use the same native evaluator
+  and RDF representation. The existing eager pack reader remains supported.
+- **diagnostics:** validated message identities, typed parameters and structured
+  details, with exact JSON/SARIF records and a borrowed C error-record accessor.
+- **distribution:** generated recipient-specific rights inventories and full
+  notices, actual Cargo/Python/npm/C archive audits, compiler runtime notices,
+  coherent native/shadow Python versions, and isolated empty crate bootstrapping.
+  The XML conformance suite is acquired and hash-verified in a local cache.
 
 - **wasm:** `QueryEngine.blankScope` (`"keep"` or `"merge"`, typed as
   `BlankScopeMode`), the declared option for how a blank node's scope crosses to
