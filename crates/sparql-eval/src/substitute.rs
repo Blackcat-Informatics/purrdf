@@ -1336,9 +1336,8 @@ fn restore_probed_bindings(
 }
 
 /// Push constants into a triple pattern's subject and object, recording which
-/// candidates were consumed. The predicate is a [`NamedNodePattern`] and a
-/// pre-binding that reached it would be pre-binding a PREDICATE variable, which
-/// [`substitute_in_named_node_pattern`] already handles on the SHACL path.
+/// candidates were consumed. Ordinary pushdown leaves predicate positions alone;
+/// [`complete_shacl_leaf`] also writes IRI predicates and restores their bindings.
 fn probe_triple_pattern(
     triple: &mut TriplePattern,
     probes: &[(Variable, GroundTerm)],
@@ -1356,33 +1355,160 @@ fn probe_term_pattern(
     probes: &[(Variable, GroundTerm)],
     probed: &mut Vec<usize>,
 ) {
-    let mut pending: Vec<&mut TermPattern> = vec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::Variable(var) => {
-                // Both early exits leave `probed` alone as well as the term. Recording an
-                // index here without writing the constant would emit a restoring `VALUES`
-                // for a column the leaf never consumed; for a blank-node pre-binding that
-                // is the difference between the injection-only `VALUES` path and matching
-                // every term in the graph.
-                let Some(index) = probes.iter().position(|(candidate, _)| candidate == var) else {
+    probe_positions(
+        vec![ProbePosition::Term(term)],
+        probes,
+        probed,
+        ProbeRule::Pushdown,
+    );
+}
+
+/// A matched position, including predicates nested inside quoted triples.
+enum ProbePosition<'a> {
+    Term(&'a mut TermPattern),
+    Predicate(&'a mut NamedNodePattern),
+}
+
+/// The ordinary parameter restriction writes only representable term constants;
+/// SHACL additionally binds every occurrence locally, including unwritable values.
+#[derive(Clone, Copy)]
+enum ProbeRule {
+    Pushdown,
+    Shacl,
+}
+
+/// The shared iterative matched-position walk. SHACL predicates are written only
+/// for IRIs; every other value remains a variable whose local VALUES binding cannot
+/// match an RDF predicate, yielding no solution without constructing invalid algebra.
+fn probe_positions<'a>(
+    positions: impl IntoIterator<Item = ProbePosition<'a>>,
+    probes: &[(Variable, GroundTerm)],
+    probed: &mut Vec<usize>,
+    rule: ProbeRule,
+) {
+    // The common matched leaf fits inline. Completing an already-probed SHACL
+    // leaf must not allocate once per focus merely to discover no remaining name.
+    let mut pending: purrdf_core::SmallVec<[ProbePosition<'a>; 8]> =
+        positions.into_iter().collect();
+    while let Some(position) = pending.pop() {
+        match position {
+            ProbePosition::Term(term) => match term {
+                TermPattern::Variable(var) => {
+                    let Some(index) = probes.iter().position(|(candidate, _)| candidate == var)
+                    else {
+                        continue;
+                    };
+                    let constant = term_pattern_from_ground(&probes[index].1);
+                    if (constant.is_some() || matches!(rule, ProbeRule::Shacl))
+                        && !probed.contains(&index)
+                    {
+                        probed.push(index);
+                    }
+                    if let Some(constant) = constant {
+                        *term = constant;
+                    }
+                }
+                TermPattern::Triple(triple) => {
+                    let TriplePattern {
+                        subject,
+                        predicate,
+                        object,
+                    } = &mut **triple;
+                    pending.push(ProbePosition::Term(object));
+                    if matches!(rule, ProbeRule::Shacl) {
+                        pending.push(ProbePosition::Predicate(predicate));
+                    }
+                    pending.push(ProbePosition::Term(subject));
+                }
+                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                }
+            },
+            ProbePosition::Predicate(predicate) => {
+                let NamedNodePattern::Variable(var) = predicate else {
                     continue;
                 };
-                let Some(constant) = term_pattern_from_ground(&probes[index].1) else {
+                let Some(index) = probes.iter().position(|(candidate, _)| candidate == var) else {
                     continue;
                 };
                 if !probed.contains(&index) {
                     probed.push(index);
                 }
-                *term = constant;
+                if let Some(constant) = named_node_from_ground(&probes[index].1) {
+                    *predicate = NamedNodePattern::NamedNode(constant);
+                }
             }
-            TermPattern::Triple(triple) => {
-                let triple: &mut TriplePattern = triple;
-                pending.push(&mut triple.object);
-                pending.push(&mut triple.subject);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
+    }
+}
+
+/// Complete SHACL pre-binding at a matched leaf before its enclosing operators run.
+///
+/// The ordinary pushdown already completed every writable occurrence it safely
+/// reaches. Remaining occurrences include OPTIONAL/MINUS right arms, subqueries,
+/// slices, aggregates, and every blank-bearing value. A local VALUES join restores
+/// written columns and constrains unwritable identities at the leaf itself. A leaf
+/// with no remaining occurrence is untouched, avoiding duplicate seeds.
+fn complete_shacl_leaf(
+    leaf: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    scope: WalkScope,
+) {
+    let mut bound = Vec::new();
+    match leaf {
+        GraphPattern::Bgp { patterns } => {
+            for triple in patterns {
+                probe_positions(
+                    [
+                        ProbePosition::Term(&mut triple.object),
+                        ProbePosition::Predicate(&mut triple.predicate),
+                        ProbePosition::Term(&mut triple.subject),
+                    ],
+                    probes,
+                    &mut bound,
+                    ProbeRule::Shacl,
+                );
+            }
+        }
+        GraphPattern::Path {
+            subject, object, ..
+        } => probe_positions(
+            [ProbePosition::Term(object), ProbePosition::Term(subject)],
+            probes,
+            &mut bound,
+            ProbeRule::Shacl,
+        ),
+        _ => unreachable!("only BGP and path leaves hold matched positions"),
+    }
+    restore_shacl_bindings(leaf, &bound, probes, scope);
+}
+
+/// Restore SHACL-local bindings, hiding their names from EXISTS row correlation.
+fn restore_shacl_bindings(
+    leaf: &mut GraphPattern,
+    bound: &[usize],
+    probes: &[(Variable, GroundTerm)],
+    scope: WalkScope,
+) {
+    if bound.is_empty() {
+        return;
+    }
+    // An EXISTS row may already bind these names. Keep the leaf's prebindings
+    // inside their own projection, the same scope boundary used for call drivers,
+    // so correlated SPARQL substitution cannot interpret their seed as rebinding.
+    let kept = (scope == WalkScope::ExistsBody).then(|| {
+        crate::eval::syntactic_schema(leaf)
+            .vars()
+            .iter()
+            .filter(|var| !bound.iter().any(|&index| &probes[index].0 == *var))
+            .cloned()
+            .collect()
+    });
+    restore_probed_bindings(leaf, bound, probes, false);
+    if let Some(variables) = kept {
+        purrdf_sparql_algebra::substitute::take_and_replace(leaf, |leaf| GraphPattern::Project {
+            inner: Child::new(leaf),
+            variables,
+        });
     }
 }
 
@@ -1539,8 +1665,11 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
 ///
 /// First performs the ordinary VALUES-join rewrite via [`apply_substitutions`]
 /// (so triple-pattern positions and projectable variables work exactly like the
-/// generic pre-binding path). Then walks the algebra and, for every pre-bound
-/// variable whose value is an IRI or literal:
+/// generic pre-binding path). Then completes every BGP/path leaf at every depth,
+/// including OPTIONAL and MINUS right arms and nested EXISTS bodies. A leaf-local
+/// VALUES join constrains blank and blank-bearing quoted identities and restores
+/// columns replaced by constants. The full walk also, for every pre-bound variable
+/// whose value is an IRI or literal:
 ///
 /// * replaces `Expression::Variable(v)` with the constant IRI/literal,
 /// * replaces `Expression::Bound(v)` with the `true` boolean literal,
@@ -1889,17 +2018,17 @@ fn enter_substitution(
     // Wildcard-free on purpose: a `GraphPattern` variant added later must fail to
     // compile here rather than silently pass through unsubstituted.
     let (child, stage, child_scope) = match &mut node {
-        // A leaf's term positions are matched against the graph, not evaluated, and
-        // `apply_substitutions`' pushdown has already written the pre-bound constants
-        // into the ones that can carry them. A `Values` block's cells are data for the
-        // same reason.
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {
+        // SHACL reaches every matched leaf, including scopes the ordinary parameter
+        // pushdown deliberately leaves alone. VALUES cells themselves are data.
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => {
+            complete_shacl_leaf(&mut node, &expr_subs.0, scope);
             return Step::Finished((node, core));
         }
-        // BOTH arms, unlike the pushdown. Replacing a variable with a constant
-        // EXPRESSION removes no column from any schema, so the divergence that stops
-        // the pushdown at an `OPTIONAL`'s or a `MINUS`'s right arm does not arise here.
-        // See `crate::enf`'s "The SHACL pre-binding fork".
+        GraphPattern::Values { .. } => return Step::Finished((node, core)),
+        // BOTH arms, unlike ordinary parameter pushdown: SHACL binds each matched
+        // occurrence before this operator evaluates, with leaf-local VALUES retaining
+        // every replaced column. A restricted OPTIONAL match becoming a miss is the
+        // required focus-specific result. See `crate::enf`'s pre-binding fork.
         //
         // A `Lateral`'s left operand is entered first; what happens to a call on its
         // right waits until the left is back ([`resume_substitution`]).
@@ -2089,10 +2218,23 @@ fn resume_substitution(
             drive_expression_reads(&mut frame.node, expr_subs, scope, columns);
             Then::Finish(columns)
         }
-        (
-            GraphPattern::Graph { inner, .. } | GraphPattern::Service { inner, .. },
-            SubstituteStage::Inner,
-        ) => {
+        (GraphPattern::Graph { name, inner }, SubstituteStage::Inner) => {
+            **inner = operand;
+            // An unwritable graph-name binding must constrain this GRAPH before an
+            // OPTIONAL consumes it, even when its inner BGP never names that variable.
+            let bound = match name {
+                NamedNodePattern::Variable(var) => expr_subs
+                    .0
+                    .iter()
+                    .position(|(candidate, _)| candidate == var),
+                NamedNodePattern::NamedNode(_) => None,
+            };
+            if let Some(index) = bound {
+                restore_shacl_bindings(&mut frame.node, &[index], &expr_subs.0, scope);
+            }
+            Then::Finish(core)
+        }
+        (GraphPattern::Service { inner, .. }, SubstituteStage::Inner) => {
             **inner = operand;
             Then::Finish(core)
         }
@@ -3912,9 +4054,11 @@ mod walk_tests {
         let beneath = scope.beneath();
         let core = SeedColumns::at_core(scope, expr_subs.0.len());
         let (reads_expressions, carried) = match pattern {
-            GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {
+            GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => {
+                complete_shacl_leaf(pattern, &expr_subs.0, scope);
                 (false, core)
             }
+            GraphPattern::Values { .. } => (false, core),
             GraphPattern::Join { left, right } | GraphPattern::Minus { left, right } => {
                 reference_substitute_in_graph_pattern(left, expr_subs, beneath);
                 reference_substitute_in_graph_pattern(right, expr_subs, beneath);
@@ -3970,7 +4114,22 @@ mod walk_tests {
                     reference_substitute_in_graph_pattern(inner, expr_subs, scope),
                 )
             }
-            GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+            GraphPattern::Graph { name, inner } => {
+                substitute_in_named_node_pattern(name, expr_subs);
+                reference_substitute_in_graph_pattern(inner, expr_subs, beneath);
+                let bound = match name {
+                    NamedNodePattern::Variable(var) => expr_subs
+                        .0
+                        .iter()
+                        .position(|(candidate, _)| candidate == var),
+                    NamedNodePattern::NamedNode(_) => None,
+                };
+                if let Some(index) = bound {
+                    restore_shacl_bindings(pattern, &[index], &expr_subs.0, scope);
+                }
+                (false, core)
+            }
+            GraphPattern::Service { name, inner, .. } => {
                 substitute_in_named_node_pattern(name, expr_subs);
                 reference_substitute_in_graph_pattern(inner, expr_subs, beneath);
                 (false, core)
@@ -5253,6 +5412,79 @@ mod walk_tests {
     }
 
     #[test]
+    fn shacl_rewrites_deep_quoted_predicates_inside_an_optional_on_a_128_kib_thread() {
+        let rewritten = purrdf_stack::on_stack(SMALL_STACK, || {
+            let this = Variable::new("this");
+            let predicate = Variable::new("predicate");
+            let mut term = TermPattern::Variable(this.clone());
+            for _ in 0..DEEP {
+                term = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri(0)),
+                    predicate: NamedNodePattern::Variable(predicate.clone()),
+                    object: term,
+                }));
+            }
+            let mut pattern = GraphPattern::LeftJoin {
+                left: Child::new(GraphPattern::empty_bgp()),
+                right: Child::new(GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::NamedNode(iri(0)),
+                        predicate: NamedNodePattern::NamedNode(iri(1)),
+                        object: term,
+                    }],
+                }),
+                expression: None,
+            };
+            substitute_in_graph_pattern(
+                &mut pattern,
+                &ExprSubs(vec![
+                    (this, GroundTerm::NamedNode(iri(7))),
+                    (predicate, GroundTerm::NamedNode(iri(1))),
+                ]),
+                WalkScope::Group,
+            );
+            pattern
+        })
+        .expect("spawn");
+        let GraphPattern::LeftJoin { right, .. } = &rewritten else {
+            panic!("OPTIONAL");
+        };
+        let GraphPattern::Join { left, right } = &**right else {
+            panic!("local seed");
+        };
+        let GraphPattern::Values {
+            variables,
+            bindings,
+        } = &**right
+        else {
+            panic!("VALUES");
+        };
+        assert_eq!(
+            variables,
+            &vec![Variable::new("predicate"), Variable::new("this")]
+        );
+        assert_eq!(
+            bindings,
+            &vec![vec![
+                Some(GroundTerm::NamedNode(iri(1))),
+                Some(GroundTerm::NamedNode(iri(7)))
+            ]]
+        );
+        let GraphPattern::Bgp { patterns } = &**left else {
+            panic!("matched leaf");
+        };
+        let mut term = &patterns[0].object;
+        let mut levels = 0;
+        while let TermPattern::Triple(triple) = term {
+            assert_eq!(triple.predicate, NamedNodePattern::NamedNode(iri(1)));
+            levels += 1;
+            term = &triple.object;
+        }
+        assert_eq!(levels, DEEP);
+        assert_eq!(term, &TermPattern::NamedNode(iri(7)));
+    }
+
+    #[test]
     fn a_hundred_thousand_level_expression_is_substituted_noted_and_renamed_on_a_128_kib_thread() {
         let this = Variable::new("this");
         let (substituted, reads, renamed) = purrdf_stack::on_stack(SMALL_STACK, {
@@ -5352,7 +5584,26 @@ mod walk_tests {
                     levels += 1;
                     node = body;
                 }
-                GraphPattern::Bgp { .. } => break,
+                GraphPattern::Join { left, right } => {
+                    assert_eq!(
+                        **left,
+                        GraphPattern::Bgp {
+                            patterns: vec![TriplePattern {
+                                subject: TermPattern::NamedNode(iri(7)),
+                                predicate: NamedNodePattern::NamedNode(iri(1)),
+                                object: TermPattern::Variable(Variable::new("o")),
+                            }],
+                        }
+                    );
+                    assert_eq!(
+                        **right,
+                        GraphPattern::Values {
+                            variables: vec![this],
+                            bindings: vec![vec![Some(GroundTerm::NamedNode(iri(7)))]],
+                        }
+                    );
+                    break;
+                }
                 other => panic!("an unexpected node in the chain: {other:?}"),
             }
         }
