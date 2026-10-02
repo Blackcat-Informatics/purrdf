@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-01T23:21:18-06:00\n"
+"POT-Creation-Date: 2026-10-02T01:01:23-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -21005,7 +21005,11 @@ msgid ""
 "`@blackcatinformatics/purrdf` package — from **one** workspace version, in "
 "lockstep. The full process is [`docs/RELEASE.md`](https://github.com/"
 "Blackcat-Informatics/purrdf/blob/main/docs/RELEASE.md)."
-msgstr "PurRDF 以**同一个**工作区版本、同步地发布到三个注册表——crates.io 上的 crate 套件、PyPI 上的 `purrdf` 与 `purrdf-rdflib` 分发包，以及 npm 上的 `@blackcatinformatics/purrdf` 包。完整流程见 [`docs/RELEASE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/RELEASE.md)。"
+msgstr ""
+"PurRDF 以**同一个**工作区版本、同步地发布到三个注册表——crates.io 上的 crate "
+"套件、PyPI 上的 `purrdf` 与 `purrdf-rdflib` 分发包，以及 npm 上的 "
+"`@blackcatinformatics/purrdf` 包。完整流程见 [`docs/RELEASE.md`](https://"
+"github.com/Blackcat-Informatics/purrdf/blob/main/docs/RELEASE.md)。"
 
 #: src/project/releases.md:14
 msgid "Semver policy from 1.0.0"
@@ -21055,7 +21059,13 @@ msgid ""
 "`purrdf_abi_version`. It is versioned separately from the workspace and "
 "stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise "
 "about it."
-msgstr "唯一的例外是 C ABI。`libpurrdf` 的 [`purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h) 带有自己的 `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（目前为 **0.8**），每当导出签名变更时递增，由 `crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时通过 `purrdf_abi_version` 读回。它的版本独立于工作区，并保持在 `0.x`：它并未冻结，工作区的 1.0.0 对它不作任何承诺。"
+msgstr ""
+"唯一的例外是 C ABI。`libpurrdf` 的 [`purrdf.h`](https://github.com/Blackcat-"
+"Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h) 带有自己的 "
+"`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（目前为 **0.8**），每当导出签名变更时递"
+"增，由 `crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时通过 "
+"`purrdf_abi_version` 读回。它的版本独立于工作区，并保持在 `0.x`：它并未冻结，"
+"工作区的 1.0.0 对它不作任何承诺。"
 
 #: src/project/releases.md:38
 msgid "MSRV policy"
@@ -21147,7 +21157,12 @@ msgid ""
 "with _Require trusted publishing_ (`trustpub_only`), so an API token cannot "
 "publish a new version of any of them: crates.io answers with `403 Forbidden: "
 "New versions of this crate can only be published using Trusted Publishing`."
-msgstr "31 个 crate 的发布集合中，每个 crate 的每个功能版本都由该通道发布。每个已有的 crate 记录都在 crates.io 上以 _Require trusted publishing_（`trustpub_only`）锁定，因此 API 令牌无法为其中任何一个发布新版本：crates.io 会回应 `403 Forbidden: New versions of this crate can only be published using Trusted Publishing`。"
+msgstr ""
+"31 个 crate 的发布集合中，每个 crate 的每个功能版本都由该通道发布。每个已有"
+"的 crate 记录都在 crates.io 上以 _Require trusted publishing_"
+"（`trustpub_only`）锁定，因此 API 令牌无法为其中任何一个发布新版本："
+"crates.io 会回应 `403 Forbidden: New versions of this crate can only be "
+"published using Trusted Publishing`。"
 
 #: src/project/releases.md:76
 msgid ""
@@ -21161,7 +21176,15 @@ msgid ""
 "release begins. `scripts/check-crates-io-records.sh --require-all` verifies "
 "the public records and locks; publisher entries require separate "
 "configuration confirmation."
-msgstr "在**打标签之前**建立新 crate 的记录。使用令牌发布一个独立、空且无依赖的 **0.0.0** 包，以创建每个缺失的记录；实际工作区 crate 保持其功能发布版本。配置其可信发布者（Trusted Publisher）条目并启用 _Require trusted publishing_，然后核对并更新 `scripts/release-crates.sh` 中的 `PURRDF_UNBOOTSTRAPPED_CRATES`。功能发布开始前，全部 31 个记录必须存在、全部发布者条目必须配置完毕、每个记录必须锁定，且台账必须为空。`scripts/check-crates-io-records.sh --require-all` 验证公开记录与锁定状态；发布者条目的配置需要单独确认。"
+msgstr ""
+"在**打标签之前**建立新 crate 的记录。使用令牌发布一个独立、空且无依赖的 "
+"**0.0.0** 包，以创建每个缺失的记录；实际工作区 crate 保持其功能发布版本。配置"
+"其可信发布者（Trusted Publisher）条目并启用 _Require trusted publishing_，然"
+"后核对并更新 `scripts/release-crates.sh` 中的 "
+"`PURRDF_UNBOOTSTRAPPED_CRATES`。功能发布开始前，全部 31 个记录必须存在、全部"
+"发布者条目必须配置完毕、每个记录必须锁定，且台账必须为空。`scripts/check-"
+"crates-io-records.sh --require-all` 验证公开记录与锁定状态；发布者条目的配置"
+"需要单独确认。"
 
 #: src/project/releases.md:86
 msgid ""
@@ -21171,7 +21194,10 @@ msgid ""
 "retaining the records and publisher settings. The complete setup and "
 "historical bootstrap receipts are in the release process document linked "
 "above."
-msgstr "随后，由标签触发的可信发布运行按依赖顺序发布功能版本。在这些版本通过验证后，使用具有独立撤回（yank）权限的令牌撤回空的 **0.0.0** 版本，同时保留记录与发布者设置。完整的设置流程与历史记录引导凭据见上文链接的发布流程文档。"
+msgstr ""
+"随后，由标签触发的可信发布运行按依赖顺序发布功能版本。在这些版本通过验证后，"
+"使用具有独立撤回（yank）权限的令牌撤回空的 **0.0.0** 版本，同时保留记录与发布"
+"者设置。完整的设置流程与历史记录引导凭据见上文链接的发布流程文档。"
 
 #: src/project/releases.md:92
 msgid ""
@@ -21238,79 +21264,98 @@ msgstr "# 2. 依据递增后的 crate 版本重新生成已提交的 C-ABI 头�
 
 #: src/project/releases.md:123
 msgid ""
-"# 3. Complete the release notes, preserving existing migration guidance.\n"
-msgstr "# 3. 完善发布说明，保留现有的迁移指导。\n"
+"# 3. Complete the changelog and reviewed summary, preserving migration "
+"guidance.\n"
+msgstr "# 3. 完善变更日志与经过审阅的摘要，保留迁移指导。\n"
 
 #: src/project/releases.md:125
 msgid "# Use make changelog only for history-generated notes.\n"
 msgstr "# 仅对根据提交历史生成的说明使用 make changelog。\n"
 
-#: src/project/releases.md:127
+#: src/project/releases.md:128
 msgid ""
-"# 4. Review, then commit the release bump, generated header, and changelog.\n"
-msgstr "# 4. 审阅后，提交版本递增、生成的头文件与变更日志。\n"
+"# 4. Review, then commit the bump, generated header, changelog and summary.\n"
+msgstr "# 4. 审阅后，提交版本递增、生成的头文件、变更日志与摘要。\n"
 
-#: src/project/releases.md:129
+#: src/project/releases.md:130
 msgid "\"chore(release): 0.2.2\""
 msgstr "\"chore(release): 0.2.2\""
 
-#: src/project/releases.md:130
+#: src/project/releases.md:131
 msgid ""
 "# 5. From an up-to-date main, run every release gate, then push all three "
 "tags.\n"
 msgstr "# 5. 从最新的 main 出发，运行每一道发布关卡，然后推送全部三个标签。\n"
 
-#: src/project/releases.md:135
+#: src/project/releases.md:136
 msgid ""
 "`make release-tags` refuses to run unless the working tree is clean, the "
 "branch is `main` and synchronized with `origin/main`, the version and "
-"crates.io record/lock checks pass, `VERSION` matches the tree, the release-"
-"notes section exists, and none of the three tags already exists locally or "
-"remotely. It then runs these gates in order:"
-msgstr "`make release-tags` 在以下条件未全部满足时拒绝运行：工作树干净、分支为 `main` 且与 `origin/main` 同步、版本及 crates.io 记录/锁定检查通过、`VERSION` 与工作树一致、发布说明小节存在，且三个标签均未在本地或远程存在。随后它按以下顺序运行各项关卡："
+"crates.io record/lock checks pass, `VERSION` matches the tree, the full "
+"changelog section and validated reviewed summary exist, and none of the "
+"three tags already exists locally or remotely. It then runs these gates in "
+"order:"
+msgstr ""
+"`make release-tags` 在以下条件未全部满足时拒绝运行：工作树干净、分支为 "
+"`main` 且与 `origin/main` 同步、版本及 crates.io 记录/锁定检查通过、"
+"`VERSION` 与工作树一致、完整的变更日志小节与通过验证且经过审阅的摘要均存在，"
+"且三个标签均未在本地或远程存在。随后它按以下顺序运行各项关卡："
 
-#: src/project/releases.md:141
+#: src/project/releases.md:143
 msgid "`make check`: the Rust and wasm workspace gate and repository hygiene."
 msgstr "`make check`：Rust 与 wasm 工作区关卡及仓库卫生检查。"
 
-#: src/project/releases.md:142
+#: src/project/releases.md:144
 msgid "`make capi-check`: the generated C-ABI/header check and linked C smoke."
 msgstr "`make capi-check`：生成的 C-ABI/头文件检查，以及链接后的 C 冒烟测试。"
 
-#: src/project/releases.md:143
+#: src/project/releases.md:145
 msgid "`make pytest`: the native Python binding suite."
 msgstr "`make pytest`：原生 Python 绑定测试套件。"
 
-#: src/project/releases.md:144
+#: src/project/releases.md:146
 msgid ""
 "`make python-release-check`: build and audit both Python wheel/sdist pairs, "
 "check them with the pinned publisher tools, and install them together."
-msgstr "`make python-release-check`：构建并审计两个 Python 分发包各自的 wheel/sdist，使用固定版本的发布工具检查它们，并将它们一同安装。"
+msgstr ""
+"`make python-release-check`：构建并审计两个 Python 分发包各自的 wheel/sdist，"
+"使用固定版本的发布工具检查它们，并将它们一同安装。"
 
-#: src/project/releases.md:146
+#: src/project/releases.md:148
 msgid "`make wasm-pkg-test`: the optimized size-gated npm/wasm package tests."
 msgstr "`make wasm-pkg-test`：经过优化、带体积关卡的 npm/wasm 包测试。"
 
-#: src/project/releases.md:147
+#: src/project/releases.md:149
 msgid ""
 "`make capi-bundle`: build and audit the native C distribution, including "
 "recipient notices and relocated linked smoke."
-msgstr "`make capi-bundle`：构建并审计原生 C 分发包，包括接收方许可声明与重定位后的链接冒烟测试。"
+msgstr ""
+"`make capi-bundle`：构建并审计原生 C 分发包，包括接收方许可声明与重定位后的链"
+"接冒烟测试。"
 
-#: src/project/releases.md:150
+#: src/project/releases.md:152
 msgid ""
 "Only after every surface passes does it recheck the clean synchronized state "
 "and atomically push the `rust-v`, `py-v`, and `npm-v` tags together. No tag "
 "is created before the complete cross-surface preflight passes. Each tag "
 "triggers its own lane, and the cargo lane additionally publishes a GitHub "
-"Release built from the committed `CHANGELOG.md`."
-msgstr "只有在每个接口都通过之后，它才会重新检查干净且已同步的状态，并以原子方式一同推送 `rust-v`、`py-v` 与 `npm-v` 标签。在完整的跨接口预检通过之前，不会创建任何标签。每个标签触发各自的通道，而 cargo 通道还会额外发布一个依据已提交的 `CHANGELOG.md` 构建的 GitHub Release。"
+"Release using the committed reviewed summary in `docs/releases/"
+"<version>.md`, linked to the complete changelog. The shared checker "
+"validates the exact version and 64 KiB UTF-8 size ceiling before tags and "
+"publication; no notes are truncated."
+msgstr ""
+"只有在每个接口都通过之后，它才会重新检查干净且已同步的状态，并以原子方式一同"
+"推送 `rust-v`、`py-v` 与 `npm-v` 标签。在完整的跨接口预检通过之前，不会创建任"
+"何标签。每个标签触发各自的通道，而 cargo 通道还会额外发布一个 GitHub "
+"Release，使用 `docs/releases/<version>.md` 中已提交且经过审阅的摘要，并链接到"
+"完整的变更日志。共享检查器会在打标签与发布之前验证精确的版本及 64 KiB 的 "
+"UTF-8 体积上限；发布说明不会被截断。"
 
-#: src/project/releases.md:156
+#: src/project/releases.md:160
 msgid "Citing PurRDF"
 msgstr "引用 PurRDF"
 
-#: src/project/releases.md:158
+#: src/project/releases.md:162
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -21358,7 +21403,13 @@ msgid ""
 "logical 64-bit anchors and typed integers as exact decimal strings. SARIF "
 "retains it in `properties.diagnosticRecord`; C callers use the borrowed "
 "`purrdf_error_presentation_json` accessor."
-msgstr "`RdfDiagnostic::presentation()` 可选地提供稳定的消息标识、具名且带类型的参数，以及结构化详情。通过 `message_id()` 选择展示模板：一个诊断代码可以涵盖多个模板。直接读取参数值，而不是从英文文本中提取。`to_json()` 输出带版本的机器记录，其中逻辑 64 位定位信息及带类型的整数以精确的十进制字符串表示。SARIF 在 `properties.diagnosticRecord` 中保留该记录；C 调用方使用借用的 `purrdf_error_presentation_json` 访问器。"
+msgstr ""
+"`RdfDiagnostic::presentation()` 可选地提供稳定的消息标识、具名且带类型的参"
+"数，以及结构化详情。通过 `message_id()` 选择展示模板：一个诊断代码可以涵盖多"
+"个模板。直接读取参数值，而不是从英文文本中提取。`to_json()` 输出带版本的机器"
+"记录，其中逻辑 64 位定位信息及带类型的整数以精确的十进制字符串表示。SARIF 在 "
+"`properties.diagnosticRecord` 中保留该记录；C 调用方使用借用的 "
+"`purrdf_error_presentation_json` 访问器。"
 
 #: src/project/diagnostic-codes.md:29
 msgid "`iri-*` — IRI parsing and base resolution (`purrdf-iri`)"
@@ -21535,7 +21586,8 @@ msgstr "`native-codec-limit`"
 msgid ""
 "A cumulative source byte/line counter or explicitly bounded local column "
 "cannot represent the next position."
-msgstr "累计的源字节/行计数器，或明确设有上限的局部列计数器，无法表示下一个位置。"
+msgstr ""
+"累计的源字节/行计数器，或明确设有上限的局部列计数器，无法表示下一个位置。"
 
 #: src/project/diagnostic-codes.md:53
 msgid ""
@@ -22318,7 +22370,9 @@ msgid ""
 "Operational storage refused a forward/reverse lookup or complete row drain. "
 "The error is fatal, including inside `SERVICE SILENT`; no partial answer is "
 "published."
-msgstr "存储操作拒绝了正向/反向查找或完整的行迭代消费。这是致命错误，即使在 `SERVICE SILENT` 内也如此；不会发布部分答案。"
+msgstr ""
+"存储操作拒绝了正向/反向查找或完整的行迭代消费。这是致命错误，即使在 `SERVICE "
+"SILENT` 内也如此；不会发布部分答案。"
 
 #: src/project/diagnostic-codes.md:153
 msgid ""
@@ -22334,14 +22388,18 @@ msgid ""
 "A bounded operational view was given an execution shape without a certified "
 "working-memory bound, or a raw evaluator entry without a held drain "
 "reservation."
-msgstr "有界的存储操作视图收到了一种没有经过认证的工作内存上界的执行形式，或在未持有行迭代消费预留的情况下调用了原始求值器入口。"
+msgstr ""
+"有界的存储操作视图收到了一种没有经过认证的工作内存上界的执行形式，或在未持有"
+"行迭代消费预留的情况下调用了原始求值器入口。"
 
 #: src/project/diagnostic-codes.md:154
 msgid ""
 "Use the engine's fallible projected basic-graph-pattern `SELECT` entry with "
 "its default dataset and empty extension configuration, or choose a resident "
 "view."
-msgstr "使用引擎中可返回操作错误的基本图模式投影 `SELECT` 入口，并采用其默认数据集和空的扩展配置，或者选择驻留视图。"
+msgstr ""
+"使用引擎中可返回操作错误的基本图模式投影 `SELECT` 入口，并采用其默认数据集和"
+"空的扩展配置，或者选择驻留视图。"
 
 #: src/project/diagnostic-codes.md:155
 msgid "`native-sparql-workspace-bound-overflow`"

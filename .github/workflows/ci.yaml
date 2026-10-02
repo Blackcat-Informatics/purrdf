@@ -209,6 +209,12 @@ jobs:
       - name: Check cross-registry release coherence
         run: python3 scripts/check-versions.py
 
+      - name: Check reviewed release summary and checksum refusal cases (offline)
+        run: python3 scripts/check-release-notes.py --self-test
+
+      - name: Check the current release has a bounded reviewed summary
+        run: python3 scripts/check-release-notes.py
+
       - name: Check the crates.io release order is publishable and verifiable (offline)
         run: python3 scripts/check-publish-order.py
 

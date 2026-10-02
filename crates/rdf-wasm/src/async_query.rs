@@ -2497,8 +2497,11 @@ impl JobInner {
         status
     }
 
-    /// Build the job's effect sources and run `operation` over them.
-    fn execute(&self, operation: Operation) -> JobOutcome {
+    /// Construct effect sources before the operation starts recursive evaluation.
+    /// Keeping this frame separate prevents resolver-construction scratch from staying
+    /// live underneath every recursive evaluation frame, including a source-free job.
+    #[inline(never)]
+    fn job_run(&self) -> JobRun<'_> {
         let local = (!self.local_services.is_empty()).then(|| {
             let resolver = self.local_services.iter().fold(
                 InProcessServiceResolver::new(),
@@ -2542,12 +2545,17 @@ impl JobInner {
             }) as Arc<dyn GraphResolver + Send + Sync>
         });
         let stop: Arc<dyn StopSignal> = Arc::clone(&self.watch) as Arc<dyn StopSignal>;
-        let run = JobRun {
+        JobRun {
             stop: Some(stop),
             remote,
             load,
             counters: Some(&self.watch.slots.counters),
-        };
+        }
+    }
+
+    /// Run with the constructed sources after their construction frame has returned.
+    fn execute(&self, operation: Operation) -> JobOutcome {
+        let run = self.job_run();
         operation(&run)
     }
 

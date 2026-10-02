@@ -37,8 +37,9 @@ make capi-header
 # 3. Complete the release notes, preserving existing migration guidance.
 # Rename the Unreleased section to the bumped version and release date.
 # Use make changelog only for history-generated notes (see below).
+# Add the reviewed short summary at docs/releases/<version>.md.
 
-# 4. Review, then commit the release bump, generated header, and changelog.
+# 4. Review, then commit the bump, generated header, changelog and summary.
 git add -A && git commit -m "chore(release): 0.2.2"
 
 # 5. From an up-to-date main, run every release gate, then push all three tags.
@@ -47,15 +48,16 @@ make release-tags VERSION=0.2.2
 
 `make release-tags` refuses to run unless the working tree is clean, the branch
 is `main` and synchronized with `origin/main`, `scripts/check-versions.py`
-passes, `VERSION` matches the tree, the release-notes section exists, and none
+passes, `VERSION` matches the tree, the full changelog section and validated
+reviewed summary exist, and none
 of the three tags already exists locally or remotely. It then runs the Rust and
 wasm workspace gate, the generated C-ABI/header check, the native Python binding
 suite, and the optimized size-gated npm/wasm package tests. Only after every
 surface passes does it recheck the clean synchronized state and atomically push
 `rust-v0.2.2`, `py-v0.2.2`, and `npm-v0.2.2` together. No tag is created before
 the complete cross-surface preflight passes. Each tag triggers its own lane
-(below); the cargo lane additionally publishes a GitHub Release built from the
-committed `CHANGELOG.md`.
+(below); the cargo lane additionally publishes a GitHub Release using the
+committed reviewed summary, with a link to the complete changelog.
 
 The per-lane tag commands in the sections below remain valid for a single-lane
 re-release, but the coherent path above is the default.
@@ -270,9 +272,9 @@ When generating from history, run `make bump` **first**:
 `make changelog` reads the just-bumped workspace version out of `Cargo.toml` and
 passes it to git-cliff as `--tag rust-v<version>`, so the pending (still untagged)
 commits are stamped under a real `## [<version>]` header instead of landing in
-`## [Unreleased]`. That is the header the release workflow later slices out of the
-committed `CHANGELOG.md` verbatim, so the version being cut must already be the tree
-version when you regenerate:
+`## [Unreleased]`. The version being cut must already be the tree version when
+you regenerate; the release guard requires exactly one matching full changelog
+section alongside the short summary:
 
 ```sh
 make changelog   # stamps the bumped version as the changelog release header,
@@ -285,12 +287,21 @@ committed changelog stays clean under the repository's issue-reference lint.
 The generation is offline and order-stable: running `make changelog` twice on
 the same history (at the same tree version) yields byte-identical output.
 
-The GitHub Release notes are **not** regenerated at tag time. The
-`release-cargo.yaml` workflow slices the section for the tagged version straight
-out of the committed `CHANGELOG.md` and attaches it to a GitHub Release named
-for the `rust-v*` tag — so the release notes and the committed changelog can
-never drift, and the workflow makes no repository commits. Complete and commit
-the release's `CHANGELOG.md` section **before** pushing the release tag.
+The GitHub Release notes are **not** regenerated at tag time. Complete and commit
+`docs/releases/<version>.md` with the exact `# PurRDF <version>` heading, concise
+consumer changes and links to the tagged full changelog, migration guidance and
+registries. `scripts/check-release-notes.py` validates its workspace version,
+visible prose and 64 KiB UTF-8 size ceiling before tags and before crate
+publication. It copies the exact committed bytes, without truncation or a
+fallback to the full history. The workflow makes no repository commits.
+
+The GitHub Release is titled `PurRDF <version>` and hosts the Linux x86_64 GNU C
+SDK tar, its license receipt and the Cargo archive license receipt. Its
+`SHA256SUMS` hashes those three actual uploaded files, with one sorted
+`<SHA-256>  <basename>` line per file. GitHub also supplies source ZIP and tar.gz
+downloads of the tagged repository. These source archives are distinct from the
+compiled C SDK. Preserve the full `CHANGELOG.md` history and commit both notes
+sources **before** pushing the release tag.
 
 ## Tag Release
 
