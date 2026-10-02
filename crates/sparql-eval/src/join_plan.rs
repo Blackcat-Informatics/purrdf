@@ -1,0 +1,380 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Factor ambient ordinary triples around connectors in pure positive UNION
+//! regions, keeping unrelated triples compact. This happens before numbering; the existing BGP
+//! cost law and shared positive schedule choose physical drivers from the dataset.
+//! No triple is copied into an arm, and every other operator remains a boundary.
+
+use purrdf_sparql_algebra::{
+    Child, Flow, GraphPattern, NodeRef, TriplePattern, Visit, fold_post_order, walk_pre_post,
+};
+
+use crate::{DetHashMap, DetHashSet};
+
+/// Apply the shared topology repair to a raw query before its tree is numbered.
+pub(crate) fn normalize_query(
+    query: &purrdf_sparql_algebra::Query,
+) -> Option<purrdf_sparql_algebra::Query> {
+    use purrdf_sparql_algebra::Query;
+    let pattern = match query {
+        Query::Select { pattern, .. }
+        | Query::Ask { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. } => pattern,
+    };
+    let normalized = normalize(pattern)?;
+    Some(crate::blank_scope::query_with_pattern(query, normalized))
+}
+
+/// Factor independent positive regions with one source-sized owned copy. Payload
+/// is moved exactly once; repeat normalization preserves the exact factored tree.
+pub(crate) fn normalize(pattern: &GraphPattern) -> Option<GraphPattern> {
+    let mut has_union = false;
+    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+        if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Union { .. })) {
+            has_union = true;
+            return Flow::Stop;
+        }
+        Flow::Descend
+    });
+    if !has_union {
+        return None;
+    }
+    let owned = pattern.clone();
+    // map_patterns moves inline nodes while keeping their child boxes alive.
+    // The two box addresses identify each original Join through those moves.
+    let mut eligible = DetHashMap::default();
+    fold_post_order(NodeRef::Pattern(&owned), |node, children| {
+        let mut summary = match node {
+            NodeRef::Pattern(GraphPattern::Bgp { .. }) => (true, false),
+            NodeRef::Pattern(GraphPattern::Join { .. }) => (true, false),
+            NodeRef::Pattern(GraphPattern::Union { .. }) => (true, true),
+            _ => (false, false),
+        };
+        if matches!(
+            node,
+            NodeRef::Pattern(GraphPattern::Join { .. } | GraphPattern::Union { .. })
+        ) {
+            for (pure, union) in children {
+                summary.0 &= pure;
+                summary.1 |= union;
+            }
+        }
+        if let NodeRef::Pattern(node @ GraphPattern::Join { .. }) = node {
+            eligible.insert(join_key(node), summary);
+        }
+        summary
+    });
+    let rewritten = crate::blank_scope::map_patterns(owned, true, &mut |node, in_join| {
+        if !matches!(node, GraphPattern::Join { .. }) {
+            return false;
+        }
+        if in_join {
+            return true;
+        }
+        let (pure, union) = eligible[&join_key(node)];
+        if !pure || !union {
+            return false;
+        }
+        let mut factors = Vec::new();
+        flatten(
+            std::mem::replace(node, GraphPattern::empty_bgp()),
+            &mut factors,
+        );
+        if !factors
+            .iter()
+            .any(|factor| matches!(factor, GraphPattern::Union { .. }))
+        {
+            *node = join(factors);
+            return true;
+        }
+        let mut triples = Vec::new();
+        let mut connectors = Vec::new();
+        for factor in factors {
+            match factor {
+                GraphPattern::Bgp { patterns } => triples.extend(patterns),
+                factor => connectors.push(factor),
+            }
+        }
+        *node = connected_join(compact_components(triples, connectors));
+        true
+    });
+    (rewritten != *pattern).then_some(rewritten)
+}
+
+fn join_key(pattern: &GraphPattern) -> (usize, usize) {
+    let GraphPattern::Join { left, right } = pattern else {
+        unreachable!("only a Join has a box key")
+    };
+    (
+        std::ptr::from_ref(&**left) as usize,
+        std::ptr::from_ref(&**right) as usize,
+    )
+}
+
+fn flatten(pattern: GraphPattern, factors: &mut Vec<GraphPattern>) {
+    let mut pending = purrdf_lex::walk::WorkList::<_, 16>::new();
+    pending.push(pattern);
+    while let Some(pattern) = pending.pop() {
+        match pattern {
+            GraphPattern::Join { left, right } => {
+                pending.push(right.into_inner());
+                pending.push(left.into_inner());
+            }
+            factor => factors.push(factor),
+        }
+    }
+}
+
+fn join(factors: impl IntoIterator<Item = GraphPattern>) -> GraphPattern {
+    factors
+        .into_iter()
+        .reduce(|left, right| GraphPattern::Join {
+            left: Child::new(left),
+            right: Child::new(right),
+        })
+        .unwrap_or_else(GraphPattern::empty_bgp)
+}
+
+/// A connector can make only components sharing one of its slots selective.
+/// Keep those components independently driveable, and leave unrelated ordinary
+/// conjunctions in one native BGP rather than inventing a wide join frontier.
+struct Factor {
+    pattern: GraphPattern,
+    slots: std::sync::Arc<crate::solution::VarSchema>,
+}
+
+fn compact_components(triples: Vec<TriplePattern>, connectors: Vec<GraphPattern>) -> Vec<Factor> {
+    let connectors: Vec<_> = connectors
+        .into_iter()
+        .map(|pattern| Factor {
+            slots: crate::eval::syntactic_schema(&pattern),
+            pattern,
+        })
+        .collect();
+    let connector_slots: DetHashSet<_> = connectors
+        .iter()
+        .flat_map(|connector| connector.slots.vars().iter().cloned())
+        .collect();
+    let mut factors = Vec::new();
+    let mut unrelated = Vec::new();
+    let mut unrelated_slots = crate::solution::VarSchema::default();
+    for patterns in components(triples) {
+        let slots =
+            crate::solution::VarSchema::from_vars(patterns.iter().flat_map(crate::bgp::slot_keys));
+        if slots
+            .vars()
+            .iter()
+            .any(|variable| connector_slots.contains(variable))
+        {
+            factors.push(Factor {
+                pattern: GraphPattern::Bgp { patterns },
+                slots: std::sync::Arc::new(slots),
+            });
+        } else {
+            unrelated_slots.append(&slots);
+            unrelated.extend(patterns);
+        }
+    }
+    if !unrelated.is_empty() {
+        factors.push(Factor {
+            pattern: GraphPattern::Bgp {
+                patterns: unrelated,
+            },
+            slots: std::sync::Arc::new(unrelated_slots),
+        });
+    }
+    factors.extend(connectors);
+    factors
+}
+
+/// Build a connected factor spine, so a selective component can drive its
+/// connector before an independent component forms a product. Each slot's
+/// incidence list is consumed once; the frontier chooses stable source ordinals.
+fn connected_join(factors: Vec<Factor>) -> GraphPattern {
+    let mut slots = Vec::with_capacity(factors.len());
+    let mut incident = DetHashMap::<_, Vec<usize>>::default();
+    for (index, factor) in factors.iter().enumerate() {
+        for variable in factor.slots.vars() {
+            incident.entry(variable.clone()).or_default().push(index);
+        }
+        slots.push(std::sync::Arc::clone(&factor.slots));
+    }
+    let mut factors: Vec<_> = factors
+        .into_iter()
+        .map(|factor| Some(factor.pattern))
+        .collect();
+    let mut queued = vec![false; factors.len()];
+    let mut frontier = std::collections::BinaryHeap::<std::cmp::Reverse<usize>>::new();
+    let mut next = 0;
+    let mut result = None;
+    for _ in 0..factors.len() {
+        let index = loop {
+            if let Some(std::cmp::Reverse(index)) = frontier.pop() {
+                if factors[index].is_some() {
+                    break index;
+                }
+            } else {
+                while factors[next].is_none() {
+                    next += 1;
+                }
+                break next;
+            }
+        };
+        let factor = factors[index]
+            .take()
+            .expect("the selected factor remains available");
+        queued[index] = true;
+        for variable in slots[index].vars() {
+            if let Some(neighbors) = incident.remove(variable) {
+                for neighbor in neighbors {
+                    if !queued[neighbor] {
+                        queued[neighbor] = true;
+                        frontier.push(std::cmp::Reverse(neighbor));
+                    }
+                }
+            }
+        }
+        result = Some(match result {
+            Some(left) => GraphPattern::Join {
+                left: Child::new(left),
+                right: Child::new(factor),
+            },
+            None => factor,
+        });
+    }
+    result.unwrap_or_else(GraphPattern::empty_bgp)
+}
+
+/// Slot-connected components of the ordinary triples. Union-find bounds this by
+/// the number of slots rather than repeatedly scanning a long disconnected BGP.
+fn components(triples: Vec<TriplePattern>) -> Vec<Vec<TriplePattern>> {
+    let mut roots: Vec<usize> = (0..triples.len()).collect();
+    let mut first = DetHashMap::default();
+    for (index, triple) in triples.iter().enumerate() {
+        for variable in crate::bgp::slot_keys(triple) {
+            if let Some(&other) = first.get(&variable) {
+                let a = root(&mut roots, index);
+                let b = root(&mut roots, other);
+                roots[a.max(b)] = a.min(b);
+            } else {
+                first.insert(variable, index);
+            }
+        }
+    }
+    let mut groups = DetHashMap::default();
+    let mut out: Vec<Vec<TriplePattern>> = Vec::new();
+    for (index, triple) in triples.into_iter().enumerate() {
+        let root = root(&mut roots, index);
+        let group = *groups.entry(root).or_insert_with(|| {
+            out.push(Vec::new());
+            out.len() - 1
+        });
+        out[group].push(triple);
+    }
+    out
+}
+
+fn root(roots: &mut [usize], mut index: usize) -> usize {
+    while roots[index] != index {
+        roots[index] = roots[roots[index]];
+        index = roots[index];
+    }
+    index
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::Write;
+
+    use super::*;
+    use purrdf_sparql_algebra::{Query, SparqlParser};
+
+    fn payload(pattern: &GraphPattern) -> (usize, usize) {
+        let mut nodes = 0;
+        let mut triples = 0;
+        walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+            if visit == Visit::Enter
+                && let NodeRef::Pattern(pattern) = node
+            {
+                nodes += 1;
+                if let GraphPattern::Bgp { patterns } = pattern {
+                    triples += patterns.len();
+                }
+            }
+            Flow::Descend
+        });
+        (nodes, triples)
+    }
+
+    #[test]
+    fn compact_payload_is_stable_on_second_and_third_normalization() {
+        for count in [1, 4, 16, 64] {
+            let mut body = String::new();
+            for i in 0..count {
+                write!(body,
+                    "?v{i} <http://example.org/attr> ?a{i} . {{ ?v{i} <http://example.org/a> ?v{} }} UNION {{ ?v{i} <http://example.org/b> ?v{} }} ", i + 1, i + 1,
+                ).expect("String writes are infallible");
+            }
+            let Query::Select { pattern, .. } = SparqlParser::new()
+                .parse_query(&format!("SELECT * WHERE {{ {body} }}"))
+                .expect("compact source")
+            else {
+                unreachable!()
+            };
+            let first = normalize(&pattern).unwrap_or_else(|| pattern.clone());
+            let second = normalize(&first).unwrap_or_else(|| first.clone());
+            let third = normalize(&second).unwrap_or_else(|| second.clone());
+            assert_eq!(first, second);
+            assert_eq!(second, third);
+            assert_eq!(payload(&pattern).1, count * 3);
+            assert_eq!(payload(&first).1, count * 3);
+            assert!(payload(&first).0 <= count * 7 + 2);
+        }
+    }
+
+    #[test]
+    fn nested_arm_forms_and_unit_duplicates_are_idempotent() {
+        for body in [
+            "{ ?x <http://example.org/a> ?y . { ?y <http://example.org/b> ?z } UNION { ?y <http://example.org/c> ?z } } UNION { ?x <http://example.org/d> ?y } ?x <http://example.org/e> ?v",
+            "{} UNION {} ?x <http://example.org/a> ?y . ?y <http://example.org/b> ?z",
+            "?x <http://example.org/a> ?y OPTIONAL { ?y <http://example.org/b> ?z } { ?x <http://example.org/c> ?v } UNION { ?x <http://example.org/d> ?v }",
+            "?x <http://example.org/a> ?y FILTER EXISTS { ?a <http://example.org/attr> ?av . { ?a <http://example.org/b> ?b } UNION { ?a <http://example.org/c> ?b } ?b <http://example.org/attr> ?bv }",
+        ] {
+            let Query::Select { pattern, .. } = SparqlParser::new()
+                .parse_query(&format!("SELECT * WHERE {{ {body} }}"))
+                .expect("mixed source")
+            else {
+                unreachable!()
+            };
+            let first = normalize(&pattern).unwrap_or_else(|| pattern.clone());
+            let second = normalize(&first).unwrap_or_else(|| first.clone());
+            let third = normalize(&second).unwrap_or_else(|| second.clone());
+            assert_eq!(first, second);
+            assert_eq!(second, third);
+            assert_eq!(payload(&pattern).1, payload(&first).1);
+        }
+    }
+
+    #[test]
+    fn a_tall_join_with_a_barrier_has_linear_eligibility_work() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut pattern = GraphPattern::Project {
+                inner: Child::new(GraphPattern::union(
+                    GraphPattern::empty_bgp(),
+                    GraphPattern::empty_bgp(),
+                )),
+                variables: Vec::new(),
+            };
+            for _ in 0..100_000 {
+                pattern = GraphPattern::Join {
+                    left: Child::new(pattern),
+                    right: Child::new(GraphPattern::empty_bgp()),
+                };
+            }
+            assert!(normalize(&pattern).is_none());
+        })
+        .expect("normalization stays on the explicit work list");
+    }
+}

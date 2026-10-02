@@ -141,13 +141,43 @@ pub(crate) fn join_shared_blanks_in_query(query: &Query) -> Option<Query> {
     | Query::Construct { pattern, .. }
     | Query::Describe { pattern, .. }) = query;
     let joined = join_shared_blanks(pattern)?;
-    let mut query = query.clone();
-    let (Query::Select { pattern, .. }
-    | Query::Ask { pattern, .. }
-    | Query::Construct { pattern, .. }
-    | Query::Describe { pattern, .. }) = &mut query;
-    *pattern = joined;
-    Some(query)
+    Some(query_with_pattern(query, joined))
+}
+
+/// Carry a replacement WHERE pattern without cloning the discarded original.
+/// Query heads, templates and prologue metadata remain byte-identical.
+pub(crate) fn query_with_pattern(query: &Query, pattern: GraphPattern) -> Query {
+    let dataset = query.dataset().clone();
+    let base_iri = query.base_iri().cloned();
+    let version = query.version().cloned();
+    match query {
+        Query::Select { .. } => Query::Select {
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        },
+        Query::Ask { .. } => Query::Ask {
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        },
+        Query::Construct { template, .. } => Query::Construct {
+            template: template.clone(),
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        },
+        Query::Describe { targets, .. } => Query::Describe {
+            targets: targets.clone(),
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -52,6 +52,27 @@ use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::statement_layer::{self, StatementProbe};
 use std::sync::Arc;
 
+mod positive;
+pub(crate) use positive::PositivePlan;
+
+/// The guaranteed incoming bindings and row forecast of a positive driver.
+#[derive(Clone)]
+struct SeedEstimate {
+    schema: VarSchema,
+    bound: DetHashSet<Variable>,
+    rows: u64,
+}
+
+impl Default for SeedEstimate {
+    fn default() -> Self {
+        Self {
+            schema: VarSchema::default(),
+            bound: DetHashSet::default(),
+            rows: 1,
+        }
+    }
+}
+
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
 /// layer. A triple pattern whose predicate is bound to this IRI (and whose object is a
 /// quoted-triple pattern) draws candidates from the dataset's reifier side-table via
@@ -142,19 +163,45 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     patterns: &[TriplePattern],
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    // The empty BGP is the identity table Z: one solution binding nothing.
+    eval_bgp_seeded(patterns, None, None, ctx)
+}
+
+/// The same indexed kernel, driven by a pure positive relation. Such relations
+/// produce dataset identities only; expression/VALUES producers stay outside this
+/// physical path. Duplicate and partially-bound input rows remain independent.
+/// A retained unit order applies only without a seed; the differential structural
+/// override and an actual seed's mask keep their existing ordering paths.
+pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
+    patterns: &[TriplePattern],
+    input: Option<crate::eval::PositiveInput<'_, D::Id>>,
+    selected_order: Option<Arc<[usize]>>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    let borrowed = input.as_ref().map(crate::eval::PositiveInput::rows);
     if patterns.is_empty() {
-        return Ok(SolutionSeq::unit());
+        return Ok(input.map_or_else(SolutionSeq::unit, crate::eval::PositiveInput::into_sequence));
     }
 
     // Pass 1: collect every slot variable (real + synthetic blank) in first-seen
     // (subject, predicate, object) order — the working column layout.
-    let mut working = VarSchema::default();
+    let mut working = borrowed.map_or_else(VarSchema::default, |input| (*input.schema).clone());
     for pattern in patterns {
         for key in slot_keys(pattern) {
             working.push(key);
         }
     }
+
+    let initial: Vec<bool> = borrowed.map_or_else(Vec::new, |input| {
+        working
+            .vars()
+            .iter()
+            .map(|variable| {
+                input.schema.index_of(variable).is_some_and(|column| {
+                    !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
+                })
+            })
+            .collect()
+    });
 
     // Pass 2: compile each pattern; a ground constant absent from the dataset makes
     // the whole BGP empty.
@@ -164,6 +211,12 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
             Some(cp) => compiled.push(cp),
             None => return Ok(empty_over_real_vars(&working)),
         }
+    }
+    // An empty producer cannot extend this relation. Keep the full logical
+    // header, but do not charge or allocate the ordinary unit seed: there is no
+    // intermediate row. Ground-term compilation above retains read failures.
+    if borrowed.is_some_and(|input| input.rows.is_empty()) {
+        return Ok(empty_over_real_vars(&working));
     }
 
     // The graph scope for this BGP (resolved once — `active_graph` is fixed across a
@@ -182,8 +235,16 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     // multiset must stay identical.
     let order = if ctx.options.force_structural_bgp_order {
         Arc::from(structural_order(&compiled))
+    } else if let Some(order) = selected_order.filter(|_| input.is_none()) {
+        order
     } else {
-        plan_or_cached_order(&compiled, ctx.dataset, &scope, ctx.bgp_order_cache)
+        plan_or_cached_order(
+            &compiled,
+            ctx.dataset,
+            &scope,
+            &initial,
+            ctx.bgp_order_cache,
+        )
     };
 
     // The interned id of `rdf:reifies`, resolved once. `None` ⇒ the dataset has no
@@ -238,23 +299,44 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         let _ = ctx.observe_cells(1, working.len());
         return Ok(empty_over_real_vars(&working));
     }
-    let mut rows: Vec<Solution<D::Id>> = vec![purrdf_core::smallvec![None; working.len()]];
+    let input_rows = borrowed.map_or(1, |input| input.rows.len());
+    if cell_ceiling.is_some_and(|ceiling| input_rows > ceiling) {
+        let _ = ctx.observe_cells(
+            cell_ceiling.expect("a ceiling exists").saturating_add(1),
+            working.len(),
+        );
+        return Ok(empty_over_real_vars(&working));
+    }
+    let unit_driven = input.is_none();
+    let mut rows: Vec<Solution<D::Id>> = match input {
+        Some(input) => {
+            let mut rows = input.into_rows();
+            for row in &mut rows {
+                row.resize(working.len(), None);
+            }
+            rows
+        }
+        None => vec![purrdf_core::smallvec![None; working.len()]],
+    };
+    if rows.is_empty() {
+        return Ok(empty_over_real_vars(&working));
+    }
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
-        // The probe's bound-axis shape is fixed across this slot's rows (a variable is
-        // bound by an earlier pattern for every row or for none), so the permutation
-        // choice is loop-invariant: for a single-graph scope, compute the
-        // `QuadProbePlan` once from the first row (non-empty — the loop `break`s above
-        // the moment `rows` empties) and capture the `Copy` plan in every worker,
-        // instead of re-selecting it per row.
-        let plan: Option<D::ProbePlan> = match &scope {
-            GraphScope::One(gm) => Some(ctx.dataset.probe_plan(
-                query_id(&cp.s, &rows[0]).is_some(),
-                query_id(&cp.p, &rows[0]).is_some(),
-                query_id(&cp.o, &rows[0]).is_some(),
-                *gm,
-            )),
-            GraphScope::Merge(_) => None,
+        // Ordinary unit-driven BGPs have a uniform binding mask. A UNION seed
+        // can omit different variables in each row, so choose its probe per row.
+        let plan: Option<D::ProbePlan> = if unit_driven {
+            match &scope {
+                GraphScope::One(gm) => Some(ctx.dataset.probe_plan(
+                    query_id(&cp.s, &rows[0]).is_some(),
+                    query_id(&cp.p, &rows[0]).is_some(),
+                    query_id(&cp.o, &rows[0]).is_some(),
+                    *gm,
+                )),
+                GraphScope::Merge(_) => None,
+            }
+        } else {
+            None
         };
         let expand = |acc: &mut crate::parallel::RowSink<'_, Solution<D::Id>>,
                       fuel: &mut u64,
@@ -266,7 +348,10 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                 // Single-graph scope (store default / a named graph): the indexed
                 // partition_point read, unchanged — no de-dup overhead.
                 GraphScope::One(gm) => {
-                    let plan = plan.expect("plan computed above for GraphScope::One");
+                    let plan = plan.unwrap_or_else(|| {
+                        ctx.dataset
+                            .probe_plan(s.is_some(), p.is_some(), o.is_some(), *gm)
+                    });
                     for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
                         if ctx.stop_check().is_some() {
                             return;
@@ -396,6 +481,9 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         // starts.
         if let Some(state) = ctx.governor_state() {
             if state.tripped().is_some() {
+                if stage != last_stage {
+                    rows.clear();
+                }
                 break;
             } else if metered {
                 let crossing = state.commit_ordered_items(&ledger);
@@ -412,6 +500,9 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                 );
                 if let Some((_, committed, _)) = crossing {
                     rows.truncate(usize::try_from(committed).unwrap_or(usize::MAX));
+                    if stage != last_stage {
+                        rows.clear();
+                    }
                     break;
                 }
             }
@@ -502,6 +593,7 @@ fn plan_or_cached_order<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
     scope: &GraphScope<D::Id>,
+    initial: &[bool],
     cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
 ) -> Arc<[usize]> {
     // A one-pattern BGP has exactly one join order, so there is nothing to plan and
@@ -524,9 +616,12 @@ fn plan_or_cached_order<D: DatasetView>(
         return Arc::clone(SINGLETON.get_or_init(|| Arc::from(vec![0_usize])));
     }
     let Some(cache) = cache else {
-        return Arc::from(cost_based_order(compiled, dataset, scope));
+        return Arc::from(cost_based_order_from(compiled, dataset, scope, initial));
     };
-    let key = (dataset.stats_fingerprint(), bgp_shape_key(compiled, scope));
+    let key = (
+        dataset.stats_fingerprint(),
+        bgp_shape_key_seeded(compiled, scope, initial),
+    );
     use crate::plan_cache::OrderCacheRef;
     let cached = match cache {
         OrderCacheRef::Legacy(cache) => cache
@@ -544,7 +639,7 @@ fn plan_or_cached_order<D: DatasetView>(
             return order;
         }
     }
-    let order: Arc<[usize]> = Arc::from(cost_based_order(compiled, dataset, scope));
+    let order: Arc<[usize]> = Arc::from(cost_based_order_from(compiled, dataset, scope, initial));
     match cache {
         OrderCacheRef::Legacy(cache) => {
             cache
@@ -570,6 +665,18 @@ fn plan_or_cached_order<D: DatasetView>(
 /// the order cache key. Encodes `compiled.len()` and the full positional structure so two
 /// structurally distinct BGPs cannot collide to one cached order, and folds in the scope
 /// because a pattern's cardinality (hence its best order) is scope-dependent.
+fn bgp_shape_key_seeded<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    scope: &GraphScope<I>,
+    initial: &[bool],
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    bgp_shape_key(compiled, scope).hash(&mut hash);
+    initial.hash(&mut hash);
+    hash.finish()
+}
+
 fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphScope<I>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = purrdf_hash::fixed::FixedHasher::default();
@@ -668,6 +775,15 @@ fn cost_based_order<D: DatasetView>(
     dataset: &D,
     scope: &GraphScope<D::Id>,
 ) -> Vec<usize> {
+    cost_based_order_from(compiled, dataset, scope, &[])
+}
+
+fn cost_based_order_from<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    initial: &[bool],
+) -> Vec<usize> {
     let n = compiled.len();
     if n <= 1 {
         return (0..n).collect();
@@ -693,9 +809,9 @@ fn cost_based_order<D: DatasetView>(
     }
 
     if n <= COST_DP_MAX_PATTERNS {
-        cost_order_dp(compiled, &base, t, n_cols)
+        cost_order_dp_from(compiled, &base, t, n_cols, initial)
     } else {
-        cost_order_greedy(compiled, &base, t, n_cols)
+        cost_order_greedy_from(compiled, &base, t, n_cols, initial)
     }
 }
 
@@ -772,16 +888,28 @@ fn power(ops: Binary64<'_>, base: f64, exponent: usize) -> f64 {
 /// Greedy minimum-cardinality join order for a large BGP (`n > COST_DP_MAX_PATTERNS`):
 /// repeatedly schedule the connected pattern whose appended intermediate-size estimate
 /// is smallest, lowest-index on ties. Connectivity is enforced exactly as in the DP.
+#[cfg(test)]
 fn cost_order_greedy<I: ViewTermId>(
     compiled: &[CompiledPattern<I>],
     base: &[f64],
     t: f64,
     n_cols: usize,
 ) -> Vec<usize> {
+    cost_order_greedy_from(compiled, base, t, n_cols, &[])
+}
+
+fn cost_order_greedy_from<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    base: &[f64],
+    t: f64,
+    n_cols: usize,
+    initial: &[bool],
+) -> Vec<usize> {
     let n = compiled.len();
     let precision = Binary64Scope::enter();
     let ops = precision.ops();
-    let mut bound = vec![false; n_cols];
+    let mut bound = initial.to_vec();
+    bound.resize(n_cols, false);
     let mut scheduled = vec![false; n];
     let mut order = Vec::with_capacity(n);
     let mut running = 1.0f64;
@@ -865,11 +993,22 @@ struct DpPlan {
 /// The order is carried as a nibble-packed `u64` (see [`DpPlan`]): each DP transition
 /// copies the `Copy` struct and shifts in one nibble — no heap allocation per step.
 /// The final order is decoded MSB→LSB into a `Vec<usize>` for the caller.
+#[cfg(test)]
 fn cost_order_dp<I: ViewTermId>(
     compiled: &[CompiledPattern<I>],
     base: &[f64],
     t: f64,
     n_cols: usize,
+) -> Vec<usize> {
+    cost_order_dp_from(compiled, base, t, n_cols, &[])
+}
+
+fn cost_order_dp_from<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    base: &[f64],
+    t: f64,
+    n_cols: usize,
+    initial: &[bool],
 ) -> Vec<usize> {
     let n = compiled.len();
     // Safety invariant: each pattern index must fit in a 4-bit nibble (values 1–15
@@ -904,14 +1043,15 @@ fn cost_order_dp<I: ViewTermId>(
         };
         // The slots bound after this prefix (the union of the set's slots).
         // Decode order_bits MSB→LSB to recover the scheduled indices.
-        let mut bound = vec![false; n_cols];
+        let mut bound = initial.to_vec();
+        bound.resize(n_cols, false);
         for k in 0..plan.len {
             let nibble_pos = plan.len - 1 - k; // 0 = least-significant occupied nibble
             let idx = ((plan.order_bits >> (4 * nibble_pos)) & 0xF) as usize - 1;
             mark_bound(&compiled[idx], &mut bound);
         }
-        let any_connected = mask != 0
-            && (0..n).any(|i| mask & (1usize << i) == 0 && pattern_connected(&compiled[i], &bound));
+        let any_connected =
+            (0..n).any(|i| mask & (1usize << i) == 0 && pattern_connected(&compiled[i], &bound));
 
         for i in 0..n {
             if mask & (1usize << i) != 0 {
@@ -922,11 +1062,7 @@ fn cost_order_dp<I: ViewTermId>(
             if any_connected && !pattern_connected(&compiled[i], &bound) {
                 continue;
             }
-            let joins = if mask == 0 {
-                0
-            } else {
-                join_positions(&compiled[i], &bound)
-            };
+            let joins = join_positions(&compiled[i], &bound);
             let size = step_size(ops, plan.size, base[i], joins, t);
             let cost = ops.add(plan.cost, size);
             // Append pattern index `i` as a new LSB nibble (1-based so index 0 ≠ empty).
@@ -1022,7 +1158,7 @@ fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
 ///
 /// Inline for a pattern of up to four slots, which every pattern without a quoted
 /// triple is.
-fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Variable; 4]> {
+pub(crate) fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Variable; 4]> {
     let mut keys = purrdf_core::SmallVec::new();
     collect_triple_slot_keys(pattern, &mut keys);
     keys
@@ -1782,6 +1918,16 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             }
             Step::Visit(pattern, active_graph) => (pattern, active_graph),
         };
+        if survey
+            .shape
+            .node_of(pattern)
+            .is_some_and(|node| survey.shape.positive_region(node))
+            && let Some(positive) =
+                PositivePlan::build(dataset, active_dataset, active_graph, pattern)?
+        {
+            positive.survey(dataset, active_dataset, active_graph, pattern, survey)?;
+            continue;
+        }
         match pattern {
             GraphPattern::Bgp { patterns } => {
                 survey_bgp(dataset, active_dataset, active_graph, pattern, patterns, survey)?;
@@ -1862,13 +2008,43 @@ fn survey_bgp<D: DatasetView>(
     if patterns.is_empty() {
         return Ok(());
     }
+    survey_bgp_seeded(
+        dataset,
+        active_dataset,
+        active_graph,
+        node,
+        patterns,
+        &SeedEstimate::default(),
+        survey,
+    )
+}
+
+/// Price the same compiled BGP and initial bound mask that the indexed evaluator
+/// orders. Only certainly-bound input columns contribute selectivity.
+fn forecast_bgp<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    patterns: &[TriplePattern],
+    seed: &SeedEstimate,
+) -> Result<(VarSchema, PlanEstimate, Vec<usize>), EvalError> {
     let scope = active_dataset.scope_for(active_graph);
-    let mut working = VarSchema::default();
+    let mut working = seed.schema.clone();
     for pattern in patterns {
         for key in slot_keys(pattern) {
             working.push(key);
         }
     }
+    let seeded = !seed.schema.is_empty() || !seed.bound.is_empty() || seed.rows != 1;
+    let initial: Vec<bool> = if seeded {
+        working
+            .vars()
+            .iter()
+            .map(|v| seed.bound.contains(v))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut compiled = Vec::with_capacity(patterns.len());
     let mut any_absent = false;
     for pattern in patterns {
@@ -1882,34 +2058,59 @@ fn survey_bgp<D: DatasetView>(
     }
     let order: Vec<usize> = if any_absent {
         (0..patterns.len()).collect()
+    } else if seeded {
+        cost_based_order_from(&compiled, dataset, &scope, &initial)
     } else {
         cost_based_order(&compiled, dataset, &scope)
     };
+    let schema = real_var_schema(&working);
+    let (rows, peak_rows) = if any_absent {
+        (0, 0)
+    } else if patterns.is_empty() {
+        (seed.rows, seed.rows)
+    } else if seeded {
+        replay_cost_estimate_from(&compiled, dataset, &scope, &order, &initial, seed.rows)
+    } else {
+        replay_cost_estimate(&compiled, dataset, &scope, &order)
+    };
+    let estimate = PlanEstimate {
+        rows,
+        peak_rows,
+        columns: working.len() as u64,
+    };
+    Ok((schema, estimate, order))
+}
+
+/// Record a BGP's forecast under its selected positive driver's bindings.
+fn survey_bgp_seeded<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    node: &GraphPattern,
+    patterns: &[TriplePattern],
+    seed: &SeedEstimate,
+    survey: &mut PlanSurvey,
+) -> Result<(), EvalError> {
+    let (_, estimate, order) = forecast_bgp(dataset, active_dataset, active_graph, patterns, seed)?;
+    record_bgp_forecast(node, patterns, estimate, &order, survey);
+    Ok(())
+}
+
+/// Record a forecast and its selected order through the same provenance home,
+/// whether just computed from a seed or retained from the unit forecast.
+fn record_bgp_forecast(
+    node: &GraphPattern,
+    patterns: &[TriplePattern],
+    estimate: PlanEstimate,
+    order: &[usize],
+    survey: &mut PlanSurvey,
+) {
     if patterns.len() >= 2 {
-        for &i in &order {
+        for &i in order {
             survey.orders.push(triple_pattern_to_string(&patterns[i]));
         }
     }
-    let columns = real_var_schema(&working).len() as u64;
-    let estimate = if any_absent {
-        // A ground constant absent from the dataset makes the whole BGP empty, so
-        // the honest prediction is zero rows — not the product the cost model
-        // would compute from cardinalities it never probed.
-        PlanEstimate {
-            rows: 0,
-            peak_rows: 0,
-            columns,
-        }
-    } else {
-        let (rows, peak_rows) = replay_cost_estimate(&compiled, dataset, &scope, &order);
-        PlanEstimate {
-            rows,
-            peak_rows,
-            columns,
-        }
-    };
     survey.record(node, estimate);
-    Ok(())
 }
 
 /// Record the survey's prediction for one property-function node, keyed by that node's
@@ -1995,6 +2196,17 @@ fn replay_cost_estimate<D: DatasetView>(
     scope: &GraphScope<D::Id>,
     order: &[usize],
 ) -> (u64, u64) {
+    replay_cost_estimate_from(compiled, dataset, scope, order, &[], 1)
+}
+
+fn replay_cost_estimate_from<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    order: &[usize],
+    initial: &[bool],
+    driving_rows: u64,
+) -> (u64, u64) {
     let base: Vec<f64> = compiled
         .iter()
         .map(|cp| base_cardinality(dataset, cp, scope) as f64)
@@ -2009,9 +2221,10 @@ fn replay_cost_estimate<D: DatasetView>(
 
     let precision = Binary64Scope::enter();
     let ops = precision.ops();
-    let mut bound = vec![false; n_cols];
-    let mut running = 1.0f64;
-    let mut peak = 0.0f64;
+    let mut bound = initial.to_vec();
+    bound.resize(n_cols, false);
+    let mut running = driving_rows as f64;
+    let mut peak = if compiled.is_empty() { running } else { 0.0f64 };
     for &i in order {
         let joins = join_positions(&compiled[i], &bound);
         running = step_size(ops, running, base[i], joins, t);
@@ -3941,7 +4154,9 @@ mod survey_tests {
     // ── The recursive reference ────────────────────────────────────────────────────
 
     /// The survey as a recursion over the algebra: each node's children in written order,
-    /// a call priced after the whole subtree to its left.
+    /// a call priced after the whole subtree to its left. Pure positive islands use
+    /// their shared physical schedule; the independent reference here checks the
+    /// surrounding traversal and property-function pricing, not that cost heuristic.
     fn reference_survey<D: DatasetView>(
         dataset: &D,
         active_dataset: &ActiveDataset<D::Id>,
@@ -3950,6 +4165,15 @@ mod survey_tests {
         relations: &PropertyFunctionRegistry,
         survey: &mut PlanSurvey,
     ) -> Result<(), EvalError> {
+        if survey
+            .shape
+            .node_of(pattern)
+            .is_some_and(|node| survey.shape.positive_region(node))
+            && let Some(positive) =
+                super::PositivePlan::build(dataset, active_dataset, active_graph, pattern)?
+        {
+            return positive.survey(dataset, active_dataset, active_graph, pattern, survey);
+        }
         match pattern {
             GraphPattern::Bgp { patterns } => survey_bgp(
                 dataset,

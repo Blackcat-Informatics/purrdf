@@ -244,6 +244,8 @@ pub(crate) struct PlanShape {
     /// evaluations of a kept tree, so its preparation is built per evaluation and never
     /// kept. Empty when no body is.
     volatile_sites: Vec<bool>,
+    /// Pure UNION regions, derived once from the numbered kinds and parent edges.
+    positive_regions: OnceLock<Vec<bool>>,
 }
 
 impl PlanShape {
@@ -270,6 +272,41 @@ impl PlanShape {
     /// `node`'s algebra variant.
     pub(crate) fn kind(&self, node: NodeId) -> NodeKind {
         self.rows[node.index()].kind
+    }
+
+    /// Whether this complete subtree contains UNION and only BGP/Join/Union.
+    /// The reverse fold touches each edge once, so suffixes of a deep join chain
+    /// do not repeatedly scan the same descendants.
+    pub(crate) fn positive_region(&self, node: NodeId) -> bool {
+        self.positive_regions
+            .get_or_init(|| {
+                if !self.rows.iter().any(|row| row.kind.label() == "Union") {
+                    return Vec::new();
+                }
+                let mut facts: Vec<(bool, bool)> = self
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let label = row.kind.label();
+                        (matches!(label, "Bgp" | "Join" | "Union"), label == "Union")
+                    })
+                    .collect();
+                for index in (1..self.rows.len()).rev() {
+                    if let Some(parent) = self.rows[index].parent {
+                        let child = facts[index];
+                        let parent = &mut facts[parent.index()];
+                        parent.0 &= child.0;
+                        parent.1 |= child.1;
+                    }
+                }
+                facts
+                    .into_iter()
+                    .map(|(pure, union)| pure && union)
+                    .collect()
+            })
+            .get(node.index())
+            .copied()
+            .unwrap_or(false)
     }
 
     /// `node`'s depth below the root.
@@ -520,6 +557,7 @@ impl<'q> Tree<'q> {
                 volatile_exprs: Vec::new(),
                 recycled: Vec::new(),
                 volatile_sites: Vec::new(),
+                positive_regions: OnceLock::new(),
             }),
             numbered: std::marker::PhantomData,
         }
@@ -669,6 +707,33 @@ mod tests {
     use crate::governor::soundness::{
         PatternPart, pattern_label, visit_classified_children, visit_pattern_parts, walk_spine,
     };
+
+    #[test]
+    fn plain_trees_cache_an_empty_positive_region_bitmap() {
+        let mut pattern = GraphPattern::empty_bgp();
+        for _ in 0..1_000 {
+            pattern = GraphPattern::Join {
+                left: purrdf_sparql_algebra::Child::new(pattern),
+                right: purrdf_sparql_algebra::Child::new(GraphPattern::empty_bgp()),
+            };
+        }
+        let tree = Tree::build(&pattern);
+        let shape = tree.shape();
+        assert!(shape.positive_regions.get().is_none());
+        for index in 0..shape.len() {
+            assert!(!shape.positive_region(NodeId::from_index(index)));
+        }
+        let cached = shape
+            .positive_regions
+            .get()
+            .expect("classification is cached");
+        assert_eq!(cached, &Vec::new());
+        assert_eq!(
+            cached.capacity(),
+            0,
+            "a tree without UNION needs no bitmap allocation"
+        );
+    }
 
     impl PlanShape {
         /// `node`'s children with the edge reaching each, in id order: every node whose

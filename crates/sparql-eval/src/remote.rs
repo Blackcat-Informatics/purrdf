@@ -1275,6 +1275,7 @@ pub(crate) fn evaluate_in_memory(
     // A walk over the whole forwarded body, over work lists, at whatever depth the
     // `SERVICE` sits.
     let parsed = crate::blank_scope::join_shared_blanks_in_query(&parsed).unwrap_or(parsed);
+    let parsed = crate::join_plan::normalize_query(&parsed).unwrap_or(parsed);
     let mut ctx = EvalCtx::new(dataset).with_remote(nested);
     if stop.is_some() || max_intermediate_cells.is_some() {
         let mut governors = QueryGovernors::UNBOUNDED;
