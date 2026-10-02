@@ -645,6 +645,14 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`eval`], an UPDATE's `WHERE`); `None` on a context no entry prepared, which then
     /// has no variable-endpoint analysis and no tree-resident `EXISTS` preparations.
     pub(crate) plan: Option<crate::plan::PlanHandle>,
+    /// Eligibility-only numbering of a temporary evaluated Join subtree. Its
+    /// owner keeps the AST alive until the scoped evaluation returns; this is
+    /// restored before that owner drops. Source ordinals, expression sites,
+    /// SERVICE analysis and cap licences continue to read [`Self::plan`].
+    positive_shape: Option<crate::plan::PlanHandle>,
+    /// Deterministic test observation of temporary classification, without runtime storage.
+    #[cfg(test)]
+    temporary_positive_numberings: usize,
     /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
     /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
     /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
@@ -842,7 +850,8 @@ pub(crate) type NodeCursors = (
     bool,
 );
 
-/// RAII guard returned by [`EvalCtx::enter_substituted_exists`]; see there for
+/// RAII guard returned by [`EvalCtx::enter_substituted_exists`] and the temporary
+/// positive-eligibility scope; see there for
 /// why the flag it manages exists and what composes correctly because this is
 /// a guard rather than the two hand-rolled save/restore pairs it replaces
 /// (formerly one in `binop::eval_lateral`, one in `expr::exists`'s correlated
@@ -853,32 +862,52 @@ pub(crate) type NodeCursors = (
 /// [`EvalCtx::in_substituted_exists`] value unconditionally, including when
 /// the guard is dropped during an early `?` return — and, when this window pushed a
 /// [`EvalCtx::correlated_node_maps`] entry, pops exactly that one entry, same as the flag.
-pub(crate) struct SubstitutedExistsGuard<'ctx, 'd, D: DatasetView + Sync> {
+pub(crate) struct EvalScopeGuard<'ctx, 'd, D: DatasetView + Sync> {
     ctx: &'ctx mut EvalCtx<'d, D>,
-    prev: bool,
-    pushed_map: bool,
-    prev_deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
+    restore: ScopeRestore,
 }
 
-impl<'d, D: DatasetView + Sync> core::ops::Deref for SubstitutedExistsGuard<'_, 'd, D> {
+/// Exactly the state changed by one context scope. Both scopes restore during
+/// unwinding, before the borrowed temporary tree can drop.
+enum ScopeRestore {
+    Substitution {
+        prev: bool,
+        pushed_map: bool,
+        deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
+    },
+    PositiveShape(Option<crate::plan::PlanHandle>),
+}
+
+impl<'d, D: DatasetView + Sync> core::ops::Deref for EvalScopeGuard<'_, 'd, D> {
     type Target = EvalCtx<'d, D>;
     fn deref(&self) -> &Self::Target {
         self.ctx
     }
 }
 
-impl<D: DatasetView + Sync> core::ops::DerefMut for SubstitutedExistsGuard<'_, '_, D> {
+impl<D: DatasetView + Sync> core::ops::DerefMut for EvalScopeGuard<'_, '_, D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.ctx
     }
 }
 
-impl<D: DatasetView + Sync> Drop for SubstitutedExistsGuard<'_, '_, D> {
+impl<D: DatasetView + Sync> Drop for EvalScopeGuard<'_, '_, D> {
     fn drop(&mut self) {
-        self.ctx.in_substituted_exists = self.prev;
-        self.ctx.deferred_exists = self.prev_deferred.take();
-        if self.pushed_map {
-            self.ctx.correlated_node_maps.pop();
+        match &mut self.restore {
+            ScopeRestore::Substitution {
+                prev,
+                pushed_map,
+                deferred,
+            } => {
+                self.ctx.in_substituted_exists = *prev;
+                self.ctx.deferred_exists = deferred.take();
+                if *pushed_map {
+                    self.ctx.correlated_node_maps.pop();
+                }
+            }
+            ScopeRestore::PositiveShape(previous) => {
+                self.ctx.positive_shape = previous.take();
+            }
         }
     }
 }
@@ -945,6 +974,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // The tree is installed when a pattern is prepared for evaluation
             // (`prepare_query_context`, `eval`, an UPDATE's `WHERE`).
             plan: None,
+            positive_shape: None,
+            #[cfg(test)]
+            temporary_positive_numberings: 0,
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
             property_functions: &EMPTY_RELATIONS,
@@ -991,7 +1023,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         &mut self,
         ledger_map: Option<crate::expr::SubstitutionSourceMap>,
         deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
-    ) -> SubstitutedExistsGuard<'_, 'd, D> {
+    ) -> EvalScopeGuard<'_, 'd, D> {
         let prev = self.in_substituted_exists;
         self.in_substituted_exists = true;
         let prev_deferred = std::mem::replace(&mut self.deferred_exists, deferred);
@@ -999,11 +1031,26 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if let Some(map) = ledger_map {
             self.correlated_node_maps.push(Arc::new(map));
         }
-        SubstitutedExistsGuard {
+        EvalScopeGuard {
             ctx: self,
-            prev,
-            pushed_map,
-            prev_deferred,
+            restore: ScopeRestore::Substitution {
+                prev,
+                pushed_map,
+                deferred: prev_deferred,
+            },
+        }
+    }
+
+    /// Scope eligibility numbering without changing source numbering or any
+    /// substitution state. The caller keeps the numbered AST alive until drop.
+    fn enter_positive_shape(
+        &mut self,
+        shape: crate::plan::PlanHandle,
+    ) -> EvalScopeGuard<'_, 'd, D> {
+        let previous = self.positive_shape.replace(shape);
+        EvalScopeGuard {
+            ctx: self,
+            restore: ScopeRestore::PositiveShape(previous),
         }
     }
 
@@ -1390,6 +1437,18 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// The id of `pattern` in the installed tree, when it is one of its nodes.
     pub(crate) fn plan_node(&self, pattern: &GraphPattern) -> Option<crate::plan::NodeId> {
         self.plan.as_ref()?.node_of(pattern)
+    }
+
+    /// Read positive eligibility from the source tree or this evaluation's
+    /// temporary tree. No address survives the temporary subtree's scope.
+    pub(crate) fn positive_region(&self, pattern: &GraphPattern) -> Option<bool> {
+        [self.plan.as_ref(), self.positive_shape.as_ref()]
+            .into_iter()
+            .flatten()
+            .find_map(|plan| {
+                plan.node_of(pattern)
+                    .map(|id| plan.shape().positive_region(id))
+            })
     }
 
     /// The installed tree's variable-endpoint `SERVICE` analysis; absent when no tree is.
@@ -2108,6 +2167,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             endpoint_frames: self.endpoint_frames.clone(),
             // SHARED: the worker evaluates part of the same tree.
             plan: self.plan.clone(),
+            // Scoped workers finish while the numbered temporary AST is alive.
+            positive_shape: self.positive_shape.clone(),
+            #[cfg(test)]
+            temporary_positive_numberings: self.temporary_positive_numberings,
             // The query's effective base IRI is a read-only per-query constant.
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
@@ -2322,6 +2385,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // The body's own tree is installed when it is prepared for evaluation
             // (`prepare_query_context`); nothing of the caller's applies to it.
             plan: None,
+            positive_shape: None,
+            #[cfg(test)]
+            temporary_positive_numberings: 0,
             base_iri: None,
             user_functions: self.user_functions,
             // Inherited with the function table: a function body is SPARQL like any
@@ -2432,7 +2498,24 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_evaluated_with(pattern, ctx, |ctx| eval_node(pattern, ctx))
+    // A correlated substitution or ENF preparation can evaluate a copied AST
+    // outside the source numbering. Number its first reached Join once, rather
+    // than rescanning every suffix of a deep copied join chain. Leaf-only calls
+    // and source-known trees retain their allocation-free eligibility path.
+    eval_evaluated_with(pattern, ctx, |ctx| {
+        // The shared wrapper has already checked stop and charged node entry.
+        if matches!(pattern, GraphPattern::Join { .. }) && ctx.positive_region(pattern).is_none() {
+            #[cfg(test)]
+            {
+                ctx.temporary_positive_numberings += 1;
+            }
+            let tree = crate::plan::Tree::build(pattern);
+            let mut guard = ctx.enter_positive_shape(tree.handle());
+            eval_node(pattern, &mut guard)
+        } else {
+            eval_node(pattern, ctx)
+        }
+    })
 }
 
 /// A binding bag produced inside one certified pure positive region. Only this
@@ -3734,7 +3817,143 @@ pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
-    use purrdf_sparql_algebra::Child;
+    use purrdf_sparql_algebra::{Child, NamedNode};
+
+    #[test]
+    fn temporary_positive_numbering_is_once_per_correlated_copy() {
+        purrdf_stack::on_stack(64 * 1024 * 1024, || {
+            let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+            for depth in [32, 64, 128, 256, 512] {
+                let mut right = GraphPattern::empty_bgp();
+                for _ in 0..depth {
+                    right = GraphPattern::Join {
+                        left: Child::new(right),
+                        right: Child::new(GraphPattern::empty_bgp()),
+                    };
+                }
+                let pattern = GraphPattern::Lateral {
+                    left: Child::new(GraphPattern::Values {
+                        variables: vec![Variable::new("outer")],
+                        bindings: (0..32)
+                            .map(|index| {
+                                vec![Some(purrdf_sparql_algebra::GroundTerm::NamedNode(
+                                    NamedNode::new(format!("http://example.org/outer{index}"))
+                                        .expect("fixture IRI"),
+                                ))]
+                            })
+                            .collect(),
+                    }),
+                    right: Child::new(right),
+                };
+                let mut ctx = EvalCtx::new(&*dataset);
+                let result = eval(&pattern, &mut ctx).expect("complete lateral bag");
+                assert_eq!(result.rows.len(), 32);
+                assert_eq!(result.schema.vars(), &[Variable::new("outer")]);
+                assert_eq!(
+                    ctx.temporary_positive_numberings, 32,
+                    "each copied Join tree is classified once, independent of depth"
+                );
+                assert!(ctx.positive_shape.is_none());
+            }
+        })
+        .expect("deep evaluation stack");
+    }
+
+    #[test]
+    fn temporary_positive_numbering_restores_nested_success_and_error_scopes() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let outer = GraphPattern::Join {
+            left: Child::new(GraphPattern::empty_bgp()),
+            right: Child::new(GraphPattern::empty_bgp()),
+        };
+        let source = crate::plan::Tree::build(&outer);
+        let mut ctx = EvalCtx::new(&*dataset);
+        ctx.install_plan(&source);
+        ctx.positive_shape = Some(source.handle());
+        let key = source.handle().key();
+        for fail in [false, true] {
+            let inner = GraphPattern::Join {
+                left: Child::new(GraphPattern::empty_bgp()),
+                right: Child::new(if fail {
+                    GraphPattern::Service {
+                        name: NamedNodePattern::NamedNode(
+                            NamedNode::new("http://example.org/unavailable").expect("service IRI"),
+                        ),
+                        inner: Child::new(GraphPattern::empty_bgp()),
+                        silent: false,
+                    }
+                } else {
+                    GraphPattern::empty_bgp()
+                }),
+            };
+            let result = eval_evaluated(&inner, &mut ctx);
+            assert_eq!(result.is_err(), fail);
+            assert_eq!(
+                ctx.positive_shape
+                    .as_ref()
+                    .map(crate::plan::PlanHandle::key),
+                Some(key)
+            );
+            assert_eq!(
+                ctx.plan.as_ref().map(crate::plan::PlanHandle::key),
+                Some(key)
+            );
+            assert_eq!(ctx.plan_node(&outer), Some(crate::plan::NodeId::ROOT));
+        }
+        ctx.positive_shape = None;
+        let leaf = GraphPattern::empty_bgp();
+        ctx.temporary_positive_numberings = 0;
+        eval_evaluated(&leaf, &mut ctx).expect("unit leaf");
+        eval_evaluated(&outer, &mut ctx).expect("source-known join");
+        assert_eq!(ctx.temporary_positive_numberings, 0);
+        assert!(ctx.positive_shape.is_none());
+    }
+
+    #[test]
+    fn temporary_positive_numbering_restores_after_a_caught_unwind() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let outer = GraphPattern::Join {
+            left: Child::new(GraphPattern::empty_bgp()),
+            right: Child::new(GraphPattern::empty_bgp()),
+        };
+        let source = crate::plan::Tree::build(&outer);
+        let mut ctx = EvalCtx::new(&*dataset);
+        ctx.install_plan(&source);
+        ctx.positive_shape = Some(source.handle());
+        let key = source.handle().key();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let copied = outer.clone();
+            let tree = crate::plan::Tree::build(&copied);
+            let mut guard = ctx.enter_positive_shape(tree.handle());
+            assert_eq!(guard.positive_region(&copied), Some(false));
+            let nested = outer.clone();
+            eval_evaluated(&nested, &mut guard).expect("nested unit bag");
+            assert_eq!(
+                guard
+                    .positive_shape
+                    .as_ref()
+                    .map(crate::plan::PlanHandle::key),
+                Some(tree.handle().key())
+            );
+            panic!("caller unwinds while a temporary tree is alive");
+        }));
+        assert!(caught.is_err());
+        assert_eq!(
+            ctx.positive_shape
+                .as_ref()
+                .map(crate::plan::PlanHandle::key),
+            Some(key)
+        );
+        assert_eq!(
+            ctx.plan.as_ref().map(crate::plan::PlanHandle::key),
+            Some(key)
+        );
+        let answered = eval_evaluated(&outer, &mut ctx).expect("context remains reusable");
+        let Evaluated::Complete(rows) = answered else {
+            panic!("unit bag completes")
+        };
+        assert_eq!(rows.rows.len(), 1);
+    }
 
     #[test]
     fn bnode_mint_prefix_rejects_an_illegal_prefix() {

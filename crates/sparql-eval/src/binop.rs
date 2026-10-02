@@ -64,14 +64,7 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let positive = ctx
-        .plan
-        .as_ref()
-        .and_then(|plan| {
-            plan.node_of(node)
-                .map(|id| plan.shape().positive_region(id))
-        })
-        .unwrap_or(true);
+    let positive = ctx.positive_region(node).unwrap_or(false);
     if positive
         && let Some(plan) = crate::bgp::PositivePlan::build(
             ctx.dataset,
