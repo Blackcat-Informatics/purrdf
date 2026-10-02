@@ -957,7 +957,7 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
                 count += 1;
                 rows.push(quad);
                 let (s, p, o) = (native_id(quad.s)?, native_id(quad.p)?, native_id(quad.o)?);
-                let g = quad.g.map(&native_id).transpose()?;
+                let g = quad.g.map(native_id).transpose()?;
                 referenced_graphs.extend(quad.g);
                 match table {
                     0 => builder.push_quad(s, p, o, g),

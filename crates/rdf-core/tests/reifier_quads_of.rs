@@ -111,7 +111,7 @@ fn build_page(anchors: &[&str], keep: impl Fn(usize) -> bool) -> Arc<RdfDataset>
         if !keep(index) {
             continue;
         }
-        b.push_reifier_in_graph(id_of(reifier), triples[*triple], graph.map(&id_of));
+        b.push_reifier_in_graph(id_of(reifier), triples[*triple], graph.map(id_of));
     }
     for anchor in anchors {
         b.push_quad(id_of("not-a-reifier"), p, id_of(anchor), None);

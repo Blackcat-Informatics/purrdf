@@ -120,7 +120,7 @@ fn describe_reifier_rows(graph: &Graph) -> Vec<(String, String, String, String, 
                 spell(*subject),
                 spell(*predicate),
                 spell(*object),
-                by.map(&spell),
+                by.map(spell),
             )
         })
         .collect()
