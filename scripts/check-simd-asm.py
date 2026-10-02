@@ -1439,6 +1439,41 @@ def multiplier_scan(name: str, text: str) -> list[str]:
     return problems
 
 
+def html_after_markdown_containers(line: str) -> str | None:
+    """Find a leading HTML spelling after space/tab and quote/list prefixes.
+
+    Each consumed prefix advances the cursor; a malformed marker stops the scan.
+    Whitespace belongs to exactly one step, so long nested prefixes cannot cause
+    the backtracking that overlapping repeated regular-expression groups allow.
+    """
+    position = 0
+    length = len(line)
+    while position < length:
+        while position < length and line[position] in " \t":
+            position += 1
+        if position == length:
+            return None
+        marker = line[position]
+        if marker == ">":
+            position += 1
+            continue
+        if marker in "-+*":
+            position += 1
+        elif marker.isdecimal():
+            while position < length and line[position].isdecimal():
+                position += 1
+            if position == length or line[position] not in ".)":
+                return None
+            position += 1
+        else:
+            return line[position:] if marker == "<" else None
+        # Bullet and ordered-list markers require a following space or tab;
+        # blockquote markers above intentionally allow an adjacent prefix.
+        if position == length or line[position] not in " \t":
+            return None
+    return None
+
+
 def current_changelog(text: str, version: str) -> tuple[str, str]:
     """Select canonical release notes; ambiguous Markdown structures fail closed."""
     # Markdown permits several spaces/tabs after the hashes and up to three
@@ -1492,11 +1527,10 @@ def current_changelog(text: str, version: str) -> tuple[str, str]:
     # the canonical notes can start a line with that same spelling. Requiring
     # the full angle-bracketed URI excludes HTML tags, including attributes,
     # declarations, processing instructions and custom/multiline elements.
-    html_line = re.compile(r"^[ \t]*(?:(?:>[ \t]*|[-+*][ \t]+|\d+[.)][ \t]+)[ \t]*)*(<.*)$")
     uri_autolink = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*>")
     if "<!--" in without_legal_headers or any(
-        (match := html_line.match(line)) is not None
-        and uri_autolink.match(match.group(1)) is None
+        (html := html_after_markdown_containers(line)) is not None
+        and uri_autolink.match(html) is None
         for line in without_legal_headers.splitlines()
     ):
         raise GateError("CHANGELOG.md candidate uses unsupported raw HTML; claim scan refused")
@@ -2210,6 +2244,35 @@ def self_test() -> int:
         expect(bool(multiplier_scan("t", claim)), f"{claim!r} must fail the multiplier scan")
     for fine in ("4×u32 masked compare is faster to write", "256×8 LUT", "`i32x4`", "`f64x2.add`", "the loop is 3x unrolled"):
         expect(not multiplier_scan("t", fine), f"{fine!r} must pass the multiplier scan")
+
+    # Quote and list prefixes retain their exact former grammar, including
+    # decimal digits outside ASCII. Each prefix is consumed once, without the
+    # overlapping whitespace repetitions that allowed exponential backtracking.
+    for prefix in ("", " \t", ">", ">>\t", "- ", "+\t", "*  ", "0)\t", "12. ", "١٢. ", "> - \t2) >\t"):
+        expect(html_after_markdown_containers(prefix + "<div>") == "<div>",
+               f"a valid Markdown container prefix preserves its HTML start: {prefix!r}")
+    for ordinary in ("", " \t", "text <div>", "-<div>", "+<div>", "*<div>",
+                     "12.<div>", "12)<div>", "12 <div>", "². <div>", "> -<div>"):
+        expect(html_after_markdown_containers(ordinary) is None,
+               f"ordinary text or a malformed container marker is not an HTML start: {ordinary!r}")
+    # All three reported ambiguous repetitions must terminate both when no
+    # HTML follows and when a real block or URI autolink follows. Keep the
+    # claim after the long line to prove that scanning cannot silently skip it.
+    for prefix in (">" + "\t>" * 4096, "*" + "\t\t*" * 4096 + " ",
+                   "0)" + "\t\t0)" * 4096 + " "):
+        ordinary = f"## [3.0.0]\n{prefix}x\n3× faster\n## [2.0.2]\nold\n"
+        expect(html_after_markdown_containers(prefix + "x") is None,
+               "a long repeated container prefix without HTML terminates")
+        expect(bool(multiplier_scan("t", current_changelog(ordinary, "3.0.0")[1])),
+               "a long repeated container prefix cannot hide a later claim")
+        autolink = ordinary.replace(prefix + "x", prefix + "<https://example.org/x>")
+        expect(bool(multiplier_scan("t", current_changelog(autolink, "3.0.0")[1])),
+               "a URI autolink after a long container prefix preserves the later claim")
+        try:
+            current_changelog(ordinary.replace(prefix + "x", prefix + "<div>"), "3.0.0")
+            failures.append("a raw HTML block after a long repeated container prefix must be refused")
+        except GateError as err:
+            expect("unsupported raw HTML" in str(err), "the long raw HTML container is refused explicitly")
 
     # The release cut renames Unreleased rather than retaining an empty placeholder.
     # Both states scan the actual candidate prose; historical or ambiguous headings
