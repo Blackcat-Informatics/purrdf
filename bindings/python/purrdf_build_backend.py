@@ -122,6 +122,8 @@ def binary_expression(target: str | None, *, offline: bool = True) -> str:
         [
             "cargo",
             "tree",
+            "--color",
+            "never",
             "--locked",
             *(["--offline"] if offline else []),
             "--manifest-path",
@@ -498,6 +500,27 @@ def build_sdist(sdist_directory, config_settings=None):
 
 def self_test() -> None:
     """Exercise metadata variability and the wheel's independent integrity law."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    def cargo_license_tree(arguments, **_kwargs):
+        # Model the hosted Cargo color setting: only an explicit machine-output
+        # option prevents its styled duplicate marker from becoming SPDX text.
+        plain = (
+            "--color" in arguments
+            and arguments[arguments.index("--color") + 1] == "never"
+        )
+        marker = " (*)" if plain else " \x1b[33m\x1b[2m(*)\x1b[39m\x1b[22m"
+        return SimpleNamespace(stdout=f"fixture v1|MIT{marker}\n")
+
+    with patch.object(subprocess, "run", side_effect=cargo_license_tree) as tree:
+        expected_expression = combined(
+            {OWNED, "Apache-2.0 OR MIT", "Unicode-3.0", "MIT"}
+        )
+        assert binary_expression("x86_64-unknown-linux-gnu") == expected_expression
+        arguments = tree.call_args.args[0]
+        assert arguments[arguments.index("--color") + 1] == "never"
+
     raw = b"Metadata-Version: 2.4\nName: fixture\nVersion: 1\nLicense: obsolete\nDynamic: Requires-Dist\n\nREADME body\n"
     expression = combined({OWNED, "Unicode-3.0", "MIT"})
     source = metadata_bytes(raw, expression, source=True)
@@ -536,9 +559,6 @@ def self_test() -> None:
             archive.writestr("fixture-1.dist-info/RECORD", b"stale\n")
         qualify(path)
         first = path.read_bytes()
-        from types import SimpleNamespace
-        from unittest.mock import Mock, patch
-
         settings = {"maturin.build-args": "--target x86_64-unknown-linux-gnu"}
         prepared = Path(directory) / "fixture-1.dist-info"
         prepared.mkdir()
