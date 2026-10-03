@@ -34,8 +34,9 @@ use crate::governed::PartialAnswers;
 pub type FallibleSparqlResult<OperationalError, Evidence> =
     Result<CompleteSparqlResult<Evidence>, FallibleSparqlError<OperationalError, Evidence>>;
 
-/// A scoped visitor value and its exact final operational receipt. The visitor
-/// output may be published only after this complete read boundary returns `Ok`.
+/// A caller-owned value and its exact final operational receipt, used by scoped
+/// visitors and measured EXPLAIN. The value may be published only after this
+/// complete read boundary returns `Ok`.
 pub type FallibleScopedResult<R, OperationalError, Evidence> =
     Result<(R, Evidence), FallibleSparqlError<OperationalError, Evidence>>;
 

@@ -20,12 +20,15 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult};
+use purrdf_core::{
+    InMemoryPageProvider, PagedDataset, PagedQueryLimits, RdfDataset, RdfDatasetBuilder,
+    RdfLiteral, SparqlRequest, SparqlResult, StopCause, TrippedGovernor,
+};
 use purrdf_sparql_eval::{
-    HttpRemoteQuerySource, HttpRequest, InProcessServiceResolver, NativeSparqlEngine,
-    QueryGovernors, QueryOptions, RemoteError, ServiceCapabilities, ServiceCapability,
-    ServiceCatalog, ServiceCredential, ServiceProfile, ServiceRequest, ServiceResolver,
-    ServiceRouter,
+    CancellationFlag, FallibleSparqlError, HttpRemoteQuerySource, HttpRequest,
+    InProcessServiceResolver, NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError,
+    ServiceCapabilities, ServiceCapability, ServiceCatalog, ServiceCredential, ServiceProfile,
+    ServiceRequest, ServiceResolver, ServiceRouter,
 };
 
 /// The in-process service, and the one every gated fixture lists.
@@ -226,6 +229,121 @@ fn an_in_process_service_is_answered_without_the_network_transport_being_touched
         spy.posts(),
         1,
         "the network path is live and reachable — the zero above was a prevented request"
+    );
+}
+
+#[test]
+fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes() {
+    let resident = local_dataset();
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![Arc::clone(
+        &resident,
+    )])))
+    .expect("seal the same local data for operational reads");
+    let spy = SpyTransport::default();
+    let network = HttpRemoteQuerySource::new(&spy).with_catalog(
+        ServiceCatalog::default().with_service(
+            NET_EP,
+            profile(&[ServiceCapability::Query, ServiceCapability::Network])
+                .with_header("X-Explain-Source", "configured"),
+        ),
+    );
+    let in_process = InProcessServiceResolver::new().with_endpoint(LOCAL_EP, service_dataset());
+    let router = ServiceRouter::new()
+        .with_route(LOCAL_EP, &in_process)
+        .with_fallback(&network);
+    let options = QueryOptions::EMPTY.with_remote(Some(&router));
+    let engine = NativeSparqlEngine::new();
+
+    for endpoint in [LOCAL_EP, NET_EP] {
+        let query = service_query(endpoint, false);
+        let before = spy.posts();
+        let per_run = usize::from(endpoint == NET_EP);
+        let expected = engine
+            .explain_query_with_options(&resident, &query, None, options)
+            .expect("the configured resident source answers");
+        assert_eq!(spy.posts(), before + per_run);
+        let ordinary = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let (explanation, evidence) = engine
+            .explain_query_with_options_fallible_view(&ordinary, &query, None, options)
+            .expect("operational EXPLAIN forwards the same request source");
+        assert_eq!(explanation.render(), expected.render());
+        assert_eq!(evidence.consumed_pages, 1);
+        assert_eq!(spy.posts(), before + 2 * per_run);
+
+        let quiet = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let (signalled, quiet_evidence) = engine
+            .explain_query_with_stop_signal_fallible_view(
+                &quiet,
+                &query,
+                None,
+                options,
+                Arc::new(CancellationFlag::new()),
+            )
+            .expect("a quiet stop still measures the configured source");
+        assert_eq!(signalled.render(), expected.render());
+        assert_eq!(quiet_evidence, evidence);
+        assert_eq!(spy.posts(), before + 3 * per_run);
+
+        let stop = Arc::new(CancellationFlag::new());
+        stop.cancel();
+        let stopped_resident = engine
+            .explain_query_with_stop_signal(&resident, &query, None, options, stop.clone())
+            .expect("resident cancellation reports its truncated measuring receipt");
+        let cancelled = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let (stopped, _) = engine
+            .explain_query_with_stop_signal_fallible_view(&cancelled, &query, None, options, stop)
+            .expect("operational cancellation reports the same measuring receipt");
+        assert_eq!(stopped.render(), stopped_resident.render());
+        assert_eq!(
+            stopped.evidence().tripped,
+            Some(TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled,
+            }),
+        );
+        assert_eq!(
+            spy.posts(),
+            before + 3 * per_run,
+            "a fired signal prevents another exchange on the proven live source",
+        );
+    }
+    assert_eq!(
+        spy.headers(),
+        vec![("X-Explain-Source".to_owned(), "configured".to_owned())],
+        "the configured network fallback supplies the measuring requests",
+    );
+
+    let denied = HttpRemoteQuerySource::new(&spy).with_catalog(
+        ServiceCatalog::default().with_service(NET_EP, profile(&[ServiceCapability::Query])),
+    );
+    let denied_router = ServiceRouter::new()
+        .with_route(LOCAL_EP, &in_process)
+        .with_fallback(&denied);
+    let denied_options = QueryOptions::EMPTY.with_remote(Some(&denied_router));
+    let query = service_query(NET_EP, false);
+    let before = spy.posts();
+    let expected = engine
+        .explain_query_with_options(&resident, &query, None, denied_options)
+        .expect_err("resident EXPLAIN propagates the source capability refusal");
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let failed = engine
+        .explain_query_with_options_fallible_view(&view, &query, None, denied_options)
+        .expect_err("a failed SERVICE cannot publish an operational explanation");
+    assert!(failed.operational_error().is_none());
+    assert!(failed.partial_answers().is_none());
+    let FallibleSparqlError::Query {
+        diagnostic,
+        evidence,
+    } = failed
+    else {
+        panic!("a ready local view retains the source's query diagnostic");
+    };
+    assert_eq!(diagnostic.code, expected.code);
+    assert_eq!(diagnostic.message, expected.message);
+    assert_eq!(evidence.consumed_pages, 1);
+    assert_eq!(
+        spy.posts(),
+        before,
+        "denial prevents the same transport that successfully measured the granted service",
     );
 }
 

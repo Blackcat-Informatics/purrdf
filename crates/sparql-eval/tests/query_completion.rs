@@ -9,12 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder,
-    RdfStoreCapabilities, SparqlRequest, TermId, TermValue, ViewOperationStatus,
-    WorkspaceReservation,
+    RdfStoreCapabilities, SparqlRequest, StopCause, TermId, TermValue, TrippedGovernor,
+    ViewOperationStatus, WorkspaceReservation,
 };
 use purrdf_sparql_eval::{
-    FallibleSparqlError, GovernedEvidence, GovernorState, NativeSparqlEngine, QueryGovernors,
-    QueryOptions,
+    CancellationFlag, FallibleScopedResult, FallibleSparqlError, GovernedEvidence, GovernorState,
+    NativeSparqlEngine, QueryExplanation, QueryGovernors, QueryOptions, ShaclPrebinding,
+    StopSignal,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +35,7 @@ impl std::fmt::Display for RefusedRead {
 }
 impl std::error::Error for RefusedRead {}
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefusalSite {
     Never,
     Iterator,
@@ -58,6 +59,7 @@ struct Receipt {
     execution_guards: usize,
     reads: usize,
 }
+#[derive(Debug)]
 struct Source {
     resident: Arc<RdfDataset>,
     failed: AtomicBool,
@@ -626,6 +628,10 @@ fn refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry() {
     }
 }
 fn assert_held_receipt(source: &Source, receipt: &Receipt) {
+    assert_workspace_receipt(source, receipt);
+    assert!(receipt.reads > 0);
+}
+fn assert_workspace_receipt(source: &Source, receipt: &Receipt) {
     source.assert_receipt(receipt);
     assert!(!receipt.failed);
     assert_eq!(receipt.reporting_guards, 1);
@@ -637,7 +643,6 @@ fn assert_held_receipt(source: &Source, receipt: &Receipt) {
     };
     assert_eq!(receipt.execution_attempts, executions);
     assert_eq!(receipt.reservations, executions + 2);
-    assert!(receipt.reads > 0);
 }
 fn assert_complete_query<V: ViewReceipt>(
     source: &Source,
@@ -809,6 +814,286 @@ fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
         2
     );
 }
+#[derive(Clone, Copy)]
+enum ExplainRoute {
+    Default,
+    Options,
+    QuietStop,
+}
+const EXPLAIN_ROUTES: [ExplainRoute; 3] = [
+    ExplainRoute::Default,
+    ExplainRoute::Options,
+    ExplainRoute::QuietStop,
+];
+#[allow(
+    clippy::result_large_err,
+    reason = "test helper preserves the public operational result shared by all three EXPLAIN entries"
+)]
+fn explain(
+    engine: &NativeSparqlEngine,
+    source: &Source,
+    route: ExplainRoute,
+    query: &str,
+) -> FallibleScopedResult<QueryExplanation, RefusedRead, Receipt> {
+    match route {
+        ExplainRoute::Default => engine.explain_query_fallible_view(source, query, None),
+        ExplainRoute::Options => engine.explain_query_with_options_fallible_view(
+            source,
+            query,
+            None,
+            QueryOptions::EMPTY,
+        ),
+        ExplainRoute::QuietStop => engine.explain_query_with_stop_signal_fallible_view(
+            source,
+            query,
+            None,
+            QueryOptions::EMPTY,
+            Arc::new(CancellationFlag::new()),
+        ),
+    }
+}
+fn explain_admission_failures_remain_typed_without_an_explanation() {
+    let engine = NativeSparqlEngine::new();
+    for site in [
+        RefusalSite::Reporting,
+        RefusalSite::Execution,
+        RefusalSite::ExecutionInitial,
+        RefusalSite::ExecutionGrowth,
+        RefusalSite::Lookup,
+        RefusalSite::ReportingSticky,
+        RefusalSite::ExecutionSticky,
+    ] {
+        let expected = match site {
+            RefusalSite::Lookup => RefusedRead::Lookup,
+            RefusalSite::ReportingSticky | RefusalSite::ExecutionSticky => RefusedRead::FinalRead,
+            _ => RefusedRead::Workspace,
+        };
+        let query = if site == RefusalSite::Lookup {
+            LOOKUP_QUERY
+        } else {
+            QUERY
+        };
+        for route in EXPLAIN_ROUTES {
+            let source = Source::at(site);
+            let error =
+                assert_source_refusal(explain(&engine, &source, route, query), &source, expected);
+            let receipt = error.evidence();
+            assert_eq!(receipt.failed, expected == RefusedRead::FinalRead);
+            assert_eq!(receipt.execution_guards, 0);
+            let attempts = match site {
+                RefusalSite::Reporting | RefusalSite::ReportingSticky => 0,
+                RefusalSite::ExecutionGrowth => 2,
+                _ => 1,
+            };
+            assert_eq!(receipt.execution_attempts, attempts);
+            if site != RefusalSite::Lookup {
+                assert_eq!(receipt.reads, 0);
+            }
+        }
+    }
+}
+fn explain_preflight_failure_outranks_malformed_query() {
+    let engine = NativeSparqlEngine::new();
+    for route in EXPLAIN_ROUTES {
+        let source = Source::at(RefusalSite::Never);
+        source.refuse();
+        let error = assert_source_refusal(
+            explain(&engine, &source, route, "not SPARQL"),
+            &source,
+            RefusedRead::FinalRead,
+        );
+        assert_eq!(error.evidence().reservations, 0);
+        assert_eq!(error.evidence().reads, 0);
+    }
+}
+fn explain_measuring_and_final_checkpoint_failures_publish_no_ledger() {
+    let engine = NativeSparqlEngine::new();
+    for site in [
+        RefusalSite::Iterator,
+        RefusalSite::Term,
+        RefusalSite::Checkpoint,
+    ] {
+        let query = if site == RefusalSite::Term {
+            "SELECT ?s WHERE { ?s ?p ?o FILTER(STR(?s) = \"http://example.org/s\") }"
+        } else {
+            QUERY
+        };
+        for route in EXPLAIN_ROUTES {
+            let source = Source::at(site);
+            let error = assert_source_refusal(
+                explain(&engine, &source, route, query),
+                &source,
+                RefusedRead::FinalRead,
+            );
+            assert_eq!(error.evidence().reporting_guards, 1);
+            assert_eq!(error.evidence().execution_guards, 1);
+            assert!(error.evidence().reads > 0);
+        }
+    }
+}
+fn healthy_explain_is_identical_to_resident_and_holds_admission_through_publication() {
+    let engine = NativeSparqlEngine::new();
+    for site in [RefusalSite::Never, RefusalSite::BoundedHealthy] {
+        for route in EXPLAIN_ROUTES {
+            let source = Source::at(site);
+            let expected = engine
+                .explain_query(&source.resident, QUERY, None)
+                .expect("resident explanation");
+            let (actual, receipt) =
+                explain(&engine, &source, route, QUERY).expect("healthy operational explanation");
+            assert_eq!(actual.render(), expected.render());
+            assert_eq!(actual.evidence(), expected.evidence());
+            assert_eq!(actual.evidence().tripped, None);
+            assert_held_receipt(&source, &receipt);
+        }
+    }
+    let source = Source::at(RefusalSite::Never);
+    let options = QueryOptions::EMPTY
+        .with_prebinding(ShaclPrebinding::Applied)
+        .with_bnode_mint_prefix(Some("configured-mint"));
+    let expected = engine
+        .explain_query_with_options(&source.resident, QUERY, None, options)
+        .expect("resident configured explanation");
+    let (actual, receipt) = engine
+        .explain_query_with_options_fallible_view(&source, QUERY, None, options)
+        .expect("operational configured explanation");
+    assert_eq!(actual.render(), expected.render());
+    assert_held_receipt(&source, &receipt);
+}
+fn healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence() {
+    let engine = NativeSparqlEngine::new();
+    for query in [
+        "not SPARQL",
+        "SELECT ?s WHERE { SERVICE <https://example.org/service> { ?s ?p ?o } }",
+    ] {
+        for route in EXPLAIN_ROUTES {
+            let source = Source::at(RefusalSite::Never);
+            let expected = engine
+                .explain_query(&source.resident, query, None)
+                .expect_err("resident query diagnostic");
+            let error = explain(&engine, &source, route, query)
+                .expect_err("healthy operational view retains the query diagnostic");
+            let diagnostic = error.diagnostic().expect("query diagnostic");
+            assert_eq!(diagnostic, &expected);
+            assert!(error.operational_error().is_none());
+            assert!(error.partial_answers().is_none());
+            source.assert_receipt(error.evidence());
+            assert!(!error.evidence().failed);
+            assert_eq!(error.evidence().reporting_guards, 1);
+            assert_eq!(
+                error.evidence().execution_guards,
+                usize::from(query != "not SPARQL")
+            );
+        }
+    }
+    let source = Source::at(RefusalSite::Checkpoint);
+    let error = assert_source_refusal(
+        engine.explain_query_fallible_view(
+            &source,
+            "SELECT ?s WHERE { SERVICE <https://example.org/service> { ?s ?p ?o } }",
+            None,
+        ),
+        &source,
+        RefusedRead::FinalRead,
+    );
+    assert_eq!(error.evidence().execution_guards, 1);
+}
+fn explain_refuses_unpriced_supplied_inputs_before_parsing_or_reading() {
+    let engine = NativeSparqlEngine::new();
+    let remote = RefusingService(AtomicUsize::new(0));
+    for options in [
+        QueryOptions::EMPTY.with_bnode_mint_prefix(Some("configured-mint")),
+        QueryOptions::EMPTY.with_remote(Some(&remote)),
+    ] {
+        let source = Source::at(RefusalSite::BoundedHealthy);
+        let cache = engine.plan_cache_stats();
+        let error = engine
+            .explain_query_with_options_fallible_view(&source, "not SPARQL", None, options)
+            .expect_err("unpriced context is refused before parsing");
+        assert_eq!(
+            error.diagnostic().expect("unpriced diagnostic").code,
+            "native-sparql-workspace-unpriced"
+        );
+        assert!(error.operational_error().is_none());
+        source.assert_receipt(error.evidence());
+        assert_eq!(error.evidence().reservations, 1);
+        assert_eq!(error.evidence().reporting_guards, 1);
+        assert_eq!(error.evidence().execution_attempts, 0);
+        assert_eq!(error.evidence().reads, 0);
+        assert_eq!(engine.plan_cache_stats(), cache);
+    }
+    assert_eq!(remote.0.load(Ordering::Relaxed), 0);
+}
+#[derive(Debug)]
+struct FailureAndStop(Arc<Source>);
+impl StopSignal for FailureAndStop {
+    fn poll(&self) -> Option<StopCause> {
+        self.0.refuse();
+        Some(StopCause::Cancelled)
+    }
+}
+fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence() {
+    let engine = NativeSparqlEngine::new();
+    for site in [RefusalSite::Never, RefusalSite::BoundedHealthy] {
+        let source = Source::at(site);
+        let stop = CancellationFlag::new();
+        stop.cancel();
+        let expected = engine
+            .explain_query_with_stop_signal(
+                &source.resident,
+                QUERY,
+                None,
+                QueryOptions::EMPTY,
+                Arc::new(stop.clone()),
+            )
+            .expect("resident cancellation receipt");
+        let (actual, receipt) = engine
+            .explain_query_with_stop_signal_fallible_view(
+                &source,
+                QUERY,
+                None,
+                QueryOptions::EMPTY,
+                Arc::new(stop),
+            )
+            .expect("a stop alone preserves the explanation");
+        assert_eq!(
+            actual.evidence().tripped,
+            Some(TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled
+            })
+        );
+        assert_eq!(actual.render(), expected.render());
+        assert_workspace_receipt(&source, &receipt);
+    }
+    let source = Source::at(RefusalSite::Checkpoint);
+    let stop = CancellationFlag::new();
+    stop.cancel();
+    let error = assert_source_refusal(
+        engine.explain_query_with_stop_signal_fallible_view(
+            &source,
+            QUERY,
+            None,
+            QueryOptions::EMPTY,
+            Arc::new(stop),
+        ),
+        &source,
+        RefusedRead::FinalRead,
+    );
+    assert_eq!(error.evidence().execution_guards, 1);
+    let source = Arc::new(Source::at(RefusalSite::Never));
+    let error = assert_source_refusal(
+        engine.explain_query_with_stop_signal_fallible_view(
+            source.as_ref(),
+            QUERY,
+            None,
+            QueryOptions::EMPTY,
+            Arc::new(FailureAndStop(Arc::clone(&source))),
+        ),
+        source.as_ref(),
+        RefusedRead::FinalRead,
+    );
+    assert_eq!(error.evidence().execution_guards, 1);
+}
 purrdf_testkit::harness_main!(
     typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures,
     preexisting_source_failure_outranks_parse_and_empty_pattern_success,
@@ -820,4 +1105,11 @@ purrdf_testkit::harness_main!(
     healthy_query_routes_hold_execution_admission_through_final_checkpoint,
     final_checkpoint_failure_discards_success_and_keeps_workspace_held,
     graph_admission_and_final_checkpoint_failures_leave_destination_unchanged,
+    explain_admission_failures_remain_typed_without_an_explanation,
+    explain_preflight_failure_outranks_malformed_query,
+    explain_measuring_and_final_checkpoint_failures_publish_no_ledger,
+    healthy_explain_is_identical_to_resident_and_holds_admission_through_publication,
+    healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence,
+    explain_refuses_unpriced_supplied_inputs_before_parsing_or_reading,
+    explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence,
 );
