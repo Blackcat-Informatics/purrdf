@@ -158,6 +158,10 @@ macro_rules! __text_field {
 /// each body is `Self::Variant(convert(&value))` — `ToString::to_string` for a
 /// variant that carries the source's message.
 ///
+/// A generic target names its unbounded type parameters in an `impl<T, U>`
+/// header. Both forms support that header, including source types that use the
+/// parameters; the conversion must be valid for every instantiation.
+///
 /// ```rust
 /// #[derive(Debug, PartialEq, Eq)]
 /// enum Outer {
@@ -188,26 +192,61 @@ macro_rules! __text_field {
 ///
 /// let error = "x".parse::<u8>().unwrap_err();
 /// assert_eq!(Rendered::from(error.clone()), Rendered::Message(error.to_string()));
+///
+/// #[derive(Debug, PartialEq, Eq)]
+/// enum Operational<E> {
+///     Read(E),
+///     Message(String),
+/// }
+///
+/// purrdf_lex::variant_from!(impl<E> Operational<E> {
+///     Message(core::num::ParseIntError, core::fmt::Error) as ToString::to_string
+/// });
+///
+/// assert_eq!(
+///     Operational::<core::convert::Infallible>::from(error.clone()),
+///     Operational::Message(error.to_string()),
+/// );
 /// ```
 #[macro_export]
 macro_rules! variant_from {
-    ($type:ty { $variant:ident($($source:ty),+ $(,)?) as $convert:path }) => {
+    (impl <$($parameter:ident),+ $(,)?> $type:ty { $($items:tt)* }) => {
+        $crate::variant_from!(@variants [<$($parameter),+>] $type { $($items)* });
+    };
+    ($type:ty { $($items:tt)* }) => {
+        $crate::variant_from!(@variants [] $type { $($items)* });
+    };
+    (@variants $parameters:tt $type:ty {
+        $variant:ident($($source:ty),+ $(,)?) as $convert:path
+    }) => {
         $(
-            impl ::core::convert::From<$source> for $type {
-                fn from(value: $source) -> Self {
-                    Self::$variant($convert(&value))
-                }
-            }
+            $crate::variant_from!(@render $parameters $type {
+                $variant($source) as $convert
+            });
         )+
     };
-    ($type:ty { $($variant:ident($source:ty)),+ $(,)? }) => {
+    (@variants $parameters:tt $type:ty {
+        $($variant:ident($source:ty)),+ $(,)?
+    }) => {
         $(
-            impl ::core::convert::From<$source> for $type {
-                fn from(value: $source) -> Self {
-                    Self::$variant(value)
-                }
-            }
+            $crate::variant_from!(@wrap $parameters $type { $variant($source) });
         )+
+    };
+    (@render [$($parameters:tt)*] $type:ty {
+        $variant:ident($source:ty) as $convert:path
+    }) => {
+        impl $($parameters)* ::core::convert::From<$source> for $type {
+            fn from(value: $source) -> Self {
+                Self::$variant($convert(&value))
+            }
+        }
+    };
+    (@wrap [$($parameters:tt)*] $type:ty { $variant:ident($source:ty) }) => {
+        impl $($parameters)* ::core::convert::From<$source> for $type {
+            fn from(value: $source) -> Self {
+                Self::$variant(value)
+            }
+        }
     };
 }
 
@@ -291,6 +330,48 @@ mod tests {
         Message(core::num::ParseIntError, core::fmt::Error) as ToString::to_string
     });
 
+    #[derive(Debug, PartialEq, Eq)]
+    enum GenericWrapped<T> {
+        Value(T),
+    }
+
+    crate::variant_from!(impl<T> GenericWrapped<T> {
+        Value(T),
+    });
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum GenericError<E, V> {
+        Operational(E, V),
+        Parse(core::num::ParseIntError),
+        Utf8(core::str::Utf8Error),
+    }
+
+    crate::variant_from!(impl<E, V> GenericError<E, V> {
+        Parse(core::num::ParseIntError),
+        Utf8(core::str::Utf8Error),
+    });
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct GenericSource<T>(T);
+
+    impl<T> core::fmt::Display for GenericSource<T> {
+        fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            output.write_str("generic source")
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum GenericRendered<E> {
+        Operational(E),
+        Message(String),
+    }
+
+    crate::variant_from!(impl<E> GenericRendered<E> {
+        Message(core::num::ParseIntError, core::fmt::Error, GenericSource<E>) as ToString::to_string
+    });
+
+    struct Opaque;
+
     #[test]
     fn a_tuple_variant_takes_any_text() {
         assert_eq!(Refusal::config("a"), Refusal::Config("a".to_owned()));
@@ -356,5 +437,56 @@ mod tests {
             Rendered::from(core::fmt::Error),
             Rendered::Message(core::fmt::Error.to_string())
         );
+    }
+
+    #[test]
+    fn variant_from_wraps_a_generic_source_without_cloning() {
+        let source = Arc::new(String::from("owned source"));
+        let witness = Arc::clone(&source);
+        let GenericWrapped::Value(wrapped) = GenericWrapped::from(source);
+        assert!(Arc::ptr_eq(&wrapped, &witness));
+        assert_eq!(Arc::strong_count(&witness), 2);
+    }
+
+    #[test]
+    fn variant_from_wraps_each_source_for_multiple_type_parameters() {
+        let error = "z".parse::<u8>().unwrap_err();
+        assert_eq!(
+            GenericError::<u8, bool>::from(error.clone()),
+            GenericError::Parse(error),
+        );
+        let invalid = [u8::MAX];
+        let utf8 = core::str::from_utf8(&invalid).unwrap_err();
+        assert_eq!(
+            GenericError::<u8, bool>::from(utf8),
+            GenericError::Utf8(utf8),
+        );
+        let _operational = GenericError::Operational(Opaque, Opaque);
+        assert!(matches!(
+            GenericError::<Opaque, Opaque>::from(utf8),
+            GenericError::Utf8(_),
+        ));
+    }
+
+    #[test]
+    fn variant_from_renders_fixed_and_generic_sources_for_a_generic_error() {
+        let error = "z".parse::<u8>().unwrap_err();
+        assert_eq!(
+            GenericRendered::<u8>::from(error.clone()),
+            GenericRendered::Message(error.to_string()),
+        );
+        assert_eq!(
+            GenericRendered::<u8>::from(core::fmt::Error),
+            GenericRendered::Message(core::fmt::Error.to_string()),
+        );
+        assert_eq!(
+            GenericRendered::from(GenericSource(7_u8)),
+            GenericRendered::Message("generic source".to_owned()),
+        );
+        let _operational = GenericRendered::Operational(Opaque);
+        assert!(matches!(
+            GenericRendered::from(GenericSource(Opaque)),
+            GenericRendered::Message(message) if message == "generic source",
+        ));
     }
 }

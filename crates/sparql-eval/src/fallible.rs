@@ -81,10 +81,10 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
         /// Deterministic evidence captured at the final ready checkpoint.
         evidence: Evidence,
     },
-    /// The view failed operationally. This variant takes precedence over any
-    /// evaluator error derived after data became unavailable.
+    /// The view refused admission or failed operationally. This variant takes
+    /// precedence over any evaluator error derived after data became unavailable.
     Operational {
-        /// The sticky operational root cause.
+        /// The typed refusal or read error; an existing sticky root takes precedence.
         error: OperationalError,
         /// Deterministic evidence at the failure boundary.
         evidence: Evidence,
