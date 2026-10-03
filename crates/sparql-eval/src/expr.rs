@@ -1586,7 +1586,8 @@ fn exists_prepared<D: DatasetView + Sync>(
     // for one triple, where the once-built probe is already bounded by one index.
     let native_positive = correlated
         && !stateful
-        && !matches!(normalized.as_ref(), GraphPattern::Bgp { patterns } if patterns.len() <= 1);
+        && !matches!(normalized.as_ref(), GraphPattern::Bgp { patterns } if patterns.len() <= 1)
+        && crate::bgp::PositivePlan::seed_eligible(normalized, schema);
     #[cfg(test)]
     let native_positive =
         native_positive && FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get).is_none();

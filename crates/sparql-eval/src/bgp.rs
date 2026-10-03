@@ -366,14 +366,16 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
             // promotion law. Treating one as an unbound probe would scan a whole
             // index just to reject every candidate during unification. The same
             // rule covers slots nested inside quoted triple patterns.
-            let mut absent = false;
-            for pos in [&cp.s, &cp.p, &cp.o] {
-                for_each_slot(pos, &mut |column| {
-                    absent |= matches!(row[column], Some(SolutionTerm::Computed(_)));
-                });
-            }
-            if absent {
-                return;
+            if !unit_driven {
+                let mut absent = false;
+                for pos in [&cp.s, &cp.p, &cp.o] {
+                    for_each_slot(pos, &mut |column| {
+                        absent |= matches!(row[column], Some(SolutionTerm::Computed(_)));
+                    });
+                }
+                if absent {
+                    return;
+                }
             }
             let s = query_id(&cp.s, row);
             let p = query_id(&cp.p, row);
@@ -1201,13 +1203,31 @@ pub(crate) fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Varia
 /// Append a triple pattern's slot variables, through nested quoted triples, in
 /// `(s, p, o)` order.
 fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut impl Extend<Variable>) {
-    collect_slot_keys(
+    visit_triple_slots(pattern, |key| {
+        keys.extend([match key {
+            SlotKey::Variable(variable) => variable.clone(),
+            SlotKey::Blank(label) => blank_var(label),
+        }]);
+    });
+}
+
+/// One borrowed slot identity. Only an owning consumer spells a blank label as
+/// its synthetic variable; an eligibility check never needs that allocation.
+pub(crate) enum SlotKey<'a> {
+    Variable(&'a Variable),
+    Blank(&'a str),
+}
+
+/// Read every slot without cloning variables or constructing blank identities.
+/// The same iterative walk supplies the indexed kernel's owning slot census.
+pub(crate) fn visit_triple_slots<'a>(pattern: &'a TriplePattern, visit: impl FnMut(SlotKey<'a>)) {
+    visit_slot_keys(
         purrdf_core::smallvec![
             SlotPosition::Term(&pattern.object),
             SlotPosition::Predicate(&pattern.predicate),
             SlotPosition::Term(&pattern.subject),
         ],
-        keys,
+        visit,
     );
 }
 
@@ -1217,20 +1237,18 @@ enum SlotPosition<'a> {
     Predicate(&'a NamedNodePattern),
 }
 
-/// Append the slot variables of the positions on `pending` — a work list whose top is
-/// the next position in `(s, p, o)` order — to `keys`: a real variable, a synthetic
-/// blank-node variable, or, for a quoted triple, its inner positions in the same
-/// order. Ground terms yield nothing.
-fn collect_slot_keys(
-    mut pending: purrdf_core::SmallVec<[SlotPosition<'_>; 8]>,
-    keys: &mut impl Extend<Variable>,
+/// Visit the borrowed slots on `pending`, with its top next in `(s, p, o)`
+/// order. Nested quoted triples use that same order; ground terms yield nothing.
+fn visit_slot_keys<'a>(
+    mut pending: purrdf_core::SmallVec<[SlotPosition<'a>; 8]>,
+    mut visit: impl FnMut(SlotKey<'a>),
 ) {
     while let Some(position) = pending.pop() {
         match position {
             SlotPosition::Predicate(NamedNodePattern::Variable(v))
-            | SlotPosition::Term(TermPattern::Variable(v)) => keys.extend([v.clone()]),
+            | SlotPosition::Term(TermPattern::Variable(v)) => visit(SlotKey::Variable(v)),
             SlotPosition::Term(TermPattern::BlankNode(b)) => {
-                keys.extend([blank_var(b.as_str())]);
+                visit(SlotKey::Blank(b.as_str()));
             }
             SlotPosition::Term(TermPattern::Triple(t)) => pending.extend([
                 SlotPosition::Term(&t.object),
@@ -1960,6 +1978,10 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                 graph,
                 optional,
             } => {
+                if !PositivePlan::pure_eligible(right) {
+                    steps.push(Step::Visit(right, graph));
+                    continue;
+                }
                 let driving_rows = predicted_rows(left, survey).unwrap_or(1);
                 let mut seed = seeds
                     .remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize))

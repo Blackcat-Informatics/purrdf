@@ -119,14 +119,16 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
-    let seed = crate::bgp::SeedEstimate::from_rows(&l);
-    if let Some(plan) = crate::bgp::PositivePlan::build_seeded(
-        ctx.dataset,
-        &ctx.active_dataset,
-        ctx.active_graph,
-        right,
-        &seed,
-    )? {
+    if crate::bgp::PositivePlan::seed_eligible(right, &l.schema) {
+        let seed = crate::bgp::SeedEstimate::from_rows(&l);
+        let plan = crate::bgp::PositivePlan::build_seeded(
+            ctx.dataset,
+            &ctx.active_dataset,
+            ctx.active_graph,
+            right,
+            &seed,
+        )?
+        .expect("the right relation was certified seed eligible");
         let out = l.schema.union(plan.root_schema());
         let Some(joined) = lift.absorb(
             1,
@@ -1288,7 +1290,9 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let evaluated = eval_evaluated(left, ctx)?;
-    if let Evaluated::Complete(rows) = &evaluated {
+    if let Evaluated::Complete(rows) = &evaluated
+        && crate::bgp::PositivePlan::seed_eligible(right, &rows.schema)
+    {
         let mut seed = crate::bgp::SeedEstimate::from_rows(rows);
         // OPTIONAL commits one driver occurrence at a time. Its working bag
         // therefore has one incoming row, even when the outer bag is large.

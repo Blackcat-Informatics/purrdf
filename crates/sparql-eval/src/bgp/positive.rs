@@ -44,6 +44,51 @@ fn scope_summary(node: &GraphPattern, estimate: PlanEstimate) -> Summary {
 }
 
 impl PositivePlan {
+    /// Refuse scope boundaries and disconnected operands before constructing
+    /// any seed or forecast. The small traversal stack stays inline on ordinary
+    /// prepared-query shapes, so checking an ineligible operand allocates nothing.
+    pub(crate) fn seed_eligible(root: &GraphPattern, schema: &VarSchema) -> bool {
+        if schema.is_empty() {
+            return false;
+        }
+        matches!(Self::region_facts(root, Some(schema)), Some((_, true)))
+    }
+
+    /// Whether the subtree can receive physical bindings without crossing a
+    /// logical expression or solution-modifier boundary.
+    pub(crate) fn pure_eligible(root: &GraphPattern) -> bool {
+        Self::region_facts(root, None).is_some()
+    }
+
+    /// The single positive-shape census: UNION presence and borrowed shared slots.
+    fn region_facts(root: &GraphPattern, schema: Option<&VarSchema>) -> Option<(bool, bool)> {
+        let mut shared = false;
+        let mut has_union = false;
+        let mut pending = purrdf_lex::walk::WorkList::<_, 16>::with(root);
+        while let Some(node) = pending.pop() {
+            match node {
+                GraphPattern::Bgp { patterns } => {
+                    if let Some(schema) = schema {
+                        for pattern in patterns {
+                            super::visit_triple_slots(pattern, |slot| {
+                                if let super::SlotKey::Variable(variable) = slot {
+                                    shared |= schema.index_of(variable).is_some();
+                                }
+                            });
+                        }
+                    }
+                }
+                GraphPattern::Join { left, right } => pending.extend([&**right, &**left]),
+                GraphPattern::Union { arms } => {
+                    has_union = true;
+                    pending.extend(arms.iter());
+                }
+                _ => return None,
+            }
+        }
+        Some((has_union, shared))
+    }
+
     /// Forecast a complete pure region once. Other operators and regions without
     /// a UNION use their existing evaluation law.
     pub(crate) fn build<D: DatasetView>(
@@ -64,13 +109,7 @@ impl PositivePlan {
         root: &GraphPattern,
         seed: &SeedEstimate,
     ) -> Result<Option<Self>, EvalError> {
-        let schema = crate::eval::syntactic_schema(root);
-        if !seed
-            .schema
-            .vars()
-            .iter()
-            .any(|variable| schema.index_of(variable).is_some())
-        {
+        if !Self::seed_eligible(root, &seed.schema) {
             return Ok(None);
         }
         Self::build_with_seed(dataset, active_dataset, active_graph, root, Some(seed))
@@ -83,19 +122,9 @@ impl PositivePlan {
         root: &GraphPattern,
         seed: Option<&SeedEstimate>,
     ) -> Result<Option<Self>, EvalError> {
-        let mut scan = purrdf_lex::walk::WorkList::<_, 16>::with(root);
-        let mut has_union = false;
-        while let Some(node) = scan.pop() {
-            match node {
-                GraphPattern::Bgp { .. } => {}
-                GraphPattern::Join { left, right } => scan.extend([&**right, &**left]),
-                GraphPattern::Union { arms } => {
-                    has_union = true;
-                    scan.extend(arms.iter());
-                }
-                _ => return Ok(None),
-            }
-        }
+        let Some((has_union, _)) = Self::region_facts(root, None) else {
+            return Ok(None);
+        };
         if !has_union && seed.is_none() {
             return Ok(None);
         }
