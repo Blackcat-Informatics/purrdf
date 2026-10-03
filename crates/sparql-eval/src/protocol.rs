@@ -1250,6 +1250,7 @@ impl From<&EvalError> for FailureCode {
             | EvalError::ExchangeIdExhausted
             | EvalError::WorkspaceUnpriced(_)
             | EvalError::WorkspaceBoundOverflow
+            | EvalError::AllocationFailed { .. }
             | EvalError::Dataset(_)
             | EvalError::Internal(_)
             | EvalError::Data(_)

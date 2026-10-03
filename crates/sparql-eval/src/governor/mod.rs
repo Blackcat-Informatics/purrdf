@@ -1647,7 +1647,24 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// A scratch ceiling sized against v9 can therefore stop earlier under v10,
 /// including after an aggregate's final value is interned. Consumers must
 /// remeasure such ceilings rather than carry the old number across versions.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 10;
+///
+/// # v11
+///
+/// [`CHARGE_SCHEDULE`] is byte-identical to v10. Eligible positive operands of
+/// ordinary joins now receive the driver's bindings, so indexed candidate visits
+/// and committed rows replace work over an independent relation. An OPTIONAL's
+/// positive right operand is evaluated once per driver occurrence, which changes
+/// its [`ChargePoint::AlgebraNodeEntry`] count and the order of its row charges.
+/// Eligible correlated `EXISTS`/`NOT EXISTS` bodies use native row restrictions
+/// and the first-witness definition path instead of materializing an independent
+/// probe relation, moving their candidate and existence-evidence charges too.
+///
+/// The complete answers retain their scope and bag multiplicity. Fuel totals and
+/// budget-cut points can move, and carried columns change intermediate-cell
+/// widths. Admission also prices the selected seeded execution and relation-local
+/// join domains. Consumers must remeasure fuel and cell ceilings for these query
+/// shapes; a budget sized against v10 does not identify the execution it buys in v11.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 11;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1655,7 +1672,9 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 10;
 /// property-function points, v6 appends the two aggregate points, v7 appends the three
 /// `EXISTS`-strategy evidence points, and v8 appends `property-function-work`; v9 leaves
 /// it unchanged and moves only the order of charges in a per-row loop; v10 also
-/// leaves it unchanged and corrects scratch ownership and mint checkpoints — see
+/// leaves it unchanged and corrects scratch ownership and mint checkpoints; v11
+/// leaves it unchanged and moves charged work through binding-driven positive
+/// operands and existence restrictions — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
@@ -2662,6 +2681,16 @@ mod tests {
         assert_eq!(
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
+        );
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 11);
+        assert_eq!(
+            pinned, "135209daa53d2d55380f95f1331a1e34f019dbc4af10d8ab4c82d0c0b349c3e8",
+            "the consumer's v11 receipt identity pins the unchanged charge table"
+        );
+        assert_ne!(
+            schedule_digest(GOVERNOR_PROFILE_ID, 10, &CHARGE_SCHEDULE),
+            pinned,
+            "binding-driven execution cannot reuse the v10 receipt identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

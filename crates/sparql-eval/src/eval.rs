@@ -2572,15 +2572,26 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     })
 }
 
-/// A binding bag produced inside one certified pure positive region. Only this
-/// module can construct it; arbitrary VALUES/BIND rows cannot enter the native
-/// seeded kernel. A join transfers its producer bag; UNION lends that one owned
-/// bag to its arms until their scoped workers have returned.
+/// A binding bag delivered to a certified pure positive region. The consumer is
+/// restricted to BGP/Join/Union, so carrying an upstream value cannot make a
+/// FILTER, BIND or subquery see a binding outside its logical scope.
 pub(crate) struct PositiveInput<'a, I: ViewTermId> {
     storage: std::borrow::Cow<'a, SolutionSeq<I>>,
 }
 
 impl<I: ViewTermId> PositiveInput<'_, I> {
+    pub(crate) fn owned(rows: SolutionSeq<I>) -> PositiveInput<'static, I> {
+        PositiveInput {
+            storage: std::borrow::Cow::Owned(rows),
+        }
+    }
+
+    pub(crate) fn from_rows(rows: &SolutionSeq<I>) -> PositiveInput<'_, I> {
+        PositiveInput {
+            storage: std::borrow::Cow::Borrowed(rows),
+        }
+    }
+
     pub(crate) fn rows(&self) -> &SolutionSeq<I> {
         self.storage.as_ref()
     }
@@ -2605,16 +2616,9 @@ pub(crate) fn positive_input<I: ViewTermId>(
     producer: &GraphPattern,
     rows: SolutionSeq<I>,
 ) -> Result<PositiveInput<'static, I>, EvalError> {
-    if !plan.contains(producer)
-        || rows
-            .rows
-            .iter()
-            .flatten()
-            .flatten()
-            .any(|term| !matches!(term, SolutionTerm::Existing(_)))
-    {
+    if !plan.contains(producer) {
         return Err(EvalError::internal(
-            "a native join seed was not produced by its pure positive plan",
+            "a native join seed was not produced by its positive plan",
         ));
     }
     Ok(PositiveInput {

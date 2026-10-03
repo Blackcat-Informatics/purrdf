@@ -23,13 +23,15 @@
 #[path = "../tests/support/mod.rs"]
 mod support;
 
-use support::skewed_star;
+use support::{boundary_joins, result_size, skewed_star};
 
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 use purrdf_core::RdfDataset;
 use purrdf_sparql_algebra::SparqlParser;
-use purrdf_sparql_eval::{EvalCtx, evaluate_query};
+use purrdf_sparql_eval::{
+    EvalCtx, NativeSparqlEngine, QueryGovernors, QueryOptions, evaluate_query,
+};
 
 const STAR_QUERY: &str = "SELECT ?a ?b ?c ?d WHERE { \
      ?s <http://ex/hot> ?a . ?s <http://ex/warm> ?b . \
@@ -63,5 +65,41 @@ fn bench_skewed_star(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_skewed_star);
+/// Compare boundary-sensitive shapes with their equivalent selective forms on
+/// the same full-scale dataset, prepared outside timing and under one allowance.
+fn bench_boundary_joins(c: &mut Bench) {
+    let dataset = boundary_joins::dataset();
+    let engine = NativeSparqlEngine::new();
+    let governors = QueryGovernors::METERED.with_max_intermediate_cells(boundary_joins::CELLS);
+    let mut group = c.benchmark_group("cost_based_bgp_planner/boundary_joins");
+    for (label, original, equivalent, expected) in boundary_joins::QUERIES {
+        for (form, body) in [("original", original), ("equivalent", equivalent)] {
+            let prepared = engine
+                .prepare_query(&boundary_joins::query(body), None)
+                .expect("boundary query parses");
+            let run = || {
+                let outcome = engine
+                    .query_prepared_governed_view(
+                        &*dataset,
+                        &prepared,
+                        &[],
+                        QueryOptions::EMPTY,
+                        &governors,
+                    )
+                    .expect("boundary benchmark evaluates");
+                let result = outcome
+                    .into_complete()
+                    .expect("bounded benchmark completes");
+                result_size(&result)
+            };
+            assert_eq!(run(), expected, "{label}/{form}");
+            group.bench_function(format!("{label}/{form}"), |bencher| {
+                bencher.iter(|| std::hint::black_box(run()));
+            });
+        }
+    }
+    group.finish();
+}
+
+bench_group!(benches, bench_skewed_star, bench_boundary_joins);
 bench_main!(benches);

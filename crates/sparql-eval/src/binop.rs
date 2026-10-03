@@ -111,13 +111,51 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
         let Some(l) = lift.absorb(0, evaluated) else {
             return Ok(lift.withheld());
         };
-        return Ok(lift.finish(hash_join(&l, &r, ctx)));
+        return Ok(lift.finish(hash_join(&l, &r, ctx)?));
     }
     let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
         return Ok(lift.withheld());
     };
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
+    }
+    finish_join(lift, l, right, ctx)
+}
+
+/// Build the driven relation only after the recursive driver has returned, so
+/// its seed and physical forecast do not enlarge every frame of a join spine.
+#[inline(never)]
+fn finish_join<D: DatasetView + Sync>(
+    mut lift: Lift<'_>,
+    l: SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if crate::bgp::PositivePlan::seed_eligible(right, &l.schema) {
+        let seed = crate::bgp::SeedEstimate::from_rows(&l);
+        let plan = crate::bgp::PositivePlan::build_seeded(
+            ctx.dataset,
+            &ctx.active_dataset,
+            ctx.active_graph,
+            right,
+            &seed,
+        )?
+        .expect("the right relation was certified seed eligible");
+        let out = l.schema.union(plan.root_schema());
+        let Some(joined) = lift.absorb(
+            1,
+            crate::eval::eval_positive_evaluated(
+                right,
+                Some(crate::eval::PositiveInput::owned(l)),
+                &plan,
+                ctx,
+            )?,
+        ) else {
+            return Ok(lift.withheld());
+        };
+        // The seeded relation already contains each driver occurrence. Joining
+        // it back to the driver would square duplicate multiplicities.
+        return Ok(lift.finish(joined.reorder_like(&out)));
     }
     // A variable-endpoint `SERVICE` in the right operand is answered over the endpoints
     // the left rows bind — see `crate::service_endpoints`.
@@ -130,7 +168,7 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     let Some(r) = lift.absorb(1, evaluated) else {
         return Ok(lift.withheld());
     };
-    Ok(lift.finish(hash_join(&l, &r, ctx)))
+    Ok(lift.finish(hash_join(&l, &r, ctx)?))
 }
 
 /// Execute one physical positive join. Disjoint unit-driven children keep the
@@ -168,7 +206,7 @@ pub(crate) fn eval_positive_join<D: DatasetView + Sync>(
         ) else {
             return Ok(lift.withheld());
         };
-        return Ok(lift.finish(hash_join(&rows, &other, ctx)));
+        return Ok(lift.finish(hash_join(&rows, &other, ctx)?));
     }
     let Some(joined) = lift.absorb(
         second,
@@ -1019,7 +1057,7 @@ fn hash_join<D: DatasetView + Sync>(
     l: &SolutionSeq<D::Id>,
     r: &SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
-) -> SolutionSeq<D::Id> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -1041,8 +1079,10 @@ fn hash_join<D: DatasetView + Sync>(
         // A global allocation bound cannot be divided among parallel chunks without each
         // chunk receiving (and allocating) the whole allowance. Keep this governed lane in
         // source order and test the ceiling before `merge` constructs the next row.
-        let worst_case = l.rows.len().saturating_mul(r.rows.len());
-        let mut rows = Vec::with_capacity(cell_ceiling.min(worst_case));
+        // A cell ceiling is permission to hold rows, not evidence that the join
+        // produces them. Allocate only when a compatible candidate is emitted;
+        // even two enormous bags can have an empty intersection.
+        let mut rows = Vec::new();
         'left: for lrow in &l.rows {
             match bound_key(lrow, &shared, KeySide::Left) {
                 Some(key) => {
@@ -1052,6 +1092,7 @@ fn hash_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
+                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
                             rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                         }
                     }
@@ -1061,6 +1102,7 @@ fn hash_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
+                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
                             rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                         }
                     }
@@ -1072,6 +1114,7 @@ fn hash_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
+                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
                             rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
                         }
                     }
@@ -1110,10 +1153,30 @@ fn hash_join<D: DatasetView + Sync>(
         })
     };
 
-    SolutionSeq {
+    Ok(SolutionSeq {
         schema: Arc::new(out),
         rows,
+    })
+}
+
+/// Grow the output for candidates actually being emitted, with amortized growth
+/// capped by the governor's remaining row allowance. No hypothetical Cartesian
+/// product participates in the reservation, and failure stays on the error channel.
+fn reserve_join_rows<I: ViewTermId>(
+    rows: &mut Vec<Solution<I>>,
+    needed: usize,
+    ceiling: usize,
+) -> Result<(), EvalError> {
+    if needed > rows.capacity() - rows.len() {
+        let remaining = ceiling.saturating_sub(rows.len());
+        debug_assert!(needed <= remaining);
+        let additional = needed.max(rows.capacity().max(4)).min(remaining);
+        rows.try_reserve_exact(additional)
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "join solutions",
+            })?;
     }
+    Ok(())
 }
 
 /// Which side's ordinal a shared-column pair addresses.
@@ -1238,9 +1301,44 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
     expression: Option<&Expression>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    let evaluated = eval_evaluated(left, ctx)?;
+    finish_left_join(node, evaluated, right, expression, ctx)
+}
+
+/// The driver has returned before any seed forecast or match block is built.
+/// Keep these locals out of the frame retained while descending an OPTIONAL
+/// spine, just as the node dispatcher keeps operator work out of its frame.
+#[inline(never)]
+fn finish_left_join<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    evaluated: Evaluated<D::Id>,
+    right: &GraphPattern,
+    expression: Option<&Expression>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if let Evaluated::Complete(rows) = &evaluated
+        && crate::bgp::PositivePlan::seed_eligible(right, &rows.schema)
+    {
+        let mut seed = crate::bgp::SeedEstimate::from_rows(rows);
+        // OPTIONAL commits one driver occurrence at a time. Its working bag
+        // therefore has one incoming row, even when the outer bag is large.
+        seed.rows = 1;
+        if let Some(plan) = crate::bgp::PositivePlan::build_seeded(
+            ctx.dataset,
+            &ctx.active_dataset,
+            ctx.active_graph,
+            right,
+            &seed,
+        )? {
+            let Evaluated::Complete(rows) = evaluated else {
+                unreachable!("the inspected left arm was complete")
+            };
+            return eval_seeded_left_join(node, rows, right, expression, &plan, ctx);
+        }
+    }
     left_join_lift(
         node,
-        eval_evaluated(left, ctx)?,
+        evaluated,
         // A variable-endpoint `SERVICE` in the optional side is answered over the
         // endpoints the left rows bind — see `crate::service_endpoints`.
         |l, ctx| {
@@ -1254,6 +1352,68 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
         expression,
         ctx,
     )
+}
+
+/// Keep an OPTIONAL's driver occurrences separate until each has been fully
+/// tested. A duplicate driver contributes its own complete match block; an
+/// unmatched occurrence is padded only after its seeded relation finishes.
+fn eval_seeded_left_join<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    left: SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    expression: Option<&Expression>,
+    plan: &crate::bgp::PositivePlan,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let schema = Arc::new(left.schema.union(plan.root_schema()));
+    let cell_ceiling = ctx.cell_row_ceiling(schema.len());
+    let row_ceiling = ctx.row_ceiling();
+    let mut rows = Vec::new();
+    'driver: for row in left.rows {
+        let unit = SolutionSeq {
+            schema: Arc::clone(&left.schema),
+            rows: vec![row],
+        };
+        let evaluated = crate::eval::eval_positive_evaluated(
+            right,
+            Some(crate::eval::PositiveInput::from_rows(&unit)),
+            plan,
+            ctx,
+        )?;
+        if matches!(evaluated, Evaluated::Truncated(_)) {
+            drop(lift.absorb(1, evaluated));
+            break;
+        }
+        // The singleton has multiplicity one, so this reuses the ordinary
+        // condition/padding law without multiplying the already-seeded bag.
+        let block = left_join_lift(
+            node,
+            Evaluated::Complete(unit),
+            |_, _| Ok(evaluated),
+            expression,
+            ctx,
+        )?;
+        let block = match block {
+            Evaluated::Complete(block) => block.reorder_like(&schema),
+            truncated @ Evaluated::Truncated(_) => {
+                drop(lift.absorb(1, truncated));
+                break;
+            }
+        };
+        for row in block.rows {
+            if row_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                break 'driver;
+            }
+            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                let _ = ctx.observe_cells(rows.len().saturating_add(1), schema.len());
+                break 'driver;
+            }
+            reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
+            rows.push(row);
+        }
+    }
+    Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
 /// The `LeftJoin` lift, given the left arm's result and a **lazy** right arm.
@@ -1294,7 +1454,7 @@ fn left_join_lift<D: DatasetView + Sync>(
     // why padding then bounds the answer on neither side.
     let pad_unmatched = !lift.is_truncated();
     let joined = match expression {
-        None => left_outer_join(&l, &r, ctx, pad_unmatched),
+        None => left_outer_join(&l, &r, ctx, pad_unmatched)?,
         Some(expr) => left_outer_join_filtered(node, &l, &r, expr, ctx, pad_unmatched)?,
     };
     // An `EXISTS` inside the inline condition is an opaque edge: a trip inside it makes
@@ -1432,8 +1592,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         ctx.absorb_worker_witnesses(witnesses);
         rows
     } else {
-        let mut rows =
-            Vec::with_capacity(cell_ceiling.map_or(l.rows.len(), |cap| cap.min(l.rows.len())));
+        let mut rows = Vec::new();
         'left: for lrow in &l.rows {
             let mut matched = false;
             match filtered_candidates(lrow, &shared, &keyed, &wild) {
@@ -1445,6 +1604,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
+                            reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
                             rows.push(merged);
                             matched = true;
                         }
@@ -1461,6 +1621,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
+                            reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
                             rows.push(merged);
                             matched = true;
                         }
@@ -1474,6 +1635,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 }
                 let mut row = purrdf_core::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
+                reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
                 rows.push(row);
             }
         }
@@ -1495,7 +1657,7 @@ fn left_outer_join<D: DatasetView + Sync>(
     r: &SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
     pad_unmatched: bool,
-) -> SolutionSeq<D::Id> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -1511,8 +1673,7 @@ fn left_outer_join<D: DatasetView + Sync>(
     // order is byte-identical to the sequential path.
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let rows = if let Some(cell_ceiling) = cell_ceiling {
-        let worst_case = l.rows.len().saturating_mul(r.rows.len().max(1));
-        let mut rows = Vec::with_capacity(cell_ceiling.min(worst_case));
+        let mut rows = Vec::new();
         'left: for lrow in &l.rows {
             let before = rows.len();
             match bound_key(lrow, &shared, KeySide::Left) {
@@ -1523,6 +1684,7 @@ fn left_outer_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
+                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
                             rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                         }
                     }
@@ -1532,6 +1694,7 @@ fn left_outer_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
+                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
                             rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                         }
                     }
@@ -1543,6 +1706,7 @@ fn left_outer_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
+                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
                             rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
                         }
                     }
@@ -1555,6 +1719,7 @@ fn left_outer_join<D: DatasetView + Sync>(
                 }
                 let mut row = purrdf_core::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
+                reserve_join_rows(&mut rows, 1, cell_ceiling)?;
                 rows.push(row);
             }
         }
@@ -1593,10 +1758,10 @@ fn left_outer_join<D: DatasetView + Sync>(
         })
     };
 
-    SolutionSeq {
+    Ok(SolutionSeq {
         schema: Arc::new(out),
         rows,
-    }
+    })
 }
 
 /// Evaluate `left MINUS { right }` (algebra `Minus`).
@@ -1898,7 +2063,7 @@ mod tests {
             &TestQueryGovernors::UNBOUNDED.with_max_intermediate_cells(4),
         ));
         let ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
-        let (joined, merges) = counting_merges(|| hash_join(&left, &right, &ctx));
+        let (joined, merges) = counting_merges(|| hash_join(&left, &right, &ctx).expect("join"));
 
         assert_eq!(joined.rows.len(), 2);
         assert_eq!(
@@ -1913,6 +2078,94 @@ mod tests {
                 consumed: 6,
             })
         );
+    }
+
+    /// These bags go directly to the materializing operators: a binding-driven
+    /// query rewrite cannot hide a Cartesian reservation in either operator.
+    fn sparse_join_bags() -> (SolutionSeq, SolutionSeq) {
+        const ROWS: u32 = 21_000;
+        let make = |start, end, payload| SolutionSeq {
+            schema: Arc::new(VarSchema::from_vars([
+                Variable::new("key"),
+                Variable::new(payload),
+            ])),
+            rows: (start..end)
+                .map(|key| {
+                    purrdf_core::smallvec![
+                        Some(SolutionTerm::Existing(TermId::from_index(key))),
+                        Some(SolutionTerm::Existing(TermId::from_index(0))),
+                    ]
+                })
+                .collect(),
+        };
+        let mut left = make(ROWS, ROWS * 2, "left");
+        left.rows.push(purrdf_core::smallvec![
+            Some(SolutionTerm::Existing(TermId::from_index(0))),
+            Some(SolutionTerm::Existing(TermId::from_index(0))),
+        ]);
+        (left, make(0, ROWS, "right"))
+    }
+
+    #[test]
+    fn sparse_join_capacity_tracks_actual_matches_under_every_cell_allowance() {
+        let ds = graph();
+        let (left, right) = sparse_join_bags();
+        for governors in [
+            TestQueryGovernors::METERED,
+            TestQueryGovernors::UNBOUNDED.with_max_intermediate_cells(8_388_608),
+            TestQueryGovernors::UNBOUNDED,
+        ] {
+            let state = Arc::new(TestGovernorState::new(&governors));
+            let ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
+            let joined = hash_join(&left, &right, &ctx).expect("sparse join");
+            assert_eq!(joined.rows.len(), 1);
+            assert!(joined.rows.capacity() <= 4, "{:?}", joined.rows.capacity());
+            assert_eq!(state.tripped(), None);
+
+            let joined =
+                left_outer_join(&left, &right, &ctx, false).expect("sparse join without padding");
+            assert_eq!(joined.rows.len(), 1);
+            assert!(joined.rows.capacity() <= 4, "{:?}", joined.rows.capacity());
+            assert_eq!(state.tripped(), None);
+
+            let joined =
+                left_outer_join(&left, &right, &ctx, true).expect("sparse join with padding");
+            assert_eq!(joined.rows.len(), left.rows.len());
+            assert!(joined.rows.capacity() <= left.rows.len().next_power_of_two());
+            let right_column = joined
+                .schema
+                .index_of(&Variable::new("right"))
+                .expect("right column");
+            assert_eq!(
+                joined
+                    .rows
+                    .iter()
+                    .filter(|row| row[right_column].is_some())
+                    .count(),
+                1
+            );
+            assert_eq!(state.tripped(), None);
+        }
+    }
+
+    #[test]
+    fn join_output_reservation_capacity_overflow_is_typed() {
+        let mut rows: Vec<Solution> = Vec::new();
+        let error = reserve_join_rows(&mut rows, usize::MAX, usize::MAX)
+            .expect_err("a solution vector cannot have usize::MAX slots");
+        assert_eq!(
+            error,
+            EvalError::AllocationFailed {
+                construct: "join solutions",
+            }
+        );
+        assert_eq!(error.code(), Some(EvalError::ALLOCATION_FAILED_CODE));
+        assert_eq!(
+            error.to_string(),
+            "memory allocation failed for join solutions"
+        );
+        assert_eq!(rows, [] as [Solution; 0]);
+        assert_eq!(rows.capacity(), 0);
     }
 
     #[test]
