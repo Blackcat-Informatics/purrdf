@@ -31,6 +31,29 @@ fn diagnostic(error: &EvalError) -> RdfDiagnostic {
     )
 }
 
+/// Admission keeps operational causes typed until the caller selects its egress.
+pub(super) enum AdmissionError<E> {
+    Query(RdfDiagnostic),
+    Operational(E),
+}
+
+type AdmissionResult<D, T> = Result<T, AdmissionError<<D as DatasetView>::ReadError>>;
+
+purrdf_lex::variant_from!(impl<E> AdmissionError<E> {
+    Query(EvalError) as diagnostic
+});
+
+impl<E: std::fmt::Display> AdmissionError<E> {
+    /// Project either cause into the resident diagnostic boundary; operational
+    /// callers keep the typed variant instead of using this lossy projection.
+    fn into_diagnostic(self) -> RdfDiagnostic {
+        match self {
+            Self::Query(error) => error,
+            Self::Operational(error) => diagnostic(&EvalError::source_read(error)),
+        }
+    }
+}
+
 /// Fixed governor/report scaffolding is admitted before constructing its heap
 /// owner. Resident monomorphs retain the same zero-sized no-op reservation.
 pub(super) fn reserve_reporting<D: DatasetView>(
@@ -52,10 +75,20 @@ pub(super) fn reserve<'a, D: DatasetView>(
     has_substitutions: bool,
     options: super::QueryOptions<'_>,
 ) -> Result<impl WorkspaceReservation<Error = D::ReadError> + 'a, RdfDiagnostic> {
-    let _reporting =
-        reserve_reporting(view).map_err(|error| diagnostic(&EvalError::source_read(error)))?;
-    check_inputs(view, has_substitutions, options)?;
-    reserve_checked(view, query).map_err(|error| diagnostic(&error))
+    reserve_with_error(view, query, has_substitutions, options)
+        .map_err(AdmissionError::into_diagnostic)
+}
+
+/// The shared admission path before an operational caller publishes its receipt.
+pub(super) fn reserve_with_error<'a, D: DatasetView>(
+    view: &'a D,
+    query: &Query,
+    has_substitutions: bool,
+    options: super::QueryOptions<'_>,
+) -> AdmissionResult<D, impl WorkspaceReservation<Error = D::ReadError> + 'a> {
+    let _reporting = reserve_reporting(view).map_err(AdmissionError::Operational)?;
+    check_inputs(view, has_substitutions, options).map_err(AdmissionError::Query)?;
+    reserve_checked(view, query)
 }
 
 /// Refuse known unpriced caller inputs before request parameter metadata can
@@ -90,26 +123,26 @@ pub(super) fn check_inputs<D: DatasetView>(
 fn reserve_checked<'a, D: DatasetView>(
     view: &'a D,
     query: &Query,
-) -> Result<impl WorkspaceReservation<Error = D::ReadError> + 'a, EvalError> {
+) -> AdmissionResult<D, impl WorkspaceReservation<Error = D::ReadError> + 'a> {
     if view.storage_live_budget().is_none() {
-        return view.reserve_workspace(0).map_err(EvalError::source_read);
+        return view
+            .reserve_workspace(0)
+            .map_err(AdmissionError::Operational);
     }
     let Query::Select {
         pattern, dataset, ..
     } = query
     else {
-        return Err(EvalError::WorkspaceUnpriced("the query form"));
+        return Err(EvalError::WorkspaceUnpriced("the query form").into());
     };
     if !dataset.default.is_empty() || !dataset.named.is_empty() {
-        return Err(EvalError::WorkspaceUnpriced("an explicit active dataset"));
+        return Err(EvalError::WorkspaceUnpriced("an explicit active dataset").into());
     }
     let GraphPattern::Project { inner, variables } = pattern else {
-        return Err(EvalError::WorkspaceUnpriced("solution modifiers"));
+        return Err(EvalError::WorkspaceUnpriced("solution modifiers").into());
     };
     let GraphPattern::Bgp { patterns } = &**inner else {
-        return Err(EvalError::WorkspaceUnpriced(
-            "algebra outside a basic graph pattern",
-        ));
+        return Err(EvalError::WorkspaceUnpriced("algebra outside a basic graph pattern").into());
     };
     let term_bytes = view
         .max_owned_term_bytes()
@@ -145,7 +178,7 @@ fn reserve_checked<'a, D: DatasetView>(
                     logical(blank.as_str().len())?
                 }
                 TermPattern::Triple(_) => {
-                    return Err(EvalError::WorkspaceUnpriced("a nested triple pattern"));
+                    return Err(EvalError::WorkspaceUnpriced("a nested triple pattern").into());
                 }
             };
             authored_bytes = add(authored_bytes, bytes)?;
@@ -168,7 +201,7 @@ fn reserve_checked<'a, D: DatasetView>(
     )?;
     let reservation = view
         .reserve_workspace(base)
-        .map_err(EvalError::source_read)?;
+        .map_err(AdmissionError::Operational)?;
     let mut rows = 1_u64;
     for pattern in patterns {
         let (subject, missing_subject) = term_id(view, &pattern.subject)?;
@@ -179,7 +212,7 @@ fn reserve_checked<'a, D: DatasetView>(
                 let value = crate::convert::named_node_to_value(node);
                 let id = view
                     .term_id_by_value(&value)
-                    .map_err(EvalError::source_read)?;
+                    .map_err(AdmissionError::Operational)?;
                 (id, id.is_none())
             }
         };
@@ -189,7 +222,7 @@ fn reserve_checked<'a, D: DatasetView>(
             view.cardinality_estimate(subject, predicate, object, GraphMatch::Default)
         };
         if let Some(error) = view.read_error() {
-            return Err(EvalError::source_read(error));
+            return Err(AdmissionError::Operational(error));
         }
         // Each prefix in any join order has at most this product's rows. A zero
         // pattern contributes one to keep all earlier prefixes covered as well.
@@ -208,22 +241,25 @@ fn reserve_checked<'a, D: DatasetView>(
     let planner = add(32_768, mul(mul(count, count)?, add(128, mul(width, 32)?)?)?)?;
     let full = add(base, add(bags, planner)?)?;
     drop(reservation);
-    view.reserve_workspace(full).map_err(EvalError::source_read)
+    view.reserve_workspace(full)
+        .map_err(AdmissionError::Operational)
 }
 
 fn term_id<D: DatasetView>(
     view: &D,
     term: &TermPattern,
-) -> Result<(Option<D::Id>, bool), EvalError> {
+) -> AdmissionResult<D, (Option<D::Id>, bool)> {
     match term {
         TermPattern::Variable(_) | TermPattern::BlankNode(_) => Ok((None, false)),
         TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
             let value = crate::convert::ground_term_pattern_to_value(term, "workspace admission")?;
             let id = view
                 .term_id_by_value(&value)
-                .map_err(EvalError::source_read)?;
+                .map_err(AdmissionError::Operational)?;
             Ok((id, id.is_none()))
         }
-        TermPattern::Triple(_) => Err(EvalError::WorkspaceUnpriced("a nested triple pattern")),
+        TermPattern::Triple(_) => {
+            Err(EvalError::WorkspaceUnpriced("a nested triple pattern").into())
+        }
     }
 }

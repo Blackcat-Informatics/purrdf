@@ -15,7 +15,10 @@ use purrdf_core::{
     SegmentedReadLimits, SegmentedSession, SegmentedSnapshot, SparqlRequest, SparqlResult,
     TermValue,
 };
-use purrdf_sparql_eval::{FallibleSparqlError, NativeSparqlEngine, QueryOptions};
+use purrdf_sparql_eval::{
+    CancellationFlag, FallibleSparqlError, NativeSparqlEngine, NodeCharges, QueryOptions,
+    ResourceDimension,
+};
 
 #[global_allocator]
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
@@ -424,4 +427,211 @@ fn unpriced_request_inputs_refuse_before_copying_parameter_metadata() {
             )
             .is_ok()
     );
+}
+
+#[test]
+/// Real segmented EXPLAIN stays within charged capacity and releases workspace between runs.
+fn fallible_explain_measures_the_segmented_store_within_its_certified_reservation() {
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    engine.prepare_query(QUERY, None).unwrap();
+    let expected = engine
+        .explain_query(&resident, QUERY, None)
+        .unwrap()
+        .render();
+
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    // Four measuring runs share the session's fixed-capacity request ledger.
+    let source = SegmentedSession::open(
+        Arc::new(image.provider()),
+        image.receipt(),
+        SegmentedReadLimits::new(CEILING, 2, 8192, 20_000_000, 8),
+    )
+    .unwrap();
+    let (explanation, evidence) = engine
+        .explain_query_fallible_view(&source, QUERY, None)
+        .expect("the selective persistent join is certified");
+    let after = source.evidence();
+    let measured = window.close();
+    assert_eq!(explanation.render(), expected);
+    assert!(
+        evidence.evictions() > 0,
+        "the measuring run used the sparse storage cache"
+    );
+    let fuel: u64 = explanation
+        .ledger()
+        .iter()
+        .map(NodeCharges::fuel_total)
+        .sum();
+    assert_eq!(
+        fuel,
+        explanation.evidence().consumed_in(ResourceDimension::Fuel)
+    );
+    assert!(fuel > 0);
+    assert!(
+        u64::try_from(measured.peak_working_bytes).unwrap() <= evidence.peak_bytes(),
+        "actual {} exceeds the certified peak {}",
+        measured.peak_working_bytes,
+        evidence.peak_bytes()
+    );
+    assert!(evidence.peak_bytes() <= CEILING);
+    assert!(
+        evidence.live_bytes() > after.live_bytes(),
+        "publication captured held guards, and returning released them"
+    );
+    assert!(source.read_error().is_none());
+
+    // Repeat on the same healthy storage session. A retained execution guard
+    // would accumulate a live charge even though each measuring run has ended.
+    for _ in 0..3 {
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let (again, receipt) = engine
+            .explain_query_fallible_view(&source, QUERY, None)
+            .unwrap();
+        let live = source.evidence().live_bytes();
+        let measured = window.close();
+        assert_eq!(again.render(), expected);
+        assert_eq!(live, after.live_bytes());
+        assert!(receipt.live_bytes() > live);
+        assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= receipt.peak_bytes());
+        assert!(receipt.peak_bytes() <= CEILING);
+    }
+}
+
+#[test]
+/// Capacity and algebra admission failures precede row probes and release every guard.
+fn fallible_explain_refuses_tight_capacity_and_unpriced_algebra_before_probing() {
+    let (image, _) = fixture();
+    let initial = open(&image, CEILING);
+    let opening_bytes = initial.evidence().live_bytes();
+    drop(initial);
+    let engine = NativeSparqlEngine::new();
+    engine.prepare_query(QUERY, None).unwrap();
+    let ordered = format!("{QUERY} ORDER BY ?label");
+    engine.prepare_query(&ordered, None).unwrap();
+
+    for (headroom, query) in [(512, QUERY), (24_000, QUERY), (16_384, ordered.as_str())] {
+        let ceiling = opening_bytes + headroom;
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let source = open(&image, ceiling);
+        let before = source.evidence();
+        let error = engine
+            .explain_query_fallible_view(&source, query, None)
+            .unwrap_err();
+        let after = source.evidence();
+        let measured = window.close();
+        assert_eq!(after.request_count(), before.request_count());
+        assert!(
+            after.live_bytes() <= before.live_bytes(),
+            "refusal released its guards"
+        );
+        assert!(error.partial_answers().is_none());
+        assert!(
+            u64::try_from(measured.peak_working_bytes).unwrap() <= error.evidence().peak_bytes()
+        );
+        assert!(error.evidence().peak_bytes() <= ceiling);
+        if query == QUERY {
+            assert!(matches!(
+                error,
+                FallibleSparqlError::Operational {
+                    error: SegmentedError::Residency { .. },
+                    ..
+                }
+            ));
+        } else {
+            assert!(
+                matches!(error, FallibleSparqlError::Query { diagnostic, .. }
+                if diagnostic.code == "native-sparql-workspace-unpriced")
+            );
+            assert!(source.read_error().is_none());
+        }
+    }
+}
+
+#[test]
+/// Unpriced configuration is rejected before copying it, consulting the cache, or reading data.
+fn fallible_explain_refuses_unpriced_options_before_cache_lookup_or_data_reads() {
+    let (image, _) = fixture();
+    let long_prefix = "x".repeat(100_000);
+    for options in [
+        QueryOptions::EMPTY.with_bnode_mint_prefix(Some(&long_prefix)),
+        QueryOptions::EMPTY.with_call_depth(1),
+    ] {
+        for signalled in [false, true] {
+            let engine = NativeSparqlEngine::new();
+            let source = open(&image, CEILING);
+            let before = source.evidence();
+            let stop = Arc::new(CancellationFlag::new());
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let error = if signalled {
+                engine.explain_query_with_stop_signal_fallible_view(
+                    &source, QUERY, None, options, stop,
+                )
+            } else {
+                engine.explain_query_with_options_fallible_view(&source, QUERY, None, options)
+            }
+            .expect_err("unpriced input is refused before plan preparation or storage lookup");
+            let measured = window.close();
+            assert!(
+                matches!(error, FallibleSparqlError::Query { diagnostic, .. }
+                if diagnostic.code == "native-sparql-workspace-unpriced")
+            );
+            assert!(
+                measured.peak_working_bytes <= 8192,
+                "caller payload must not be copied"
+            );
+            assert_eq!(source.evidence().request_count(), before.request_count());
+            assert_eq!(source.evidence().live_bytes(), before.live_bytes());
+            assert_eq!(engine.cached_plan_count(), 0);
+            assert!(source.read_error().is_none());
+        }
+    }
+}
+
+#[test]
+/// A real segmented cardinality-read failure preserves its typed cause over cancellation.
+fn fallible_explain_preserves_a_segmented_provider_fault_over_a_fired_stop() {
+    let (image, _) = fixture();
+    let provider = Arc::new(RefusingProvider {
+        bytes: image.provider(),
+        refuse: AtomicBool::new(false),
+        operation: "explain cardinality read",
+    });
+    let source = SegmentedSession::open(
+        provider.clone(),
+        image.receipt(),
+        SegmentedReadLimits::new(CEILING, 2, 2048, 20_000_000, 8),
+    )
+    .unwrap();
+    let engine = NativeSparqlEngine::new();
+    engine.prepare_query(QUERY, None).unwrap();
+    let before = source.evidence();
+    provider.refuse.store(true, Ordering::Relaxed);
+    let stop = Arc::new(CancellationFlag::new());
+    stop.cancel();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let error = engine
+        .explain_query_with_stop_signal_fallible_view(
+            &source,
+            QUERY,
+            None,
+            QueryOptions::EMPTY,
+            stop,
+        )
+        .expect_err("storage refusal outranks the measuring run's stop signal");
+    let after = source.evidence();
+    let measured = window.close();
+    assert_eq!(
+        error.operational_error(),
+        Some(&SegmentedError::Provider {
+            operation: "explain cardinality read",
+            host_code: Some(5),
+        })
+    );
+    assert!(error.diagnostic().is_none());
+    assert!(error.partial_answers().is_none());
+    assert!(after.request_count() > before.request_count());
+    assert!(after.live_bytes() <= before.live_bytes());
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= error.evidence().peak_bytes());
+    assert!(error.evidence().peak_bytes() <= CEILING);
 }

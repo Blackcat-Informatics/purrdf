@@ -43,13 +43,23 @@ impl NativeSparqlEngine {
         let _reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
             error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
         })?;
-        let evaluation = self.query_governed_prepared_in_state(
+        let workspace = super::reserve_fallible_workspace(
+            dataset,
+            &prepared.query,
+            !substitutions.is_empty(),
+            options,
+        )
+        .map_err(|error| {
+            error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+        })?;
+        let evaluation = self.query_governed_prepared_admitted(
             dataset,
             prepared,
             &AdmittedSubstitutions::prepared(substitutions),
             options,
             state,
             super::Sequencing::for_view::<D>(),
+            &workspace,
         );
         finish_governed_fallible_query(dataset, state, evaluation)
     }

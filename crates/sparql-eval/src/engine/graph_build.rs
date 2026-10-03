@@ -173,7 +173,16 @@ impl NativeSparqlEngine {
         let _reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
             error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
         })?;
-        let evaluation = self.stage_construct(
+        let workspace = super::reserve_fallible_workspace(
+            dataset,
+            &prepared.query,
+            !substitutions.is_empty(),
+            options,
+        )
+        .map_err(|error| {
+            error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+        })?;
+        let evaluation = self.stage_construct_admitted(
             dataset,
             prepared,
             substitutions,
@@ -181,6 +190,7 @@ impl NativeSparqlEngine {
             destination,
             Some(state),
             super::Sequencing::for_view::<D>(),
+            &workspace,
         );
         match dataset.operation_status() {
             ViewOperationStatus::Failed { error, evidence } => {
@@ -232,6 +242,36 @@ impl NativeSparqlEngine {
             !substitutions.is_empty(),
             options,
         )?;
+        self.stage_construct_admitted(
+            dataset,
+            prepared,
+            substitutions,
+            options,
+            destination,
+            state,
+            sequencing,
+            &workspace,
+        )
+    }
+
+    /// Stage the complete graph under the caller's admitted guard. This body
+    /// reads destination identities but leaves append and its final checkpoint
+    /// to the ingress, so a failed run cannot modify the destination.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the one staging body keeps its destination, governor and sequencing under the admitted guard"
+    )]
+    fn stage_construct_admitted<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
+        options: QueryOptions<'d>,
+        destination: &RdfDatasetBuilder,
+        state: Option<&Arc<GovernorState>>,
+        sequencing: super::Sequencing,
+        workspace: &impl purrdf_core::WorkspaceReservation<Error = D::ReadError>,
+    ) -> Result<ValidatedRdfDatasetBuilder, GraphBuildError> {
         let prefix =
             crate::template::destination_mint_prefix(options.bnode_mint_prefix, |prefix| {
                 destination.blank_identities().any(|(label, scope)| {
@@ -257,7 +297,7 @@ impl NativeSparqlEngine {
                 )?,
             })
         };
-        let mut ctx = apply_query_options(self.eval_ctx(dataset, &workspace), options)?;
+        let mut ctx = apply_query_options(self.eval_ctx(dataset, workspace), options)?;
         if let Some(state) = state {
             ctx = ctx.with_governors(Arc::clone(state));
         }
