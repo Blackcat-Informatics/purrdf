@@ -92,13 +92,16 @@ def transport_summary(stderr: str) -> str:
         trace = re.match(r"(?:[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)? +)?"
                          r"http\.c:[0-9]+ +(.+)$", line)
         payload = trace[1] if trace else ""
-        request = re.match(r"=> Send header: (GET|POST) /\S* HTTP/(1\.0|1\.1|2|3)(?:\s|$)",
-                           payload)
+        # RFC 9110 sections 9.1 and 5.6.2: every method is a case-sensitive
+        # token. Even an unrecognized method starts a new response context.
+        request = re.fullmatch(r"=> Send header: ([!#$%&'*+.^_`|~0-9A-Za-z-]+) "
+                               r"\S+ HTTP/([0-9](?:\.[0-9])?)", payload)
         if request:
             latest_request = {
                 "GET": "latest HTTP request is GET",
                 "POST": "latest HTTP request is POST",
-            }[request[1]]
+                "CONNECT": "latest HTTP request is CONNECT",
+            }.get(request[1], "latest HTTP request has an unrecognized method")
             latest_response = None
             add(HTTP_PROTOCOLS.get(request[2]))
         header = re.match(r"<= Recv header: HTTP/(1\.0|1\.1|2|3) ([0-9]{3})(?:\s|$)",

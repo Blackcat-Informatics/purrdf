@@ -416,6 +416,44 @@ class TransportDiagnosticsTests(unittest.TestCase):
         self.assertNotIn("latest HTTP request final response 200", output)
         self.assertIn("timed out after 0.1 seconds", output)
 
+    def test_proxy_connect_response_is_not_attributed_to_previous_post(self):
+        output = self.invoke(
+            "http.c:1 => Send header: POST /repo.git/git-receive-pack HTTP/1.1\n"
+            "http.c:1 => Send header: CONNECT synthetic-proxy-target.example.org:443 HTTP/1.1\n"
+            "http.c:1 <= Recv header: HTTP/1.1 200 Connection established\n",
+            status=0,
+        )
+        self.assertIn("receive-pack POST observed", output)
+        self.assertIn("latest HTTP request is CONNECT", output)
+        self.assertIn("latest HTTP request final response 200 observed", output)
+        self.assertNotIn("latest HTTP request is POST", output)
+        self.assertNotIn("synthetic-proxy-target.example.org", output)
+        self.assertNotIn("Connection established", output)
+
+    def test_unrecognized_request_method_resets_previous_post_context(self):
+        for method, protocol in (
+            ("HEAD", "1.1"), ("OPTIONS", "2"), ("get", "1.1"),
+            ("Synthetic!#$%&'*+-.^_`|~0123456789", "1.1"), ("HEAD", "9.9"),
+        ):
+            with self.subTest(method=method, protocol=protocol):
+                output = self.invoke(
+                    "http.c:1 => Send header: POST /repo.git/git-receive-pack HTTP/1.1\n"
+                    "http.c:1 <= Recv header: HTTP/1.1 413 Request too large\n"
+                    f"http.c:1 => Send header: {method} /synthetic-private-target HTTP/{protocol}\n"
+                    f"http.c:1 <= Recv header: HTTP/{protocol} 200 OK\n",
+                    status=0,
+                )
+                self.assertIn("latest HTTP request has an unrecognized method", output)
+                self.assertNotIn("latest HTTP request is POST", output)
+                self.assertNotIn("latest HTTP request final response 413", output)
+                self.assertNotIn("synthetic-private-target", output)
+                self.assertNotIn(method, output)
+                if protocol == "9.9":
+                    self.assertIn("latest HTTP request has no recognized final response", output)
+                    self.assertNotIn("9.9", output)
+                else:
+                    self.assertIn("latest HTTP request final response 200 observed", output)
+
     def test_unknown_numbers_headers_and_server_fields_are_suppressed(self):
         output = self.invoke(
             "http.c:1 <= Recv header: HTTP/9 777 synthetic-private-marker\n"
