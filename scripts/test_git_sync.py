@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     "git_sync", Path(__file__).with_name("sync-git-refs.py")
@@ -157,7 +158,7 @@ class GitSyncTests(unittest.TestCase):
         self.hook("post-receive", "git update-ref -d refs/tags/light")
         with self.assertRaisesRegex(git_sync.SyncError, "three attempts"):
             self.sync()
-        self.assertIn("remote ref readback differed: refs/tags/light",
+        self.assertIn("remote ref readback differed for 1 refs",
                       self.diagnostics.getvalue())
         self.assertNotIn("refs/tags/light", self.identities(self.remote))
 
@@ -168,7 +169,54 @@ class GitSyncTests(unittest.TestCase):
             self.sync(timeout=0.1)
         self.assertLess(time.monotonic() - started, 3)
         self.assertIn("timed out", self.diagnostics.getvalue())
+        self.assertIn("pack write completion observed", self.diagnostics.getvalue())
         self.assertEqual(self.identities(self.remote), {})
+
+    def test_failed_destination_preflight_never_attempts_push(self):
+        original = git_sync.git
+        calls = []
+
+        def fail_remote_read(arguments, timeout):
+            calls.append(arguments[0])
+            if arguments[0] == "ls-remote":
+                raise git_sync.SyncError("synthetic destination read failed")
+            return original(arguments, timeout)
+
+        self.hook("pre-receive", "echo attempt >> attempts\nexit 1")
+        with mock.patch.object(git_sync, "git", side_effect=fail_remote_read):
+            with self.assertRaisesRegex(git_sync.SyncError, "three attempts"):
+                self.sync()
+        self.assertEqual(calls.count("ls-remote"), 3)
+        self.assertNotIn("push", calls)
+        self.assertFalse((self.remote / "attempts").exists())
+        self.assertEqual(self.identities(self.remote), {})
+
+    def test_exact_preflight_skips_push_and_preserves_extra_refs(self):
+        expected = self.sync()
+        self.git(self.remote, "update-ref", "refs/heads/retained",
+                 expected["refs/heads/main"])
+        self.hook("pre-receive", "echo attempt >> attempts\nexit 1")
+        self.assertEqual(self.sync(), expected)
+        self.assertFalse((self.remote / "attempts").exists())
+        self.assertEqual(self.identities(self.remote),
+                         dict(expected, **{"refs/heads/retained": expected["refs/heads/main"]}))
+
+    def test_lost_push_acknowledgment_reconciles_by_exact_preflight(self):
+        original = git_sync.git
+        pushes = []
+
+        def lose_acknowledgment(arguments, timeout):
+            result = original(arguments, timeout)
+            if arguments[0] == "push":
+                pushes.append(arguments)
+                raise git_sync.SyncError("synthetic acknowledgment lost")
+            return result
+
+        with mock.patch.object(git_sync, "git", side_effect=lose_acknowledgment):
+            expected = self.sync()
+        self.assertEqual(len(pushes), 1)
+        self.assertEqual(self.identities(self.remote), expected)
+        self.assertIn("Sync attempt 1/3 failed", self.diagnostics.getvalue())
 
     def test_main_is_required_even_when_similar_branch_exists(self):
         self.git(self.source, "checkout", "main-other")
@@ -272,6 +320,142 @@ class WorkflowAuthenticationTests(unittest.TestCase):
             self.assertIn(f"Missing {name} secret", result.stderr)
             self.assertNotIn(self.username, result.stdout + result.stderr)
             self.assertNotIn(self.password, result.stdout + result.stderr)
+
+
+class TransportDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        executable = self.root / "git"
+        executable.write_text(textwrap.dedent("""\
+            #!/usr/bin/env python3
+            import os
+            import sys
+            import time
+            if any(os.environ.get(name) != "1" for name in (
+                "GIT_TRACE_CURL", "GIT_TRACE_CURL_NO_DATA", "GIT_TRACE_REDACT"
+            )):
+                sys.exit(99)
+            sys.stderr.write(os.environ["GIT_SYNC_TEST_DIAGNOSTIC"])
+            sys.stderr.flush()
+            if os.environ["GIT_SYNC_TEST_SLEEP"] == "1":
+                time.sleep(20)
+            sys.exit(int(os.environ["GIT_SYNC_TEST_STATUS"]))
+            """))
+        executable.chmod(0o755)
+
+    def invoke(self, diagnostic, *, status=128, timeout=1, sleeping=False):
+        output = io.StringIO()
+        trace_path = self.root / "inherited-trace-destination"
+        with mock.patch.dict(os.environ, {
+            "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+            "GIT_TRACE_CURL": str(trace_path),
+            "GIT_TRACE_CURL_NO_DATA": "0",
+            "GIT_TRACE_REDACT": "0",
+            "GIT_SYNC_TEST_DIAGNOSTIC": diagnostic,
+            "GIT_SYNC_TEST_STATUS": str(status),
+            "GIT_SYNC_TEST_SLEEP": "1" if sleeping else "0",
+        }), redirect_stderr(output):
+            try:
+                git_sync.git(["push", "--progress", "https://example.org/repo.git"], timeout)
+            except git_sync.SyncError as error:
+                output.write(str(error))
+        self.assertFalse(trace_path.exists())
+        return output.getvalue()
+
+    def test_recognized_milestones_preserve_no_remote_text(self):
+        diagnostic_marker = "synthetic-private-diagnostic-value"
+        diagnostic = (
+            "00:00:00 http.c:1 => Send header: POST /repo.git/git-receive-pack HTTP/2\n"
+            "00:00:00 http.c:1 => Send header: Authorization: Basic " + diagnostic_marker + "\n"
+            "00:00:00 http.c:1 <= Recv header: HTTP/2 413 " + diagnostic_marker + "\n"
+            "00:00:00 http.c:1 == Info: upload completely sent off: 123 bytes\n"
+            "Writing objects: 31% (31/100)\rWriting objects: 100% (100/100), 123 bytes, done.\n"
+            "error: RPC failed; HTTP 413 curl 22 " + diagnostic_marker + "\n"
+            "fatal: unable to access 'https://synthetic-user:" + diagnostic_marker +
+            "@example.org/repo.git': " + diagnostic_marker + "\n"
+        )
+        output = self.invoke(diagnostic)
+        for expected in ("HTTP/2 observed", "HTTP status 413 observed",
+                         "receive-pack POST observed", "HTTP upload completion observed",
+                         "pack write completion observed", "last pack write progress 100%",
+                         "libcurl HTTP error response (22)",
+                         "latest HTTP request final response 413 observed"):
+            self.assertIn(expected, output)
+        for denied in (diagnostic_marker, "Authorization", "synthetic-user", "example.org",
+                       "123 bytes", "http.c"):
+            self.assertNotIn(denied, output)
+
+    def test_challenge_then_success_does_not_claim_authentication_rejection(self):
+        output = self.invoke(
+            "http.c:1 => Send header: GET /repo.git/info/refs HTTP/2\n"
+            "http.c:1 <= Recv header: HTTP/2 401\n"
+            "http.c:1 => Send header: GET /repo.git/info/refs HTTP/2\n"
+            "http.c:1 <= Recv header: HTTP/2 200\n",
+            status=0,
+        )
+        self.assertIn("HTTP status 401 observed", output)
+        self.assertIn("latest HTTP request final response 200 observed", output)
+        self.assertNotIn("authentication or permission rejected", output)
+        self.assertNotIn("exit status", output)
+
+    def test_stalled_post_resets_successful_get_response_context(self):
+        output = self.invoke(
+            "http.c:1 => Send header: GET /repo.git/info/refs HTTP/1.1\n"
+            "http.c:1 <= Recv header: HTTP/1.1 200 OK\n"
+            "http.c:1 => Send header: POST /repo.git/git-receive-pack HTTP/1.1\n"
+            "http.c:1 <= Recv header: HTTP/1.1 100 Continue\n"
+            "Writing objects:  37% (37/100)\r",
+            timeout=0.1, sleeping=True,
+        )
+        self.assertIn("receive-pack POST observed", output)
+        self.assertIn("last pack write progress 37%", output)
+        self.assertIn("latest HTTP request is POST", output)
+        self.assertIn("latest HTTP request has no recognized final response", output)
+        self.assertNotIn("latest HTTP request final response 200", output)
+        self.assertIn("timed out after 0.1 seconds", output)
+
+    def test_unknown_numbers_headers_and_server_fields_are_suppressed(self):
+        output = self.invoke(
+            "http.c:1 <= Recv header: HTTP/9 777 synthetic-private-marker\n"
+            "error: RPC failed; HTTP 777 curl 9999 synthetic-private-marker\n"
+            "Writing objects: 999% (999/100) synthetic-private-marker\n"
+            "remote: Writing objects: 42% (42/100) synthetic-private-marker\n"
+            "Password for 'https://synthetic-private-marker@example.org': \n"
+            "http.c:1 <= Recv header: X-Private: synthetic-private-marker\n"
+        )
+        for denied in ("synthetic-private-marker", "777", "9999", "999%", "42%",
+                       "Password", "X-Private", "example.org"):
+            self.assertNotIn(denied, output)
+        self.assertIn("Git command failed", output)
+
+    def test_remote_and_header_injected_trace_markers_do_not_change_context(self):
+        output = self.invoke(
+            "http.c:1 => Send header: GET /repo.git/info/refs HTTP/2\n"
+            "http.c:1 <= Recv header: HTTP/2 200\n"
+            "remote: http.c:1 => Send header: POST /repo.git/git-receive-pack HTTP/2\n"
+            "http.c:1 <= Recv header: X-Private: <= Recv header: HTTP/2 401\n"
+            "remote: http.c:1 == Info: upload completely sent off: 123 bytes\n",
+            status=0,
+        )
+        self.assertIn("latest HTTP request is GET", output)
+        self.assertIn("latest HTTP request final response 200 observed", output)
+        for denied in ("receive-pack POST observed", "HTTP upload completion observed",
+                       "HTTP status 401 observed", "X-Private", "123 bytes"):
+            self.assertNotIn(denied, output)
+
+    def test_authentication_rejection_and_refused_prompt_are_distinct(self):
+        for diagnostic, expected, denied in (
+            ("fatal: Authentication failed for 'https://example.org/repo.git'\n",
+             "authentication or permission rejected", "credential prompt refused"),
+            ("fatal: could not read Username for 'https://example.org': terminal prompts disabled\n",
+             "credential prompt refused", "authentication or permission rejected"),
+        ):
+            output = self.invoke(diagnostic)
+            self.assertIn(expected, output)
+            self.assertNotIn(denied, output)
+            self.assertNotIn("example.org", output)
 
 
 if __name__ == "__main__":
