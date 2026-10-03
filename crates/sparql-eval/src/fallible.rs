@@ -34,8 +34,9 @@ use crate::governed::PartialAnswers;
 pub type FallibleSparqlResult<OperationalError, Evidence> =
     Result<CompleteSparqlResult<Evidence>, FallibleSparqlError<OperationalError, Evidence>>;
 
-/// A scoped visitor value and its exact final operational receipt. The visitor
-/// output may be published only after this complete read boundary returns `Ok`.
+/// A caller-owned value and its exact final operational receipt, used by scoped
+/// visitors and measured EXPLAIN. The value may be published only after this
+/// complete read boundary returns `Ok`.
 pub type FallibleScopedResult<R, OperationalError, Evidence> =
     Result<(R, Evidence), FallibleSparqlError<OperationalError, Evidence>>;
 
@@ -81,10 +82,10 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
         /// Deterministic evidence captured at the final ready checkpoint.
         evidence: Evidence,
     },
-    /// The view failed operationally. This variant takes precedence over any
-    /// evaluator error derived after data became unavailable.
+    /// The view refused admission or failed operationally. This variant takes
+    /// precedence over any evaluator error derived after data became unavailable.
     Operational {
-        /// The sticky operational root cause.
+        /// The typed refusal or read error; an existing sticky root takes precedence.
         error: OperationalError,
         /// Deterministic evidence at the failure boundary.
         evidence: Evidence,

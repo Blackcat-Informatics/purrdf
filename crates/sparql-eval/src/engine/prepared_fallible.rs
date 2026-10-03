@@ -100,21 +100,31 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
-        let evaluation = super::bounded_workspace::check_inputs(
+        if let Err(diagnostic) = super::bounded_workspace::check_inputs(
             dataset,
             !substitutions.values.is_empty(),
             options,
+        ) {
+            return finish_governed_fallible_query(dataset, state, Err(diagnostic));
+        }
+        let workspace = super::reserve_fallible_workspace(
+            dataset,
+            &prepared.query,
+            !substitutions.values.is_empty(),
+            options,
         )
-        .and_then(|()| {
-            self.query_governed_prepared_in_state(
-                dataset,
-                prepared,
-                substitutions,
-                options,
-                state,
-                super::Sequencing::for_view::<D>(),
-            )
-        });
+        .map_err(|error| {
+            error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+        })?;
+        let evaluation = self.query_governed_prepared_admitted(
+            dataset,
+            prepared,
+            substitutions,
+            options,
+            state,
+            super::Sequencing::for_view::<D>(),
+            &workspace,
+        );
         finish_governed_fallible_query(dataset, state, evaluation)
     }
 
