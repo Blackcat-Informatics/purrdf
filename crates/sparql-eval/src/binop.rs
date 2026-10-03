@@ -1245,6 +1245,15 @@ fn merge<I: ViewTermId>(
     merged
 }
 
+/// Emit an unmatched driver's values followed by the OPTIONAL's unbound columns.
+/// The caller establishes that the complete right relation has no accepted match.
+fn padded_left_row<I: ViewTermId>(left: &Solution<I>, width: usize) -> Solution<I> {
+    let mut row = Solution::with_capacity(width);
+    row.extend_from_slice(left);
+    row.resize(width, None);
+    row
+}
+
 #[cfg(test)]
 std::thread_local! {
     /// Per-test proof that a cell-bounded cross product checks the sink before constructing
@@ -1369,57 +1378,192 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
     let schema = Arc::new(left.schema.union(plan.root_schema()));
     let cell_ceiling = ctx.cell_row_ceiling(schema.len());
     let row_ceiling = ctx.row_ceiling();
+    // Restore the ordinary ungoverned outer join's driver parallelism. Every
+    // observable checkpoint/cap and every operational read remains sequential.
+    if expression.is_none()
+        && matches!(right, GraphPattern::Bgp { .. })
+        && ctx.may_fork_sibling_patterns()
+        && ctx.ledger.is_none()
+        && ctx.cap_pushdown.is_none()
+        && ctx.dataset.storage_live_budget().is_none()
+        && crate::engine::Sequencing::for_view::<D>() == crate::engine::Sequencing::Free
+        && crate::parallel::should_parallelize(ctx.sequential_operation_required(), left.len())
+    {
+        let rows = parallel_seeded_optional(node, &left, right, plan, &schema, ctx)?;
+        return Ok(lift.finish(SolutionSeq { schema, rows }));
+    }
     let mut rows = Vec::new();
     let mut bgp = None;
-    'driver: for row in left.rows {
+    for row in left.rows {
         let unit = SolutionSeq {
             schema: Arc::clone(&left.schema),
             rows: vec![row],
         };
-        let input = crate::eval::PositiveInput::from_rows(&unit);
-        let evaluated = if matches!(right, GraphPattern::Bgp { .. }) {
-            crate::eval::eval_cached_bgp_evaluated(right, input, &mut bgp, ctx)?
-        } else {
-            crate::eval::eval_positive_evaluated(right, Some(input), plan, ctx)?
-        };
-        if matches!(evaluated, Evaluated::Truncated(_)) {
-            drop(lift.absorb(1, evaluated));
-            break;
-        }
-        // Every seeded row already contains this singleton's compatible values.
-        // An unfiltered nonempty block needs no second join or index. Empty
-        // blocks and inline conditions retain the ordinary padding/filter law.
-        let block = if expression.is_none() && !evaluated.rows().is_empty() {
-            evaluated
-        } else {
-            left_join_lift(
-                node,
-                Evaluated::Complete(unit),
-                |_, _| Ok(evaluated),
-                expression,
-                ctx,
-            )?
-        };
-        let block = match block {
-            Evaluated::Complete(block) => block.reorder_like(&schema),
+        let SeededOptionalBlock { evaluated, padding } =
+            seeded_optional_block(node, unit, right, expression, plan, &mut bgp, ctx)?;
+        let block = match evaluated {
+            Evaluated::Complete(block) => block,
             truncated @ Evaluated::Truncated(_) => {
                 drop(lift.absorb(1, truncated));
                 break;
             }
         };
-        for row in block.rows {
-            if row_ceiling.is_some_and(|cap| rows.len() >= cap) {
-                break 'driver;
-            }
-            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-                let _ = ctx.observe_cells(rows.len().saturating_add(1), schema.len());
-                break 'driver;
-            }
-            reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
-            rows.push(row);
+        if !append_seeded_optional_block(
+            block,
+            padding,
+            &mut rows,
+            &schema,
+            row_ceiling,
+            cell_ceiling,
+            ctx,
+        )? {
+            break;
         }
     }
     Ok(lift.finish(SolutionSeq { schema, rows }))
+}
+
+/// One driver's inspected relation. Padding cells accompany only a complete
+/// empty unfiltered relation; a truncated relation can never license padding.
+struct SeededOptionalBlock<I: ViewTermId> {
+    evaluated: Evaluated<I>,
+    padding: Option<Solution<I>>,
+}
+
+/// Execute each driver through the same node/read/stop checkpoints. Unfiltered
+/// seeds move their singleton storage; conditions retain the ordinary lift.
+fn seeded_optional_block<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    unit: SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    expression: Option<&Expression>,
+    plan: &crate::bgp::PositivePlan,
+    bgp: &mut Option<crate::bgp::CompiledBgp<D::Id>>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SeededOptionalBlock<D::Id>, EvalError> {
+    let padding = expression.is_none().then(|| unit.rows[0].clone());
+    let mut unit = Some(unit);
+    let input = if expression.is_none() {
+        crate::eval::PositiveInput::owned(unit.take().expect("the driver is present"))
+    } else {
+        crate::eval::PositiveInput::from_rows(unit.as_ref().expect("the driver is present"))
+    };
+    let evaluated = if matches!(right, GraphPattern::Bgp { .. }) {
+        crate::eval::eval_cached_bgp_evaluated(right, input, bgp, ctx)?
+    } else {
+        crate::eval::eval_positive_evaluated(right, Some(input), plan, ctx)?
+    };
+    if evaluated.is_truncated() {
+        return Ok(SeededOptionalBlock {
+            evaluated,
+            padding: None,
+        });
+    }
+    if expression.is_none() {
+        let padding = evaluated.rows().is_empty().then_some(padding).flatten();
+        return Ok(SeededOptionalBlock { evaluated, padding });
+    }
+    Ok(SeededOptionalBlock {
+        evaluated: left_join_lift(
+            node,
+            Evaluated::Complete(unit.expect("a filtered block retains its driver")),
+            |_, _| Ok(evaluated),
+            expression,
+            ctx,
+        )?,
+        padding: None,
+    })
+}
+
+/// Complete driver blocks share their layout, padding and sink admission law
+/// across serial execution and the ungoverned indexed chunk reduction.
+fn append_seeded_optional_block<D: DatasetView + Sync>(
+    block: SolutionSeq<D::Id>,
+    padding: Option<Solution<D::Id>>,
+    rows: &mut Vec<Solution<D::Id>>,
+    schema: &Arc<VarSchema>,
+    row_ceiling: Option<usize>,
+    cell_ceiling: Option<usize>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    if let Some(padding) = padding {
+        // The ordinary empty outer join admits its padded working row before
+        // the parent's semantic row cap, including LIMIT 0.
+        if cell_ceiling == Some(0) {
+            let _ = ctx.observe_cells(1, schema.len());
+            return Ok(false);
+        }
+        return push_seeded_join_row(rows, schema.len(), row_ceiling, cell_ceiling, ctx, || {
+            padded_left_row(&padding, schema.len())
+        });
+    }
+    for row in block.reorder_like(schema).rows {
+        if !push_seeded_join_row(rows, schema.len(), row_ceiling, cell_ceiling, ctx, || row)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Restore the ordinary outer join's indexed driver chunking when no cap or
+/// operational read can observe a fork. BGPs carry parent terms but mint none,
+/// so each child's complete rows escape without a scratch conversion.
+fn parallel_seeded_optional<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    left: &SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    plan: &crate::bgp::PositivePlan,
+    schema: &Arc<VarSchema>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Vec<Solution<D::Id>>, EvalError> {
+    let (rows, _) = crate::parallel::par_chunk_try_map_init(
+        ctx.sequential_operation_required(),
+        &left.rows,
+        || (ctx.fork_for_worker(), None),
+        |(child, bgp), rows, row| {
+            let unit = SolutionSeq {
+                schema: Arc::clone(&left.schema),
+                rows: vec![row.clone()],
+            };
+            let SeededOptionalBlock { evaluated, padding } =
+                seeded_optional_block(node, unit, right, None, plan, bgp, child)?;
+            let Evaluated::Complete(block) = evaluated else {
+                return Err(EvalError::internal(
+                    "an ungoverned uncapped BGP driver unexpectedly truncated",
+                ));
+            };
+            if !append_seeded_optional_block(block, padding, rows, schema, None, None, child)? {
+                return Err(EvalError::internal(
+                    "an ungoverned uncapped BGP driver unexpectedly reached a cap",
+                ));
+            }
+            Ok(())
+        },
+        |_| (),
+    )?;
+    Ok(rows)
+}
+
+/// Admit a completed seeded row before constructing padding or growing its sink.
+/// Matched and unmatched occurrences share the parent's answer and cell ceilings.
+fn push_seeded_join_row<D: DatasetView + Sync>(
+    rows: &mut Vec<Solution<D::Id>>,
+    width: usize,
+    row_ceiling: Option<usize>,
+    cell_ceiling: Option<usize>,
+    ctx: &EvalCtx<'_, D>,
+    make_row: impl FnOnce() -> Solution<D::Id>,
+) -> Result<bool, EvalError> {
+    if row_ceiling.is_some_and(|cap| rows.len() >= cap) {
+        return Ok(false);
+    }
+    if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+        let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
+        return Ok(false);
+    }
+    reserve_join_rows(rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
+    rows.push(make_row());
+    Ok(true)
 }
 
 /// The `LeftJoin` lift, given the left arm's result and a **lazy** right arm.
@@ -1587,9 +1731,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     }
                 }
                 if pad_unmatched && acc.len() == before {
-                    let mut row = purrdf_core::smallvec![None; out_len];
-                    row[..left_len].copy_from_slice(lrow);
-                    acc.push(row);
+                    acc.push(padded_left_row(lrow, out_len));
                 }
                 Ok(())
             },
@@ -1639,10 +1781,8 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                     break;
                 }
-                let mut row = purrdf_core::smallvec![None; out_len];
-                row[..left_len].copy_from_slice(lrow);
                 reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
-                rows.push(row);
+                rows.push(padded_left_row(lrow, out_len));
             }
         }
         rows
@@ -1723,10 +1863,8 @@ fn left_outer_join<D: DatasetView + Sync>(
                     let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                     break;
                 }
-                let mut row = purrdf_core::smallvec![None; out_len];
-                row[..left_len].copy_from_slice(lrow);
                 reserve_join_rows(&mut rows, 1, cell_ceiling)?;
-                rows.push(row);
+                rows.push(padded_left_row(lrow, out_len));
             }
         }
         rows
@@ -1757,9 +1895,7 @@ fn left_outer_join<D: DatasetView + Sync>(
             // No compatible right solution → keep the left solution alone (the OPTIONAL
             // contributed nothing, its variables stay unbound).
             if pad_unmatched && acc.len() == before {
-                let mut row = purrdf_core::smallvec![None; out_len];
-                row[..left_len].copy_from_slice(lrow);
-                acc.push(row);
+                acc.push(padded_left_row(lrow, out_len));
             }
         })
     };
@@ -2083,6 +2219,48 @@ mod tests {
                 limit: 4,
                 consumed: 6,
             })
+        );
+    }
+
+    /// The raw seam has no engine admission forecast to refuse this narrow cell
+    /// allowance. A complete empty OPTIONAL observes its padded working width
+    /// before the parent's LIMIT 0 discards every output row.
+    #[test]
+    fn empty_optional_padding_observes_cells_before_a_zero_limit() {
+        let ds = graph();
+        let left = bgp(
+            vp("x"),
+            pred("http://ex/likes"),
+            TermPattern::NamedNode(NamedNode::new_unchecked("http://ex/cake")),
+        );
+        let right = bgp(vp("x"), pred("http://ex/absent"), vp("v"));
+        let plan = GraphPattern::Slice {
+            inner: Child::new(GraphPattern::LeftJoin {
+                left: Child::new(left),
+                right: Child::new(right),
+                expression: None,
+            }),
+            start: 0,
+            length: Some(0),
+        };
+        let state = Arc::new(TestGovernorState::new(
+            &TestQueryGovernors::METERED.with_max_intermediate_cells(1),
+        ));
+        let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
+        let evaluated = eval_evaluated(&plan, &mut ctx).expect("raw combined caps");
+        assert!(evaluated.is_truncated(), "{evaluated:?}");
+        assert!(evaluated.rows().is_empty());
+        assert_eq!(
+            state.tripped(),
+            Some(TestTrippedGovernor::Budget {
+                dimension: TestResourceDimension::IntermediateCells,
+                limit: 1,
+                consumed: 2,
+            })
+        );
+        assert_eq!(
+            state.consumed_in(TestResourceDimension::IntermediateCells),
+            2
         );
     }
 

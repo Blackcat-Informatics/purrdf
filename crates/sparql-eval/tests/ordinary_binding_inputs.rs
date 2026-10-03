@@ -5,11 +5,100 @@
 
 mod support;
 
-use purrdf_core::{RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlRequest};
+use purrdf_core::{
+    RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest, SparqlResult,
+};
 use purrdf_sparql_eval::{
     EvalOptions, NativeSparqlEngine, PartialAnswers, QueryGovernors, QueryOptions,
 };
 use support::{EX, render_cell, row, sorted_rows};
+
+/// A driver bag above the shared chunk cutoff exercises the actual ungoverned
+/// fork. Duplicate/nullable drivers, carried computed terms and blank projection
+/// retain the serial bag and its complete source order across four workers.
+#[test]
+fn ungoverned_optional_driver_chunks_preserve_bags_and_order() {
+    const BLOCKS: usize = 512;
+    let mut builder = RdfDatasetBuilder::new();
+    let [a, b, p, q, v1, v2, v3, z1, z2, z3] =
+        ["a", "b", "p", "q", "v1", "v2", "v3", "z1", "z2", "z3"]
+            .map(|local| builder.intern_iri(&format!("{EX}{local}")));
+    for (s, predicate, object) in [
+        (a, p, v1),
+        (a, p, v2),
+        (b, p, v3),
+        (v1, q, z1),
+        (v2, q, z2),
+        (v3, q, z3),
+    ] {
+        builder.push_quad(s, predicate, object, None);
+    }
+    let dataset = builder.freeze().expect("driver chunk fixture");
+    let drivers = "ex:a ex:a ex:missing UNDEF ".repeat(BLOCKS);
+    let query = format!(
+        "PREFIX ex: <{EX}> SELECT ?x ?z ?carry WHERE {{ VALUES ?x {{ {drivers} }} \
+         BIND(\"fresh\" AS ?carry) OPTIONAL {{ ?x ex:p _:middle . _:middle ex:q ?z }} }}"
+    );
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .expect("four-worker fork proof");
+    let run = |force_sequential| {
+        pool.install(|| {
+            NativeSparqlEngine::new()
+                .with_eval_options(EvalOptions {
+                    force_sequential,
+                    ..EvalOptions::default()
+                })
+                .query(
+                    &dataset,
+                    SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                )
+                .expect("complete ungoverned OPTIONAL")
+        })
+    };
+    let parallel = run(false);
+    let sequential = run(true);
+    let mut expected = Vec::new();
+    for (x, z, copies) in [
+        ("a", "z1", BLOCKS * 3),
+        ("a", "z2", BLOCKS * 3),
+        ("b", "z3", BLOCKS),
+        ("missing", "UNBOUND", BLOCKS),
+    ] {
+        let x = format!("<{EX}{x}>");
+        let z = if z == "UNBOUND" {
+            z.into()
+        } else {
+            format!("<{EX}{z}>")
+        };
+        expected.extend((0..copies).map(|_| row(&[("x", &x), ("z", &z), ("carry", "fresh")])));
+    }
+    expected.sort();
+    assert_eq!(sorted_rows(&parallel, render_cell), expected);
+    assert_eq!(sorted_rows(&sequential, render_cell), expected);
+    let (
+        SparqlResult::Solutions {
+            variables: parallel_variables,
+            rows: parallel_rows,
+            ..
+        },
+        SparqlResult::Solutions {
+            variables: sequential_variables,
+            rows: sequential_rows,
+            ..
+        },
+    ) = (parallel, sequential)
+    else {
+        panic!("the fixture returns solutions");
+    };
+    assert_eq!(parallel_variables, sequential_variables);
+    assert_eq!(parallel_rows, sequential_rows);
+}
 
 #[test]
 fn duplicate_nullable_and_absent_drivers_keep_their_exact_join_bags() {
