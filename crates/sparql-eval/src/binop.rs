@@ -119,6 +119,18 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
+    finish_join(lift, l, right, ctx)
+}
+
+/// Build the driven relation only after the recursive driver has returned, so
+/// its seed and physical forecast do not enlarge every frame of a join spine.
+#[inline(never)]
+fn finish_join<D: DatasetView + Sync>(
+    mut lift: Lift<'_>,
+    l: SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     if crate::bgp::PositivePlan::seed_eligible(right, &l.schema) {
         let seed = crate::bgp::SeedEstimate::from_rows(&l);
         let plan = crate::bgp::PositivePlan::build_seeded(
@@ -1290,6 +1302,20 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let evaluated = eval_evaluated(left, ctx)?;
+    finish_left_join(node, evaluated, right, expression, ctx)
+}
+
+/// The driver has returned before any seed forecast or match block is built.
+/// Keep these locals out of the frame retained while descending an OPTIONAL
+/// spine, just as the node dispatcher keeps operator work out of its frame.
+#[inline(never)]
+fn finish_left_join<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    evaluated: Evaluated<D::Id>,
+    right: &GraphPattern,
+    expression: Option<&Expression>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     if let Evaluated::Complete(rows) = &evaluated
         && crate::bgp::PositivePlan::seed_eligible(right, &rows.schema)
     {
