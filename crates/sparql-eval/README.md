@@ -30,14 +30,18 @@ For repeated work, retain an `Arc<PreparedQuery>` from `prepare_query` or
 `prepare_algebra` and pass data through substitutions. Compiler-produced algebra
 goes directly through structural and registry admission without rendering or parsing
 query text. `PreparedQuery::rewritten` also admits and feasibility-orders its input.
-The public `query` field remains accessible; execution revalidates caller changes
-and refuses any that require replanning.
+The admitted algebra is immutable and accessible through `PreparedQuery::query()`;
+changed algebra must be admitted into a new plan.
 `query_prepared_governed_in_operation` charges a caller-owned governor across
 multiple queries; immutable plans and the governor can be shared by worker-local
 engines without locking evaluation globally. Its fallible-view sibling
 `query_prepared_governed_fallible_in_operation` preserves operational failure
-precedence and publishes only after the final ready checkpoint; a federation
-variant accepts a service resolver under the same governor.
+precedence and publishes only after the final ready checkpoint.
+`query_prepared_governed_fallible_view` executes that same prepared fallible
+boundary under fresh per-call governors, returning combined view and governor
+evidence. A healthy governor trip carries certified partial answers; an
+operational failure discards them. Both entries have federation variants that
+accept a service resolver under the same governor.
 
 The engine's prepared-plan and join-order caches each default to 4096 entries and
 64 MiB of charged payload. Configure them independently with
@@ -49,9 +53,9 @@ and shared-string storage charged per occurrence; it excludes allocator overhead
 and caller-retained handles. `PlanMemoryObserver` separately reports all live
 admitted plan payloads and the portions retained by a cache or held exclusively
 by callers, even after cache replacement or destruction. Each allocation is counted
-once regardless of `Arc` clones. Its admission estimates do not track later
-public-field mutations; `PreparedQuery::retained_size_bytes` computes the current
-payload. Public totals saturate without losing internal lifetime accounting.
+once regardless of `Arc` clones. Admission estimates and
+`PreparedQuery::retained_size_bytes` describe the immutable admitted payload.
+Public totals saturate without losing internal lifetime accounting.
 Neither counter is an RSS measurement. Dataset statistics key
 join-order hints only, never result reuse. The existing caller-owned
 `eval::BgpOrderCache` alias remains available with its original type.

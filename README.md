@@ -180,6 +180,11 @@ and caller-owned outputs have separate memory obligations. The kernel performs
 no filesystem or network I/O. See the [storage contract](./crates/rdf-core/STORAGE.md)
 and [3.0 migration guide](./docs/MIGRATION-3.0.md) for the exact boundaries.
 
+Rust's `explain_query_fallible_view` measures the operational view directly and
+returns its explanation with final storage evidence. Its options and stop-signal
+variants share the query admission rule; a storage failure discards the entire
+explanation, and a stop alone appears in the explanation's governor evidence.
+
 **Graph transport with its payloads.** [GTS](./docs/GTS-SPEC.md) is a
 content-addressed, append-only container with deterministic fold, binary
 payloads, chained CBOR segments, COSE signing/encryption and pure-Rust crypto.
