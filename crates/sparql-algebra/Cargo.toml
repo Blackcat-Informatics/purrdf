@@ -68,6 +68,14 @@ name = "tokenize"
 harness = false
 
 [[bench]]
+name = "scope_checks"
+harness = false
+
+[[test]]
+name = "scope_candidates"
+harness = false
+
+[[bench]]
 name = "tokenize_values"
 harness = false
 
