@@ -20,6 +20,7 @@ use purrdf_sparql_eval::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RefusedRead(RefusalSite);
 impl std::fmt::Display for RefusedRead {
+    /// Preserve the injected read site when an evaluator projects the cause into a diagnostic.
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(out, "source refused at {:?}", self.0)
     }
@@ -43,6 +44,7 @@ struct Source {
     site: RefusalSite,
 }
 impl Source {
+    /// Start with one healthy resident row and zero observations of the selected refusal site.
     fn at(site: RefusalSite) -> Self {
         Self {
             resident: support::local_dataset([("s", "p", "o")]),
@@ -52,6 +54,7 @@ impl Source {
             site,
         }
     }
+    /// Latch the refusal so every subsequent publication checkpoint sees the same cause.
     fn refuse(&self) {
         self.failed.store(true, Ordering::Relaxed);
     }
@@ -64,6 +67,7 @@ impl DatasetView for Source {
     fn storage_live_budget(&self) -> Option<u64> {
         (self.site == RefusalSite::Reporting).then_some(8192)
     }
+    /// Refuse reporting admission independently of the sticky lazy-read failure flag.
     fn reserve_workspace(
         &self,
         _: u64,
@@ -76,11 +80,13 @@ impl DatasetView for Source {
             Ok(NoopReservation::<RefusedRead>::default())
         }
     }
+    /// Read the latched cause without advancing the publication-checkpoint counter.
     fn read_error(&self) -> Option<RefusedRead> {
         self.failed
             .load(Ordering::Relaxed)
             .then_some(RefusedRead(self.site))
     }
+    /// Inject failure either before yielding a row or when a yielded row's stream ends.
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         let mut rows = self.resident.as_ref().quads();
         std::iter::from_fn(move || {
@@ -98,6 +104,7 @@ impl DatasetView for Source {
             }
         })
     }
+    /// Make owned-result materialization the failing read without replacing the term's identity.
     fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, RefusedRead> {
         if self.site == RefusalSite::Term {
             self.refuse();
@@ -147,6 +154,7 @@ impl DatasetView for Source {
 impl FallibleDatasetView for Source {
     type Error = RefusedRead;
     type Evidence = bool;
+    /// For the final-checkpoint fixture, refuse the second check after healthy evaluation.
     fn operation_status(&self) -> ViewOperationStatus<RefusedRead, bool> {
         let prior = self.checkpoints.fetch_add(1, Ordering::Relaxed);
         if self.site == RefusalSite::FinalCheckpoint && prior == 1 {
@@ -162,6 +170,7 @@ impl FallibleDatasetView for Source {
     }
 }
 const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
+/// Request default-dataset evaluation without a base or caller substitutions.
 fn request(query: &str) -> SparqlRequest<'_> {
     SparqlRequest {
         query,
@@ -169,6 +178,7 @@ fn request(query: &str) -> SparqlRequest<'_> {
         substitutions: &[],
     }
 }
+/// Require the exact operational cause and forbid query or budget outcomes and partial answers.
 fn assert_source_refusal<T: std::fmt::Debug, V: std::fmt::Debug>(
     result: Result<T, FallibleSparqlError<RefusedRead, V>>,
     site: RefusalSite,
@@ -181,6 +191,7 @@ fn assert_source_refusal<T: std::fmt::Debug, V: std::fmt::Debug>(
     assert!(error.tripped().is_none());
     error
 }
+/// Exercise every owned fallible entry at both lazy iterator and term-materialization failures.
 fn typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures() {
     for site in [RefusalSite::Iterator, RefusalSite::Term] {
         let engine = NativeSparqlEngine::new();
@@ -237,6 +248,7 @@ fn typed_owned_and_governed_queries_never_publish_iterator_or_materialization_fa
     assert!(matches!(answer.result,SparqlResult::Solutions { rows,.. } if rows.len()==1));
     assert!(!answer.evidence);
 }
+/// A failed ingress checkpoint must defeat invalid text and plans that need no data reads.
 fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
     let source = Source::at(RefusalSite::Never);
     source.refuse();
@@ -272,6 +284,7 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
         RefusalSite::Never,
     );
 }
+/// Reads performed by a retained-result visitor remain covered by the final checkpoint.
 fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
@@ -304,6 +317,7 @@ fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
         (7, false)
     );
 }
+/// A reporting reservation's own cause survives even when the source has no latched read failure.
 fn refused_reporting_admission_remains_typed_even_before_sticky_failure() {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(QUERY, None).expect("prepare fixture");
@@ -361,6 +375,7 @@ fn refused_reporting_admission_remains_typed_even_before_sticky_failure() {
     assert!(source.read_error().is_none());
 }
 
+/// Select governor ownership while preserving the same plan, source, and publication boundary.
 #[allow(
     clippy::result_large_err,
     reason = "the test drives both public entries through their unchanged typed reporting boundary"
@@ -392,6 +407,7 @@ fn prepared_governed(
     }
 }
 
+/// A row observed before a lazy stream refusal must never escape as a certified partial answer.
 fn prepared_governed_queries_discard_rows_produced_before_an_iterator_failure() {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(QUERY, None).expect("prepare fixture");
@@ -420,6 +436,7 @@ enum ReadyOutcome {
     Budget,
 }
 
+/// Final-checkpoint refusal replaces completion, diagnostics, and exhaustion without losing meters.
 fn the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome() {
     let engine = NativeSparqlEngine::new();
     for (query, governors, expected) in [

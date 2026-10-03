@@ -31,6 +31,7 @@ enum GovernedEntry<'a> {
 }
 
 impl GovernedEntry<'_> {
+    /// Run identical request inputs through the text, per-call prepared, or shared-state boundary.
     #[allow(
         clippy::result_large_err,
         reason = "the fixture preserves the paired receipts returned by each public entry"
@@ -97,6 +98,7 @@ impl SegmentedProvider for RefusingProvider {
     }
 }
 
+/// Dense storage blocks must price only the selected subject range and retain provider refusals.
 #[test]
 fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() {
     let (image, resident) = fixture_with_layout(8192, 128);
@@ -168,6 +170,7 @@ fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() 
     ));
 }
 
+/// A long host-owned cause stays exact while error publication fits the charged reporting ledger.
 #[test]
 fn long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation() {
     let (image, _) = fixture();
@@ -225,6 +228,7 @@ fn long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation()
     }
 }
 
+/// Cold complete and exhausted runs share receipts and release exactly one reporting reservation.
 #[test]
 fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
     let (image, _) = fixture();
@@ -294,6 +298,7 @@ fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
     }
 }
 
+/// Sparse cache eviction preserves the resident join answer while measured allocations fit the ledger.
 #[test]
 fn selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger() {
     let (image, resident) = fixture();
@@ -338,6 +343,7 @@ fn selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger() {
     assert!(source.read_error().is_none());
 }
 
+/// Storage pressure and an unpriced sort must refuse before either probes rows or emits answers.
 #[test]
 fn tiny_capacity_and_unpriced_order_refuse_before_any_row_probe_or_output() {
     let (image, _) = fixture();
@@ -377,6 +383,7 @@ fn tiny_capacity_and_unpriced_order_refuse_before_any_row_probe_or_output() {
     assert_eq!(source.evidence().request_count(), before);
 }
 
+/// Retained-result consumption keeps its workspace live, and ordinary owned egress still succeeds.
 #[test]
 fn scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption() {
     let (image, _) = fixture();
@@ -406,6 +413,7 @@ fn scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption(
     assert!(matches!(answer.result, SparqlResult::Solutions { rows, .. } if rows.len() == 1));
 }
 
+/// Tight reporting headroom refuses before owner allocation without disguising an unpriced sort.
 #[test]
 fn governed_refusal_prices_its_reporting_owner_before_allocating() {
     let (image, _) = fixture();
@@ -476,6 +484,7 @@ fn governed_refusal_prices_its_reporting_owner_before_allocating() {
     }
 }
 
+/// Reject an unpriced construction context before copying its mint prefix or changing the destination.
 #[test]
 fn unpriced_construct_refuses_before_allocating_a_destination_mint_prefix() {
     let (image, _) = fixture();
@@ -519,6 +528,7 @@ fn unpriced_construct_refuses_before_allocating_a_destination_mint_prefix() {
     assert!(source.read_error().is_none());
 }
 
+/// Large caller-owned substitutions and prefixes must be refused without copying payloads or probing.
 #[test]
 fn unpriced_request_inputs_refuse_before_copying_parameter_metadata() {
     let (image, _) = fixture();

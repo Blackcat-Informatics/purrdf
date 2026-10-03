@@ -28,6 +28,7 @@ use purrdf_sparql_eval::{
 const SELECT: &str =
     "SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value } ORDER BY ?this";
 
+/// Give each fresh view one three-row page priced at exactly 101 bytes.
 fn pages() -> PagedDataset {
     PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
         vec![(three_subjects_one_value(), 101)],
@@ -36,10 +37,12 @@ fn pages() -> PagedDataset {
     .unwrap()
 }
 
+/// Start independent compute meters without truncating the fixture's execution.
 fn metered() -> Arc<GovernorState> {
     Arc::new(GovernorState::new(&QueryGovernors::METERED))
 }
 
+/// Compare ordered answers and graph contents without requiring dataset-carrier equality.
 fn equal_results(left: SparqlResult, right: SparqlResult) {
     match (left, right) {
         (SparqlResult::Boolean(a), SparqlResult::Boolean(b)) => assert_eq!(a, b),
@@ -66,6 +69,7 @@ fn equal_results(left: SparqlResult, right: SparqlResult) {
     }
 }
 
+/// Matching and absent SHACL focus bindings must charge the same work after preparation.
 #[test]
 fn prepared_operations_match_text_with_shacl_prebinding_for_each_result_form() {
     let engine = NativeSparqlEngine::new();
@@ -126,6 +130,7 @@ fn prepared_operations_match_text_with_shacl_prebinding_for_each_result_form() {
     }
 }
 
+/// Check both receipts across query forms and substitution modes on independent read views.
 #[test]
 fn prepared_fallible_calls_match_text_and_shared_receipts_for_every_query_form() {
     let paged = pages();
@@ -190,6 +195,7 @@ fn prepared_fallible_calls_match_text_and_shared_receipts_for_every_query_form()
     }
 }
 
+/// A handwritten algebra plan must answer and meter identically without touching a text cache.
 #[test]
 fn compiler_constructed_plans_execute_without_text_or_cache_activity() {
     let query = Query::Select {
@@ -242,6 +248,7 @@ fn compiler_constructed_plans_execute_without_text_or_cache_activity() {
     equal_results(answer.result, text.result);
 }
 
+/// Reusing a two-answer ceiling must preserve its certified prefix without accumulating charges.
 #[test]
 fn repeated_prepared_calls_own_independent_budgets_and_certified_answers() {
     let paged = pages();
@@ -294,6 +301,7 @@ fn repeated_prepared_calls_own_independent_budgets_and_certified_answers() {
     }
 }
 
+/// Fresh page receipts coexist with cumulative compute charges and a certified shared-budget cut.
 #[test]
 fn shared_prepared_fallible_operations_keep_both_meters_and_certified_prefixes() {
     let paged = pages();
@@ -373,6 +381,7 @@ fn shared_prepared_fallible_operations_keep_both_meters_and_certified_prefixes()
     assert_eq!(evidence.governors, limited.evidence());
 }
 
+/// A latched page refusal takes precedence over SERVICE, cancellation, and registry admission.
 #[test]
 fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_precedence() {
     let paged = pages();
@@ -464,6 +473,7 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
     assert_eq!(evidence.governors.consumed_in(ResourceDimension::Fuel), 0);
 }
 
+/// Distinguish ready-view diagnostics from storage faults and retain a valid registry neighbor.
 #[test]
 fn healthy_prepared_views_keep_query_errors_and_registry_admission_typed() {
     let paged = pages();
@@ -597,6 +607,7 @@ fn healthy_prepared_views_keep_query_errors_and_registry_admission_typed() {
     }
 }
 
+/// The explicit federation source must replace a disabled options source without changing receipts.
 #[test]
 fn explicit_per_call_source_replaces_options_remote_and_preserves_receipts() {
     let paged = pages();
@@ -643,6 +654,7 @@ fn explicit_per_call_source_replaces_options_remote_and_preserves_receipts() {
     equal_results(answer.result, direct.result);
 }
 
+/// A stop fired inside a successful remote exchange still prevents complete publication.
 #[test]
 fn remote_cancellation_prevents_prepared_fallible_publication() {
     let paged = pages();
@@ -695,6 +707,7 @@ fn remote_cancellation_prevents_prepared_fallible_publication() {
     }
 }
 
+/// Worker-local engines reuse one plan while competing for one execution's measured fuel ceiling.
 #[test]
 fn simultaneously_started_worker_local_engines_share_one_plan_and_fuel_ceiling() {
     let dataset = three_subjects_one_value();
