@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Curated SPARQL syntax fixtures — the in-house stand-in for the W3C SPARQL
-//! syntax suite (the full official suite is deferred to a follow-up, the
-//! option-3 deferral noted on).
+//! Curated SPARQL syntax fixtures complement the official W3C suites in
+//! `purrdf-sparql-conformance` with focused parser admission controls.
 //!
 //! POSITIVE fixtures: one per in-scope feature; each MUST parse.
-//! NEGATIVE fixtures: out-of-scope or malformed; each MUST hard-fail with the
+//! NEGATIVE fixtures: typed parser refusals; each MUST hard-fail with the
 //! expected typed [`ParseError`] variant (never a panic, never a silent parse).
 
 use purrdf_sparql_algebra::{ParseError, SparqlParser};

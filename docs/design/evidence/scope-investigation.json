@@ -1,0 +1,1142 @@
+{
+  "license": {
+    "SPDX-FileCopyrightText": "2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>",
+    "SPDX-License-Identifier": "CC-BY-4.0"
+  },
+  "format": "purrdf-scope-investigation-v1",
+  "proof_boundary": "SELECT positive flat-term BGP/Join/Union with named source predicates, constant GRAPH, outer projection and inner projection without ordinary-binding removal; small VALUES records and CONSTRUCT template category records with flat subject/object, named source predicate and absent/constant graph. Trusted stable source-site provenance requires coherent repeated fields and injective raw source-owner keys. Recursive triple terms, variable query/template GRAPH names, variable predicates, inner projections removing ordinary bindings, ambiguous raw copies across owner boundaries and ASK/DESCRIBE observer forms are explicitly unavailable. UPDATE is not represented by this Query-based prototype. This is not a query-equivalence proof.",
+  "runtime_freshness": {
+    "status": "not_established_from_ast",
+    "explanation": "The same valid CONSTRUCT/INSERT AST can be executed by a fresh or identity-reusing allocator. Runtime rows and repeated executions require semantic evidence."
+  },
+  "layouts": [
+    {
+      "type": "Variable",
+      "bytes": 16
+    },
+    {
+      "type": "Binder",
+      "bytes": 12
+    },
+    {
+      "type": "Identity",
+      "bytes": 40
+    },
+    {
+      "type": "Atom",
+      "bytes": 64
+    },
+    {
+      "type": "Contract",
+      "bytes": 72
+    },
+    {
+      "type": "Evidence",
+      "bytes": 312
+    }
+  ],
+  "outcomes": [
+    {
+      "case": "generated_union_witness",
+      "legal": true,
+      "claim": "generated witnesses connect every alternative and tail",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "join_reassociation",
+      "legal": true,
+      "claim": "source binding partitions survive reassociation",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "bgp_merge",
+      "legal": true,
+      "claim": "generated witnesses preserve connections when BGP fragments merge",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "bgp_split",
+      "legal": true,
+      "claim": "generated witnesses preserve connections when a BGP splits",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "distribution",
+      "legal": true,
+      "claim": "branch bags survive distribution including a repeated arm",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "bijective_alpha_renaming",
+      "legal": true,
+      "claim": "correspondence is a consistent bijection",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "repeated_normalization",
+      "legal": true,
+      "claim": "normalization preserves original binding relationships repeatedly",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "serialization_reparse",
+      "legal": true,
+      "claim": "legal carrier names retain source-site binding identity and visible schema",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "carrier_alias_explicit_output",
+      "legal": false,
+      "claim": "a reencoded non-distinguished witness was explicitly projected by its legal alias",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "NonDistinguishedProjection(Identity { name: \"__purrdf_hidden_0\", blank_scope: None, blank_category: None, hidden: false })"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "NonDistinguishedProjection(Identity { name: \"__purrdf_hidden_0\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "case": "caller_generated_name_lookalike",
+      "legal": true,
+      "claim": "ordinary caller projection remains visible while generated aliases avoid its spelling",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "capture_user",
+      "legal": false,
+      "claim": "hidden and caller-visible identities became one",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "BindingPartition"
+      }
+    },
+    {
+      "case": "merged_witnesses",
+      "legal": false,
+      "claim": "independent existential witnesses became one",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "BindingPartition"
+      }
+    },
+    {
+      "case": "lost_connection",
+      "legal": false,
+      "claim": "tail uses a fresh declared witness instead of the branch witness",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "BindingPartition"
+      }
+    },
+    {
+      "case": "inconsistent_alpha",
+      "legal": false,
+      "claim": "only one source site was renamed",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "BindingPartition"
+      }
+    },
+    {
+      "case": "scope_escape",
+      "legal": false,
+      "claim": "path-origin witness moved into an undeclared binder region",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "Ownership { site: 1, owner: 0, region: 99 }"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "Ownership { site: 1, owner: 0, region: 99 }"
+      }
+    },
+    {
+      "case": "premature_projection",
+      "legal": false,
+      "claim": "branch witness is discarded before the tail consumes it",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "PrematureProjection(Identity { name: \"\\0bgph\", blank_scope: None, blank_category: None, hidden: true })"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "PrematureProjection(Identity { name: \"\\0bgph\", blank_scope: None, blank_category: None, hidden: true })"
+      }
+    },
+    {
+      "case": "repeated_arm_removal",
+      "legal": false,
+      "claim": "identical UNION arms contribute independent bag multiplicities",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "BranchMultiplicity"
+      }
+    },
+    {
+      "case": "explicit_hidden_output",
+      "legal": false,
+      "claim": "hidden witness becomes a visible column",
+      "existing": {
+        "status": "detected",
+        "diagnostic": "Admission(\"SPARQL syntax error at byte 0: a non-distinguished variable cannot be explicitly observed: ?\\\\0bgph in projection at Pattern item 0 node 0 slot 2; Keep the witness in match positions and output only distinguished variables.\")"
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "Admission(\"SPARQL syntax error at byte 0: a non-distinguished variable cannot be explicitly observed: ?\\\\0bgph in projection at Pattern item 0 node 0 slot 2; Keep the witness in match positions and output only distinguished variables.\")"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "Admission(\"SPARQL syntax error at byte 0: a non-distinguished variable cannot be explicitly observed: ?\\\\0bgph in projection at Pattern item 0 node 0 slot 2; Keep the witness in match positions and output only distinguished variables.\")"
+      }
+    },
+    {
+      "case": "visible_schema_reordered",
+      "legal": false,
+      "claim": "carrier changed caller-visible column order",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "VisibleSchema"
+      }
+    },
+    {
+      "case": "carrier_alias_collision",
+      "legal": false,
+      "claim": "generated carrier alias captures caller variable s",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "AliasCollision(\"s\")"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "AliasCollision(\"s\")"
+      }
+    },
+    {
+      "case": "independent_same_spelling_blanks",
+      "legal": true,
+      "claim": "the same opaque blank spelling in independent raw BGP arms is legal",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "shared_blank_two_triples_one_bgp",
+      "legal": true,
+      "claim": "two different source sites in one BGP refer to one existential blank binder",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "raw_blank_positive_split",
+      "legal": true,
+      "claim": "production positive Join ownership preserves a raw blank across compiler BGP fragments",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "raw_blank_source_owner_divergence",
+      "legal": false,
+      "claim": "a shared source existential was moved across actual GRAPH scope boundaries",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "MissingDeclaration { site: 2, identity: Identity { name: \"same\", blank_scope: Some(2), blank_category: Some(Existential), hidden: false } }"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "MissingDeclaration { site: 2, identity: Identity { name: \"same\", blank_scope: Some(2), blank_category: Some(Existential), hidden: false } }"
+      }
+    },
+    {
+      "case": "raw_blank_distinct_source_owners_fully_declared",
+      "legal": false,
+      "claim": "valid declarations for independent source scopes cannot recover the lost source connection",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "BindingPartition"
+      }
+    },
+    {
+      "case": "raw_blank_merge_captures_independent",
+      "legal": false,
+      "claim": "merging independently owned GRAPH existentials into one BGP accidentally creates a connection",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "BindingPartition"
+      }
+    },
+    {
+      "case": "template_allocation_category",
+      "legal": true,
+      "claim": "template blank identity has template allocation origin",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "template_dataset_confusion",
+      "legal": false,
+      "claim": "a template allocation is misdeclared as a concrete dataset blank",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "Category { site: 5, identity: Identity { name: \"allocation\", blank_scope: Some(0), blank_category: Some(TemplateAllocation), hidden: false }, declared: DatasetBlank }"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "Category { site: 5, identity: Identity { name: \"allocation\", blank_scope: Some(0), blank_category: Some(TemplateAllocation), hidden: false }, declared: DatasetBlank }"
+      }
+    },
+    {
+      "case": "merged_template_allocations",
+      "legal": false,
+      "claim": "two independent allocation sites became one template identity",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "BindingPartition"
+      }
+    },
+    {
+      "case": "concrete_prebound_dataset_blank",
+      "legal": true,
+      "claim": "a VALUES blank is a concrete identity rather than a query existential",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      }
+    },
+    {
+      "case": "dataset_existential_confusion",
+      "legal": false,
+      "claim": "a concrete prebound blank was misdeclared as an existential",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "Category { site: 100000000, identity: Identity { name: \"allocation\", blank_scope: Some(0), blank_category: Some(DatasetBlank), hidden: false }, declared: Existential }"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "Category { site: 100000000, identity: Identity { name: \"allocation\", blank_scope: Some(0), blank_category: Some(DatasetBlank), hidden: false }, declared: Existential }"
+      }
+    },
+    {
+      "case": "witness_template_origin",
+      "legal": false,
+      "claim": "a generated match witness cannot originate in a template allocation",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "Origin { site: 3, identity: Identity { name: \"\\0bgpk\", blank_scope: None, blank_category: None, hidden: true } }"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "Origin { site: 3, identity: Identity { name: \"\\0bgpk\", blank_scope: None, blank_category: None, hidden: true } }"
+      }
+    },
+    {
+      "case": "duplicated_binder_id",
+      "legal": false,
+      "claim": "distinct encoded identities were assigned one explicit binder id",
+      "existing": {
+        "status": "not_detected",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "detected",
+        "diagnostic": "DuplicateBinder { id: 0, first: Identity { name: \"\\0bgph\", blank_scope: None, blank_category: None, hidden: true }, second: Identity { name: \"\\0bgpk\", blank_scope: None, blank_category: None, hidden: true } }"
+      },
+      "contract": {
+        "status": "detected",
+        "diagnostic": "DuplicateBinder { id: 0, first: Identity { name: \"\\0bgph\", blank_scope: None, blank_category: None, hidden: true }, second: Identity { name: \"\\0bgpk\", blank_scope: None, blank_category: None, hidden: true } }"
+      }
+    }
+  ],
+  "proof_boundaries": [
+    {
+      "case": "nested_hidden_pattern_identity",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTerm(PatternTriple)"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTerm(PatternTriple)"
+      }
+    },
+    {
+      "case": "nested_blank_values_identity",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTerm(GroundTriple)"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTerm(GroundTriple)"
+      }
+    },
+    {
+      "case": "ordinary_inner_projection_scope",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedProjection(Identity { name: \"x\", blank_scope: None, blank_category: None, hidden: false })"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedProjection(Identity { name: \"x\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "case": "variable_graph_name_connection",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedGraphName(Identity { name: \"g\", blank_scope: None, blank_category: None, hidden: false })"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedGraphName(Identity { name: \"g\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "case": "variable_graph_name_changed_connection",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedGraphName(Identity { name: \"x\", blank_scope: None, blank_category: None, hidden: false })"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedGraphName(Identity { name: \"x\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "case": "ambiguous_copied_raw_source_owner",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "AmbiguousSourceOwner(1)"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "AmbiguousSourceOwner(1)"
+      }
+    },
+    {
+      "case": "contradictory_repeated_source_fields",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "ContradictorySourceSite(1)"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "ContradictorySourceSite(1)"
+      }
+    },
+    {
+      "case": "template_variable_graph_before",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTemplateGraphName(Identity { name: \"s\", blank_scope: None, blank_category: None, hidden: false })"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTemplateGraphName(Identity { name: \"s\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "case": "template_variable_graph_after",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTemplateGraphName(Identity { name: \"o\", blank_scope: None, blank_category: None, hidden: false })"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTemplateGraphName(Identity { name: \"o\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "case": "template_variable_predicate",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "MissingProvenance"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "MissingProvenance"
+      }
+    },
+    {
+      "case": "describe_observer_target_before",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedQueryForm(Describe)"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedQueryForm(Describe)"
+      }
+    },
+    {
+      "case": "describe_observer_target_after",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedQueryForm(Describe)"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedQueryForm(Describe)"
+      }
+    },
+    {
+      "case": "ask_observer_form",
+      "existing": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedQueryForm(Ask)"
+      },
+      "contract": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedQueryForm(Ask)"
+      }
+    }
+  ],
+  "unavailable_transformations": [
+    {
+      "transformation": "remove_inner_ordinary_projection",
+      "existing_before": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "existing_after": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit_after": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract_transition": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedProjection(Identity { name: \"x\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "transformation": "rename_variable_graph",
+      "existing_before": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "existing_after": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit_after": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedGraphName(Identity { name: \"x\", blank_scope: None, blank_category: None, hidden: false })"
+      },
+      "contract_transition": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedGraphName(Identity { name: \"g\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "transformation": "merge_ambiguous_copied_raw_owners",
+      "existing_before": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "existing_after": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit_after": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "contract_transition": {
+        "status": "not_established_from_input",
+        "diagnostic": "AmbiguousSourceOwner(1)"
+      }
+    },
+    {
+      "transformation": "rename_template_variable_graph",
+      "existing_before": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "existing_after": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit_after": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTemplateGraphName(Identity { name: \"o\", blank_scope: None, blank_category: None, hidden: false })"
+      },
+      "contract_transition": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedTemplateGraphName(Identity { name: \"s\", blank_scope: None, blank_category: None, hidden: false })"
+      }
+    },
+    {
+      "transformation": "rename_template_variable_predicate",
+      "existing_before": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "existing_after": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit_after": {
+        "status": "not_established_from_input",
+        "diagnostic": "MissingProvenance"
+      },
+      "contract_transition": {
+        "status": "not_established_from_input",
+        "diagnostic": "MissingProvenance"
+      }
+    },
+    {
+      "transformation": "change_describe_observer_target",
+      "existing_before": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "existing_after": {
+        "status": "accepted_control",
+        "diagnostic": ""
+      },
+      "explicit_after": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedQueryForm(Describe)"
+      },
+      "contract_transition": {
+        "status": "not_established_from_input",
+        "diagnostic": "UnsupportedQueryForm(Describe)"
+      }
+    }
+  ],
+  "allocation_costs": [
+    {
+      "input": "representative",
+      "query_retained_size_bytes": 2705,
+      "contract_retained_payload_bytes_excluding_map_nodes": 2072,
+      "existing_check": {
+        "allocations": 0,
+        "requested_bytes": 0,
+        "retained_bytes": 0,
+        "peak_working_bytes": 0
+      },
+      "explicit_check": {
+        "allocations": 86,
+        "requested_bytes": 11122,
+        "retained_bytes": 0,
+        "peak_working_bytes": 4916
+      },
+      "encoded_variable_declaration_prepare": {
+        "allocations": 7,
+        "requested_bytes": 1012,
+        "retained_bytes": 596,
+        "peak_working_bytes": 820
+      },
+      "contract_prepare": {
+        "allocations": 94,
+        "requested_bytes": 11800,
+        "retained_bytes": 2376,
+        "peak_working_bytes": 4916
+      },
+      "contract_reuse_check": {
+        "allocations": 92,
+        "requested_bytes": 11310,
+        "retained_bytes": 0,
+        "peak_working_bytes": 4916
+      }
+    },
+    {
+      "input": "branches_256",
+      "query_retained_size_bytes": 93287,
+      "contract_retained_payload_bytes_excluding_map_nodes": 75069,
+      "existing_check": {
+        "allocations": 7,
+        "requested_bytes": 12192,
+        "retained_bytes": 0,
+        "peak_working_bytes": 6144
+      },
+      "explicit_check": {
+        "allocations": 3218,
+        "requested_bytes": 495587,
+        "retained_bytes": 0,
+        "peak_working_bytes": 405688
+      },
+      "encoded_variable_declaration_prepare": {
+        "allocations": 13,
+        "requested_bytes": 13143,
+        "retained_bytes": 591,
+        "peak_working_bytes": 6336
+      },
+      "contract_prepare": {
+        "allocations": 3226,
+        "requested_bytes": 502404,
+        "retained_bytes": 75425,
+        "peak_working_bytes": 405688
+      },
+      "contract_reuse_check": {
+        "allocations": 3225,
+        "requested_bytes": 501919,
+        "retained_bytes": 0,
+        "peak_working_bytes": 405688
+      }
+    },
+    {
+      "input": "width_1024",
+      "query_retained_size_bytes": 218503,
+      "contract_retained_payload_bytes_excluding_map_nodes": 133476,
+      "existing_check": {
+        "allocations": 9,
+        "requested_bytes": 49056,
+        "retained_bytes": 0,
+        "peak_working_bytes": 24576
+      },
+      "explicit_check": {
+        "allocations": 12684,
+        "requested_bytes": 2167330,
+        "retained_bytes": 0,
+        "peak_working_bytes": 1608498
+      },
+      "encoded_variable_declaration_prepare": {
+        "allocations": 14,
+        "requested_bytes": 49946,
+        "retained_bytes": 586,
+        "peak_working_bytes": 24768
+      },
+      "contract_prepare": {
+        "allocations": 12691,
+        "requested_bytes": 2299070,
+        "retained_bytes": 133884,
+        "peak_working_bytes": 1608498
+      },
+      "contract_reuse_check": {
+        "allocations": 12691,
+        "requested_bytes": 2298590,
+        "retained_bytes": 0,
+        "peak_working_bytes": 1608498
+      }
+    },
+    {
+      "input": "deep_64",
+      "query_retained_size_bytes": 12205,
+      "contract_retained_payload_bytes_excluding_map_nodes": 614,
+      "existing_check": {
+        "allocations": 5,
+        "requested_bytes": 2976,
+        "retained_bytes": 0,
+        "peak_working_bytes": 1536
+      },
+      "explicit_check": {
+        "allocations": 33,
+        "requested_bytes": 8858,
+        "retained_bytes": 0,
+        "peak_working_bytes": 3872
+      },
+      "encoded_variable_declaration_prepare": {
+        "allocations": 10,
+        "requested_bytes": 3866,
+        "retained_bytes": 586,
+        "peak_working_bytes": 1728
+      },
+      "contract_prepare": {
+        "allocations": 39,
+        "requested_bytes": 9526,
+        "retained_bytes": 1022,
+        "peak_working_bytes": 3872
+      },
+      "contract_reuse_check": {
+        "allocations": 39,
+        "requested_bytes": 9046,
+        "retained_bytes": 0,
+        "peak_working_bytes": 3872
+      }
+    },
+    {
+      "input": "deep_512",
+      "query_retained_size_bytes": 92845,
+      "contract_retained_payload_bytes_excluding_map_nodes": 614,
+      "existing_check": {
+        "allocations": 8,
+        "requested_bytes": 24480,
+        "retained_bytes": 0,
+        "peak_working_bytes": 12288
+      },
+      "explicit_check": {
+        "allocations": 39,
+        "requested_bytes": 51866,
+        "retained_bytes": 0,
+        "peak_working_bytes": 14624
+      },
+      "encoded_variable_declaration_prepare": {
+        "allocations": 13,
+        "requested_bytes": 25370,
+        "retained_bytes": 586,
+        "peak_working_bytes": 12480
+      },
+      "contract_prepare": {
+        "allocations": 45,
+        "requested_bytes": 52534,
+        "retained_bytes": 1022,
+        "peak_working_bytes": 14624
+      },
+      "contract_reuse_check": {
+        "allocations": 45,
+        "requested_bytes": 52054,
+        "retained_bytes": 0,
+        "peak_working_bytes": 14624
+      }
+    },
+    {
+      "input": "deep_100000",
+      "query_retained_size_bytes": 18000685,
+      "contract_retained_payload_bytes_excluding_map_nodes": 614,
+      "existing_check": {
+        "allocations": 16,
+        "requested_bytes": 6291360,
+        "retained_bytes": 0,
+        "peak_working_bytes": 3145728
+      },
+      "explicit_check": {
+        "allocations": 55,
+        "requested_bytes": 12585626,
+        "retained_bytes": 0,
+        "peak_working_bytes": 3148064
+      },
+      "encoded_variable_declaration_prepare": {
+        "allocations": 21,
+        "requested_bytes": 6292250,
+        "retained_bytes": 586,
+        "peak_working_bytes": 3145920
+      },
+      "contract_prepare": {
+        "allocations": 61,
+        "requested_bytes": 12586294,
+        "retained_bytes": 1022,
+        "peak_working_bytes": 3148064
+      },
+      "contract_reuse_check": {
+        "allocations": 61,
+        "requested_bytes": 12585814,
+        "retained_bytes": 0,
+        "peak_working_bytes": 3148064
+      }
+    }
+  ],
+  "wasm_evidence": {
+    "target": "wasm32-unknown-unknown",
+    "runner": "scripts/wasm-test-runner.sh",
+    "node_version": "v26.10.0",
+    "wasm_bindgen_version": "0.2.125",
+    "tests_passed": 13,
+    "layouts_bytes": {
+      "Variable": 8,
+      "Binder": 12,
+      "Identity": 24,
+      "Atom": 48,
+      "Contract": 36,
+      "Evidence": 156
+    },
+    "allocation_and_timing_scope": "Native measurements only; wasm execution and type layouts measured on target."
+  }
+}
