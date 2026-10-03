@@ -37,11 +37,14 @@ class ReleaseError(ValueError):
 class GitHub:
     """The authenticated gh transport; only a literal lookup 404 means absent."""
 
+    RELEASE_PAGE_SIZE = 100
+    RELEASE_PAGE_LIMIT = 100
+
     def __init__(self, repository: str):
         self.repository = repository
         self.base = f"repos/{repository}"
 
-    def api(self, path: str, *, body: dict | None = None, absent=False):
+    def api(self, path: str, *, body: dict | None = None, absent=False, expected=dict):
         arguments = ["gh", "api", "--include", f"{self.base}/{path}"]
         if body is not None:
             arguments += ["--method", "PATCH", "--input", "-"]
@@ -66,12 +69,61 @@ class GitHub:
             value = json.loads(payload)
         except ValueError as error:
             raise ReleaseError("GitHub returned malformed JSON") from error
-        if not isinstance(value, dict):
-            raise ReleaseError("GitHub returned a non-object record")
+        if not isinstance(value, expected):
+            raise ReleaseError("GitHub returned an unexpected JSON record shape")
         return value
 
     def release(self, tag: str):
-        return self.api(f"releases/tags/{tag}", absent=True)
+        # GitHub's tag endpoint only returns published releases. Drafts require
+        # the authenticated catalog, followed by an exact numeric-ID lookup.
+        published = self.api(f"releases/tags/{tag}", absent=True)
+        if published is not None:
+            return published
+        candidate = None
+        for page in range(1, self.RELEASE_PAGE_LIMIT + 1):
+            records = self.api(
+                f"releases?per_page={self.RELEASE_PAGE_SIZE}&page={page}",
+                expected=list,
+            )
+            if len(records) > self.RELEASE_PAGE_SIZE:
+                raise ReleaseError("GitHub release catalog page exceeds its bound")
+            for record in records:
+                if (
+                    not isinstance(record, dict)
+                    or type(record.get("id")) is not int
+                    or record["id"] <= 0
+                    or not isinstance(record.get("tag_name"), str)
+                    or not record["tag_name"]
+                    or type(record.get("draft")) is not bool
+                    or type(record.get("immutable")) is not bool
+                ):
+                    raise ReleaseError(
+                        "GitHub release catalog has a malformed identity"
+                    )
+                if record["tag_name"] == tag:
+                    if candidate is not None:
+                        raise ReleaseError(
+                            "GitHub release catalog has duplicate exact tags"
+                        )
+                    candidate = record
+            if len(records) < self.RELEASE_PAGE_SIZE:
+                break
+        else:
+            raise ReleaseError("GitHub release catalog pagination bound exhausted")
+        if candidate is None:
+            return None
+        if candidate["draft"] is not True or candidate["immutable"] is not False:
+            raise ReleaseError("GitHub catalog tag is not a mutable draft")
+        draft = self.api(f"releases/{candidate['id']}")
+        if (
+            type(draft.get("id")) is not int
+            or draft["id"] != candidate["id"]
+            or draft.get("tag_name") != tag
+            or draft.get("draft") is not True
+            or draft.get("immutable") is not False
+        ):
+            raise ReleaseError("GitHub draft identity changed after catalog lookup")
+        return draft
 
     def tag_sha(self, tag: str) -> str:
         reference = self.api(f"git/ref/tags/{tag}")
@@ -274,10 +326,18 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     for path in paths:
         with path.open("rb") as source:
             expected[path.name] = hashlib.file_digest(source, "sha256").hexdigest()
+    # Reassert the complete reviewed identity on every draft transition. An
+    # omitted tag_name can clear GitHub's selected tag even during publication.
+    reviewed = {
+        "tag_name": tag,
+        "name": title,
+        "body": notes.decode("utf-8"),
+        "prerelease": False,
+    }
     if release is None:
         github.create_draft(tag, title, notes_path)
     else:
-        github.edit(release["id"], name=title, body=notes.decode(), prerelease=False)
+        github.edit(release["id"], **reviewed, draft=True)
     release = github.release(tag)
     identity(release, tag, title, notes, draft=True)
     github.upload(tag, paths)
@@ -286,7 +346,7 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     verify_assets(github, release, version, expected)
     if github.tag_sha(tag) != sha:
         raise ReleaseError("release tag moved before publication")
-    github.edit(release["id"], draft=False)
+    github.edit(release["id"], **reviewed, draft=False)
     release = github.release(tag)
     identity(release, tag, title, notes, draft=False)
     verify_assets(github, release, version, expected)
