@@ -143,7 +143,7 @@ impl GraphPattern {
     /// # Errors
     /// Refuses explicit hidden projection, grouping, output or expression references.
     pub fn validate_hidden_variables(&self) -> Result<()> {
-        visit_nodes(vec![NodeRef::Pattern(self)], check_hidden_observers)
+        crate::scope::validate_pattern(self).map_err(ParseError::from)
     }
 }
 
@@ -154,22 +154,7 @@ impl Query {
     /// # Errors
     /// Refuses an explicit observation of a hidden match witness.
     pub fn validate_hidden_variables(&self) -> Result<()> {
-        match self {
-            Self::Construct { template, .. } => {
-                for quad in template {
-                    check_quad_output(quad)?;
-                }
-            }
-            Self::Describe { targets, .. } => {
-                for target in targets {
-                    if let NamedNodePattern::Variable(variable) = target {
-                        ensure_distinguished(variable)?;
-                    }
-                }
-            }
-            Self::Select { .. } | Self::Ask { .. } => {}
-        }
-        self.pattern().validate_hidden_variables()
+        crate::scope::validate_query(self).map_err(ParseError::from)
     }
 
     /// Check the structural invariants needed to evaluate compiler-built algebra.
@@ -241,11 +226,11 @@ impl Query {
         if let Some(base) = base {
             purrdf_iri::BaseIri::parse(base.as_str()).map_err(|e| invalid(e.to_string()))?;
         }
+        crate::scope::validate_query_head(self).map_err(ParseError::from)?;
         let mut stack = vec![NodeRef::Pattern(pattern)];
         match self {
             Self::Construct { template, .. } => {
                 for quad in template {
-                    check_quad_output(quad)?;
                     if let Some(graph) = &quad.graph {
                         named(graph)?;
                     }
@@ -254,9 +239,6 @@ impl Query {
             }
             Self::Describe { targets, .. } => {
                 for target in targets {
-                    if let NamedNodePattern::Variable(variable) = target {
-                        ensure_distinguished(variable)?;
-                    }
                     named(target)?;
                 }
             }
@@ -268,64 +250,24 @@ impl Query {
 
 /// The shared borrowed admission walk, with one check per node and no recursion.
 fn visit_nodes<'a>(
-    mut stack: Vec<NodeRef<'a>>,
+    stack: Vec<NodeRef<'a>>,
     mut check: impl FnMut(NodeRef<'a>) -> Result<()>,
 ) -> Result<()> {
-    while let Some(node) = stack.pop() {
-        check(node)?;
-        node.for_each_child(|child| stack.push(child));
+    for root in stack.into_iter().rev() {
+        crate::scope::walk_nodes(root, |node, index| {
+            crate::scope::check_node(node, crate::scope::ScopeSite::pattern(index))
+                .map_err(ParseError::from)?;
+            check(node)
+        })?;
     }
     Ok(())
 }
 
-/// A template's complete variable census, including quoted slots and graph name.
-pub(crate) fn for_each_quad_variable(quad: &crate::QuadPattern, mut visit: impl FnMut(&Variable)) {
-    crate::walk::walk_pre_post(NodeRef::Triple(&quad.triple), |phase, node| {
-        if phase == crate::walk::Visit::Enter {
-            node.for_each_variable(&mut visit);
-        }
-        crate::walk::Flow::Descend
-    });
-    if let Some(NamedNodePattern::Variable(variable)) = &quad.graph {
-        visit(variable);
-    }
-}
+pub(crate) use crate::scope::for_each_quad_variable;
 
 /// The one output rule shared by query admission and update carriers.
 pub(crate) fn check_quad_output(quad: &crate::QuadPattern) -> Result<()> {
-    let mut result = Ok(());
-    for_each_quad_variable(quad, |variable| {
-        if result.is_ok() {
-            result = ensure_distinguished(variable);
-        }
-    });
-    result
-}
-
-fn check_distinguished_leaves(node: NodeRef<'_>) -> Result<()> {
-    let mut result = Ok(());
-    node.for_each_variable(|variable| {
-        if result.is_ok() {
-            result = ensure_distinguished(variable);
-        }
-    });
-    result
-}
-
-/// The one identity-only rule shared by full admission, raw entries and carriers.
-fn check_hidden_observers(node: NodeRef<'_>) -> Result<()> {
-    match node {
-        NodeRef::Pattern(
-            GraphPattern::Project { .. }
-            | GraphPattern::Group { .. }
-            | GraphPattern::Extend { .. }
-            | GraphPattern::Unfold { .. },
-        )
-        | NodeRef::Expr(Expression::Variable(_) | Expression::Bound(_)) => {
-            check_distinguished_leaves(node)
-        }
-        _ => Ok(()),
-    }
+    crate::scope::validate_quad(quad).map_err(ParseError::from)
 }
 
 fn invalid(message: impl Into<String>) -> ParseError {
@@ -357,17 +299,6 @@ fn variable(value: &Variable) -> Result<()> {
     // BEGIN with one, and no position admits `'-'`.
     if !value.is_hidden() && !crate::lexer::is_varname(value.as_str()) {
         return Err(invalid("invalid query variable name"));
-    }
-    Ok(())
-}
-
-/// Non-distinguished match witnesses cannot be named as observable bindings or
-/// expression inputs. This is an identity contract, not a textual name restriction.
-fn ensure_distinguished(value: &Variable) -> Result<()> {
-    if value.is_hidden() {
-        return Err(invalid(
-            "a non-distinguished variable cannot be explicitly observed",
-        ));
     }
     Ok(())
 }
@@ -425,7 +356,6 @@ fn literal(value: &Literal) -> Result<()> {
 /// The checks of `node` itself; its children are checked when they are reached.
 /// Every [`Function::Custom`] IRI `node` calls is recorded in `calls`.
 fn check<'a>(node: NodeRef<'a>, calls: &mut BTreeSet<&'a str>) -> Result<()> {
-    check_hidden_observers(node)?;
     match node {
         NodeRef::Pattern(pattern) => check_pattern(pattern),
         NodeRef::Expr(expr) => check_expression(expr, calls),
