@@ -231,6 +231,43 @@ impl MutableDataset {
         &self.base
     }
 
+    /// Visit every retained blank identity without freezing or copying the dataset.
+    /// Includes suppressed base terms and blanks nested in delta triple terms or
+    /// composite literals, so fresh publication can avoid all identities this
+    /// destination owns. The first `Break` ends the visit.
+    pub fn visit_blank_identities<B>(
+        &self,
+        mut visit: impl FnMut(&str, crate::BlankScope) -> ControlFlow<B>,
+    ) -> ControlFlow<B> {
+        for index in 0..self.base.term_count() {
+            let id = TermId::from_index(u32::try_from(index).expect("native index fits u32"));
+            if let TermRef::Blank { label, scope } = self.base.resolve(id) {
+                visit(label, scope)?;
+            }
+        }
+        for value in &self.delta.values {
+            value.visit_terms(|term| {
+                match term {
+                    TermValue::Blank { label, scope } => visit(label, *scope)?,
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        ..
+                    } => {
+                        for (label, scope) in
+                            crate::cdt_blank::cdt_embedded_blanks(lexical_form, datatype)
+                        {
+                            visit(&label, scope)?;
+                        }
+                    }
+                    TermValue::Iri(_) | TermValue::Triple { .. } => {}
+                }
+                ControlFlow::Continue(())
+            })?;
+        }
+        ControlFlow::Continue(())
+    }
+
     // -- value ↔ MutTermId resolution -------------------------------------------------
 
     /// Resolve a base [`TermId`] to its dataset-independent [`TermValue`], through

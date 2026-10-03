@@ -820,8 +820,8 @@ terminal! {
     /// and may not BEGIN one, so `_:a-b` is one label and `_:-b` is not a label
     /// at all. Scanning the head with the continue class silently admits a
     /// label this workspace's own writer refuses to emit — see
-    /// `purrdf_rdf_core::blank_label::is_valid_blank_node_label`, the egress
-    /// side of the same production.
+    /// [`is_valid_blank_node_label`], the egress side of the same production
+    /// (also re-exported by `purrdf_core::blank_label`).
     ///
     /// It is also narrower than [`is_pn_local_start`]: a `':'` begins a
     /// `PN_LOCAL` and never a blank node label, because the `':'` in `_:` has
@@ -840,6 +840,39 @@ terminal! {
         (0x30, 0x39), // [0-9]
     ];
     non_ascii: [];
+}
+
+/// Whether `label` is legal as a serialized blank-node label (`_:{label}`).
+///
+/// Implements the exact W3C Turtle/SPARQL production
+/// `BLANK_NODE_LABEL ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?`,
+/// validating the part after `_:`. A label that fails this check cannot be
+/// emitted by any codec without producing a document that no conforming
+/// parser (including PurRDF's own) can read back.
+#[must_use]
+pub fn is_valid_blank_node_label(label: &str) -> bool {
+    let mut chars = label.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !is_blank_node_label_start(first) {
+        return false;
+    }
+    // The grammar is `(PN_CHARS | '.')* PN_CHARS` after the first character:
+    // any run of PN_CHARS/'.' is legal mid-label, but the *final* character
+    // must be PN_CHARS (never '.'). Track whether the most recently accepted
+    // character was a '.' and reject at the end if so.
+    let mut trailing_dot = false;
+    for ch in chars {
+        if ch == '.' {
+            trailing_dot = true;
+        } else if is_pn_chars(ch) {
+            trailing_dot = false;
+        } else {
+            return false;
+        }
+    }
+    !trailing_dot
 }
 
 terminal! {

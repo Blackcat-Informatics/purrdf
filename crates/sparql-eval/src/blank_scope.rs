@@ -64,6 +64,10 @@
 use std::sync::Arc;
 
 use purrdf_core::ViewTermId;
+use purrdf_sparql_algebra::scope::{
+    LabelSource, joins_blank_scope as is_spine, spine_leaves, visit_leaf_labels,
+    visit_spine_leaves as any_spine_leaf, visit_term_labels,
+};
 use purrdf_sparql_algebra::{
     AggregateExpression, Expression, GraphPattern, OrderExpression, Query, TermPattern,
     TriplePattern, Variable,
@@ -184,37 +188,6 @@ pub(crate) fn query_with_pattern(query: &Query, pattern: GraphPattern) -> Query 
 // The spine
 // ---------------------------------------------------------------------------
 
-/// Whether `pattern` is a node joining two pieces of one basic graph pattern.
-fn is_spine(pattern: &GraphPattern) -> bool {
-    match pattern {
-        GraphPattern::Join { .. } => true,
-        GraphPattern::Lateral { right, .. } => {
-            matches!(&**right, GraphPattern::PropertyFunction(_))
-        }
-        _ => false,
-    }
-}
-
-/// The leaves under the spine rooted at `pattern`, in written order.
-///
-/// A work list stands in for the recursion: a spine node's operands are pushed right
-/// first, so the left pops first and the leaves come out left to right, however tall
-/// the spine.
-fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
-    let mut pending: purrdf_core::SmallVec<[&'a GraphPattern; 8]> = purrdf_core::smallvec![pattern];
-    while let Some(node) = pending.pop() {
-        match node {
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
-                if is_spine(node) =>
-            {
-                pending.push(right);
-                pending.push(left);
-            }
-            _ => out.push(node),
-        }
-    }
-}
-
 /// [`spine_leaves`], mutably.
 fn spine_leaves_mut<'a>(pattern: &'a mut GraphPattern, out: &mut Vec<&'a mut GraphPattern>) {
     let mut pending: Vec<&'a mut GraphPattern> = vec![pattern];
@@ -247,94 +220,11 @@ fn leaf_labels_with<'a>(leaf: &'a GraphPattern, out: &mut Vec<&'a str>, source: 
     });
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LabelSource {
-    Raw,
-    Carried,
-    All,
-}
-
-/// Visit a leaf's labels, stopping when the visitor returns true. A UNION exposes
-/// only carried parser-block identities, never its arms' local algebra blanks.
-fn visit_leaf_labels<'a>(
-    leaf: &'a GraphPattern,
-    source: LabelSource,
-    visit: &mut impl FnMut(&'a str) -> bool,
-) -> bool {
-    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![(leaf, source)];
-    while let Some((node, source)) = pending.pop() {
-        let found = match node {
-            GraphPattern::Bgp { patterns } => patterns.iter().any(|triple| {
-                visit_term_labels(&triple.subject, source, visit)
-                    || visit_term_labels(&triple.object, source, visit)
-            }),
-            GraphPattern::Path {
-                subject, object, ..
-            } => {
-                visit_term_labels(subject, source, visit)
-                    || visit_term_labels(object, source, visit)
-            }
-            GraphPattern::PropertyFunction(call) => call
-                .subject_args
-                .iter()
-                .chain(&call.object_args)
-                .any(|term| visit_term_labels(term, source, visit)),
-            GraphPattern::Join { left, right } => {
-                pending.push((right, source));
-                pending.push((left, source));
-                false
-            }
-            GraphPattern::Union { arms } if source != LabelSource::Raw => {
-                pending.extend(arms.iter().rev().map(|arm| (arm, LabelSource::Carried)));
-                false
-            }
-            _ => false,
-        };
-        if found {
-            return true;
-        }
-    }
-    false
-}
-
 fn term_labels_with<'a>(term: &'a TermPattern, out: &mut Vec<&'a str>, source: LabelSource) {
     visit_term_labels(term, source, &mut |label| {
         out.push(label);
         false
     });
-}
-
-/// The blank labels in a term, subject before object at every quoted level, over
-/// an inline work list and with the same early-exit visitor as the leaf walk.
-fn visit_term_labels<'a>(
-    term: &'a TermPattern,
-    source: LabelSource,
-    visit: &mut impl FnMut(&'a str) -> bool,
-) -> bool {
-    let mut pending: purrdf_core::SmallVec<[&'a TermPattern; 8]> = purrdf_core::smallvec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::BlankNode(blank) if source != LabelSource::Carried => {
-                if visit(blank.as_str()) {
-                    return true;
-                }
-            }
-            TermPattern::Variable(variable) if source != LabelSource::Raw => {
-                if variable.source_blank_label().is_some_and(&mut *visit) {
-                    return true;
-                }
-            }
-            TermPattern::Triple(triple) => {
-                pending.push(&triple.object);
-                pending.push(&triple.subject);
-            }
-            TermPattern::NamedNode(_)
-            | TermPattern::BlankNode(_)
-            | TermPattern::Literal(_)
-            | TermPattern::Variable(_) => {}
-        }
-    }
-    false
 }
 
 /// The labels written in more than one of `leaves`, sorted.
@@ -399,34 +289,6 @@ fn shared_labels(leaves: &[&GraphPattern]) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // Detection (read-only)
 // ---------------------------------------------------------------------------
-
-/// Whether any leaf under the spine rooted at `pattern` satisfies `test` — the
-/// leaves visited left to right and the walk stopped at the first that does, over a
-/// work list held inline until a spine is taller than it, so a pattern with nothing to
-/// rename allocates nothing (this walk runs on every admission, prepared re-runs
-/// included).
-fn any_spine_leaf<'a>(
-    pattern: &'a GraphPattern,
-    test: &mut impl FnMut(&'a GraphPattern) -> bool,
-) -> bool {
-    let mut pending: purrdf_core::SmallVec<[&'a GraphPattern; 8]> = purrdf_core::smallvec![pattern];
-    while let Some(node) = pending.pop() {
-        match node {
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
-                if is_spine(node) =>
-            {
-                pending.push(right);
-                pending.push(left);
-            }
-            _ => {
-                if test(node) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
 
 /// Whether a leaf writes any blank node at all.
 fn leaf_has_blank(leaf: &GraphPattern) -> bool {

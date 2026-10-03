@@ -426,38 +426,9 @@ fn push_hex6(cp: u32, out: &mut String) {
     );
 }
 
-/// Whether `label` is legal as a serialized blank-node label (`_:{label}`).
-///
-/// Implements the exact W3C Turtle/SPARQL production
-/// `BLANK_NODE_LABEL ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?`,
-/// validating the part after `_:`. A label that fails this check cannot be
-/// emitted by any codec without producing a document that no conforming
-/// parser (including PurRDF's own) can read back.
-#[must_use]
-pub fn is_valid_blank_node_label(label: &str) -> bool {
-    let mut chars = label.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(is_pn_chars_u(first) || first.is_ascii_digit()) {
-        return false;
-    }
-    // The grammar is `(PN_CHARS | '.')* PN_CHARS` after the first character:
-    // any run of PN_CHARS/'.' is legal mid-label, but the *final* character
-    // must be PN_CHARS (never '.'). Track whether the most recently accepted
-    // character was a '.' and reject at the end if so.
-    let mut trailing_dot = false;
-    for ch in chars {
-        if ch == '.' {
-            trailing_dot = true;
-        } else if is_pn_chars(ch) {
-            trailing_dot = false;
-        } else {
-            return false;
-        }
-    }
-    !trailing_dot
-}
+// Keep the dataset-codec API while the exact shared lexical grammar lives below
+// both dataset codecs and the SPARQL front end.
+pub use purrdf_lex::terminals::is_valid_blank_node_label;
 
 /// Whether `prefix` is legal as a mint-time PREFIX for [`is_valid_blank_node_label`]:
 /// a string a caller can safely splice in front of every label an evaluator mints,

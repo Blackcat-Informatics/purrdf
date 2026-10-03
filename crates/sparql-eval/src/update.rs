@@ -85,6 +85,7 @@
 //! it wastes less work on a request that is going to be discarded, and discards it either
 //! way.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -104,8 +105,8 @@ use crate::governor::{ChargePoint, GovernorState, StopSignal};
 use crate::plan_cache::BoundedOrderCache;
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
-    TripleOrdinal, instantiate_ground_term, instantiate_predicate, instantiate_term,
-    positionally_ill_formed, resolve_triple,
+    TripleOrdinal, destination_mint_prefix, instantiate_ground_term, instantiate_predicate,
+    instantiate_term, positionally_ill_formed, resolve_triple, template_has_blank_node,
 };
 
 /// Why an UPDATE request stopped before applying.
@@ -522,9 +523,12 @@ fn insert_data(
     counter: &mut u64,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
+    let prefix = template_has_blank_node(data)
+        .then(|| mutable_mint_prefix(m, None))
+        .flatten();
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
-        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
+        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter, prefix.as_deref()) {
             // Charged per quad rather than per operation because an ill-formed template
             // quad is skipped rather than inserted (§16.2), and fuel counts what the store
             // actually did.
@@ -545,7 +549,7 @@ fn delete_data(
 ) -> Result<(), UpdateAbort> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
-        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
+        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter, None) {
             charge_mutations(governors, 1)?;
             m.remove(&q);
         }
@@ -637,6 +641,20 @@ fn delete_insert(
     // minted by this operation (template blanks, `BNODE()`, `rdf:List` cells) stay
     // disjoint from every other operation's in the same request.
     ctx.bnode_counter = *bnode_counter;
+    // The counter separates this request's mints; the namespace also separates
+    // them from the destination, including earlier requests and LOAD operations.
+    // Reuse the registry-aware stateful-effect test: a pure, blank-free update
+    // neither inventories destination identities nor allocates a mint namespace.
+    if (template_has_blank_node(insert) || !ctx.pattern_is_parallel_safe(pattern))
+        && let Some(prefix) = mutable_mint_prefix(m, cfg.options.bnode_mint_prefix)
+    {
+        ctx = ctx.with_bnode_mint_prefix(&prefix).map_err(|error| {
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                error.to_string(),
+            )
+        })?;
+    }
 
     // Scope the WHERE active dataset (§3.1.3): USING (if present) builds a custom
     // dataset and replaces WITH's effect on the WHERE; otherwise WITH scopes the WHERE
@@ -1066,6 +1084,22 @@ fn graph_op_move(
 
 // ── shared helpers ───────────────────────────────────────────────────────────
 
+/// Apply the shared publication namespace law to a mutable destination without
+/// publishing a snapshot or cloning its term payloads.
+fn mutable_mint_prefix(destination: &MutableDataset, requested: Option<&str>) -> Option<String> {
+    destination_mint_prefix(requested, |prefix| {
+        destination
+            .visit_blank_identities(|label, scope| {
+                if scope == purrdf_core::BlankScope::DEFAULT && label.starts_with(prefix) {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
+            .is_break()
+    })
+}
+
 /// Instantiate a **variable-free** `DATA` quad (`INSERT DATA` / `DELETE DATA`) into a
 /// concrete [`QuadValues`] with no dataset/snapshot. `None` if the triple is
 /// positionally ill-formed (§16.2) or — a parser-invariant guard — any position holds
@@ -1075,13 +1109,14 @@ fn instantiate_ground_quad(
     qp: &QuadPattern,
     blanks: &mut DetHashMap<String, String>,
     counter: &mut u64,
+    prefix: Option<&str>,
 ) -> Option<QuadValues> {
-    let s = instantiate_ground_term(&qp.triple.subject, blanks, counter)?;
+    let s = instantiate_ground_term(&qp.triple.subject, blanks, counter, prefix)?;
     let p = match &qp.triple.predicate {
         NamedNodePattern::NamedNode(n) => named_node_to_value(n),
         NamedNodePattern::Variable(_) => return None,
     };
-    let o = instantiate_ground_term(&qp.triple.object, blanks, counter)?;
+    let o = instantiate_ground_term(&qp.triple.object, blanks, counter, prefix)?;
     if positionally_ill_formed(&s, &p, &o) {
         return None;
     }

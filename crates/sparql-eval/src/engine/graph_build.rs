@@ -232,7 +232,12 @@ impl NativeSparqlEngine {
             !substitutions.is_empty(),
             options,
         )?;
-        let prefix = destination_mint_prefix(destination, options.bnode_mint_prefix);
+        let prefix =
+            crate::template::destination_mint_prefix(options.bnode_mint_prefix, |prefix| {
+                destination.blank_identities().any(|(label, scope)| {
+                    scope == purrdf_core::BlankScope::DEFAULT && label.starts_with(prefix)
+                })
+            });
         let options = QueryOptions {
             bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
             ..options
@@ -390,29 +395,4 @@ fn publish(
         intermediate_freezes: 0,
         governors,
     }
-}
-
-/// Choose a deterministic namespace disjoint from every existing destination
-/// blank. Source-carried bindings are untouched; only evaluation's minted terms
-/// consume this prefix. A fresh destination keeps the ordinary query spelling.
-fn destination_mint_prefix(
-    destination: &RdfDatasetBuilder,
-    requested: Option<&str>,
-) -> Option<String> {
-    if !destination
-        .blank_identities()
-        .any(|(_, scope)| scope == purrdf_core::BlankScope::DEFAULT)
-    {
-        return None;
-    }
-    let requested = requested.unwrap_or("");
-    for ordinal in 0_u64.. {
-        let candidate = format!("{requested}append{ordinal}_");
-        if !destination.blank_identities().any(|(label, scope)| {
-            scope == purrdf_core::BlankScope::DEFAULT && label.starts_with(&candidate)
-        }) {
-            return Some(candidate);
-        }
-    }
-    unreachable!("a finite builder cannot occupy every mint namespace")
 }

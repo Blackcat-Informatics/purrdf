@@ -310,7 +310,8 @@ impl Update {
     /// rendering any operation. Uses the same carrier as [`core::fmt::Display`].
     ///
     /// # Errors
-    /// Refuses hidden template outputs or explicit hidden observers in `WHERE`.
+    /// Refuses hidden template outputs, explicit hidden observers in `WHERE`, or
+    /// concrete blank VALUES bindings without a SPARQL text representation.
     pub fn try_to_sparql(&self) -> crate::Result<String> {
         checked_update_carrier(self, self.validate_hidden_outputs())
     }
@@ -476,8 +477,9 @@ impl core::fmt::Display for QueryDataset {
 impl core::fmt::Display for Update {
     /// Serialize an Update request: its operations joined by `;`.
     ///
-    /// Refuses hidden template outputs and explicit hidden observers in `WHERE`
-    /// with [`core::fmt::Error`] before writing any bytes. Consequently,
+    /// Refuses hidden template outputs, explicit hidden observers in `WHERE`, and
+    /// concrete blank VALUES bindings with [`core::fmt::Error`] before writing
+    /// any bytes. Consequently,
     /// [`ToString::to_string`] and `format!` panic for such hand-built algebra.
     /// Use [`Self::try_to_sparql`] for a typed refusal. Parser-produced requests
     /// satisfy this identity contract.
@@ -608,7 +610,8 @@ impl GraphUpdateOperation {
     /// rendering. Uses the same carrier as [`core::fmt::Display`].
     ///
     /// # Errors
-    /// Refuses hidden template outputs or explicit hidden observers in `WHERE`.
+    /// Refuses hidden template outputs, explicit hidden observers in `WHERE`, or
+    /// concrete blank VALUES bindings without a SPARQL text representation.
     pub fn try_to_sparql(&self) -> crate::Result<String> {
         checked_update_carrier(self, self.validate_hidden_outputs())
     }
@@ -631,7 +634,7 @@ impl GraphUpdateOperation {
             } => {
                 validate_template(delete)?;
                 validate_template(insert)?;
-                pattern.validate_hidden_variables()?;
+                crate::serialize::validate_carrier_pattern(pattern)?;
             }
             _ => {}
         }
@@ -642,8 +645,9 @@ impl GraphUpdateOperation {
 impl core::fmt::Display for GraphUpdateOperation {
     /// Serialize one update operation to SPARQL Update surface syntax.
     ///
-    /// Refuses hidden template outputs and explicit hidden observers in `WHERE`
-    /// with [`core::fmt::Error`] before writing any bytes. Consequently,
+    /// Refuses hidden template outputs, explicit hidden observers in `WHERE`, and
+    /// concrete blank VALUES bindings with [`core::fmt::Error`] before writing
+    /// any bytes. Consequently,
     /// [`ToString::to_string`] and `format!` panic for such hand-built algebra.
     /// Use [`Self::try_to_sparql`] for a typed refusal. Parser-produced operations
     /// satisfy this identity contract.

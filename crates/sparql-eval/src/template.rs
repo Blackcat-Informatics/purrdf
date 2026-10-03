@@ -35,7 +35,7 @@
 
 use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, DatasetView, TermValue};
-use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
+use purrdf_sparql_algebra::{NamedNodePattern, QuadPattern, TermPattern, TriplePattern};
 
 use crate::DetHashMap;
 use crate::convert::{literal_to_value, named_node_to_value};
@@ -270,6 +270,7 @@ pub(crate) fn instantiate_ground_term(
     term: &TermPattern,
     blanks: &mut DetHashMap<String, String>,
     counter: &mut u64,
+    prefix: Option<&str>,
 ) -> Option<TermValue> {
     enum Step<'t> {
         Term(&'t TermPattern),
@@ -283,10 +284,9 @@ pub(crate) fn instantiate_ground_term(
             Step::Term(term) => match term {
                 TermPattern::NamedNode(n) => values.push(named_node_to_value(n)),
                 TermPattern::Literal(l) => values.push(literal_to_value(l)),
-                // The DATA path mints unprefixed: it is variable-free ingestion with a
-                // request-local counter, never a per-focus SHACL evaluation.
+                // The destination selects a disjoint namespace before DATA instantiation.
                 TermPattern::BlankNode(b) => {
-                    values.push(mint_blank(b.as_str(), blanks, counter, None));
+                    values.push(mint_blank(b.as_str(), blanks, counter, prefix));
                 }
                 TermPattern::Triple(t) => steps.extend([
                     Step::Assemble,
@@ -480,6 +480,56 @@ pub(crate) fn mint_blank(
         label: fresh,
         scope: BlankScope::DEFAULT,
     }
+}
+
+/// Choose a deterministic mint namespace disjoint from the destination's blanks.
+/// `occupied(prefix)` reports whether a default-scope identity starts with that
+/// prefix; the empty prefix asks whether any such identity exists. A destination
+/// without default-scope blanks retains the caller's ordinary mint spelling.
+pub(crate) fn destination_mint_prefix(
+    requested: Option<&str>,
+    mut occupied: impl FnMut(&str) -> bool,
+) -> Option<String> {
+    if !occupied("") {
+        return None;
+    }
+    let requested = requested.unwrap_or("");
+    for ordinal in 0_u64.. {
+        let candidate = format!("{requested}append{ordinal}_");
+        if !occupied(&candidate) {
+            return Some(candidate);
+        }
+    }
+    unreachable!("a finite destination cannot occupy every mint namespace")
+}
+
+/// Whether a template has a blank mint position, including quoted triples.
+pub(crate) fn template_has_blank_node(template: &[QuadPattern]) -> bool {
+    // A graph position admits only an IRI or a variable, so it can never hold a
+    // blank node and never needs scanning.
+    template
+        .iter()
+        .any(|quad| triple_pattern_has_blank_node(&quad.triple))
+}
+
+/// The [`TriplePattern`] half of [`template_has_blank_node`]'s scan.
+fn triple_pattern_has_blank_node(tp: &TriplePattern) -> bool {
+    term_pattern_has_blank_node(&tp.subject) || term_pattern_has_blank_node(&tp.object)
+}
+
+/// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, through nested
+/// quoted-triple positions — subject before object, over a work list rather than the
+/// call stack, ending at the first blank node found.
+pub(crate) fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
+    let mut pending: Vec<&TermPattern> = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(_) => return true,
+            TermPattern::Triple(inner) => pending.extend([&inner.object, &inner.subject]),
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -714,7 +764,8 @@ mod term_walk_tests {
             let mut budget = 5;
             let pattern = pattern(&mut choices, &mut budget);
             let (mut blanks_walk, mut counter_walk) = (DetHashMap::default(), 0_u64);
-            let walked = instantiate_ground_term(&pattern, &mut blanks_walk, &mut counter_walk);
+            let walked =
+                instantiate_ground_term(&pattern, &mut blanks_walk, &mut counter_walk, None);
             let (mut blanks_ref, mut counter_ref) = (DetHashMap::default(), 0_u64);
             let referenced = ground_reference(&pattern, &mut blanks_ref, &mut counter_ref);
             assert_eq!(walked, referenced, "seed {seed}");
@@ -761,7 +812,7 @@ mod term_walk_tests {
 
             let mut blanks = DetHashMap::default();
             let mut counter = 0_u64;
-            let ground = instantiate_ground_term(&pattern, &mut blanks, &mut counter)
+            let ground = instantiate_ground_term(&pattern, &mut blanks, &mut counter, None)
                 .expect("a variable-free template term instantiates");
             let (levels, innermost) = unwind(&ground);
             assert_eq!(levels, DEPTH);

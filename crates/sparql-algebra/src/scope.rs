@@ -13,8 +13,10 @@
 //! These borrowed checks establish roles in the supplied algebra. A lost intended
 //! connection, a changed solution bag or incorrect runtime template allocation
 //! requires transformation provenance or semantic evidence in addition to a tree.
-//! All recursive children are visited through the shared iterative [`NodeRef`]
-//! walk; checking a deeper tree consumes no additional machine stack.
+//! Whole-tree role checks visit recursive children through the shared iterative
+//! [`NodeRef`] walk. Source ownership and label-exposure visitors follow the
+//! positive basic-graph-pattern spine over work lists as well; deeper input
+//! consumes no additional machine stack.
 
 use core::fmt;
 
@@ -390,4 +392,145 @@ pub(crate) fn walk_nodes<'a, E>(
         Flow::Descend
     });
     result
+}
+
+// Source basic-graph-pattern ownership and exposure are shared with evaluation.
+
+/// Whether `pattern` is a node joining two pieces of one basic graph pattern.
+#[must_use]
+pub fn joins_blank_scope(pattern: &GraphPattern) -> bool {
+    match pattern {
+        GraphPattern::Join { .. } => true,
+        GraphPattern::Lateral { right, .. } => {
+            matches!(&**right, GraphPattern::PropertyFunction(_))
+        }
+        _ => false,
+    }
+}
+
+/// The leaves under the spine rooted at `pattern`, in written order.
+///
+/// A work list stands in for the recursion: a spine node's operands are pushed right
+/// first, so the left pops first and the leaves come out left to right, however tall
+/// the spine.
+pub fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
+    visit_spine_leaves(pattern, &mut |leaf| {
+        out.push(leaf);
+        false
+    });
+}
+
+/// Whether any leaf under the spine rooted at `pattern` satisfies `test` — the
+/// leaves visited left to right and the walk stopped at the first that does, over a
+/// work list held inline until a spine is taller than it, so a pattern with nothing to
+/// rename allocates nothing (this walk runs on every admission, prepared re-runs
+/// included).
+pub fn visit_spine_leaves<'a>(
+    pattern: &'a GraphPattern,
+    test: &mut impl FnMut(&'a GraphPattern) -> bool,
+) -> bool {
+    let mut pending = crate::worklist::WorkList::<_, 8>::with(pattern);
+    while let Some(node) = pending.pop() {
+        match node {
+            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
+                if joins_blank_scope(node) =>
+            {
+                pending.push(right);
+                pending.push(left);
+            }
+            _ => {
+                if test(node) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Which identities a source-blank exposure walk includes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelSource {
+    /// Ordinary existential blank labels local to a pattern leaf.
+    Raw,
+    /// Canonical hidden identities preserving a source block's blank labels.
+    Carried,
+    /// Both ordinary and carried identities.
+    All,
+}
+
+/// Visit a leaf's labels, stopping when the visitor returns true. A UNION exposes
+/// only carried parser-block identities, never its arms' local algebra blanks.
+pub fn visit_leaf_labels<'a>(
+    leaf: &'a GraphPattern,
+    source: LabelSource,
+    visit: &mut impl FnMut(&'a str) -> bool,
+) -> bool {
+    let mut pending = crate::worklist::WorkList::<_, 8>::with((leaf, source));
+    while let Some((node, source)) = pending.pop() {
+        let found = match node {
+            GraphPattern::Bgp { patterns } => patterns.iter().any(|triple| {
+                visit_term_labels(&triple.subject, source, visit)
+                    || visit_term_labels(&triple.object, source, visit)
+            }),
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                visit_term_labels(subject, source, visit)
+                    || visit_term_labels(object, source, visit)
+            }
+            GraphPattern::PropertyFunction(call) => call
+                .subject_args
+                .iter()
+                .chain(&call.object_args)
+                .any(|term| visit_term_labels(term, source, visit)),
+            GraphPattern::Join { left, right } => {
+                pending.push((right, source));
+                pending.push((left, source));
+                false
+            }
+            GraphPattern::Union { arms } if source != LabelSource::Raw => {
+                pending.extend(arms.iter().rev().map(|arm| (arm, LabelSource::Carried)));
+                false
+            }
+            _ => false,
+        };
+        if found {
+            return true;
+        }
+    }
+    false
+}
+
+/// The blank labels in a term, subject before object at every quoted level, over
+/// an inline work list and with the same early-exit visitor as the leaf walk.
+pub fn visit_term_labels<'a>(
+    term: &'a TermPattern,
+    source: LabelSource,
+    visit: &mut impl FnMut(&'a str) -> bool,
+) -> bool {
+    let mut pending = crate::worklist::WorkList::<_, 8>::with(term);
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(blank) if source != LabelSource::Carried => {
+                if visit(blank.as_str()) {
+                    return true;
+                }
+            }
+            TermPattern::Variable(variable) if source != LabelSource::Raw => {
+                if variable.source_blank_label().is_some_and(&mut *visit) {
+                    return true;
+                }
+            }
+            TermPattern::Triple(triple) => {
+                pending.push(&triple.object);
+                pending.push(&triple.subject);
+            }
+            TermPattern::NamedNode(_)
+            | TermPattern::BlankNode(_)
+            | TermPattern::Literal(_)
+            | TermPattern::Variable(_) => {}
+        }
+    }
+    false
 }

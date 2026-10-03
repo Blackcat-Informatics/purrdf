@@ -24,6 +24,12 @@
 //!   takes, and the shape a whole aggregate query is once a caller — federation or
 //!   otherwise — has stripped the query's top `SELECT` scaffold to reach the WHERE
 //!   body underneath it).
+//! * Raw algebra may reuse a blank spelling in independent source scopes. Their
+//!   carriers receive distinct legal blank labels; a shared positive scope split
+//!   by necessary braces instead receives an unprojected carrier variable. Opaque
+//!   raw blank spellings are made legal through the same deterministic alias
+//!   allocation. Concrete dataset blanks in `VALUES` have no portable SPARQL text
+//!   representation and the checked carrier refuses them before rendering.
 //! * **Admitted in, admitted out.** A bracket or a brace is a level the evaluator's
 //!   height admission measures a re-parsed body against. So the rendering spends a
 //!   bracket or a brace only where the grammar needs one to rebuild the same tree:
@@ -132,19 +138,20 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 ///
 /// # Panics
 /// Panics when compiler-built algebra explicitly observes a non-distinguished
-/// match witness. Use [`try_pattern_to_select_query`] for a typed refusal.
+/// match witness or contains concrete blank VALUES bindings. Use [`try_pattern_to_select_query`] for a typed refusal.
 #[must_use]
 pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
     try_pattern_to_select_query(inner)
-        .expect("query carrier requires valid non-distinguished identities")
+        .expect("query carrier requires representable binding identities")
 }
 
-/// Render a complete independent carrier, refusing invalid hidden observations.
+/// Render an independent carrier, refusing invalid or unrepresentable identities.
 ///
 /// # Errors
-/// Returns the source identity-contract error without emitting changed semantics.
+/// Returns the source identity-contract error or refuses concrete blank VALUES
+/// bindings, which have no SPARQL DataBlockValue representation.
 pub fn try_pattern_to_select_query(inner: &GraphPattern) -> crate::Result<String> {
-    inner.validate_hidden_variables()?;
+    validate_carrier_pattern(inner)?;
     Ok(select_query(inner, PredicateRendering::Independent))
 }
 
@@ -160,7 +167,7 @@ pub fn try_pattern_to_select_query(inner: &GraphPattern) -> crate::Result<String
 /// each parsed function keeps its own original IRI.
 ///
 /// # Panics
-/// Panics for invalid non-distinguished observers. The checked counterpart is
+/// Panics for invalid non-distinguished observers or concrete blank VALUES bindings. The checked counterpart is
 /// [`try_pattern_to_select_query_with_options`].
 #[must_use]
 pub fn pattern_to_select_query_with_options(
@@ -168,18 +175,19 @@ pub fn pattern_to_select_query_with_options(
     options: &ParserOptions,
 ) -> String {
     try_pattern_to_select_query_with_options(inner, options)
-        .expect("query carrier requires valid non-distinguished identities")
+        .expect("query carrier requires representable binding identities")
 }
 
 /// Render a configured carrier with a typed non-distinguished-identity check.
 ///
 /// # Errors
-/// Refuses explicit hidden projection, grouping, output or expression references.
+/// Refuses explicit hidden projection, grouping, output or expression references,
+/// and concrete blank VALUES bindings.
 pub fn try_pattern_to_select_query_with_options(
     inner: &GraphPattern,
     options: &ParserOptions,
 ) -> crate::Result<String> {
-    inner.validate_hidden_variables()?;
+    validate_carrier_pattern(inner)?;
     Ok(select_query(inner, PredicateRendering::Configured(options)))
 }
 
@@ -201,20 +209,168 @@ impl PredicateRendering<'_> {
     }
 }
 
-/// Fresh legal carrier names for canonical non-distinguished identities. Ordinary
-/// variables retain their exact names, including references appearing only in an
-/// expression or an inner projection. No reserved identity is ever emitted.
+/// Refuse identities with no SPARQL text representation before emitting bytes.
+/// Concrete dataset blanks are valid injection-only algebra values, but a blank
+/// label in a VALUES cell would be neither legal DataBlockValue syntax nor a
+/// portable reference to the same dataset node.
+pub(crate) fn validate_carrier_pattern(pattern: &GraphPattern) -> crate::Result<()> {
+    pattern.validate_hidden_variables()?;
+    let mut error = None;
+    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+        if visit == Visit::Enter
+            && let NodeRef::Ground(GroundTerm::BlankNode(blank)) = node
+        {
+            error = Some(crate::ParseError::Unsupported(format!(
+                "concrete blank {:?} in VALUES has no SPARQL DataBlockValue representation; \
+                     execute the injected algebra locally or remove its concrete blank binding before forwarding",
+                blank.as_str()
+            )));
+            return Flow::Stop;
+        }
+        Flow::Descend
+    });
+    error.map_or(Ok(()), Err)
+}
+
+/// An ordinary blank can retain blank syntax, or cross a rendering boundary as
+/// a fresh unprojected variable. Addresses serve only borrowed term lookup; every
+/// emitted name is allocated in deterministic owner/label order.
+enum BlankName {
+    Label(String),
+    Witness(String),
+}
+
 #[derive(Default)]
-struct VariableNames(std::collections::BTreeMap<Variable, String>);
+struct RawBlankGroup {
+    terms: Vec<*const TermPattern>,
+    surfaces: std::collections::BTreeSet<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct PatternFrame<'a> {
+    pattern: &'a GraphPattern,
+    owner: usize,
+    surface: usize,
+}
+
+/// The shared evaluator ownership law determines which raw blanks can join.
+/// Rendering braces can split such an owner, requiring a variable carrier.
+struct RawBlankScopes<'a> {
+    owners: Vec<&'a GraphPattern>,
+    groups: std::collections::BTreeMap<(usize, &'a str), RawBlankGroup>,
+}
+
+impl<'a> RawBlankScopes<'a> {
+    fn collect(pattern: &'a GraphPattern) -> Self {
+        let mut result = Self {
+            owners: Vec::new(),
+            groups: std::collections::BTreeMap::new(),
+        };
+        let mut frames = WorkList::<PatternFrame<'_>, 16>::new();
+        let mut next_surface = 0;
+        walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+            match (visit, node) {
+                (Visit::Enter, NodeRef::Pattern(pattern)) => {
+                    let parent = frames.top_mut().copied();
+                    let owner = parent.filter(|p| crate::scope::joins_blank_scope(p.pattern));
+                    let (owner, surface) = if let Some(parent) = owner {
+                        let surface = if spine_child_needs_bracing(parent.pattern, pattern) {
+                            next_surface += 1;
+                            next_surface
+                        } else {
+                            parent.surface
+                        };
+                        (parent.owner, surface)
+                    } else {
+                        let owner = result.owners.len();
+                        result.owners.push(pattern);
+                        next_surface += 1;
+                        (owner, next_surface)
+                    };
+                    frames.push(PatternFrame {
+                        pattern,
+                        owner,
+                        surface,
+                    });
+                }
+                (Visit::Exit, NodeRef::Pattern(_)) => {
+                    frames.pop();
+                }
+                (Visit::Enter, NodeRef::Term(term @ TermPattern::BlankNode(blank))) => {
+                    let frame = frames.top_mut().expect("a pattern owns each match term");
+                    let group = result
+                        .groups
+                        .entry((frame.owner, blank.as_str()))
+                        .or_default();
+                    group.terms.push(core::ptr::from_ref(term));
+                    group.surfaces.insert(frame.surface);
+                }
+                _ => {}
+            }
+            Flow::Descend
+        });
+        result
+    }
+
+    /// The canonical identities a positive owner exposes, including marked
+    /// translation endpoints through UNION but excluding local raw arm blanks.
+    fn carried_labels(&self, owner: usize) -> std::collections::BTreeSet<&'a str> {
+        let mut leaves = Vec::new();
+        crate::scope::spine_leaves(self.owners[owner], &mut leaves);
+        let mut labels = std::collections::BTreeSet::new();
+        for leaf in leaves {
+            crate::scope::visit_leaf_labels(
+                leaf,
+                crate::scope::LabelSource::Carried,
+                &mut |label| {
+                    labels.insert(label);
+                    false
+                },
+            );
+        }
+        labels
+    }
+}
+
+/// The brace decisions shared with the renderer for a positive spine's child.
+fn spine_child_needs_bracing(parent: &GraphPattern, child: &GraphPattern) -> bool {
+    match parent {
+        GraphPattern::Join { left, .. } => {
+            if core::ptr::eq(core::ptr::from_ref(&**left), core::ptr::from_ref(child)) {
+                left_operand_needs_bracing(child)
+            } else {
+                join_right_needs_bracing(child)
+            }
+        }
+        GraphPattern::Lateral { left, right } => {
+            if core::ptr::eq(core::ptr::from_ref(&**left), core::ptr::from_ref(child)) {
+                left_operand_needs_bracing(child)
+            } else {
+                !parser_rebuilds_the_lateral(left, right)
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Fresh legal names preserve source blank ownership and omit witnesses from
+/// observable projections. Ordinary variables retain their exact names.
+#[derive(Default)]
+struct VariableNames {
+    variables: std::collections::BTreeMap<Variable, String>,
+    blanks: std::collections::BTreeMap<*const TermPattern, usize>,
+    blank_aliases: Vec<BlankName>,
+    unit: Option<String>,
+}
 
 impl VariableNames {
     fn for_pattern(
         pattern: &GraphPattern,
         reserve: impl FnOnce(&mut dyn FnMut(&Variable)),
     ) -> Self {
-        let has_hidden = !walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+        let needs_names = !walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
             if visit == Visit::Enter {
-                let mut found = false;
+                let mut found = matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
                 node.for_each_variable(|variable| found |= variable.is_hidden());
                 if found {
                     return Flow::Stop;
@@ -222,13 +378,15 @@ impl VariableNames {
             }
             Flow::Descend
         });
-        if !has_hidden {
+        if !needs_names {
             return Self::default();
         }
         let mut ordinary = std::collections::BTreeSet::new();
         let mut hidden = std::collections::BTreeSet::new();
+        let mut has_raw = false;
         walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
             if visit == Visit::Enter {
+                has_raw |= matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
                 node.for_each_variable(|variable| {
                     if variable.is_hidden() {
                         hidden.insert(variable.clone());
@@ -242,33 +400,82 @@ impl VariableNames {
         reserve(&mut |variable| {
             ordinary.insert(variable.as_str().to_owned());
         });
-        let mut prefix = String::from("__purrdf_hidden_");
-        while ordinary.iter().any(|name| name.starts_with(&prefix)) {
-            prefix.insert(0, '_');
+        let prefix = fresh_prefix("__purrdf_hidden_", &ordinary.iter().map(String::as_str));
+        let mut names = Self::default();
+        for (index, variable) in hidden.into_iter().enumerate() {
+            names.variables.insert(variable, format!("{prefix}{index}"));
         }
-        Self(
-            hidden
-                .into_iter()
-                .enumerate()
-                .map(|(index, variable)| (variable, format!("{prefix}{index}")))
-                .collect(),
-        )
+        if !names.variables.is_empty() {
+            names.unit = Some(format!("{prefix}0unit"));
+        }
+        if has_raw {
+            names.alias_raw_blanks(&RawBlankScopes::collect(pattern), &prefix);
+        }
+        names
+    }
+
+    fn alias_raw_blanks(&mut self, scopes: &RawBlankScopes<'_>, variable_prefix: &str) {
+        let mut owners_per_label = std::collections::BTreeMap::<_, usize>::new();
+        for (_, label) in scopes.groups.keys() {
+            *owners_per_label.entry(*label).or_default() += 1;
+        }
+        let blank_prefix =
+            fresh_prefix("__purrdf_scoped_blank_", &owners_per_label.keys().copied());
+        let mut next_variable = self.variables.len();
+        let mut next_blank = 0;
+        let mut last_owner = None;
+        let mut carried = std::collections::BTreeSet::new();
+        for (&(owner, label), group) in &scopes.groups {
+            if last_owner != Some(owner) {
+                carried = scopes.carried_labels(owner);
+                last_owner = Some(owner);
+            }
+            let canonical = carried
+                .contains(label)
+                .then(|| self.variables.get(&Variable::hidden_blank(label)))
+                .flatten();
+            let alias = if let Some(name) = canonical {
+                Some(BlankName::Witness(name.clone()))
+            } else if group.surfaces.len() > 1 {
+                let name = format!("{variable_prefix}{next_variable}");
+                if self.unit.is_none() {
+                    self.unit = Some(format!("{name}unit"));
+                }
+                next_variable += 1;
+                Some(BlankName::Witness(name))
+            } else if owners_per_label[label] > 1
+                || !purrdf_lex::terminals::is_valid_blank_node_label(label)
+            {
+                let name = format!("{blank_prefix}{next_blank}");
+                next_blank += 1;
+                Some(BlankName::Label(name))
+            } else {
+                None
+            };
+            if let Some(alias) = alias {
+                let index = self.blank_aliases.len();
+                self.blank_aliases.push(alias);
+                for &term in &group.terms {
+                    self.blanks.insert(term, index);
+                }
+            }
+        }
+    }
+
+    fn has_witnesses(&self) -> bool {
+        self.unit.is_some()
     }
 
     fn name<'a>(&'a self, variable: &'a Variable) -> &'a str {
-        self.0
+        self.variables
             .get(variable)
             .map_or_else(|| variable.as_str(), String::as_str)
     }
 
-    fn unit_name(&self) -> String {
-        format!(
-            "{}unit",
-            self.0
-                .values()
-                .next()
-                .expect("a hidden identity has an alias")
-        )
+    fn unit_name(&self) -> &str {
+        self.unit
+            .as_deref()
+            .expect("a witness identity has an alias")
     }
 
     fn projection(&self, s: &mut String, pattern: &GraphPattern) {
@@ -280,6 +487,15 @@ impl VariableNames {
             let _ = write!(s, "(1 AS ?{}) ", self.unit_name());
         }
     }
+}
+
+/// Reserve a deterministic prefix against all caller-authored names.
+fn fresh_prefix<'a>(initial: &str, names: &(impl Iterator<Item = &'a str> + Clone)) -> String {
+    let mut prefix = initial.to_owned();
+    while (*names).clone().any(|name| name.starts_with(&prefix)) {
+        prefix.insert(0, '_');
+    }
+    prefix
 }
 
 /// The shared complete-query renderer; the predicate mode affects BGPs alone.
@@ -305,7 +521,7 @@ fn select_query(inner: &GraphPattern, predicates: PredicateRendering<'_>) -> Str
         // output variable.
         emit(&mut s, Item::Subselect(inner), predicates, &names);
     } else {
-        if names.0.is_empty() {
+        if !names.has_witnesses() {
             s.push_str("SELECT * WHERE ");
         } else {
             s.push_str("SELECT ");
@@ -331,8 +547,7 @@ pub(crate) fn fmt_group_body(
     p: &GraphPattern,
     reserve: impl FnOnce(&mut dyn FnMut(&Variable)),
 ) -> core::fmt::Result {
-    p.validate_hidden_variables()
-        .map_err(|_| core::fmt::Error)?;
+    validate_carrier_pattern(p).map_err(|_| core::fmt::Error)?;
     emit(
         s,
         Item::GroupBody(p),
@@ -578,6 +793,12 @@ fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
 /// `A OPTIONAL { B } BIND(e AS ?v) MINUS { C }` run reproduces its own
 /// left-deep chain. A `Filter` nested inside one of those is braced by that
 /// node's own rendering.
+fn join_right_needs_bracing(pattern: &GraphPattern) -> bool {
+    !is_subselect_node(pattern)
+        && (contains_property_function(pattern)
+            || rendering_starts_with_a_reabsorbable_left(pattern))
+}
+
 const fn left_operand_needs_bracing(p: &GraphPattern) -> bool {
     matches!(p, GraphPattern::Filter { .. })
 }
@@ -845,9 +1066,7 @@ fn render<'a>(
             }
         }
         Item::JoinRight(p) => {
-            if !is_subselect_node(p)
-                && (contains_property_function(p) || rendering_starts_with_a_reabsorbable_left(p))
-            {
+            if join_right_needs_bracing(p) {
                 next.extend([Item::Str("{ "), Item::GroupBody(p), Item::Str(" }")]);
             } else {
                 next.push(Item::GroupBody(p));
@@ -912,15 +1131,9 @@ fn render<'a>(
                     Item::Str(TRIPLE_TERM_CLOSE),
                 ]);
             }
-            // Injection-only: emitted as a blank-node label. The parser never
-            // produces this variant, and `purrdf-sparql-eval`'s `SERVICE` forwarding
-            // path (`sanitize_forwarded_body` in `crates/sparql-eval/src/remote.rs`)
-            // strips every `Values` column carrying one before a substituted
-            // `SERVICE` body is serialized — a blank-node `VALUES` cell is not legal
-            // `DataBlockValue` syntax, so it must never reach the wire. This arm
-            // therefore stays live only for a hand-built pattern serialized directly
-            // through this crate's public API; the forwarding path never feeds it one.
-            GroundTerm::BlankNode(b) => write_blank(b.as_str(), s),
+            GroundTerm::BlankNode(_) => {
+                unreachable!("carrier admission refuses concrete blank VALUES cells")
+            }
         },
         Item::Path(path) => path_items(s, path, next),
         Item::PathElt(path) => match path {
@@ -1338,7 +1551,7 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
         Some((vars, _)) if !vars.is_empty() => Some(vars.to_vec()),
         Some(_) => None,
         None if !select_exprs.is_empty() => Some(crate::parser::visible_variables(cur)),
-        None if !names.0.is_empty() => Some(crate::parser::visible_variables(cur)),
+        None if names.has_witnesses() => Some(crate::parser::visible_variables(cur)),
         None => None,
     };
     // Skip any var whose binding will be emitted via `(expr AS ?v)`; emitting
@@ -1384,7 +1597,7 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
             None => false,
         },
         Some(vars) if vars.is_empty() && select_exprs.is_empty() => {
-            if names.0.is_empty() {
+            if !names.has_witnesses() {
                 s.push('*');
             } else {
                 let _ = write!(s, "(1 AS ?{})", names.unit_name());
@@ -1411,7 +1624,7 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
         ]);
     }
 
-    let hides_distinct_witnesses = !names.0.is_empty()
+    let hides_distinct_witnesses = names.has_witnesses()
         && group.is_some_and(|(_, aggregates)| {
             aggregates
                 .iter()
@@ -1858,7 +2071,18 @@ fn fmt_leaf_term(s: &mut String, t: &TermPattern, names: &VariableNames) {
         TermPattern::NamedNode(n) => {
             write_iri(n.as_str(), s);
         }
-        TermPattern::BlankNode(b) => write_blank(b.as_str(), s),
+        TermPattern::BlankNode(b) => match names
+            .blanks
+            .get(&core::ptr::from_ref(t))
+            .map(|&index| &names.blank_aliases[index])
+        {
+            Some(BlankName::Label(label)) => write_blank(label, s),
+            Some(BlankName::Witness(name)) => {
+                s.push('?');
+                s.push_str(name);
+            }
+            None => write_blank(b.as_str(), s),
+        },
         TermPattern::Literal(l) => fmt_literal(s, l),
         TermPattern::Variable(v) => {
             s.push('?');

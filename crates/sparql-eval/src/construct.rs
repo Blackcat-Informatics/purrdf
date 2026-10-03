@@ -42,6 +42,7 @@ use crate::solution::{Solution, VarSchema};
 use crate::template::{
     PredicateOrdinal, TermOrdinal, TripleOrdinal, instantiate_predicate, instantiate_term,
     positionally_ill_formed, resolve_predicate, resolve_term, resolve_triple,
+    template_has_blank_node,
 };
 use crate::{DetHashMap, DetHashSet};
 
@@ -1244,48 +1245,6 @@ fn instantiate<D: DatasetView + Sync>(
         builder.intern_value(&p),
         builder.intern_value(&o),
     ))
-}
-
-/// `true` when `template` holds a `TermPattern::BlankNode` at any subject or
-/// object position, including nested inside an RDF 1.2 quoted-triple position.
-/// Predicate positions can never hold a blank node — [`NamedNodePattern`] admits
-/// only an IRI or a variable — so only subject/object need scanning.
-///
-/// This is exactly the condition under which [`MintTracker::minted`] can ever
-/// become non-empty: [`track_minted`]'s minting arm fires only on the pattern
-/// pair `(TermPattern::BlankNode(_), TermValue::Blank { .. })`. When no such
-/// position exists anywhere in the template, `minted` is the empty set for the
-/// whole evaluation no matter how many rows run, so
-/// [`MintTracker::freshness_remap`]'s `minted.intersection(&data)` is *provably*
-/// empty regardless of what `data` holds — which makes every `data`-side
-/// classification dead weight for such a template. This is the flag that lets
-/// `instantiate` skip tracking altogether rather than merely skip acting on it.
-fn template_has_blank_node(template: &[QuadPattern]) -> bool {
-    // A graph position admits only an IRI or a variable, so it can never hold a
-    // blank node and never needs scanning.
-    template
-        .iter()
-        .any(|quad| triple_pattern_has_blank_node(&quad.triple))
-}
-
-/// The [`TriplePattern`] half of [`template_has_blank_node`]'s scan.
-fn triple_pattern_has_blank_node(tp: &TriplePattern) -> bool {
-    term_pattern_has_blank_node(&tp.subject) || term_pattern_has_blank_node(&tp.object)
-}
-
-/// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, through nested
-/// quoted-triple positions — subject before object, over a work list rather than the
-/// call stack, ending at the first blank node found.
-fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
-    let mut pending: Vec<&TermPattern> = vec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::BlankNode(_) => return true,
-            TermPattern::Triple(inner) => pending.extend([&inner.object, &inner.subject]),
-            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -2742,10 +2701,8 @@ mod term_walk_tests {
     //! the same data set; and a position a hundred thousand levels deep, classified on
     //! a thread with a 128 KiB stack.
 
-    use super::{
-        MintTracker, collect_value_blank_labels, term_pattern_has_blank_node, track_minted,
-        track_minted_predicate,
-    };
+    use super::{MintTracker, collect_value_blank_labels, track_minted, track_minted_predicate};
+    use crate::template::term_pattern_has_blank_node;
     use purrdf_core::{BlankScope, TermBox, TermValue};
     use purrdf_sparql_algebra::{
         BlankNode, Child, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
