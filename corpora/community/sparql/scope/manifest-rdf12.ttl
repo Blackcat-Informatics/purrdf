@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+<> a mf:Manifest ; mf:entries ( <#quoted-pattern-blank> ) .
+<#quoted-pattern-blank> a mf:QueryEvaluationTest ; mf:name "quoted-pattern-blank" ; rdfs:comment "RDF 1.2 triple-term identity under the separately declared SPARQL 1.2 profile." ; mf:action [ qt:query <quoted-pattern-blank.rq> ; qt:data <quoted.ttl> ] ; mf:result <quoted-pattern-blank.srj> .

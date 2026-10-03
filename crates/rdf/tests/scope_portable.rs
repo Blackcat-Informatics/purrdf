@@ -62,8 +62,7 @@ fn assert_solution_bag(result: SparqlResult, expected: &ParsedSolutions, context
 
 #[test]
 fn portable_inventory_preserves_scope_bags_columns_and_carrier_identity() {
-    let directory =
-        purrdf_testkit::paths::workspace_root().join("crates/sparql-eval/tests/fixtures/scope");
+    let directory = purrdf_testkit::paths::workspace_root().join("corpora/community/sparql/scope");
     let inventory = json::read_slice(
         &std::fs::read(directory.join("inventory.json")).expect("inventory file"),
         json::Limits::DEFAULT,
