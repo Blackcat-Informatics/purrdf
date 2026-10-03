@@ -822,6 +822,22 @@ summary = "`Lexer::cur` / `Lexer::peek`, an ASCII fast path that decodes only a 
   forbid_relaxed = true
 
 [[site]]
+id = "sparql.scope-admission"
+summary = "`scope::validate_pattern`, the borrowed iterative match-witness observer check timed by the scope candidate baseline"
+
+  # The baseline calls Query::validate_hidden_variables -> scope::validate_query
+  # -> this pattern walker. Its work is variant dispatch and observer checks,
+  # not independent fixed-width lanes. Record actual whole-symbol vector work
+  # without asserting a SIMD floor or attributing the dev-only candidates to it.
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::scope::validate_pattern"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
 id = "rdf.escape-scan"
 summary = "the RDF/XML and TriX writers' escapes, `iri_escape::escape` and `literal_escape::escape` over the XML carrier: one chunked scan for the next byte that can begin an escape, bulk copies of the runs between"
 
