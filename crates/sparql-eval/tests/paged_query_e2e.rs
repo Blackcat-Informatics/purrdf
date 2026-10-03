@@ -32,8 +32,8 @@ use std::sync::Arc;
 use support::solutions;
 
 use purrdf_core::{
-    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PagedDataset,
-    RdfDataset, TermValue,
+    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageId, PagedDataset,
+    PagedQueryLimits, RdfDataset, TermValue,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
@@ -259,6 +259,37 @@ fn cross_page_join_order_is_cost_driven_and_flips_with_skew() {
         "selective pb probed first"
     );
     assert_ne!(order1, order2, "the probe order flips with the skew");
+}
+
+#[test]
+fn operational_explain_uses_store_cardinalities_without_materializing_unneeded_pages() {
+    let engine = NativeSparqlEngine::new();
+    let first = skew_fixture("pa", "pb");
+    let second = skew_fixture("pb", "pa");
+    for _ in 0..3 {
+        for (dataset, expected) in [
+            (&first, [PATTERN_A, PATTERN_B]),
+            (&second, [PATTERN_B, PATTERN_A]),
+        ] {
+            let view = dataset.query_view(PagedQueryLimits::UNBOUNDED);
+            let (explanation, evidence) = engine
+                .explain_query_fallible_view(&view, SKEW_QUERY, None)
+                .expect("explain the operational store directly");
+            assert_eq!(explanation.join_orders(), expected);
+            // Each light predicate lives on page zero and its subject occurs in no
+            // heavy-predicate page. The measured join is genuinely empty; planning
+            // consults sealed cardinalities while execution demands only page zero.
+            // A resident copy would have read all three pages before explaining.
+            assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+            assert_eq!(evidence.consumed_pages, 1);
+            assert!(
+                explanation
+                    .ledger()
+                    .iter()
+                    .any(|node| node.estimate.is_some())
+            );
+        }
+    }
 }
 
 // ── Test C — lazy hook fires only for needed pages (query-time) ─────────────────

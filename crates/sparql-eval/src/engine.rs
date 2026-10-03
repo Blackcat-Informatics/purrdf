@@ -6227,7 +6227,7 @@ mod tests {
                 .with_call_depth(3)
         };
         for _ in 0..2 {
-            let (typed, _) = engine
+            let (typed, ()) = engine
                 .explain_query_with_options_fallible_view(&*ds, query, None, inert)
                 .expect("typed explanation with both registries");
             assert_eq!(typed.render(), resident.render());

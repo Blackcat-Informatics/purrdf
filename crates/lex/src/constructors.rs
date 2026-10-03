@@ -461,7 +461,8 @@ mod tests {
             GenericError::<u8, bool>::from(utf8),
             GenericError::Utf8(utf8),
         );
-        let _operational = GenericError::Operational(Opaque, Opaque);
+        let operational = GenericError::Operational(Opaque, Opaque);
+        assert!(matches!(operational, GenericError::Operational(_, _)));
         assert!(matches!(
             GenericError::<Opaque, Opaque>::from(utf8),
             GenericError::Utf8(_),
@@ -483,7 +484,8 @@ mod tests {
             GenericRendered::from(GenericSource(7_u8)),
             GenericRendered::Message("generic source".to_owned()),
         );
-        let _operational = GenericRendered::Operational(Opaque);
+        let operational = GenericRendered::Operational(Opaque);
+        assert!(matches!(operational, GenericRendered::Operational(_)));
         assert!(matches!(
             GenericRendered::from(GenericSource(Opaque)),
             GenericRendered::Message(message) if message == "generic source",

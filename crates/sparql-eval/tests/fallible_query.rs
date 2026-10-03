@@ -17,8 +17,8 @@ use purrdf_core::{
     PagedQueryLimits, RdfDataset, SparqlRequest, SparqlResult, StopCause, TermValue,
 };
 use purrdf_sparql_eval::{
-    ExtensionEnv, FallibleSparqlError, MemoryRelation, NativeSparqlEngine,
-    PropertyFunctionRegistry, QueryOptions,
+    CancellationFlag, ExtensionEnv, FallibleSparqlError, MemoryRelation, NativeSparqlEngine,
+    NodeCharges, PropertyFunctionRegistry, QueryOptions, ResourceDimension,
 };
 
 type CompleteSolutions = (Vec<String>, Vec<Vec<Option<TermValue>>>, PagedQueryEvidence);
@@ -326,6 +326,102 @@ fn two_page_faulting_dataset(fault: ScriptedFault) -> PagedDataset {
         fault,
     )))
     .expect("fault is armed only after the successful seal")
+}
+
+#[test]
+fn fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure() {
+    let paged = two_page_faulting_dataset(ScriptedFault::Provider);
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let error = NativeSparqlEngine::new()
+        .explain_query_fallible_view(&view, "SELECT * WHERE { ?s ?p ?o }", None)
+        .expect_err("a failed measuring run cannot publish its partial ledger");
+    assert!(error.diagnostic().is_none());
+    assert!(error.partial_answers().is_none());
+    let FallibleSparqlError::Operational { error, evidence } = &error else {
+        panic!("a provider fault must remain operational: {error:?}");
+    };
+    assert_eq!(
+        error,
+        &PagedQueryError::Provider {
+            page: PageId(1),
+            message: "object read failed".to_owned(),
+        }
+    );
+    assert_eq!(evidence.requested_pages, vec![PageId(0), PageId(1)]);
+    assert_eq!(evidence.consumed_pages, 1);
+    assert_eq!(evidence.consumed_bytes, 10);
+}
+
+#[test]
+fn healthy_fallible_explain_is_byte_identical_on_cold_warm_and_signalled_entries() {
+    let rows = [
+        ("a", "p", "x"),
+        ("b", "p", "y"),
+        ("a", "q", "x"),
+        ("b", "q", "y"),
+    ];
+    let resident = local_dataset(rows);
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![
+            (local_dataset([rows[0], rows[1]]), 20),
+            (local_dataset([rows[2], rows[3]]), 30),
+        ],
+        PageGeneration(47),
+    )))
+    .expect("seal healthy pages");
+    let query =
+        "SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o . ?s <http://example.org/q> ?o }";
+    let expected = NativeSparqlEngine::new()
+        .explain_query(&resident, query, None)
+        .expect("resident explanation")
+        .render();
+
+    for engine in [NativeSparqlEngine::new(), NativeSparqlEngine::new()] {
+        for _ in 0..3 {
+            let ordinary = paged.query_view(PagedQueryLimits::new(2, 50));
+            let configured = paged.query_view(PagedQueryLimits::new(2, 50));
+            let signalled = paged.query_view(PagedQueryLimits::new(2, 50));
+            let explanations = [
+                engine
+                    .explain_query_fallible_view(&ordinary, query, None)
+                    .expect("default operational explanation"),
+                engine
+                    .explain_query_with_options_fallible_view(
+                        &configured,
+                        query,
+                        None,
+                        QueryOptions::EMPTY,
+                    )
+                    .expect("configured operational explanation"),
+                engine
+                    .explain_query_with_stop_signal_fallible_view(
+                        &signalled,
+                        query,
+                        None,
+                        QueryOptions::EMPTY,
+                        Arc::new(CancellationFlag::new()),
+                    )
+                    .expect("quiet stop signal is inert"),
+            ];
+            for (explanation, evidence) in explanations {
+                assert_eq!(explanation.render(), expected);
+                assert_eq!(explanation.evidence().tripped, None);
+                let fuel: u64 = explanation
+                    .ledger()
+                    .iter()
+                    .map(NodeCharges::fuel_total)
+                    .sum();
+                assert!(fuel > 0, "EXPLAIN must actually measure evaluation");
+                assert_eq!(
+                    fuel,
+                    explanation.evidence().consumed_in(ResourceDimension::Fuel)
+                );
+                assert_eq!(evidence.requested_pages, vec![PageId(0), PageId(1)]);
+                assert_eq!(evidence.consumed_pages, 2);
+                assert_eq!(evidence.consumed_bytes, 50);
+            }
+        }
+    }
 }
 
 fn one_page_faulting_dataset(fault: ScriptedFault) -> PagedDataset {
@@ -722,6 +818,75 @@ fn pair_relation() -> PropertyFunctionRegistry {
         ),
     );
     registry
+}
+
+#[test]
+fn fallible_explain_options_measure_the_same_registered_relation_as_resident() {
+    let resident = page();
+    let paged =
+        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![resident.clone()])))
+            .expect("seal page unrelated to the relation");
+    let engine = NativeSparqlEngine::new();
+    let env = ExtensionEnv::over_relations(pair_relation()).expect("declare the relation");
+    let options = QueryOptions::new().with_env(&env);
+    let expected = engine
+        .explain_query_with_options(&resident, RELATION_QUERY, None, options)
+        .expect("resident registered-relation explanation")
+        .render();
+
+    let configured = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let signalled = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    for (explanation, evidence) in [
+        engine
+            .explain_query_with_options_fallible_view(&configured, RELATION_QUERY, None, options)
+            .expect("operational relation is parsed and measured with its registry"),
+        engine
+            .explain_query_with_stop_signal_fallible_view(
+                &signalled,
+                RELATION_QUERY,
+                None,
+                options,
+                Arc::new(CancellationFlag::new()),
+            )
+            .expect("quiet signal preserves registry-aware measuring"),
+    ] {
+        assert_eq!(explanation.render(), expected);
+        assert_eq!(explanation.relations().len(), 1);
+        assert!(explanation.ledger().iter().any(|node| node.rows > 0));
+        assert!(
+            evidence.requested_pages.is_empty(),
+            "a relation does not scan unrelated data"
+        );
+    }
+}
+
+#[test]
+fn a_failed_paged_view_outranks_an_explain_stop_signal() {
+    let paged = cancelled_paged();
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let engine = NativeSparqlEngine::new();
+    let first = engine
+        .query_fallible_view(
+            &view,
+            request("SELECT * WHERE { ?s ?p ?o }"),
+            QueryOptions::EMPTY,
+        )
+        .expect_err("arm the sticky source failure");
+    let stop = Arc::new(CancellationFlag::new());
+    stop.cancel();
+    let explained = engine
+        .explain_query_with_stop_signal_fallible_view(
+            &view,
+            "SELECT * WHERE {}",
+            None,
+            QueryOptions::EMPTY,
+            stop,
+        )
+        .expect_err("failed storage cannot publish even a stopped explanation");
+    assert_eq!(explained.operational_error(), first.operational_error());
+    assert_eq!(explained.evidence(), first.evidence());
+    assert!(explained.diagnostic().is_none());
+    assert!(explained.partial_answers().is_none());
 }
 
 /// A registered relation answers through `query_fallible_view` once `options` carries
