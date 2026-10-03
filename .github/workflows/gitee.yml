@@ -68,7 +68,14 @@ jobs:
           ASKPASS
           chmod 700 "$askpass"
           export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
-          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=''
+          export GIT_CONFIG_COUNT=4 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=''
+          # Avoid chunked encoding for the initial pack on this mirror endpoint.
+          export GIT_CONFIG_KEY_1=http.https://gitee.com/blackcat-informatics/purrdf.git.postBuffer
+          export GIT_CONFIG_VALUE_1=134217728
+          export GIT_CONFIG_KEY_2=http.https://gitee.com/blackcat-informatics/purrdf.git.lowSpeedLimit
+          export GIT_CONFIG_VALUE_2=1
+          export GIT_CONFIG_KEY_3=http.https://gitee.com/blackcat-informatics/purrdf.git.lowSpeedTime
+          export GIT_CONFIG_VALUE_3=300
           # The empty mirror needs a full-history upload; keep reads at 45s.
           python3 - <<'PY'
           import importlib.util
@@ -79,6 +86,8 @@ jobs:
           original_git = git_sync.git
 
           def bootstrap_git(arguments, deadline):
+              if arguments[0] == "push":
+                  print("Workflow push deadline: 1800 seconds.", flush=True)
               return original_git(arguments, 1800 if arguments[0] == "push" else deadline)
 
           git_sync.git = bootstrap_git
