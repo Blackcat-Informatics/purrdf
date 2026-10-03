@@ -1,0 +1,348 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[workspace]
+resolver = "2"
+members = [
+    "bindings/python",
+    "crates/alloc-probe",
+    "crates/bench",
+    "crates/cdt",
+    "crates/cli",
+    "crates/columnar",
+    "crates/datalog",
+    "crates/deflate",
+    "crates/ed25519",
+    "crates/entail",
+    "crates/envelope-probe",
+    "crates/geo",
+    "crates/gts",
+    "crates/hash",
+    "crates/hash-conformance",
+    "crates/helper-census",
+    "crates/hnsw",
+    "crates/iri",
+    "crates/json",
+    "crates/jsonschema",
+    "crates/lex",
+    "crates/markdown",
+    "crates/purrdf",
+    "crates/rdf",
+    "crates/rdf-capi",
+    "crates/rdf-core",
+    "crates/rdf-events",
+    "crates/rdf-wasm",
+    "crates/retrieval",
+    "crates/shapes",
+    "crates/shex",
+    "crates/slice",
+    "crates/sparql-algebra",
+    "crates/sparql-conformance",
+    "crates/sparql-eval",
+    "crates/sparql-results",
+    "crates/testkit",
+    "crates/stack",
+    "crates/text",
+    "crates/validate",
+    "crates/wasm-link",
+    "crates/xsd",
+]
+exclude = [
+    "crates/gts/fuzz",
+]
+
+[workspace.package]
+version = "3.0.1"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+repository = "https://github.com/Blackcat-Informatics/purrdf"
+homepage = "https://blackcatinformatics.ca/purrdf/"
+
+# Single source of truth for every dependency version in the workspace.
+# Member crates inherit with `dep.workspace = true`; per-crate feature
+# additions stay at the use site (workspace features merge additively).
+# Where a use site needs default features OFF, they are disabled HERE and
+# re-enabled per crate with `default-features = true` where required.
+[workspace.dependencies]
+# --- internal crates (paths are relative to the WORKSPACE ROOT) ---
+purrdf = { path = "crates/purrdf", version = "3.0.1" }
+# The C ABI's own library is also named `purrdf`; this distinct import key
+# reaches the same facade without colliding with that library name.
+purrdf-rs = { package = "purrdf", path = "crates/purrdf", version = "3.0.1" }
+# DEV-ONLY instrument (`publish = false`): the shared counting allocator and its
+# two measurement windows. Declared PATH-ONLY, with NO `version` key, and that
+# omission is load-bearing: cargo strips a versionless path dev-dependency from
+# the manifest it uploads, so a published crate can depend on this unpublished
+# one without `cargo publish`'s verification step trying — and failing — to
+# resolve it from the registry. Never a normal dependency of anything, so the
+# wasm32 lane (which builds `--lib`) never sees it.
+purrdf-alloc-probe = { path = "crates/alloc-probe" }
+purrdf-cdt = { path = "crates/cdt", version = "3.0.1" }
+purrdf-columnar = { path = "crates/columnar", version = "3.0.1" }
+purrdf-core = { path = "crates/rdf-core", version = "3.0.1" }
+purrdf-datalog = { path = "crates/datalog", version = "3.0.1" }
+purrdf-deflate = { path = "crates/deflate", version = "3.0.1" }
+purrdf-ed25519 = { path = "crates/ed25519", version = "3.0.1" }
+purrdf-entail = { path = "crates/entail", version = "3.0.1" }
+purrdf-events = { path = "crates/rdf-events", version = "3.0.1" }
+purrdf-geo = { path = "crates/geo", version = "3.0.1" }
+purrdf-gts = { path = "crates/gts", version = "3.0.1" }
+purrdf-hash = { path = "crates/hash", version = "3.0.1" }
+purrdf-hnsw = { path = "crates/hnsw", version = "3.0.1" }
+purrdf-iri = { path = "crates/iri", version = "3.0.1" }
+purrdf-json = { path = "crates/json", version = "3.0.1" }
+purrdf-jsonschema = { path = "crates/jsonschema", version = "3.0.1" }
+purrdf-lex = { path = "crates/lex", version = "3.0.1" }
+purrdf-markdown = { path = "crates/markdown", version = "3.0.1" }
+purrdf-rdf = { path = "crates/rdf", version = "3.0.1" }
+purrdf-retrieval = { path = "crates/retrieval", version = "3.0.1" }
+purrdf-shapes = { path = "crates/shapes", version = "3.0.1" }
+purrdf-shex = { path = "crates/shex", version = "3.0.1" }
+purrdf-slice = { path = "crates/slice", version = "3.0.1" }
+purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "3.0.1" }
+purrdf-sparql-eval = { path = "crates/sparql-eval", version = "3.0.1" }
+purrdf-sparql-results = { path = "crates/sparql-results", version = "3.0.1" }
+# DEV-ONLY test support (`publish = false`): goldens, temporary paths under the
+# target directory, frozen differential vectors and the `harness = false`
+# runner. PATH-ONLY with NO `version`, for the reason given for
+# `purrdf-alloc-probe` above. Its one first-party dependency is `purrdf-hash`,
+# the zero-dependency root, whose frozen-vector suites live in the unpublished
+# `purrdf-hash-conformance` rather than in its own tests, so any member's tests
+# may use it without closing a cycle.
+purrdf-testkit = { path = "crates/testkit" }
+purrdf-stack = { path = "crates/stack", version = "3.0.1" }
+purrdf-text = { path = "crates/text", version = "3.0.1" }
+purrdf-validate = { path = "crates/validate", version = "3.0.1" }
+purrdf-xsd = { path = "crates/xsd", version = "3.0.1" }
+
+# --- external crates ---
+# The structural source censuses (the rdf and shapes census tests and the
+# unpublished helper-census binary); both already occur in the resolved graph.
+# `span-locations` gives the helper census line numbers and the byte ranges it
+# re-lexes function bodies from; it changes nothing inside a real proc macro.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "visit"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+# Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
+# `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models
+# its command tree with. Not a library dependency, so the wasm gate (which
+# builds `--lib` on an explicit `-p` allowlist that omits `purrdf-cli`) is
+# unaffected.
+clap = { version = "4", features = ["derive"] }
+# OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
+# crates/sparql-eval's target-gated dependency section).
+getrandom = "0.3"
+# Only the raw `HashTable` is used; every caller supplies its own fixed-key hash
+# (`purrdf_hash::fixed::FixedHasher`),
+# so the default hasher (foldhash) and allocator-api2 stay OFF.
+hashbrown = { version = "0.17", default-features = false }
+# The C library bindings behind the CLI's immutable-input authority on Linux:
+# `mmap`/`munmap` for the read-only pack mapping, and `memfd_create` + `fcntl`
+# `F_ADD_SEALS`/`F_GET_SEALS` for the sealed snapshot (see
+# crates/cli/src/mmap.rs). Already in the graph through getrandom; used solely
+# from `purrdf-cli` (`publish = false`, absent from the `make wasm` allowlist).
+libc = "0.2"
+# purrdf-stack also uses these target-gated declarations to measure the current
+# native thread stack; wasm32 uses its own shadow-stack floor and no libc.
+pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
+rayon = "1"
+# Built without `perf-literal`: its literal prefilter is aho-corasick and memchr,
+# a second byte-search implementation beside `purrdf_lex::scan`. Every other
+# performance feature (lazy DFA, one-pass, bounded backtracker, cache, inline)
+# stays on.
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf-cache", "perf-dfa", "perf-onepass", "perf-backtrack", "perf-inline"] }
+regex-syntax = "0.8.11"
+# SHA-256/384/512 (the SPARQL SHA-2 built-ins, content digests); pure software.
+sha2 = { version = "0.11", default-features = false }
+structured-zstd = "0.0.49"
+# pure-Rust PRNG; used ONLY to deterministically seed structured-zstd's ambient
+# FastCOVER reservoir sampling (which has no seed parameter) so pack dictionaries
+# are byte-reproducible. wasm32-unknown-unknown-clean.
+fastrand = "2"
+# 1.0.0 is the tri-licensed release and a zero-runtime-dependency leaf (its
+# BLAKE3 is in-tree; the blake3 crate remains only as its dev-dependency).
+visual-hashing = "1.0.0"
+# Raw Win32 declarations for `crates/stack`'s Windows stack-bound read
+# (`GetCurrentThreadStackLimits`): `Win32_System_Threading` only. Declarations
+# only, resolved against the platform SDK at link time — no bundled C source
+# and no build-time C toolchain. Windows-only — target-gated in that crate's
+# manifest — so it never reaches a non-Windows or wasm32 build.
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+# EXACT pin: the `wasm-bindgen` CLI that generates the JS bindings must match
+# the library version byte-for-byte or it refuses to run. `make wasm-pkg`, the
+# wasm32 test runner (scripts/wasm-test-runner.sh, which reads this line and
+# refuses any other CLI version) and the CI Node lane use
+# `wasm-bindgen-cli@0.2.125` to match this.
+wasm-bindgen = "=0.2.125"
+# Encoding support for the private host linker. Native byte-preserving reads
+# and the existing Binaryen validator avoid wasmparser and its banned closure.
+wasm-encoder = { version = "0.259", default-features = false }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+# Underscore spelling, not `rust-2018-idioms`: cargo deprecated the dashed form
+# and will stop honouring it in a future edition, at which point the whole lint
+# GROUP would silently stop applying. Nightly cargo already warns about it.
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Pedantic/nursery opt-outs, each with a reason. Keep this list short and
+# justified; prefer fixing code over widening it.
+module_name_repetitions = "allow"     # purrdf_core::RdfDataset-style names are deliberate
+missing_errors_doc = "allow"          # error semantics live on the error types themselves
+missing_panics_doc = "allow"          # panics are programming errors, documented at the assert
+must_use_candidate = "allow"          # blanket #[must_use] adds noise; applied by hand where it guards bugs
+option_if_let_else = "allow"          # nursery: frequently less readable than the match it replaces
+redundant_pub_crate = "allow"         # nursery: conflicts with unreachable_pub on binary/test targets
+doc_markdown = "allow"                # 500+ backtick nits on spec terms (RDF/XML, JSON-LD); revisit with doc-valid-idents
+missing_const_for_fn = "allow"        # nursery: noisy and often wrong about intentionally non-const APIs
+too_long_first_doc_paragraph = "allow" # cosmetic doc layout only
+cast_possible_truncation = "allow"    # u32 id/offset space is asserted at construction; casts are deliberate
+cast_possible_wrap = "allow"          # ditto
+cast_sign_loss = "allow"              # ditto
+cast_precision_loss = "allow"         # XSD numeric promotion is spec-defined; losses are intentional
+unnecessary_wraps = "allow"           # Result-shaped codec seams are kept uniform even where infallible today
+unused_self = "allow"                 # method-shaped APIs kept uniform across backends
+many_single_char_names = "allow"      # s/p/o/g is the canonical RDF idiom
+similar_names = "allow"               # subject/predicate/object families trip this constantly
+too_many_lines = "allow"              # refactors are planned work, not lint chores
+single_match_else = "allow"           # stylistic; match reads better at codec branch points
+match_same_arms = "allow"             # duplicate arms often document distinct spec cases
+if_not_else = "allow"                 # stylistic
+items_after_statements = "allow"      # test-local helpers read better in place
+zero_sized_map_values = "allow"       # HashMap<K, ()> is used deliberately for entry-API patterns
+unnecessary_debug_formatting = "allow" # {:?} in diagnostics is deliberate; message text is golden-locked
+float_cmp = "allow"                   # XSD value-space equality is spec-exact by design
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+# Benchmarks inherit release but keep symbols so perf/flamegraph work.
+[profile.bench]
+# No DWARF, but keep the symbol table. A profiler attributes samples by symbol
+# name, which `strip = "none"` preserves against `[profile.release]`'s
+# `strip = "symbols"`; full debug info buys source-line attribution that nothing
+# in this repository's bench workflow reads, and pays for it in artifact size on
+# the same disk the test lane is competing for.
+debug = 0
+strip = "none"
+
+# === The GATE profile ===
+#
+# `make check` runs the whole test surface and `make conformance` runs every W3C
+# suite through it, so both gates are bounded by how well the engines under them
+# were compiled. `cargo test` builds with the `test` profile, which inherits
+# every value in this block — including the `package` table below. The
+# `[profile.test]` section further down sets exactly one thing, `debug = 0`, and
+# must never set `opt-level`, `debug-assertions` or `overflow-checks`: those are
+# stated once, here, and a second place to change them is how the gate would
+# drift from what this block claims. `scripts/check-build-profiles.py` reads the
+# resolved `test` graph, so the inheritance of those three is proven rather
+# than assumed.
+#
+# This block replaced four hand-written per-crate `opt-level = 2` tables. They
+# were right about the mechanism and wrong about its reach: the `"*"` glob below
+# matches DEPENDENCIES ONLY — Cargo excludes workspace members from it — so
+# every member that was not individually named sat at the dev default of
+# opt-level 0. That was twenty-one crates, among them the SHACL validator, the
+# ShEx validator, the SPARQL evaluator, the Datalog substrate and the GTS codec:
+# precisely the engines the conformance corpora exercise. The manifest looked
+# tuned and the gate was not, and nothing in the build said so.
+#
+# The deleted tables' measured rationale is why the base is opt-3, so it lives
+# on here. At the dev default the zero-copy SPARQL lexer and the id-native
+# string interners pay full un-inlined call overhead on every byte, making the
+# compute-bound parse/property-test suite roughly 300x slower than release (~3 s vs
+# ~10 ms for a ~4350-triple parse) and blowing test timeouts. The OWL-Direct
+# tableau is checked against a naive model-enumeration oracle
+# (`owl_dl::oracle`) that decides satisfiability by enumerating EVERY
+# interpretation over a bounded domain — exponential on purpose, because the
+# oracle's whole value is being too simple to be wrong — so its cost is a
+# bitmask inner loop run hundreds of millions of times, which un-inlined codegen
+# made roughly 15x slower.
+#
+# Optimizing the gate does not cost build time, which is the counter-intuitive
+# part. MEASURED on the SHACL crate, which sat at opt-level 0, two samples per
+# arm on a shared 32-core host (so the fastest sample of each is quoted — the
+# slow ones are contention, not codegen):
+#
+#   `cargo test -p purrdf-shapes` run time     9.9 s -> 2.0 s   (~5x faster)
+#   rebuild after one first-party edit         759 s -> 553 s   (faster, not slower)
+#   peak single-rustc RSS                      3.5 -> 6.3 GiB   (the real cost)
+#
+# Un-inlined code is BIGGER, and a crate whose test surface links dozens of
+# binaries pays that size back at every link, which is why opt-3 does not lose
+# the build-time trade it looks like it should. What it does cost is memory per
+# rustc process; that is the number to watch when sizing a CI runner, not wall
+# clock.
+#
+# What is deliberately NOT set here:
+#   * no `lto`, no `codegen-units = 1`. Both serialize codegen and inflate the
+#     link step's memory. Release wants them because it ships once; the gate
+#     wants the opposite, because it rebuilds constantly and CI runs it cold.
+#   * no `strip`. At opt-3 inlining already shreds stack frames; deleting the
+#     symbol names as well would leave a failing property test or conformance case
+#     reporting bare addresses, on the one profile whose entire job is finding
+#     bugs.
+[profile.dev]
+opt-level = 3
+# Line tables rather than full DWARF: a backtrace keeps its function names and
+# file/line, without the multi-GB symbol trees nothing here consumes.
+debug = 1
+# Orthogonal to opt-level, and load-bearing. First-party code carries
+# `#[cfg(debug_assertions)]` bodies — the SPARQL parser and the BM25 scorer among
+# them — that vanish silently with the flag, and overflow checks are what keep an
+# arithmetic bug in a byte-deterministic codec from becoming a wrong-but-green
+# run. Release-grade codegen AND the safety net, never one in place of the other.
+debug-assertions = true
+overflow-checks = true
+
+# DEPENDENCIES ONLY — Cargo excludes workspace members from `"*"`. They inherit
+# opt-level 3 from the base above, so it is stated once and proven for every unit
+# by `scripts/check-build-profiles.py` rather than restated here.
+#
+# They keep the runtime checks too. Turning them off would buy build speed with
+# the internal sanity checks of the crypto, compression and columnar crates,
+# during exactly the runs whose job is finding bugs, in a library whose contract
+# is byte determinism. That is not a trade this workspace makes at any measured
+# price. The debug-info saving is taken here instead, where nearly every unit in
+# the graph is.
+[profile.test]
+# Test binaries carry no debug info. `[profile.dev]`'s line tables exist so a
+# backtrace from a REPL or an example keeps its function names; a test target is
+# the one place that buys nothing, because a failing assertion prints its own
+# file and line and a panicking test prints its own message. Meanwhile this is
+# where the artifacts are: every integration-test file is its own linked binary,
+# and the workspace has well over a hundred of them.
+#
+# Only `debug` is set. `opt-level`, `debug-assertions` and `overflow-checks` are
+# inherited from `[profile.dev]`, which is deliberate and gated —
+# `scripts/check-build-profiles.py` asserts those three and pointedly does not
+# assert `debug`, on the grounds that debug-info size is disk hygiene rather than
+# a correctness property.
+debug = 0
+
+[profile.dev.package."*"]
+debug = false
+
+# Build scripts, proc-macros and THEIR dependencies do not inherit the base
+# profile — Cargo governs them with `build-override`, whose default is the
+# unoptimized one. The deleted `[profile.dev.package."*"] opt-level = 2` table
+# reached them only because `package."*"` outranks `build-override`, so raising
+# the base alone would have QUIETLY DE-OPTIMIZED sixty units that are pure build
+# time: `clap_derive`, `pyo3-macros`, `wasm-bindgen-macro` and the rest expand on every
+# compile of every crate that uses them. Named here, where the population is
+# named, instead of riding on a glob that means something else.
+[profile.dev.build-override]
+opt-level = 3

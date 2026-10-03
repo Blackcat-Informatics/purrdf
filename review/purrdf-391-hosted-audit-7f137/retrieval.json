@@ -1,0 +1,76 @@
+{
+  "retrieved_utc": "2026-10-03T11:07:25.663628+00:00",
+  "repo": "Blackcat-Informatics/purrdf",
+  "requested_head": "7f137d3e9c3b02961ab2ee368a7ea171c7a282a0",
+  "commands": {
+    "pull": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/pulls/391"
+    ],
+    "pr_view": [
+      "gh",
+      "pr",
+      "view",
+      "391",
+      "--repo",
+      "Blackcat-Informatics/purrdf",
+      "--json",
+      "number,title,url,state,headRefName,headRefOid,baseRefName,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup"
+    ],
+    "reviews": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/pulls/391/reviews?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "review_comments": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/pulls/391/comments?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "issue_comments": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/issues/391/comments?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "commits": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/pulls/391/commits?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "checks_current": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/commits/7f137d3e9c3b02961ab2ee368a7ea171c7a282a0/check-runs?per_page=100&filter=all",
+      "--paginate",
+      "--slurp"
+    ],
+    "statuses_current": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/commits/7f137d3e9c3b02961ab2ee368a7ea171c7a282a0/statuses?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "combined_status_current": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/commits/7f137d3e9c3b02961ab2ee368a7ea171c7a282a0/status"
+    ],
+    "actions_current": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/actions/runs?head_sha=7f137d3e9c3b02961ab2ee368a7ea171c7a282a0&per_page=100",
+      "--paginate",
+      "--slurp"
+    ]
+  }
+}

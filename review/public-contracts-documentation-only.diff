@@ -1,0 +1,131 @@
+diff --git crates/rdf-core/src/blank_label.rs crates/rdf-core/src/blank_label.rs
+index aa77fe80b..f62817bd0 100644
+--- crates/rdf-core/src/blank_label.rs
++++ crates/rdf-core/src/blank_label.rs
+@@ -436 +436 @@ pub use purrdf_lex::terminals::is_valid_blank_node_label;
+-/// `c`, `bnode`, `lc` -- and `n` a decimal counter) is always a legal
++/// `c`, `bnode`, `lc`, `service` -- and `n` a decimal counter) is always a legal
+@@ -444,4 +444,3 @@ pub use purrdf_lex::terminals::is_valid_blank_node_label;
+-/// apply to a prefix's own last character; it applies to the *mint stem's* last
+-/// character instead, which is always a decimal digit and therefore always
+-/// legal. Every OTHER position in the prefix is exactly as constrained as it
+-/// would be inside a full label: the first character must be a legal
++/// apply to a prefix's own last character; it applies to the completed label's
++/// final counter digit, which is always legal. Every OTHER prefix position follows
++/// the same constraints as in a full label: the first character must be a legal
+diff --git crates/sparql-algebra/src/scope.rs crates/sparql-algebra/src/scope.rs
+index 6a4e4edcb..dbf524848 100644
+--- crates/sparql-algebra/src/scope.rs
++++ crates/sparql-algebra/src/scope.rs
+@@ -423,5 +423,6 @@ pub fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPatter
+-/// Whether any leaf under the spine rooted at `pattern` satisfies `test` — the
+-/// leaves visited left to right and the walk stopped at the first that does, over a
+-/// work list held inline until a spine is taller than it, so a pattern with nothing to
+-/// rename allocates nothing (this walk runs on every admission, prepared re-runs
+-/// included).
++/// Whether any leaf under the spine rooted at `pattern` satisfies `test`.
++///
++/// Leaves are visited left to right, stopping at the first match. The work list
++/// holds up to eight pending nodes inline; a deeper spine can spill to heap scratch
++/// even when no labels need renaming. This walk runs on every admission, including
++/// prepared re-runs.
+diff --git crates/sparql-eval/src/eval.rs crates/sparql-eval/src/eval.rs
+index 50d182437..df1aa1447 100644
+--- crates/sparql-eval/src/eval.rs
++++ crates/sparql-eval/src/eval.rs
+@@ -392,3 +392,2 @@ pub(crate) fn schema_fingerprint(schema: &VarSchema) -> u64 {
+-/// Spell one minted blank-node label: `stem` followed by the decimal counter value
+-/// `n`, with `prefix` spliced in front when the evaluation has a deterministic
+-/// [`EvalCtx::bnode_mint_prefix`] installed.
++/// Spell one blank-node candidate as `{prefix}{stem}{n}`, omitting `prefix` when
++/// [`EvalCtx::bnode_mint_prefix`] is `None`.
+@@ -396,9 +395,7 @@ pub(crate) fn schema_fingerprint(schema: &VarSchema) -> u64 {
+-/// The single formatting rule every mint site in this crate uses — CONSTRUCT
+-/// template blanks (`stem = "c"`, [`crate::template::mint_blank`]), `BNODE()`
+-/// (`stem = "bnode"`, [`crate::expr`]), and the PurRDF list constructors
+-/// (`stem = "lc"`, [`crate::list_fn::materialize_list`]) all call this rather than
+-/// re-deriving the `Some(prefix) => format!(...), None => format!(...)` match, so a
+-/// fourth mint site added later cannot omit the prefix branch and reopen the
+-/// cross-focus label collision [`EvalCtx::with_bnode_mint_prefix`] exists to
+-/// prevent. With `prefix: None` the result is exactly `{stem}{n}`, byte-identical
+-/// to every pre-prefix caller.
++/// The shared mint seam uses this formatting rule for CONSTRUCT template blanks
++/// (`stem = "c"`, [`crate::template::fresh_blank`]), `BNODE()` (`stem = "bnode"`,
++/// [`crate::expr`]), PurRDF list constructors (`stem = "lc"`,
++/// [`crate::list_fn::materialize_list`]), and SERVICE response blank identities
++/// (`stem = "service"`, [`crate::remote`]). Formatting does not establish freshness:
++/// [`EvalCtx::try_mint_blank_label`] checks the complete default-scope identity
++/// and advances the counter past occupied candidates before returning a label.
+@@ -453,2 +450,3 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+-    /// A monotonic counter for minting fresh blank nodes (`BNODE()` and CONSTRUCT
+-    /// template blanks).
++    /// A shared monotonic candidate counter for `BNODE()`, CONSTRUCT template
++    /// blanks, PurRDF list constructors and SERVICE response blank identities.
++    /// Occupied candidates consume counter values without producing fresh blanks.
+@@ -456,9 +454,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+-    /// An optional deterministic prefix for every blank-node label this evaluation
+-    /// mints (CONSTRUCT template blanks, `BNODE()`, and the PurRDF list
+-    /// constructors): a label the mint would spell `c{n}` becomes `{prefix}c{n}`.
+-    /// `None` (the default) leaves minted labels byte-identical to an unprefixed
+-    /// evaluation. The prefix is caller-supplied data — never derived from time,
+-    /// RNG, or iteration order — so a prefixed evaluation is exactly as
+-    /// deterministic as an unprefixed one. The SHACL rules engine supplies a
+-    /// per-focus-node prefix so distinct focus nodes mint distinct blanks at mint
+-    /// time (see [`Self::with_bnode_mint_prefix`]).
++    /// An optional caller-supplied deterministic prefix for every blank-node label
++    /// this evaluation mints. Candidates are `{prefix}{stem}{n}` for the fixed
++    /// stems `c`, `bnode`, `lc` and `service`; `None` omits the prefix.
++    /// Vacancy checks use the complete default-scope identity, so changing a
++    /// prefix can change which counter values are skipped. Prefix selection uses
++    /// no time, RNG or iteration-order input. The SHACL rules engine supplies its
++    /// encoded per-focus-node identity tags (see [`Self::with_bnode_mint_prefix`]).
+@@ -1128,6 +1124,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+-    /// Supply a deterministic blank-mint prefix (see [`Self::bnode_mint_prefix`]):
+-    /// every blank-node label this evaluation mints is spelled `{prefix}{label}`,
+-    /// where `{label}` is exactly the label an unprefixed evaluation would mint.
+-    /// The prefix must be caller-supplied, deterministic data — the SHACL rules
+-    /// engine passes a per-focus-node identity tag so distinct focus nodes mint
+-    /// distinct blanks.
++    /// Supply a deterministic blank-mint prefix (see [`Self::bnode_mint_prefix`]).
++    /// Every candidate is spelled `{prefix}{stem}{n}`. The shared mint seam checks
++    /// the complete default-scope identity against the dataset and identities
++    /// reserved by this evaluation, advancing the counter past occupied candidates.
++    /// Prefixed and unprefixed evaluations can therefore select different counter
++    /// values. The prefix must be caller-supplied, deterministic data; the SHACL
++    /// rules engine passes its encoded per-focus-node identity tags.
+@@ -1140,2 +1137,2 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+-    /// mint stems (`c`, `bnode`, `lc`) followed by a decimal counter, and that
+-    /// helper is exactly the check that every such concatenation stays a legal
++    /// mint stems (`c`, `bnode`, `lc`, `service`) followed by a decimal counter.
++    /// That helper checks that every such concatenation stays a legal
+diff --git crates/sparql-eval/src/remote.rs crates/sparql-eval/src/remote.rs
+index 8ac46dcd6..2f1878733 100644
+--- crates/sparql-eval/src/remote.rs
++++ crates/sparql-eval/src/remote.rs
+@@ -9,5 +9,9 @@
+-//! transport-agnostic: it forwards the inner pattern (serialized to a `SELECT *`
+-//! query via [`purrdf_sparql_algebra::pattern_to_select_query`]) to an injected
+-//! [`ServiceResolver`] and interns the returned bindings into a
+-//! [`SolutionSeq`]. The parser wraps `SERVICE` in `Join(left, Service)`, so
+-//! `eval_service` returns *only* the remote bag — the existing hash join performs
++//! transport-agnostic: it forwards the inner pattern as a complete standalone
++//! `SELECT` query via [`purrdf_sparql_algebra::try_pattern_to_select_query`] to an
++//! injected [`ServiceResolver`] and interns the returned bindings into a
++//! [`SolutionSeq`]. The carrier projects visible variables while hiding internal
++//! witnesses. A body with no visible variables uses a hygienic constant unit
++//! column; ingestion removes that transport column and preserves every row in
++//! the original zero-column bag. The parser wraps `SERVICE` in
++//! `Join(left, Service)`, so `eval_service` returns *only* the remote bag — the
++//! existing hash join performs
+@@ -257 +261,3 @@ pub struct ServiceRequest<'a> {
+-    /// The complete forwarded SPARQL `SELECT * WHERE { … }` text.
++    /// The complete standalone SPARQL `SELECT` carrier text. Its projection hides
++    /// internal witnesses; a body with no visible variables uses a hygienic unit
++    /// transport column that the evaluator removes during ingestion, preserving rows.
+@@ -345,2 +351,4 @@ pub trait ServiceResolver {
+-    /// Forward [`ServiceRequest::query_text`] (a complete `SELECT * WHERE { … }`) to
+-    /// [`ServiceRequest::endpoint`] and return its bindings.
++    /// Forward [`ServiceRequest::query_text`] (a complete standalone `SELECT`
++    /// carrier) to [`ServiceRequest::endpoint`] and return its result columns and
++    /// rows. For a body with no visible variables, the evaluator removes the
++    /// carrier's hygienic unit transport column while preserving every row.

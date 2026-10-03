@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Action completed."
+    }
+  ],
+  "structuredContent": {
+    "statuses": [
+      {
+        "context": "CodeRabbit",
+        "state": "success",
+        "target_url": null
+      }
+    ]
+  },
+  "isError": false
+}

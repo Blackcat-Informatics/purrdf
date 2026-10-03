@@ -1,0 +1,63 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Action completed."
+    }
+  ],
+  "structuredContent": {
+    "issue": {
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/387",
+      "title": "Explore stronger blank-node scope representation and hazard detection",
+      "issue_number": 387,
+      "body": "## Problem and concrete trigger\n\nThe investigation of #385 exposed a scope hazard in a proposed property-path lowering. A sequence containing an alternative, such as `?s (ex:p|ex:q)/ex:r ?o`, needs one hidden intermediate binding shared by the alternative arms and the following edge. Representing that binding as a pattern blank label across the new UNION boundary loses its intended identity: the existing evaluator correctly treats UNION arms as separate blank-label scopes.\n\nThe intended internal algebra is:\n\n```text\nJoin(\n  Union(BGP(?s, ex:p, h0), BGP(?s, ex:q, h0)),\n  BGP(h0, ex:r, ?o)\n)\n```\n\nHere `h0` is a fresh non-distinguished binding introduced by the translator, not a dataset blank node and not a user-visible variable. Its identity must survive the rewrite, and projecting it away must preserve solution multiplicities. Reusing a blank-label spelling is insufficient to express that contract.\n\nCurrent source already has relevant mechanisms: `crates/sparql-eval/src/blank_scope.rs` promotes shared labels within a split basic graph pattern to unspellable internal variables and deliberately stops at UNION and other scope boundaries. The parser tracks blank-label scopes, and the evaluator removes internal witness columns at observable result boundaries. The new path translation exercises the interaction between those mechanisms, algebra rewrites and serialization.\n\nThe concrete lowering/scoping correctness required by #385 remains part of the held 3.0.1 fix. This issue is an explicit investigation into a stronger general detection and representation design. It does not authorize shipping an unresolved hazard.\n\n## Investigation\n\nCompare ways to make invalid scope transitions detectable before execution, rather than relying on every rewrite to remember all blank-node conventions:\n\n- A binder/scope graph or typed identities that distinguish user variables, query-pattern existentials, generated path witnesses, template allocations and ground dataset blank identities. Assess explicit scope/origin metadata against the existing unspellable internal-variable representation.\n- A shared invariant validator for parsed and compiler-produced algebra: detect accidental capture, scope escape, lost connections, inconsistent alpha-renaming, duplicated fresh-template identities and premature witness projection. A legal shared generated witness crossing a UNION must be distinguished from illegal reuse of a source blank label across separate BGPs.\n- Transformation contracts or certificates for split/merge, distribution, substitution, projection and serialization. Evaluate whether an inexpensive validator can check the relevant binding relationship before and after each transformation, including repeated normalization.\n- Collision-free naming and projection when internal algebra is rendered to legal SPARQL for SERVICE or other carriers. Check roundtrip binding identity, duplicate bags, visible result columns and caller names resembling generated names.\n- Mutation and property-based testing over a scope-interaction matrix: UNION, sequences/inverses, OPTIONAL, MINUS, EXISTS, GRAPH, subqueries, BIND/VALUES, property functions, prepared reuse, UPDATE/CONSTRUCT allocation and RDF 1.2 quoted terms. Profile restrictions must be respected.\n\nKeep semantic categories separate: a pattern blank is an existential; a pre-bound dataset blank is a concrete identity; a CONSTRUCT/INSERT blank is fresh under its template allocation rule. A detector must catch category confusion without rejecting legal queries.\n\n## Deliverables and acceptance criteria\n\n- [ ] Document the binding/scope invariants and a hazard taxonomy with minimized legal and illegal examples, including the path/UNION trigger above.\n- [ ] Compare at least the existing representation plus validation, explicit binder/scope identities, and transformation certificates. Record correctness, compatibility, memory/layout, preparation cost, reuse and wasm implications.\n- [ ] Demonstrate which intentional mutations each candidate detects, and which hazards it cannot establish statically. Keep false-positive controls and independently justified expected result bags.\n- [ ] Produce a recommended design and bounded implementation plan with one authoritative home for the shared invariants, deterministic behavior and typed actionable diagnostics.\n- [ ] Define validation at parser and public raw/compiler-algebra boundaries, transform boundaries, serialization/reparse and result egress; measure the cost of the proposed checks on representative and deeply nested queries.\n- [ ] Coordinate portable normative cases with #384 and preserve the frozen official W3C corpora. PurRDF-specific internal invariants and planner budgets must be reported separately from W3C conformance.\n\n## References\n\n- #385 — alternative-path and UNION query planning; immediate scope hazard discovered during implementation design.\n- #384 — portable community suite and proposed W3C additions.\n- [SPARQL blank-label scope](https://www.w3.org/TR/sparql11-query/#BGPsparql).\n- [SPARQL property-path translation](https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns).\n- [SPARQL treatment of pattern blank nodes](https://www.w3.org/TR/sparql11-query/#sparqlBGP).\n- [SPARQL CONSTRUCT template blank-node allocation](https://www.w3.org/TR/sparql11-query/#templatesWithBNodes).\n",
+      "state": "open",
+      "user": {
+        "login": "paudley",
+        "name": "paudley",
+        "email": null,
+        "avatar_url": "https://avatars.githubusercontent.com/u/527555?v=4",
+        "id": 527555
+      },
+      "assignees": [
+        {
+          "login": "paudley",
+          "name": "paudley",
+          "email": null,
+          "avatar_url": "https://avatars.githubusercontent.com/u/527555?v=4",
+          "id": 527555
+        }
+      ],
+      "labels": [
+        {
+          "name": "enhancement",
+          "color": "a2eeef",
+          "description": "New feature or request"
+        },
+        {
+          "name": "conformance",
+          "color": "0E8A16",
+          "description": "W3C / external test-suite conformance"
+        },
+        {
+          "name": "complexity-hard",
+          "color": "E99695",
+          "description": "Large or intricate scope"
+        }
+      ],
+      "milestone": 2,
+      "state_reason": null,
+      "comments": 17,
+      "created_at": "2026-10-02T16:07:42Z",
+      "updated_at": "2026-10-03T11:29:39Z",
+      "closed_at": null,
+      "display_url": "https://github.com/Blackcat-Informatics/purrdf/issues/387",
+      "display_title": "Explore stronger blank-node scope representation and hazard detection"
+    },
+    "url": "https://github.com/Blackcat-Informatics/purrdf/issues/387",
+    "title": "Explore stronger blank-node scope representation and hazard detection",
+    "display_url": "https://github.com/Blackcat-Informatics/purrdf/issues/387",
+    "display_title": "Explore stronger blank-node scope representation and hazard detection"
+  },
+  "isError": false
+}

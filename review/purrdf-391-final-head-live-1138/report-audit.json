@@ -1,0 +1,108 @@
+{
+  "reports": [
+    {
+      "config": "aarch64-neoverse-v1",
+      "status": "passed",
+      "sites": 103,
+      "scope": "v0\u00b7f0\u00b7r0",
+      "sha256": "ec79090953475230bfe596c0a3674072e199ad1995b24d2ba3a463250c812a12",
+      "identity": {
+        "compiler": "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\nbinary: rustc\ncommit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37\ncommit-date: 2026-10-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+        "manifest": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+        "schema": 1,
+        "source": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc"
+      }
+    },
+    {
+      "config": "aarch64",
+      "status": "passed",
+      "sites": 103,
+      "scope": "v0\u00b7f0\u00b7r0",
+      "sha256": "c1dfebb3d984ad9bf0396b4cd7d10e72e94bb8279d47624bf92332ef1b55a0b1",
+      "identity": {
+        "compiler": "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\nbinary: rustc\ncommit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37\ncommit-date: 2026-10-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+        "manifest": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+        "schema": 1,
+        "source": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc"
+      }
+    },
+    {
+      "config": "wasm32-simd128",
+      "status": "passed",
+      "sites": 103,
+      "scope": "v0\u00b7f0\u00b7r0",
+      "sha256": "2d86593f86177fd55af6423f927fd75144c2d860eaf4526baac556671540d517",
+      "identity": {
+        "compiler": "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\nbinary: rustc\ncommit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37\ncommit-date: 2026-10-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+        "manifest": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+        "schema": 1,
+        "source": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc"
+      }
+    },
+    {
+      "config": "wasm32",
+      "status": "passed",
+      "sites": 103,
+      "scope": "v0\u00b7f0\u00b7r0",
+      "sha256": "53e769cc67def6975e575e37326efdc471d58b004335eb7aeebdce10634814db",
+      "identity": {
+        "compiler": "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\nbinary: rustc\ncommit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37\ncommit-date: 2026-10-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+        "manifest": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+        "schema": 1,
+        "source": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc"
+      }
+    },
+    {
+      "config": "x86_64-v3",
+      "status": "passed",
+      "sites": 103,
+      "scope": "v0\u00b7f0\u00b7r0",
+      "sha256": "a6bce53487503f9278ca4e6a91a0af083e0cb416b4f96a27149e3cdbe979a821",
+      "identity": {
+        "compiler": "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\nbinary: rustc\ncommit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37\ncommit-date: 2026-10-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+        "manifest": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+        "schema": 1,
+        "source": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc"
+      }
+    },
+    {
+      "config": "x86_64-v4",
+      "status": "passed",
+      "sites": 103,
+      "scope": "v0\u00b7f0\u00b7r0",
+      "sha256": "b46bf4d92e94d6125345b2c350efb274bb3696eda6409269c0e9cac4b092e755",
+      "identity": {
+        "compiler": "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\nbinary: rustc\ncommit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37\ncommit-date: 2026-10-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+        "manifest": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+        "schema": 1,
+        "source": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc"
+      }
+    },
+    {
+      "config": "x86_64",
+      "status": "passed",
+      "sites": 103,
+      "scope": "v0\u00b7f0\u00b7r0",
+      "sha256": "c3c48418f8da2dbe4f0f46c448eb5bd3af848c334be0b2a05f78fc1905e02867",
+      "identity": {
+        "compiler": "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\nbinary: rustc\ncommit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37\ncommit-date: 2026-10-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+        "manifest": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+        "schema": 1,
+        "source": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc"
+      }
+    }
+  ],
+  "report_statuses": {
+    "passed": 7
+  },
+  "site_cells": 721,
+  "shared_identity": {
+    "compiler": "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\nbinary: rustc\ncommit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37\ncommit-date: 2026-10-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+    "manifest": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+    "schema": 1,
+    "source": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc"
+  },
+  "local_manifest_sha256": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+  "local_doc_sha256": "1a5553527e791e894653467d33cc80165e3b31844bee8c5a2bf617d7fe802383",
+  "complete_doc_parity_problems": []
+}

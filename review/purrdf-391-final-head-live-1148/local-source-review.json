@@ -1,0 +1,37 @@
+{
+  "retrieved_utc": "2026-10-03T11:50:38.597254+00:00",
+  "local_head": "28744b104af37faeb43a25bf865c25fa7094bc4d",
+  "read_only_git_optional_locks": "0",
+  "git_results": [
+    {
+      "command": [
+        "git",
+        "diff",
+        "--no-ext-diff",
+        "--quiet",
+        "HEAD",
+        "--"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "git",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "source_identity": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc",
+  "previous_hosted_source_identity": "7c8e3f2c7050157e7c5adfa388c8a4ec88dcdddebbd853b3aaa61c997be519bc",
+  "source_unchanged": true,
+  "manifest_sha256": "7561af7b6739d6cb9274ef66d49dfec48b16426774ceb1a42f264d2981d12ae0",
+  "document_sha256": "1a5553527e791e894653467d33cc80165e3b31844bee8c5a2bf617d7fe802383",
+  "ledger_sha256": "091e58efd8bd3d2ca55dc1a6211527f37a67d3870c0c53c8e82b021b14b6fdf5"
+}

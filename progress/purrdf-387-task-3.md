@@ -1,0 +1,11 @@
+Task 3's report is committed and pushed as `08da90dfeb0face005664c58d036d6bf0e68281b`, with refreshed measurements in `d1f9f3ba878760ab729807031257263074415a43`.
+
+The shipped investigation maps all six acceptance criteria to evidence and compares the three candidates without equating a static role check with proof of transformation intent or runtime allocation freshness. It reports the 14 accepted legal controls, 19 supported hazards, 13 unavailable proof inputs and six unavailable transitions separately. Actual native/wasm layouts, requested allocation traffic, retention, peak working bytes and conservative AST accounting are distinguished.
+
+The complete default benchmark completed successfully: 30 measurements, each with 100 samples, three seconds of warm-up, five seconds of measurement and 10,000 seeded bootstrap resamples. Exact source snapshots and ten SHA-256 hashes, compiler/hardware/environment, raw estimates, medians/MADs/intervals and the machine-readable probe are archived. Independent review compared every sample payload and table value; the refresh script is idempotent. No cross-hardware performance claim or general query-equivalence claim is made.
+
+The full shared-helper gate exposed a redundant checked-IRI wrapper; `3df44b2ac2a6048b1ac378d4f7a3e9abd2951944` removes it in favor of the existing authoritative constructor. Refreshed native/wasm candidate tests and helper hygiene pass. Commit hooks ran normally.
+
+Qualification also demonstrated that the shared inline admission traversal reduces the prepared-plan call from 49 to 48 allocations. `36122cc1ffd5580d3368dfad7aa8afaab4519a2d` pins that exact cost, proves the admission walk itself uses one allocation, and retains the independent eight-row answer check. All 17 prepared-execution tests pass.
+
+Explicit `make wasm` and full unsharded `make conformance` passed. The complete repository gate correctly stopped on the old allocation pin. A final runtime audit then reproduced ordinary BNODE dataset capture and independent SERVICE response capture, each returning one row where the specification requires zero. Both targeted controls now pass with the allocation/response-boundary repairs under review. The full gate will be rerun against the final source before PR creation; no PR has been opened.

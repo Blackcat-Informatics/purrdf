@@ -1,0 +1,33 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Action completed."
+    }
+  ],
+  "structuredContent": {
+    "workflow_runs": [
+      {
+        "id": 37119631979,
+        "name": "Docs",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 1458,
+        "jobs_url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/actions/runs/37119631979/jobs",
+        "logs_url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/actions/runs/37119631979/logs",
+        "workflow_id": 307772453
+      },
+      {
+        "id": 37119631972,
+        "name": "CI",
+        "status": "in_progress",
+        "conclusion": null,
+        "run_number": 1931,
+        "jobs_url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/actions/runs/37119631972/jobs",
+        "logs_url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/actions/runs/37119631972/logs",
+        "workflow_id": 305611062
+      }
+    ]
+  },
+  "isError": false
+}

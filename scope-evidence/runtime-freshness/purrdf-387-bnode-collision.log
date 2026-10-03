@@ -1,0 +1,21 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 0.21s
+     Running tests/scope_interactions.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-eval/40550e21ddab8f70/out/scope_interactions-40550e21ddab8f70)
+
+running 1 test
+
+thread 'bnode_allocation_is_fresh_against_default_scope_dataset_blank' (3702797) panicked at crates/sparql-eval/tests/scope_interactions.rs:781:5:
+assertion `left == right` failed: BNODE() must allocate an identity distinct from existing dataset blanks
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test bnode_allocation_is_fresh_against_default_scope_dataset_blank ... FAILED
+
+failures:
+
+failures:
+    bnode_allocation_is_fresh_against_default_scope_dataset_blank
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test scope_interactions`

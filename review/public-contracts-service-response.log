@@ -1,0 +1,16 @@
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 1 test
+test remote::response_identity_tests::separate_responses_avoid_local_callback_and_prior_mint_identities ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1353 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 1 test
+test remote::response_identity_tests::late_concrete_values_cannot_capture_an_earlier_service_response_blank ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1353 filtered out; finished in 0.00s
+

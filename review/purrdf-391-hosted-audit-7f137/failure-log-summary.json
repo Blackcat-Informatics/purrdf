@@ -1,0 +1,90 @@
+[
+  {
+    "check": "simd-asm",
+    "job": 111189113325,
+    "lines": 41,
+    "sha256": "82526fd603e3cfcbed3937b6d3a4d3ed0baf78e8c8c9c6e3369a143b0ddcfecb",
+    "diagnostics": [
+      "2026-10-03T11:00:23.9045430Z ##[group]Run test \"$MATRIX_RESULT\" = success",
+      "2026-10-03T11:00:23.9045920Z \u001b[36;1mtest \"$MATRIX_RESULT\" = success\u001b[0m",
+      "2026-10-03T11:00:23.9398501Z ##[error]Process completed with exit code 1."
+    ]
+  },
+  {
+    "check": "simd-asm-config (aarch64-neoverse-v1)",
+    "job": 111188972906,
+    "lines": 645,
+    "sha256": "5671e530a82858d61f841a40e767081b00772f86b27ff3d76f6057e5231304b1",
+    "diagnostics": [
+      "2026-10-03T11:00:09.5840441Z FAIL: bench `crates/sparql-algebra/benches/scope_checks.rs` has no row in the bench table",
+      "2026-10-03T11:00:09.6017099Z make: *** [Makefile:678: simd-asm] Error 1",
+      "2026-10-03T11:00:09.6036092Z ##[error]Process completed with exit code 2."
+    ]
+  },
+  {
+    "check": "simd-asm-config (x86_64-v4)",
+    "job": 111188972883,
+    "lines": 413,
+    "sha256": "56249c167ad819bc0470102cd43b774f4e220f7eba08bc28ca181b7d50854b81",
+    "diagnostics": [
+      "2026-10-03T10:59:54.8079478Z FAIL: bench `crates/sparql-algebra/benches/scope_checks.rs` has no row in the bench table",
+      "2026-10-03T10:59:54.8243839Z make: *** [Makefile:678: simd-asm] Error 1",
+      "2026-10-03T10:59:54.8261204Z ##[error]Process completed with exit code 2."
+    ]
+  },
+  {
+    "check": "simd-asm-config (aarch64)",
+    "job": 111188972881,
+    "lines": 644,
+    "sha256": "66897ac860fd01530f27f723e94164e6cabec332452354fba232a74872703b75",
+    "diagnostics": [
+      "2026-10-03T11:00:13.7878927Z FAIL: bench `crates/sparql-algebra/benches/scope_checks.rs` has no row in the bench table",
+      "2026-10-03T11:00:13.8054713Z make: *** [Makefile:678: simd-asm] Error 1",
+      "2026-10-03T11:00:13.8071520Z ##[error]Process completed with exit code 2."
+    ]
+  },
+  {
+    "check": "simd-asm-config (x86_64-v3)",
+    "job": 111188972869,
+    "lines": 397,
+    "sha256": "df19d731a2dd9876bba7454fc5db0aba310c5cf482ee88be797306862efd11cd",
+    "diagnostics": [
+      "2026-10-03T10:59:51.6270523Z FAIL: bench `crates/sparql-algebra/benches/scope_checks.rs` has no row in the bench table",
+      "2026-10-03T10:59:51.6410228Z make: *** [Makefile:678: simd-asm] Error 1",
+      "2026-10-03T10:59:51.6423733Z ##[error]Process completed with exit code 2."
+    ]
+  },
+  {
+    "check": "simd-asm-config (x86_64)",
+    "job": 111188972863,
+    "lines": 397,
+    "sha256": "49be7c3e0fee2ca9c2adedfcd861fe7b46af2609e92b9029e623bdc23d9b1594",
+    "diagnostics": [
+      "2026-10-03T10:59:53.3224892Z FAIL: bench `crates/sparql-algebra/benches/scope_checks.rs` has no row in the bench table",
+      "2026-10-03T10:59:53.3373014Z make: *** [Makefile:678: simd-asm] Error 1",
+      "2026-10-03T10:59:53.3387131Z ##[error]Process completed with exit code 2."
+    ]
+  },
+  {
+    "check": "simd-asm-config (wasm32-simd128)",
+    "job": 111188972862,
+    "lines": 625,
+    "sha256": "25c0526f07b492752608795834da79e30ea462cfe679c58ef59b34fd07d3b924",
+    "diagnostics": [
+      "2026-10-03T11:00:06.1657322Z FAIL: bench `crates/sparql-algebra/benches/scope_checks.rs` has no row in the bench table",
+      "2026-10-03T11:00:06.1794700Z make: *** [Makefile:678: simd-asm] Error 1",
+      "2026-10-03T11:00:06.1807389Z ##[error]Process completed with exit code 2."
+    ]
+  },
+  {
+    "check": "simd-asm-config (wasm32)",
+    "job": 111188972858,
+    "lines": 645,
+    "sha256": "1a7eea0abb6f796e6a28625d5fdf83f62bf0322d59b3696e23de6ef0f5cdf21c",
+    "diagnostics": [
+      "2026-10-03T11:00:16.9225837Z FAIL: bench `crates/sparql-algebra/benches/scope_checks.rs` has no row in the bench table",
+      "2026-10-03T11:00:16.9398206Z make: *** [Makefile:678: simd-asm] Error 1",
+      "2026-10-03T11:00:16.9414928Z ##[error]Process completed with exit code 2."
+    ]
+  }
+]

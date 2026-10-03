@@ -1,0 +1,12 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 20.45s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/1/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 4 tests
+test ir::term_walk::tests::blank_identity_visit_sees_embedded_triples_and_typed_composites ... ok
+test ir::term_walk::tests::blank_identity_visit_stops_at_first_embedded_match ... ok
+test ir::term_walk::tests::blank_identity_visit_preserves_nested_order_scopes_and_occurrences ... ok
+test ir::mutable::tests::blank_identity_visit_retains_suppressed_and_removed_nested_values ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1116 filtered out; finished in 0.00s
+

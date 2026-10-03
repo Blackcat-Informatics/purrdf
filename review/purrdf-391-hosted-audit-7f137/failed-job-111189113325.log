@@ -1,0 +1,41 @@
+﻿2026-10-03T11:00:22.6392149Z Current runner version: '2.337.0'
+2026-10-03T11:00:22.6409146Z ##[group]Runner Image Provisioner
+2026-10-03T11:00:22.6409684Z Hosted Compute Agent
+2026-10-03T11:00:22.6410025Z Version: 20260901.588
+2026-10-03T11:00:22.6410434Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-10-03T11:00:22.6410851Z Build Date: 2026-09-01T19:56:44Z
+2026-10-03T11:00:22.6411268Z Worker ID: {b1fec9fe-e538-467d-b36a-e476c564e296}
+2026-10-03T11:00:22.6411726Z Azure Region: centralus
+2026-10-03T11:00:22.6412096Z ##[endgroup]
+2026-10-03T11:00:22.6412920Z ##[group]Operating System
+2026-10-03T11:00:22.6413295Z Ubuntu
+2026-10-03T11:00:22.6413592Z 24.04.5
+2026-10-03T11:00:22.6413939Z LTS
+2026-10-03T11:00:22.6414411Z ##[endgroup]
+2026-10-03T11:00:22.6414760Z ##[group]Runner Image
+2026-10-03T11:00:22.6415115Z Image: ubuntu-24.04
+2026-10-03T11:00:22.6415478Z Version: 20260927.320.1
+2026-10-03T11:00:22.6416271Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-03T11:00:22.6417157Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+2026-10-03T11:00:22.6417744Z ##[endgroup]
+2026-10-03T11:00:22.6418406Z ##[group]GITHUB_TOKEN Permissions
+2026-10-03T11:00:22.6419545Z Contents: read
+2026-10-03T11:00:22.6419890Z Metadata: read
+2026-10-03T11:00:22.6420277Z ##[endgroup]
+2026-10-03T11:00:22.6421554Z Secret source: Actions
+2026-10-03T11:00:22.6422114Z Cache mode: write
+2026-10-03T11:00:22.6422514Z Prepare workflow directory
+2026-10-03T11:00:22.6626179Z Prepare all required actions
+2026-10-03T11:00:22.6656146Z Getting action download info
+2026-10-03T11:00:22.9554575Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-03T11:00:23.0536285Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-03T11:00:23.2223289Z Download action repository 'actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e' (SHA:95815c38cf2ff2164869cbab79da8d1f422bc89e)
+2026-10-03T11:00:23.8572828Z Complete job name: simd-asm
+2026-10-03T11:00:23.9045430Z ##[group]Run test "$MATRIX_RESULT" = success
+2026-10-03T11:00:23.9045920Z [36;1mtest "$MATRIX_RESULT" = success[0m
+2026-10-03T11:00:23.9267606Z shell: /usr/bin/bash -e {0}
+2026-10-03T11:00:23.9268208Z env:
+2026-10-03T11:00:23.9268478Z   MATRIX_RESULT: failure
+2026-10-03T11:00:23.9268767Z ##[endgroup]
+2026-10-03T11:00:23.9398501Z ##[error]Process completed with exit code 1.
+2026-10-03T11:00:23.9519733Z Cleaning up orphan processes

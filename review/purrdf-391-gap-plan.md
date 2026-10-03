@@ -1,0 +1,13 @@
+## Stage-2 gap analysis and remediation plan
+
+Current PR head: `92842627b840a755a3fca31a78d8aa274a34fa4b`. The full original issue, implementation/addendum comments, PR body, reviews, inline comments, unresolved-thread inventory and full diff have been fetched. The deficiency ledger is marker-only. The completed final local gates are `make check`, explicit `make wasm`, full unsharded `make conformance CONFORMANCE_ARGS=` and `bash scripts/check-generated.sh`; all passed. Hosted qualification is still running and remains required.
+
+| Gap | Priority | Repair and commit boundary | Validation and update |
+| --- | --- | --- | --- |
+| The added `scope_checks` benchmark has no row in the SIMD audit's mandatory benchmark table. Every architecture shard refuses document coverage before compiling; the aggregate consequently fails. | HIGH | Add an honest mapping to the scope checker actually exercised by the benchmark, with a measured function site where needed. Retain all architecture checks, symbol-presence checks and instruction/floating-point requirements. One complete audit-coverage commit, normal hooks and push. | Run the driver self-tests and static document checks, then the complete seven-configuration assembly gate and generated-artifact checks. Post exact results and commit to issue and PR; require successful hosted evidence on the resulting head. |
+
+The three candidate designs, finite proof domain, independent semantic bags/freshness controls, boundary design, reproducible cost/layout evidence and portable-case separation cover the six original acceptance criteria. An independent adversarial integration/claim audit is running alongside the concrete CI repair. CodeRabbit has no submitted review or inline thread yet and is processing all 110 selected files; its eventual findings will be added individually with repairs, validation and thread replies.
+
+The mechanical diff scan finds one apparent incomplete-work marker: the comment “This is not an unimplemented graph operator.” Its surrounding code implements extraction of original source leaves from the transformed branch; production graph execution is implemented separately. The declared finite prototype proof domain and typed unavailable proof inputs are explicit investigation outputs, not undelivered production work. Historical implementation-plan choices and intermediate pending-gate updates are assessed against the final evidence rather than treated as completion claims.
+
+Before Stage 3, re-fetch complete review/check context on the final head, close every real gap with implementation and evidence, post the final gap summary, synchronize the latest base, repeat deficiency/deferral checks, and merge only through the required structured merge tool.

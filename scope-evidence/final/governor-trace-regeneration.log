@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running tests/governor_corpus.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-conformance/967aef8ae65b8229/out/governor_corpus-967aef8ae65b8229)
+
+running 1 test
+test regenerate_fuel_sweep_trace ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 5.11s
+

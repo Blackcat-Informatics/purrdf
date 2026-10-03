@@ -1,0 +1,34 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/purrdf)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 1m 01s
+     Running tests/governor_corpus.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-conformance/967aef8ae65b8229/out/governor_corpus-967aef8ae65b8229)
+
+running 16 tests
+test a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape ... ok
+test a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministically ... ok
+test a_relation_that_ignores_the_stop_signal_is_bounded_per_invocation ... ok
+test a_transport_that_ignores_the_stop_signal_is_bounded_per_request ... ok
+test regenerate_fuel_sweep_trace ... ignored, regeneration path: writes the committed golden
+test every_boundary_is_derived_from_a_metered_run ... ok
+test every_governor_carries_a_zero_a_boundary_and_an_over_bound_case ... ok
+test the_corpus_is_reproducible_within_a_run ... ok
+test the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state ... ok
+test the_fuel_sweep_over_the_corpus_matches_its_trace ... ok
+test the_parallel_drive_is_actually_above_the_fork_threshold ... ok
+test the_parallel_drive_spends_what_the_sequential_measurement_spent ... ok
+test the_rdf12_statement_layer_is_governed ... ok
+test the_two_aggregate_charge_points_are_banded_separately ... ok
+test the_two_property_function_charge_points_are_banded_separately ... ok
+test the_corpus_matches_its_pinned_expectations ... ok
+
+test result: ok. 15 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

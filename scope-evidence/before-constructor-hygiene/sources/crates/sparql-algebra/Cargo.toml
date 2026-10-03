@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-sparql-algebra"
+description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-sparql-algebra"
+rust-version.workspace = true
+keywords = ["sparql", "rdf", "rdf-12", "algebra", "parser"]
+categories = ["parser-implementations", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
+# builds on the foundation leaves `purrdf-lex`, `purrdf-iri` and
+# `purrdf-xsd`; it deliberately does NOT depend on `purrdf-core`
+# (whose terms are dataset-interned `TermId` and which pulls a `gts` default feature).
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_sparql_algebra"
+
+[dependencies]
+purrdf-iri = { workspace = true }
+purrdf-xsd = { workspace = true }
+# The SEP-0009 composite datatypes (`cdt:List` / `cdt:Map`): the closed function
+# registry (`CdtFn`, `CdtArity`) this parser resolves a call-position CDT IRI
+# against, and the lexical layer a `"…"^^cdt:List` literal is checked with. A
+# closed leaf over `purrdf-iri` + `purrdf-xsd` only, so it adds no edge this
+# crate does not already carry and keeps the front-end `purrdf-core`-free.
+purrdf-cdt = { workspace = true }
+# The fixed-key table hasher behind the parser's prefix and blank-label maps:
+# their iteration order is the same on every run.
+purrdf-hash = { workspace = true }
+# The lexical layer: terminals, escape decoders and the chunked byte scans on
+# the tokenizer hot paths (string-literal body, IRIREF end, comment/EOL).
+purrdf-lex = { workspace = true }
+
+[dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
+# Byte-exact golden files for the algebra snapshots, and the property harness
+# (lexer round-trips, parser robustness). Path-only and unpublished, so it is
+# stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
+# Text extraction for `tests/shipped_sparql_examples.rs` — the gate that pulls
+# SPARQL query/update text and `AGG(<iri>...)` call fragments out of the book,
+# `--help` text, `.pyi`, `.d.ts`, and rustdoc, and parses each with THIS crate's
+# own parser. Dev-only: never a runtime or release dependency, so the wasm gate
+# is unaffected.
+regex = { workspace = true }
+# The counting allocator `tests/chain_parse_is_linear.rs` measures a chain's parse
+# with. Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-alloc-probe = { workspace = true }
+
+[[bench]]
+name = "tokenize"
+harness = false
+
+[[bench]]
+name = "scope_checks"
+harness = false
+
+[[test]]
+name = "scope_candidates"
+harness = false
+
+[[bench]]
+name = "tokenize_values"
+harness = false
+
+[[bench]]
+name = "update_reparse"
+harness = false
+
+[[bench]]
+# Clone, Drop, `==`, Hash, Debug and the serializer over parsed algebra trees:
+# deep ones (an OPTIONAL spine, nested calls, nested groups) and wide ones (a
+# 4 096-pattern BGP, 1 024 UNION arms, a 4 096-row VALUES). Report-only; `make
+# bench` lane only — excluded from `make check`.
+name = "algebra_walks"
+harness = false
+
+[[bench]]
+# Parse throughput over thirty embedded, realistic queries spanning the four
+# query forms, joins, OPTIONAL/UNION/MINUS/GRAPH, FILTER built-ins, paths,
+# aggregates, sub-SELECTs, RDF 1.2 triple terms and LATERAL — the whole set and
+# each query alone. Report-only; `make bench` lane only — excluded from `make
+# check`.
+name = "parse"
+harness = false

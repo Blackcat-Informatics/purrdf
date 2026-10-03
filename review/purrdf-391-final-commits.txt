@@ -1,0 +1,97 @@
+commit 28744b104af37faeb43a25bf865c25fa7094bc4d (HEAD -> paudley/387-blank-scope-investigation, origin/paudley/387-blank-scope-investigation)
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 05:25:15 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 05:25:15 2026 -0600
+
+    Cover scope admission in measured assembly audit
+
+commit 7f137d3e9c3b02961ab2ee368a7ea171c7a282a0
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 04:57:21 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 04:57:21 2026 -0600
+
+    Align public scope and allocation contracts with execution
+
+commit aa529ee697baf39aaea2148db25bc03dfff66e5e
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 04:30:55 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 04:30:55 2026 -0600
+
+    Preserve scope evidence columns in Markdown table
+
+commit 92842627b840a755a3fca31a78d8aa274a34fa4b
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 03:51:43 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 03:51:43 2026 -0600
+
+    Version governor scratch accounting and refresh measured evidence
+    
+    Publish profile 10 for independently charged scratch arenas and immediate blank identity checkpoints. Regenerate the first-party budget corpus and execution traces, retain official fixtures, and verify aggregate result retention with an independent byte oracle.
+
+commit d6f94f62a80c641f3b51734c73f19c64c0140ebc
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 03:27:44 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 03:27:44 2026 -0600
+
+    Preserve concrete blank identity across governed runtime allocation
+
+commit 36122cc1ffd5580d3368dfad7aa8afaab4519a2d
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 02:28:28 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 02:28:28 2026 -0600
+
+    Pin the shared admission walk allocation cost
+
+commit d1f9f3ba878760ab729807031257263074415a43
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 02:20:50 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 02:20:50 2026 -0600
+
+    Refresh scope measurements after shared-helper qualification
+
+commit 3df44b2ac2a6048b1ac378d4f7a3e9abd2951944
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 01:51:50 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 01:51:50 2026 -0600
+
+    Use the shared checked IRI constructor in scope experiments
+
+commit 08da90dfeb0face005664c58d036d6bf0e68281b
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 01:46:04 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 01:46:04 2026 -0600
+
+    Document measured SPARQL binding and carrier scope contracts
+
+commit 4d51d771c4cf5ae7437d6cc476612ba54733539e
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 01:30:34 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 01:30:34 2026 -0600
+
+    Compare SPARQL scope evidence with bounded transformation contracts
+
+commit 9837c4214e2899602f4303ab9686d5e404982449
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 01:26:54 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 01:26:54 2026 -0600
+
+    Preserve blank identities across SPARQL carriers and updates
+
+commit 9b7200a9e06a01f5fcb455ee59bd7e69e86c6db0
+Author:     Patrick Audley <paudley@blackcatinformatics.ca>
+AuthorDate: Sat Oct 3 00:46:43 2026 -0600
+Commit:     Patrick Audley <paudley@blackcatinformatics.ca>
+CommitDate: Sat Oct 3 00:46:43 2026 -0600
+
+    Add typed SPARQL binding-role diagnostics

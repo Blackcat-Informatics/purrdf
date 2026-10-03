@@ -1,0 +1,29 @@
+{
+  "source_head": "aa529ee697baf39aaea2148db25bc03dfff66e5e",
+  "audited_shipping_head": "92842627b840a755a3fca31a78d8aa274a34fa4b",
+  "patch_sha256": "6855b1e4f15c1924ea171dd408225c6d0f7edb9f21ad2e7d2483d46d8383f98d",
+  "comments_only": true,
+  "git_apply_check_exit": 0,
+  "files": [
+    {
+      "path": "crates/sparql-eval/src/eval.rs",
+      "source_sha256": "f096ccae8851104a48df146132023854a4901f2a874ed3d283e859bf79e5a681",
+      "proposed_sha256": "a2320fbf17fb1fa7ca822de8a86d49050464eed0976b8b65549df53b313676c8"
+    },
+    {
+      "path": "crates/rdf-core/src/blank_label.rs",
+      "source_sha256": "454f34898272d5651db0ac75685855ba0ce15d38988743452c7eb26e647d445e",
+      "proposed_sha256": "cbfc0c17bccff23dd1e2a6585069bb87bfc10ed66fbfbb5413b01f1fe2d711e7"
+    },
+    {
+      "path": "crates/sparql-eval/src/remote.rs",
+      "source_sha256": "16d4e48616d65ce94194566b35afab22463d4bf9824afe1d0a062a0e1b027a3f",
+      "proposed_sha256": "2e72a02d4773d71fed5d3acb2d6b5bb2db97d4c6c6e0dbc490f10e42951f4320"
+    },
+    {
+      "path": "crates/sparql-algebra/src/scope.rs",
+      "source_sha256": "e22db9620a973dc873877e14aa5c757b3771adcaf3f128143df3b994828c6246",
+      "proposed_sha256": "c4fd672e1e28197995d340cfd669a6e2dc4d3110ff5c64bc8841d1ff32220f6b"
+    }
+  ]
+}

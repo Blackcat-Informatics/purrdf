@@ -1,0 +1,50 @@
+{
+  "retrieved_utc": "2026-10-03T11:34:48.397289+00:00",
+  "jobs": [
+    {
+      "job": 111193073489,
+      "name": "conformance-sparql",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073489/logs"
+      ],
+      "exit_code": 0,
+      "log": "job-111193073489-conformance-sparql-full.log",
+      "bytes": 45948,
+      "sha256": "60364da0aa05326083f270e51fe8373872d6a53f22f6f283d407c248e5bd21b9",
+      "stderr": ""
+    },
+    {
+      "job": 111193073331,
+      "name": "wasm",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073331/logs"
+      ],
+      "exit_code": 0,
+      "log": "job-111193073331-wasm-full.log",
+      "bytes": 56791,
+      "sha256": "29d7799cbaf5b95379680eaffcc43f82f25ff74392c1842ac8eaa776f0f0f75b",
+      "stderr": ""
+    },
+    {
+      "job": 111193073305,
+      "name": "msrv",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073305/logs"
+      ],
+      "exit_code": 0,
+      "log": "job-111193073305-msrv-full.log",
+      "bytes": 47210,
+      "sha256": "371d70ae316ff8d4d3932883127d9c460a5d12f3bf25ea0bef1d7aee53e80bd2",
+      "stderr": ""
+    }
+  ]
+}

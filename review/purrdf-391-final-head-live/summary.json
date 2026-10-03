@@ -1,0 +1,123 @@
+{
+  "head": "28744b104af37faeb43a25bf865c25fa7094bc4d",
+  "snapshot_utc": "2026-10-03T11:31:42.390685+00:00",
+  "pr_state": "OPEN",
+  "merge_state": "UNSTABLE",
+  "check_run_total": 46,
+  "check_states": {
+    "neutral": 1,
+    "in_progress": 33,
+    "success": 12
+  },
+  "failed_checks": [],
+  "asm_shards": [
+    {
+      "id": 111193073548,
+      "name": "simd-asm-config (x86_64)",
+      "status": "in_progress",
+      "conclusion": null,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37119631972/job/111193073548"
+    },
+    {
+      "id": 111193073495,
+      "name": "simd-asm-config (wasm32)",
+      "status": "in_progress",
+      "conclusion": null,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37119631972/job/111193073495"
+    },
+    {
+      "id": 111193073475,
+      "name": "simd-asm-config (wasm32-simd128)",
+      "status": "in_progress",
+      "conclusion": null,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37119631972/job/111193073475"
+    },
+    {
+      "id": 111193073450,
+      "name": "simd-asm-config (x86_64-v4)",
+      "status": "in_progress",
+      "conclusion": null,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37119631972/job/111193073450"
+    },
+    {
+      "id": 111193073444,
+      "name": "simd-asm-config (aarch64-neoverse-v1)",
+      "status": "in_progress",
+      "conclusion": null,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37119631972/job/111193073444"
+    },
+    {
+      "id": 111193073431,
+      "name": "simd-asm-config (x86_64-v3)",
+      "status": "in_progress",
+      "conclusion": null,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37119631972/job/111193073431"
+    },
+    {
+      "id": 111193073392,
+      "name": "simd-asm-config (aarch64)",
+      "status": "in_progress",
+      "conclusion": null,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37119631972/job/111193073392"
+    }
+  ],
+  "coderabbit_statuses": [
+    {
+      "url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/statuses/28744b104af37faeb43a25bf865c25fa7094bc4d",
+      "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+      "id": 55511188680,
+      "node_id": "SC_kwDOTKq-Ms8AAAAM7LmEyA",
+      "state": "pending",
+      "description": "Review in progress",
+      "target_url": null,
+      "context": "CodeRabbit",
+      "created_at": "2026-10-03T11:26:00Z",
+      "updated_at": "2026-10-03T11:26:00Z",
+      "creator": {
+        "login": "coderabbitai[bot]",
+        "id": 136622811,
+        "node_id": "BOT_kgDOCCSy2w",
+        "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/coderabbitai%5Bbot%5D",
+        "html_url": "https://github.com/apps/coderabbitai",
+        "followers_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/followers",
+        "following_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/following{/other_user}",
+        "gists_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/subscriptions",
+        "organizations_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/orgs",
+        "repos_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/repos",
+        "events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/received_events",
+        "type": "Bot",
+        "user_view_type": "public",
+        "site_admin": false
+      }
+    }
+  ],
+  "formal_reviews": 3,
+  "formal_current_head_reviews": 0,
+  "issue_comments": 11,
+  "review_comments": 3,
+  "threads": 1,
+  "unresolved_threads": 0,
+  "nightly": {
+    "rustc": "1.101.0-nightly",
+    "commit": "0abfedbc7cd4e725f126913880c95800394f7c37",
+    "llvm": "23.1.1",
+    "source_jobs": [
+      111193073489,
+      111193073331
+    ]
+  },
+  "msrv": {
+    "rustc": "1.98.1",
+    "commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+    "llvm": "22.1.8",
+    "source_jobs": [
+      111193073305
+    ]
+  },
+  "ledger_sha256": "091e58efd8bd3d2ca55dc1a6211527f37a67d3870c0c53c8e82b021b14b6fdf5"
+}

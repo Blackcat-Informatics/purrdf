@@ -1,0 +1,32 @@
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_loss_matrix transcode`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_rule_inventory`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_unicode_blocks`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_unicode_tables idna`
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/gen_unicode_tables ecma-ranges`
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2057 file(s); entailment-overclaim ban swept 38 of 240 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2064 unit(s) outside that set).
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/opt/.cargo/slots/2b79b067da2bb563/0/target/debug/examples/viz_samples /home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/target/gate-scratch/check-generated.FiRt2s/visualization --svg-only`
+wrote RDF 1.2 visualization artifacts to /home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/target/gate-scratch/check-generated.FiRt2s/visualization
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test sssom::tests::corpus_accessibility_parses_and_validates_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1123 filtered out; finished in 0.00s
+

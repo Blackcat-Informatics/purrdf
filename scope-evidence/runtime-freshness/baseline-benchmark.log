@@ -1,0 +1,42 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/rdf-events)
+   Compiling libc v0.2.186
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/alloc-probe)
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-epoch v0.9.18
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/deflate)
+   Compiling crossbeam-deque v0.8.6
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/stack)
+   Compiling digest v0.11.3
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/xsd)
+   Compiling rayon v1.12.0
+   Compiling regex v1.12.4
+   Compiling sha2 v0.11.0
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/cdt)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/testkit)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-freshness-baseline/crates/sparql-eval)
+    Finished `bench` profile [optimized] target(s) in 1m 26s
+     Running benches/query_eval.rs (/opt/.cargo/slots/c3b6e56998f90bf8/0/build/release/build/purrdf-sparql-eval/53308acd55dc6762/out/query_eval-53308acd55dc6762)
+query_eval/i_construct_blank_free time:   [10.04 ms 10.10 ms 10.18 ms]  mad: 69.95 µs  (10 samples × 50 iterations)
+query_eval/j_construct_blank_bearing time:   [15.69 ms 15.86 ms 16.77 ms]  mad: 172.5 µs  (10 samples × 32 iterations)
+query_eval/q_construct_blank_coref time:   [28.94 ms 29.09 ms 29.61 ms]  mad: 177.9 µs  (10 samples × 18 iterations)
+
+3 benchmarks measured; 0 failed

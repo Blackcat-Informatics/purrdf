@@ -1,0 +1,9 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 27.09s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/1/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 1 test
+test user_fn::tests::a_user_function_bnode_allocation_preserves_parent_concrete_inputs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1348 filtered out; finished in 0.00s
+

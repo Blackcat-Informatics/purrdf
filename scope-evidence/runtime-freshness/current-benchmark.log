@@ -1,0 +1,24 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/testkit)
+   Compiling rayon v1.12.0
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-eval)
+    Finished `bench` profile [optimized] target(s) in 1m 15s
+     Running benches/query_eval.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/release/build/purrdf-sparql-eval/53308acd55dc6762/out/query_eval-53308acd55dc6762)
+query_eval/i_construct_blank_free time:   [9.025 ms 9.108 ms 9.187 ms]  mad: 80.97 µs  (10 samples × 55 iterations)
+query_eval/j_construct_blank_bearing time:   [12.63 ms 12.74 ms 12.79 ms]  mad: 79.14 µs  (10 samples × 39 iterations)
+query_eval/q_construct_blank_coref time:   [19.14 ms 19.68 ms 22.67 ms]  mad: 476.0 µs  (10 samples × 24 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+
+3 benchmarks measured; 0 failed

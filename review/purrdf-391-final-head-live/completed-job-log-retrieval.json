@@ -1,0 +1,47 @@
+{
+  "retrieved_utc": "2026-10-03T11:34:31.832488+00:00",
+  "jobs": [
+    {
+      "job": 111193073489,
+      "name": "conformance-sparql",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073489/logs"
+      ],
+      "exit_code": 1,
+      "log": "job-111193073489-conformance-sparql.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr": "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway\n"
+    },
+    {
+      "job": 111193073331,
+      "name": "wasm",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073331/logs"
+      ],
+      "exit_code": 1,
+      "log": "job-111193073331-wasm.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr": "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway\n"
+    },
+    {
+      "job": 111193073305,
+      "name": "msrv",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073305/logs"
+      ],
+      "exit_code": 1,
+      "log": "job-111193073305-msrv.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr": "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway\n"
+    }
+  ]
+}

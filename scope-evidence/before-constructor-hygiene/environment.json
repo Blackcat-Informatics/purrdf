@@ -1,0 +1,29 @@
+{
+  "captured_utc": "2026-10-03T07:31:31.463416+00:00",
+  "head_at_capture": "4d51d771c4cf5ae7437d6cc476612ba54733539e",
+  "platform": "Linux-7.2.7-1-cachyos-x86_64-with-glibc2.44",
+  "compiler": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1",
+  "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  32\nOn-line CPU(s) list:                     0-31\nVendor ID:                               AuthenticAMD\nModel name:                              AMD RYZEN AI MAX+ 395 w/ Radeon 8060S\nCPU family:                              26\nModel:                                   112\nThread(s) per core:                      2\nCore(s) per socket:                      16\nSocket(s):                               1\nStepping:                                0\nMicrocode version:                       0xb700037\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      81%\nCPU max MHz:                             5187.5000\nCPU min MHz:                             625.0000\nBogoMIPS:                                6000.67\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpuid_fault cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx_vnni avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect movdiri movdir64b overflow_recov succor smca fsrm avx512_vp2intersect flush_l1d amd_lbr_pmc_freeze\nVirtualization:                          AMD-V\nL1d cache:                               768 KiB (16 instances)\nL1i cache:                               512 KiB (16 instances)\nL2 cache:                                16 MiB (16 instances)\nL3 cache:                                64 MiB (2 instances)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-31\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Vulnerable\nVulnerability Spec store bypass:         Vulnerable\nVulnerability Spectre v1:                Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers\nVulnerability Spectre v2:                Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Vulnerable",
+  "load_average": "3.46 6.75 12.66 3/3561 3521964",
+  "source_sha256": {
+    "crates/sparql-algebra/tests/support/scope_candidates.rs": "ba799e29f4b1ec7a008e27462ab306b7b46bdd403f0afbcd1369deb0b8be99af",
+    "crates/sparql-algebra/tests/scope_candidates.rs": "765af5441c3272248166c75c884a5f30531fec9f23baeeb4e0c6403d632a9f0d",
+    "crates/sparql-algebra/examples/scope_investigation.rs": "f877e77648055059ffa1f3499ee6c1d910ba62e3fbf977d889824f3eb6e27e6e",
+    "crates/sparql-algebra/benches/scope_checks.rs": "84e40f5c1796de5188c4c5aa25f5ab1edab5a6e8f7a1fa80d08ad0c9dda76195",
+    "crates/sparql-algebra/src/scope.rs": "e22db9620a973dc873877e14aa5c757b3771adcaf3f128143df3b994828c6246",
+    "crates/sparql-algebra/src/walk.rs": "a0a3eab56e522d319903055ea25d20ff786cb486482010f56dafbedbe99a2e9f",
+    "crates/sparql-algebra/Cargo.toml": "969524e6c8a4f9419badffacdfd90bb7744d83bf277e0e46310836597e41c0f8",
+    "Cargo.toml": "02b43e188d489473ab2948e8517910c48e644cd56c9247dea42d251c480f0b60",
+    "Cargo.lock": "90611854529927c5f20e418673217ba07368ea981ceae2104b7bda54af572486",
+    "rust-toolchain.toml": "fb4564a4be0c39a9f5114a0bd965c737884fa9623ebd99800f27d3711ae2e800"
+  },
+  "benchmark_command": "cargo bench --locked -p purrdf-sparql-algebra --bench scope_checks",
+  "sampling": {
+    "samples": 100,
+    "warmup_seconds": 3,
+    "measurement_seconds": 5,
+    "confidence": 0.95,
+    "resamples": 10000,
+    "statistics": "median and MAD with seeded bootstrap interval"
+  }
+}

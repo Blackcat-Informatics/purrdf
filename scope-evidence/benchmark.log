@@ -1,0 +1,74 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling regex-syntax v0.8.11
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/rdf-events)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/alloc-probe)
+   Compiling regex-automata v0.4.14
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/stack)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling regex v1.12.4
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-algebra)
+    Finished `bench` profile [optimized] target(s) in 23.25s
+     Running benches/scope_checks.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/release/build/purrdf-sparql-algebra/ca46cb0052064547/out/scope_checks-ca46cb0052064547)
+scope_checks/representative/existing_check time:   [272.8 ns 286.3 ns 291.3 ns]  mad: 27.17 ns  (100 samples × 170488 iterations)
+scope_checks/representative/explicit_check time:   [3.187 µs 3.231 µs 3.291 µs]  mad: 116.0 ns  (100 samples × 15428 iterations)
+                         outliers: 2 of 100 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+scope_checks/representative/encoded_variable_declaration_prepare time:   [532.7 ns 536.5 ns 540.8 ns]  mad: 12.26 ns  (100 samples × 92097 iterations)
+                         outliers: 3 of 100 (0 low severe, 0 low mild, 1 high mild, 2 high severe)
+scope_checks/representative/contract_prepare time:   [2.873 µs 2.913 µs 2.944 µs]  mad: 123.8 ns  (100 samples × 10736 iterations)
+scope_checks/representative/contract_reuse_check time:   [3.041 µs 4.561 µs 4.696 µs]  mad: 413.0 ns  (100 samples × 10567 iterations)
+scope_checks/branches_256/existing_check time:   [24.58 µs 25.20 µs 25.60 µs]  mad: 1.551 µs  (100 samples × 7766 iterations)
+                         outliers: 22 of 100 (0 low severe, 22 low mild, 0 high mild, 0 high severe)
+scope_checks/branches_256/explicit_check time:   [388.0 µs 396.1 µs 406.2 µs]  mad: 26.21 µs  (100 samples × 116 iterations)
+                         outliers: 1 of 100 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+scope_checks/branches_256/encoded_variable_declaration_prepare time:   [30.80 µs 31.49 µs 31.86 µs]  mad: 1.593 µs  (100 samples × 1587 iterations)
+                         outliers: 5 of 100 (0 low severe, 3 low mild, 2 high mild, 0 high severe)
+scope_checks/branches_256/contract_prepare time:   [274.4 µs 278.0 µs 281.1 µs]  mad: 12.41 µs  (100 samples × 145 iterations)
+                         outliers: 7 of 100 (0 low severe, 3 low mild, 2 high mild, 2 high severe)
+scope_checks/branches_256/contract_reuse_check time:   [476.3 µs 485.3 µs 492.9 µs]  mad: 23.86 µs  (100 samples × 267 iterations)
+                         outliers: 4 of 100 (4 low severe, 0 low mild, 0 high mild, 0 high severe)
+scope_checks/width_1024/existing_check time:   [71.00 µs 73.97 µs 74.85 µs]  mad: 5.463 µs  (100 samples × 664 iterations)
+                         outliers: 3 of 100 (0 low severe, 1 low mild, 2 high mild, 0 high severe)
+scope_checks/width_1024/explicit_check time:   [1.622 ms 1.672 ms 1.716 ms]  mad: 129.7 µs  (100 samples × 30 iterations)
+                         outliers: 3 of 100 (0 low severe, 3 low mild, 0 high mild, 0 high severe)
+scope_checks/width_1024/encoded_variable_declaration_prepare time:   [46.05 µs 46.84 µs 47.34 µs]  mad: 4.809 µs  (100 samples × 469 iterations)
+                         outliers: 22 of 100 (0 low severe, 0 low mild, 0 high mild, 22 high severe)
+scope_checks/width_1024/contract_prepare time:   [1.248 ms 1.641 ms 1.947 ms]  mad: 837.8 µs  (100 samples × 68 iterations)
+scope_checks/width_1024/contract_reuse_check time:   [2.290 ms 2.563 ms 2.652 ms]  mad: 466.6 µs  (100 samples × 24 iterations)
+scope_checks/deep_64/existing_check time:   [2.077 µs 2.786 µs 3.080 µs]  mad: 679.1 ns  (100 samples × 22073 iterations)
+scope_checks/deep_64/explicit_check time:   [3.877 µs 3.941 µs 3.994 µs]  mad: 170.2 ns  (100 samples × 6460 iterations)
+                         outliers: 6 of 100 (0 low severe, 3 low mild, 3 high mild, 0 high severe)
+scope_checks/deep_64/encoded_variable_declaration_prepare time:   [2.204 µs 2.982 µs 3.162 µs]  mad: 545.6 ns  (100 samples × 49489 iterations)
+scope_checks/deep_64/contract_prepare time:   [12.41 µs 12.83 µs 13.16 µs]  mad: 1.316 µs  (100 samples × 4645 iterations)
+scope_checks/deep_64/contract_reuse_check time:   [11.29 µs 11.75 µs 11.94 µs]  mad: 953.5 ns  (100 samples × 4197 iterations)
+                         outliers: 12 of 100 (10 low severe, 2 low mild, 0 high mild, 0 high severe)
+scope_checks/deep_512/existing_check time:   [20.48 µs 21.49 µs 22.41 µs]  mad: 3.995 µs  (100 samples × 2627 iterations)
+scope_checks/deep_512/explicit_check time:   [65.37 µs 67.43 µs 69.10 µs]  mad: 5.781 µs  (100 samples × 845 iterations)
+                         outliers: 16 of 100 (13 low severe, 2 low mild, 1 high mild, 0 high severe)
+scope_checks/deep_512/encoded_variable_declaration_prepare time:   [16.10 µs 17.27 µs 17.74 µs]  mad: 2.313 µs  (100 samples × 3264 iterations)
+scope_checks/deep_512/contract_prepare time:   [67.72 µs 68.64 µs 69.40 µs]  mad: 3.405 µs  (100 samples × 803 iterations)
+                         outliers: 15 of 100 (9 low severe, 1 low mild, 5 high mild, 0 high severe)
+scope_checks/deep_512/contract_reuse_check time:   [64.81 µs 67.16 µs 68.43 µs]  mad: 6.701 µs  (100 samples × 845 iterations)
+scope_checks/deep_100000/existing_check time:   [4.501 ms 4.872 ms 5.155 ms]  mad: 768.6 µs  (100 samples × 13 iterations)
+scope_checks/deep_100000/explicit_check time:   [13.27 ms 13.73 ms 14.28 ms]  mad: 1.322 ms  (100 samples × 4 iterations)
+                         outliers: 16 of 100 (0 low severe, 16 low mild, 0 high mild, 0 high severe)
+scope_checks/deep_100000/encoded_variable_declaration_prepare time:   [3.284 ms 3.435 ms 3.550 ms]  mad: 373.9 µs  (100 samples × 16 iterations)
+                         outliers: 14 of 100 (0 low severe, 14 low mild, 0 high mild, 0 high severe)
+scope_checks/deep_100000/contract_prepare time:   [13.94 ms 14.28 ms 14.97 ms]  mad: 1.276 ms  (100 samples × 4 iterations)
+                         outliers: 8 of 100 (5 low severe, 2 low mild, 1 high mild, 0 high severe)
+scope_checks/deep_100000/contract_reuse_check time:   [12.63 ms 13.07 ms 13.49 ms]  mad: 1.336 ms  (100 samples × 4 iterations)
+                         outliers: 13 of 100 (10 low severe, 2 low mild, 1 high mild, 0 high severe)
+
+30 benchmarks measured; 0 failed

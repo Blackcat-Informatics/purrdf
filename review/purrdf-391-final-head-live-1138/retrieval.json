@@ -1,0 +1,119 @@
+{
+  "retrieved_utc": "2026-10-03T11:38:49.766481+00:00",
+  "completed_utc": "2026-10-03T11:38:50.868825+00:00",
+  "requests": [
+    {
+      "name": "pull",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/pulls/391"
+      ],
+      "exit_code": 0,
+      "bytes": 27323,
+      "sha256": "aa9acbafba44a241facd442d018aa14f6dfb793667fc35cb609ec8d677d88165",
+      "stderr": ""
+    },
+    {
+      "name": "pr_view",
+      "command": [
+        "gh",
+        "pr",
+        "view",
+        "391",
+        "--repo",
+        "Blackcat-Informatics/purrdf",
+        "--json",
+        "headRefOid,baseRefName,state,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup"
+      ],
+      "exit_code": 0,
+      "bytes": 14381,
+      "sha256": "779b4269018465a54eb46f083a2ab79c25e58fed35692a10778d4a30615175a8",
+      "stderr": ""
+    },
+    {
+      "name": "reviews",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/pulls/391/reviews?per_page=100",
+        "--paginate",
+        "--slurp"
+      ],
+      "exit_code": 0,
+      "bytes": 13194,
+      "sha256": "329ad886756296dc0cd30aaa0426ae17b7e0662e70c87386bf5ae7e5d53c9677",
+      "stderr": ""
+    },
+    {
+      "name": "review_comments",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/pulls/391/comments?per_page=100",
+        "--paginate",
+        "--slurp"
+      ],
+      "exit_code": 0,
+      "bytes": 24724,
+      "sha256": "9083aefb24053b59399a1f765769577cb2cb8d9d2d9f33e3daa4f677aeba2039",
+      "stderr": ""
+    },
+    {
+      "name": "issue_comments",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/issues/391/comments?per_page=100",
+        "--paginate",
+        "--slurp"
+      ],
+      "exit_code": 0,
+      "bytes": 54805,
+      "sha256": "bfb5963966b56c6d3c7a5daea73ec64dd8614fb8fd970434f39b4da2157292b2",
+      "stderr": ""
+    },
+    {
+      "name": "checks",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/commits/28744b104af37faeb43a25bf865c25fa7094bc4d/check-runs?per_page=100&filter=all",
+        "--paginate",
+        "--slurp"
+      ],
+      "exit_code": 0,
+      "bytes": 169065,
+      "sha256": "a3556e1043ea9a642d771676cc80a3ded0a62e7de834ab3351833265b355b92f",
+      "stderr": ""
+    },
+    {
+      "name": "statuses",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/commits/28744b104af37faeb43a25bf865c25fa7094bc4d/statuses?per_page=100",
+        "--paginate",
+        "--slurp"
+      ],
+      "exit_code": 0,
+      "bytes": 2981,
+      "sha256": "0a5a03fccb8cfa8a12f763682303e468836aadad5edb102995c4691505e34ee5",
+      "stderr": ""
+    },
+    {
+      "name": "actions",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/actions/runs?head_sha=28744b104af37faeb43a25bf865c25fa7094bc4d&per_page=100",
+        "--paginate",
+        "--slurp"
+      ],
+      "exit_code": 0,
+      "bytes": 42187,
+      "sha256": "ef278ae704e98a07852e5fa717561be7a9edcfa14fad9792f7783e4f5deedece",
+      "stderr": ""
+    }
+  ]
+}

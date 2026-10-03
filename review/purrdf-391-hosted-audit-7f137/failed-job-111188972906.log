@@ -1,0 +1,645 @@
+﻿2026-10-03T10:59:33.0430886Z Current runner version: '2.337.0'
+2026-10-03T10:59:33.0455909Z ##[group]Runner Image Provisioner
+2026-10-03T10:59:33.0457049Z Hosted Compute Agent
+2026-10-03T10:59:33.0457693Z Version: 20260901.588
+2026-10-03T10:59:33.0458427Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-10-03T10:59:33.0459196Z Build Date: 2026-09-01T19:56:44Z
+2026-10-03T10:59:33.0459915Z Worker ID: {e5acf78f-331e-4e19-b137-52e586c7a200}
+2026-10-03T10:59:33.0460645Z Azure Region: westus
+2026-10-03T10:59:33.0461240Z ##[endgroup]
+2026-10-03T10:59:33.0462784Z ##[group]Operating System
+2026-10-03T10:59:33.0463483Z Ubuntu
+2026-10-03T10:59:33.0464072Z 24.04.5
+2026-10-03T10:59:33.0464606Z LTS
+2026-10-03T10:59:33.0465158Z ##[endgroup]
+2026-10-03T10:59:33.0465784Z ##[group]Runner Image
+2026-10-03T10:59:33.0466390Z Image: ubuntu-24.04
+2026-10-03T10:59:33.0467217Z Version: 20260927.320.1
+2026-10-03T10:59:33.0468581Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-03T10:59:33.0470222Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+2026-10-03T10:59:33.0471206Z ##[endgroup]
+2026-10-03T10:59:33.0472374Z ##[group]GITHUB_TOKEN Permissions
+2026-10-03T10:59:33.0474296Z Contents: read
+2026-10-03T10:59:33.0474935Z Metadata: read
+2026-10-03T10:59:33.0475687Z ##[endgroup]
+2026-10-03T10:59:33.0478086Z Secret source: Actions
+2026-10-03T10:59:33.0479171Z Cache mode: write
+2026-10-03T10:59:33.0479965Z Prepare workflow directory
+2026-10-03T10:59:33.0829566Z Prepare all required actions
+2026-10-03T10:59:33.0880232Z Getting action download info
+2026-10-03T10:59:33.5020477Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-03T10:59:33.6015054Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-03T10:59:33.8091643Z Download action repository 'actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+2026-10-03T10:59:33.9539575Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+2026-10-03T10:59:34.1603015Z Complete job name: simd-asm-config (aarch64-neoverse-v1)
+2026-10-03T10:59:34.2466091Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+2026-10-03T10:59:34.2467434Z with:
+2026-10-03T10:59:34.2467908Z   persist-credentials: false
+2026-10-03T10:59:34.2468467Z   repository: Blackcat-Informatics/purrdf
+2026-10-03T10:59:34.2472205Z   token: ***
+2026-10-03T10:59:34.2472646Z   ssh-strict: true
+2026-10-03T10:59:34.2473081Z   ssh-user: git
+2026-10-03T10:59:34.2473530Z   clean: true
+2026-10-03T10:59:34.2473977Z   sparse-checkout-cone-mode: true
+2026-10-03T10:59:34.2474503Z   fetch-depth: 1
+2026-10-03T10:59:34.2474928Z   fetch-tags: false
+2026-10-03T10:59:34.2475382Z   show-progress: true
+2026-10-03T10:59:34.2475829Z   lfs: false
+2026-10-03T10:59:34.2476261Z   submodules: false
+2026-10-03T10:59:34.2476712Z   set-safe-directory: true
+2026-10-03T10:59:34.2477463Z   allow-unsafe-pr-checkout: false
+2026-10-03T10:59:34.2478278Z ##[endgroup]
+2026-10-03T10:59:34.3464159Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-03T10:59:34.3466230Z ##[group]Getting Git version info
+2026-10-03T10:59:34.3467167Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-03T10:59:34.3468180Z [command]/usr/bin/git version
+2026-10-03T10:59:34.3569316Z git version 2.55.0
+2026-10-03T10:59:34.3590430Z ##[endgroup]
+2026-10-03T10:59:34.3602120Z Temporarily overriding HOME='/home/runner/work/_temp/25cdb395-2b7e-494e-946a-44a133fe13b4' before making global git config changes
+2026-10-03T10:59:34.3603889Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-03T10:59:34.3608100Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-03T10:59:34.3652958Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-03T10:59:34.3656351Z ##[group]Determining repository object format
+2026-10-03T10:59:34.3658227Z ##[endgroup]
+2026-10-03T10:59:34.3659047Z ##[group]Initializing the repository
+2026-10-03T10:59:34.3662820Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-03T10:59:34.3843040Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-03T10:59:34.3844908Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-03T10:59:34.3846260Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-03T10:59:34.3847735Z hint: call:
+2026-10-03T10:59:34.3848402Z hint:
+2026-10-03T10:59:34.3849229Z hint: 	git config --global init.defaultBranch <name>
+2026-10-03T10:59:34.3850235Z hint:
+2026-10-03T10:59:34.3851237Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-03T10:59:34.3852845Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-03T10:59:34.3854390Z hint:
+2026-10-03T10:59:34.3855144Z hint: 	git branch -m <name>
+2026-10-03T10:59:34.3855992Z hint:
+2026-10-03T10:59:34.3857356Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-03T10:59:34.3858981Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-03T10:59:34.3861866Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-03T10:59:34.3864704Z ##[endgroup]
+2026-10-03T10:59:34.3866034Z ##[group]Disabling automatic garbage collection
+2026-10-03T10:59:34.3867869Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-03T10:59:34.3876042Z ##[endgroup]
+2026-10-03T10:59:34.3877374Z ##[group]Setting up auth
+2026-10-03T10:59:34.3877945Z Removing SSH command configuration
+2026-10-03T10:59:34.3883087Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T10:59:34.3916495Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T10:59:34.4252103Z Removing HTTP extra header
+2026-10-03T10:59:34.4258527Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T10:59:34.4292421Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T10:59:34.4515030Z Removing includeIf entries pointing to credentials config files
+2026-10-03T10:59:34.4520602Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T10:59:34.4552857Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T10:59:34.4781499Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-03T10:59:34.4819820Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:34.4851064Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:34.4884942Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:34.4919700Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:34.4947232Z ##[endgroup]
+2026-10-03T10:59:34.4948037Z ##[group]Fetching the repository
+2026-10-03T10:59:34.4953767Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +08e3413c209f5014fe1313507993d35b89d8bd50:refs/remotes/pull/391/merge
+2026-10-03T10:59:39.3611927Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-03T10:59:39.3613867Z  * [new ref]         08e3413c209f5014fe1313507993d35b89d8bd50 -> pull/391/merge
+2026-10-03T10:59:39.3617263Z ##[endgroup]
+2026-10-03T10:59:39.3618158Z ##[group]Determining the checkout info
+2026-10-03T10:59:39.3618879Z ##[endgroup]
+2026-10-03T10:59:39.3622361Z [command]/usr/bin/git sparse-checkout disable
+2026-10-03T10:59:39.3674571Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-03T10:59:39.3705704Z ##[group]Checking out the ref
+2026-10-03T10:59:39.3709976Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/391/merge
+2026-10-03T10:59:40.3925034Z Updating files:  82% (13007/15849)
+2026-10-03T10:59:40.3982721Z Updating files:  83% (13155/15849)
+2026-10-03T10:59:40.4042905Z Updating files:  84% (13314/15849)
+2026-10-03T10:59:40.4100167Z Updating files:  85% (13472/15849)
+2026-10-03T10:59:40.4154665Z Updating files:  86% (13631/15849)
+2026-10-03T10:59:40.4213009Z Updating files:  87% (13789/15849)
+2026-10-03T10:59:40.4273917Z Updating files:  88% (13948/15849)
+2026-10-03T10:59:40.4332243Z Updating files:  89% (14106/15849)
+2026-10-03T10:59:40.4391392Z Updating files:  90% (14265/15849)
+2026-10-03T10:59:40.4451703Z Updating files:  91% (14423/15849)
+2026-10-03T10:59:40.4512918Z Updating files:  92% (14582/15849)
+2026-10-03T10:59:40.4574005Z Updating files:  93% (14740/15849)
+2026-10-03T10:59:40.4636913Z Updating files:  94% (14899/15849)
+2026-10-03T10:59:40.4700669Z Updating files:  95% (15057/15849)
+2026-10-03T10:59:40.4765490Z Updating files:  96% (15216/15849)
+2026-10-03T10:59:40.4831889Z Updating files:  97% (15374/15849)
+2026-10-03T10:59:40.4898289Z Updating files:  98% (15533/15849)
+2026-10-03T10:59:40.4963592Z Updating files:  99% (15691/15849)
+2026-10-03T10:59:40.4965769Z Updating files: 100% (15849/15849)
+2026-10-03T10:59:40.4966377Z Updating files: 100% (15849/15849), done.
+2026-10-03T10:59:40.5127179Z Note: switching to 'refs/remotes/pull/391/merge'.
+2026-10-03T10:59:40.5129034Z 
+2026-10-03T10:59:40.5129930Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-03T10:59:40.5131035Z changes and commit them, and you can discard any commits you make in this
+2026-10-03T10:59:40.5132053Z state without impacting any branches by switching back to a branch.
+2026-10-03T10:59:40.5132656Z 
+2026-10-03T10:59:40.5133139Z If you want to create a new branch to retain commits you create, you may
+2026-10-03T10:59:40.5134043Z do so (now or later) by using -c with the switch command. Example:
+2026-10-03T10:59:40.5134525Z 
+2026-10-03T10:59:40.5134676Z   git switch -c <new-branch-name>
+2026-10-03T10:59:40.5134912Z 
+2026-10-03T10:59:40.5135053Z Or undo this operation with:
+2026-10-03T10:59:40.5135251Z 
+2026-10-03T10:59:40.5135394Z   git switch -
+2026-10-03T10:59:40.5135551Z 
+2026-10-03T10:59:40.5135825Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-03T10:59:40.5136163Z 
+2026-10-03T10:59:40.5136539Z HEAD is now at 08e3413 Merge 7f137d3e9c3b02961ab2ee368a7ea171c7a282a0 into 97769c0d95026d95211768f0c30ce0c70c7309b3
+2026-10-03T10:59:40.5170033Z ##[endgroup]
+2026-10-03T10:59:40.5216177Z [command]/usr/bin/git log -1 --format=%H
+2026-10-03T10:59:40.5243443Z 08e3413c209f5014fe1313507993d35b89d8bd50
+2026-10-03T10:59:40.5256656Z ##[group]Removing auth
+2026-10-03T10:59:40.5257755Z Removing SSH command configuration
+2026-10-03T10:59:40.5260633Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T10:59:40.5305034Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T10:59:40.5561992Z Removing HTTP extra header
+2026-10-03T10:59:40.5565131Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T10:59:40.5599171Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T10:59:40.5833103Z Removing includeIf entries pointing to credentials config files
+2026-10-03T10:59:40.5837408Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T10:59:40.5864136Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-03T10:59:40.5864866Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-03T10:59:40.5865296Z includeif.gitdir:/github/workspace/.git.path
+2026-10-03T10:59:40.5865680Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-03T10:59:40.5873439Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-03T10:59:40.5895622Z /home/runner/work/_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:40.5905217Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:40.5960716Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-03T10:59:40.5982426Z /home/runner/work/_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:40.5990337Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:40.6027037Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-03T10:59:40.6048578Z /github/runner_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:40.6056500Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:40.6097330Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-03T10:59:40.6119651Z /github/runner_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:40.6127326Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config
+2026-10-03T10:59:40.6159471Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T10:59:40.6392970Z Removing credentials config '/home/runner/work/_temp/git-credentials-7deda06c-d5ad-4db0-87bb-0dafe92247bf.config'
+2026-10-03T10:59:40.6402260Z ##[endgroup]
+2026-10-03T10:59:40.6734646Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-03T10:59:40.6735100Z with:
+2026-10-03T10:59:40.6735308Z   toolchain: nightly
+2026-10-03T10:59:40.6735614Z   targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+2026-10-03T10:59:40.6735961Z ##[endgroup]
+2026-10-03T10:59:40.6831644Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-03T10:59:40.6921475Z ##[group]Run : parse toolchain version
+2026-10-03T10:59:40.6921942Z [36;1m: parse toolchain version[0m
+2026-10-03T10:59:40.6922251Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-03T10:59:40.6922819Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-03T10:59:40.6923392Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-03T10:59:40.6923701Z [36;1m  exit 1[0m
+2026-10-03T10:59:40.6924113Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-03T10:59:40.6924750Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-03T10:59:40.6925302Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:40.6925823Z [36;1m  else[0m
+2026-10-03T10:59:40.6926233Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:40.6926700Z [36;1m  fi[0m
+2026-10-03T10:59:40.6927239Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-03T10:59:40.6927786Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:40.6928256Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-03T10:59:40.6928782Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:40.6929295Z [36;1melse[0m
+2026-10-03T10:59:40.6929541Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:40.6929844Z [36;1mfi[0m
+2026-10-03T10:59:40.7247321Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:40.7247790Z env:
+2026-10-03T10:59:40.7248034Z   toolchain: nightly
+2026-10-03T10:59:40.7248297Z ##[endgroup]
+2026-10-03T10:59:40.7391680Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=55]
+2026-10-03T10:59:40.7416598Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-03T10:59:40.7444346Z ##[group]Run : construct rustup command line
+2026-10-03T10:59:40.7444724Z [36;1m: construct rustup command line[0m
+2026-10-03T10:59:40.7445196Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:40.7445912Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:40.7446433Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:40.7509173Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:40.7509539Z env:
+2026-10-03T10:59:40.7509820Z   targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+2026-10-03T10:59:40.7510165Z   components: 
+2026-10-03T10:59:40.7510371Z ##[endgroup]
+2026-10-03T10:59:40.7609327Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=19]
+2026-10-03T10:59:40.7613832Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-03T10:59:40.7640670Z ##[group]Run : set $CARGO_HOME
+2026-10-03T10:59:40.7640947Z [36;1m: set $CARGO_HOME[0m
+2026-10-03T10:59:40.7641274Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-03T10:59:40.7702300Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:40.7702675Z ##[endgroup]
+2026-10-03T10:59:40.7794889Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=18]
+2026-10-03T10:59:40.7797994Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-03T10:59:40.7831326Z ##[group]Run : install rustup if needed
+2026-10-03T10:59:40.7831645Z [36;1m: install rustup if needed[0m
+2026-10-03T10:59:40.7831945Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-03T10:59:40.7832722Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-03T10:59:40.7833475Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-03T10:59:40.7833767Z [36;1mfi[0m
+2026-10-03T10:59:40.7895534Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:40.7895903Z env:
+2026-10-03T10:59:40.7896112Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:40.7896373Z ##[endgroup]
+2026-10-03T10:59:40.7990431Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=19]
+2026-10-03T10:59:40.8019274Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-03T10:59:40.8026154Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-03T10:59:40.8030509Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-03T10:59:40.8059128Z ##[group]Run rustup toolchain install nightly --target wasm32-unknown-unknown --target aarch64-unknown-linux-gnu --profile minimal --no-self-update
+2026-10-03T10:59:40.8060212Z [36;1mrustup toolchain install nightly --target wasm32-unknown-unknown --target aarch64-unknown-linux-gnu --profile minimal --no-self-update[0m
+2026-10-03T10:59:40.8123945Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:40.8124309Z env:
+2026-10-03T10:59:40.8124535Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:40.8124820Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-03T10:59:40.8125071Z ##[endgroup]
+2026-10-03T10:59:40.8679935Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-03T10:59:40.9908226Z info: latest update on 2026-10-03 for version 1.101.0-nightly (0abfedbc7 2026-10-02)
+2026-10-03T10:59:40.9908980Z info: downloading 5 components
+2026-10-03T10:59:52.1169641Z 
+2026-10-03T10:59:52.1238197Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (0abfedbc7 2026-10-02)
+2026-10-03T10:59:52.1238838Z 
+2026-10-03T10:59:52.1319664Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=11328]
+2026-10-03T10:59:52.1327307Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-03T10:59:52.1354980Z ##[group]Run rustup default nightly
+2026-10-03T10:59:52.1355278Z [36;1mrustup default nightly[0m
+2026-10-03T10:59:52.1419042Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:52.1419420Z env:
+2026-10-03T10:59:52.1419624Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:52.1419881Z ##[endgroup]
+2026-10-03T10:59:52.1544718Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+2026-10-03T10:59:52.1551131Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+2026-10-03T10:59:52.1551526Z 
+2026-10-03T10:59:52.1619882Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (0abfedbc7 2026-10-02)
+2026-10-03T10:59:52.1621340Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+2026-10-03T10:59:52.1622210Z 
+2026-10-03T10:59:52.1640892Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=31]
+2026-10-03T10:59:52.1647925Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-03T10:59:52.1682058Z ##[group]Run : create cachekey
+2026-10-03T10:59:52.1682652Z [36;1m: create cachekey[0m
+2026-10-03T10:59:52.1683465Z [36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-03T10:59:52.1684625Z [36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-03T10:59:52.1685507Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-03T10:59:52.1768125Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:52.1768683Z env:
+2026-10-03T10:59:52.1769022Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:52.1769409Z ##[endgroup]
+2026-10-03T10:59:52.2153008Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=50]
+2026-10-03T10:59:52.2155930Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-03T10:59:52.2209673Z ##[group]Run : disable incremental compilation
+2026-10-03T10:59:52.2210224Z [36;1m: disable incremental compilation[0m
+2026-10-03T10:59:52.2210560Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-03T10:59:52.2210897Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-03T10:59:52.2211187Z [36;1mfi[0m
+2026-10-03T10:59:52.2277991Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:52.2278346Z env:
+2026-10-03T10:59:52.2278555Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:52.2278813Z ##[endgroup]
+2026-10-03T10:59:52.2378596Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=22]
+2026-10-03T10:59:52.2381474Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-03T10:59:52.2408291Z ##[group]Run : enable colors in Cargo output
+2026-10-03T10:59:52.2408821Z [36;1m: enable colors in Cargo output[0m
+2026-10-03T10:59:52.2409148Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-03T10:59:52.2409511Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-03T10:59:52.2409814Z [36;1mfi[0m
+2026-10-03T10:59:52.2475546Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:52.2475896Z env:
+2026-10-03T10:59:52.2476100Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:52.2476371Z   CARGO_INCREMENTAL: 0
+2026-10-03T10:59:52.2476587Z ##[endgroup]
+2026-10-03T10:59:52.2571820Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=18]
+2026-10-03T10:59:52.2577883Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-03T10:59:52.2604859Z ##[group]Run : enable Cargo sparse registry
+2026-10-03T10:59:52.2605186Z [36;1m: enable Cargo sparse registry[0m
+2026-10-03T10:59:52.2605548Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-03T10:59:52.2606263Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-03T10:59:52.2607387Z [36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-03T10:59:52.2607992Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-03T10:59:52.2608537Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-03T10:59:52.2609037Z [36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-03T10:59:52.2609613Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-03T10:59:52.2610130Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-03T10:59:52.2610471Z [36;1m  fi[0m
+2026-10-03T10:59:52.2610661Z [36;1mfi[0m
+2026-10-03T10:59:52.2674075Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:52.2674418Z env:
+2026-10-03T10:59:52.2674629Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:52.2675078Z   CARGO_INCREMENTAL: 0
+2026-10-03T10:59:52.2675304Z   CARGO_TERM_COLOR: always
+2026-10-03T10:59:52.2675540Z ##[endgroup]
+2026-10-03T10:59:52.2993021Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=41]
+2026-10-03T10:59:52.2998107Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-03T10:59:52.3023804Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-03T10:59:52.3024228Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-03T10:59:52.3024775Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-03T10:59:52.3025416Z [36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-03T10:59:52.3025877Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-03T10:59:52.3026187Z [36;1mfi[0m
+2026-10-03T10:59:52.3092641Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:52.3093156Z env:
+2026-10-03T10:59:52.3093370Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:52.3093627Z   CARGO_INCREMENTAL: 0
+2026-10-03T10:59:52.3093850Z   CARGO_TERM_COLOR: always
+2026-10-03T10:59:52.3094072Z ##[endgroup]
+2026-10-03T10:59:52.3296211Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=29]
+2026-10-03T10:59:52.3301284Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-03T10:59:52.3343230Z ##[group]Run rustc +nightly --version --verbose
+2026-10-03T10:59:52.3343739Z [36;1mrustc +nightly --version --verbose[0m
+2026-10-03T10:59:52.3409478Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-03T10:59:52.3423439Z env:
+2026-10-03T10:59:52.3423697Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:52.3423979Z   CARGO_INCREMENTAL: 0
+2026-10-03T10:59:52.3424215Z   CARGO_TERM_COLOR: always
+2026-10-03T10:59:52.3424462Z ##[endgroup]
+2026-10-03T10:59:52.3614849Z rustc 1.101.0-nightly (0abfedbc7 2026-10-02)
+2026-10-03T10:59:52.3615740Z binary: rustc
+2026-10-03T10:59:52.3616480Z commit-hash: 0abfedbc7cd4e725f126913880c95800394f7c37
+2026-10-03T10:59:52.3622105Z commit-date: 2026-10-02
+2026-10-03T10:59:52.3622373Z host: x86_64-unknown-linux-gnu
+2026-10-03T10:59:52.3622617Z release: 1.101.0-nightly
+2026-10-03T10:59:52.3622843Z LLVM version: 23.1.1
+2026-10-03T10:59:52.3633397Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=33]
+2026-10-03T10:59:52.3693281Z ##[group]Run echo "identity=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+2026-10-03T10:59:52.3693901Z [36;1mecho "identity=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"[0m
+2026-10-03T10:59:52.3760479Z shell: /usr/bin/bash -e {0}
+2026-10-03T10:59:52.3760728Z env:
+2026-10-03T10:59:52.3760932Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:52.3761196Z   CARGO_INCREMENTAL: 0
+2026-10-03T10:59:52.3761445Z   CARGO_TERM_COLOR: always
+2026-10-03T10:59:52.3761675Z ##[endgroup]
+2026-10-03T10:59:52.4378461Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-03T10:59:52.5124437Z info: latest update on 2026-10-03 for version 1.101.0-nightly (0abfedbc7 2026-10-02)
+2026-10-03T10:59:52.5245704Z info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+2026-10-03T10:59:52.5246613Z info: component rust-std for target wasm32-unknown-unknown is up to date
+2026-10-03T10:59:52.5249730Z info: downloading 2 components
+2026-10-03T10:59:53.2977690Z ##[group]Run actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+2026-10-03T10:59:53.2978109Z with:
+2026-10-03T10:59:53.2978320Z   path: target/simd-asm
+2026-10-03T10:59:53.2979401Z   key: simd-asm-v1-Linux-aarch64-neoverse-v1-0f9065be5746602644a4805e3f5fddcbb6feea69d04eba1b95f981d8e48ae120-3b2ffb3b8554181c5750a04d814d0c8ea665515c4fc73046cc4e095da08d8972-08e3413c209f5014fe1313507993d35b89d8bd50
+2026-10-03T10:59:53.2981154Z   restore-keys: simd-asm-v1-Linux-aarch64-neoverse-v1-0f9065be5746602644a4805e3f5fddcbb6feea69d04eba1b95f981d8e48ae120-3b2ffb3b8554181c5750a04d814d0c8ea665515c4fc73046cc4e095da08d8972-
+
+2026-10-03T10:59:53.2982114Z   enableCrossOsArchive: false
+2026-10-03T10:59:53.2982367Z   fail-on-cache-miss: false
+2026-10-03T10:59:53.2982595Z   lookup-only: false
+2026-10-03T10:59:53.2982799Z   save-always: false
+2026-10-03T10:59:53.2982992Z env:
+2026-10-03T10:59:53.2983187Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:53.2983444Z   CARGO_INCREMENTAL: 0
+2026-10-03T10:59:53.2983697Z   CARGO_TERM_COLOR: always
+2026-10-03T10:59:53.2983915Z ##[endgroup]
+2026-10-03T10:59:53.4036223Z (node:2619) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-03T10:59:53.4037589Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-03T10:59:53.6520711Z Cache not found for input keys: simd-asm-v1-Linux-aarch64-neoverse-v1-0f9065be5746602644a4805e3f5fddcbb6feea69d04eba1b95f981d8e48ae120-3b2ffb3b8554181c5750a04d814d0c8ea665515c4fc73046cc4e095da08d8972-08e3413c209f5014fe1313507993d35b89d8bd50, simd-asm-v1-Linux-aarch64-neoverse-v1-0f9065be5746602644a4805e3f5fddcbb6feea69d04eba1b95f981d8e48ae120-3b2ffb3b8554181c5750a04d814d0c8ea665515c4fc73046cc4e095da08d8972-
+2026-10-03T10:59:53.6610355Z ##[group]Run sudo apt-get update
+2026-10-03T10:59:53.6610692Z [36;1msudo apt-get update[0m
+2026-10-03T10:59:53.6611020Z [36;1msudo apt-get install -y --no-install-recommends \[0m
+2026-10-03T10:59:53.6611439Z [36;1m  clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross[0m
+2026-10-03T10:59:53.6672364Z shell: /usr/bin/bash -e {0}
+2026-10-03T10:59:53.6672618Z env:
+2026-10-03T10:59:53.6672816Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T10:59:53.6673071Z   CARGO_INCREMENTAL: 0
+2026-10-03T10:59:53.6673293Z   CARGO_TERM_COLOR: always
+2026-10-03T10:59:53.6673517Z ##[endgroup]
+2026-10-03T10:59:53.7558229Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-03T10:59:53.7882539Z Get:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+2026-10-03T10:59:53.8688599Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [511 kB]
+2026-10-03T10:59:53.8869607Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [458 kB]
+2026-10-03T10:59:53.8910273Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.6 kB]
+2026-10-03T10:59:53.9250542Z Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+2026-10-03T10:59:53.9260572Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+2026-10-03T10:59:53.9285632Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+2026-10-03T10:59:53.9303511Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+2026-10-03T10:59:54.0316244Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1364 kB]
+2026-10-03T10:59:54.0402686Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [304 kB]
+2026-10-03T10:59:54.0407532Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Components [181 kB]
+2026-10-03T10:59:54.0478433Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1699 kB]
+2026-10-03T10:59:54.0551511Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe Translation-en [341 kB]
+2026-10-03T10:59:54.0565112Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Components [388 kB]
+2026-10-03T10:59:54.0587828Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1720 kB]
+2026-10-03T10:59:54.0670661Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [394 kB]
+2026-10-03T10:59:54.0698857Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Components [940 B]
+2026-10-03T10:59:54.0957489Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-backports/main amd64 Components [5736 B]
+2026-10-03T10:59:54.1404147Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe amd64 Components [12.6 kB]
+2026-10-03T10:59:54.1486526Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [1069 kB]
+2026-10-03T10:59:54.1543538Z Get:22 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [221 kB]
+2026-10-03T10:59:54.1560419Z Get:23 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Components [46.5 kB]
+2026-10-03T10:59:54.1569783Z Get:24 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1216 kB]
+2026-10-03T10:59:54.1633849Z Get:25 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [244 kB]
+2026-10-03T10:59:54.1649440Z Get:26 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Components [76.3 kB]
+2026-10-03T10:59:54.1661033Z Get:27 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1566 kB]
+2026-10-03T10:59:54.1741245Z Get:28 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [361 kB]
+2026-10-03T10:59:58.6318395Z Fetched 12.6 MB in 1s (8825 kB/s)
+2026-10-03T10:59:59.5293791Z Reading package lists...
+2026-10-03T10:59:59.5606524Z Reading package lists...
+2026-10-03T10:59:59.7617694Z Building dependency tree...
+2026-10-03T10:59:59.7624341Z Reading state information...
+2026-10-03T10:59:59.9209367Z The following additional packages will be installed:
+2026-10-03T10:59:59.9210514Z   binutils-aarch64-linux-gnu cpp-13-aarch64-linux-gnu cpp-aarch64-linux-gnu
+2026-10-03T10:59:59.9211479Z   gcc-13-aarch64-linux-gnu gcc-13-aarch64-linux-gnu-base gcc-13-cross-base
+2026-10-03T10:59:59.9212413Z   gcc-14-cross-base libasan8-arm64-cross libatomic1-arm64-cross
+2026-10-03T10:59:59.9213295Z   libc6-arm64-cross libgcc-13-dev-arm64-cross libgcc-s1-arm64-cross
+2026-10-03T10:59:59.9214156Z   libgomp1-arm64-cross libhwasan0-arm64-cross libitm1-arm64-cross
+2026-10-03T10:59:59.9215151Z   liblsan0-arm64-cross libstdc++6-arm64-cross libtsan2-arm64-cross
+2026-10-03T10:59:59.9218188Z   libubsan1-arm64-cross linux-libc-dev-arm64-cross llvm-runtime
+2026-10-03T10:59:59.9225576Z Suggested packages:
+2026-10-03T10:59:59.9226149Z   binutils-doc gcc-13-locales cpp-13-doc cpp-doc gcc-13-doc manpages-dev
+2026-10-03T10:59:59.9226666Z   gdb-aarch64-linux-gnu gcc-doc
+2026-10-03T10:59:59.9531074Z The following NEW packages will be installed:
+2026-10-03T10:59:59.9531951Z   binutils-aarch64-linux-gnu clang cpp-13-aarch64-linux-gnu
+2026-10-03T10:59:59.9533050Z   cpp-aarch64-linux-gnu gcc-13-aarch64-linux-gnu gcc-13-aarch64-linux-gnu-base
+2026-10-03T10:59:59.9534131Z   gcc-13-cross-base gcc-14-cross-base gcc-aarch64-linux-gnu
+2026-10-03T10:59:59.9534816Z   libasan8-arm64-cross libatomic1-arm64-cross libc6-arm64-cross
+2026-10-03T10:59:59.9535574Z   libc6-dev-arm64-cross libgcc-13-dev-arm64-cross libgcc-s1-arm64-cross
+2026-10-03T10:59:59.9536349Z   libgomp1-arm64-cross libhwasan0-arm64-cross libitm1-arm64-cross
+2026-10-03T10:59:59.9537558Z   liblsan0-arm64-cross libstdc++6-arm64-cross libtsan2-arm64-cross
+2026-10-03T10:59:59.9541579Z   libubsan1-arm64-cross linux-libc-dev-arm64-cross llvm llvm-runtime
+2026-10-03T10:59:59.9726049Z 0 upgraded, 25 newly installed, 0 to remove and 25 not upgraded.
+2026-10-03T10:59:59.9727003Z Need to get 45.2 MB of archives.
+2026-10-03T10:59:59.9727641Z After this operation, 168 MB of additional disk space will be used.
+2026-10-03T10:59:59.9728381Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-03T11:00:00.0620959Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 clang amd64 1:18.0-59~exp2 [5846 B]
+2026-10-03T11:00:00.1346231Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-aarch64-linux-gnu-base amd64 13.3.0-6ubuntu2~24.04.1cross1 [51.9 kB]
+2026-10-03T11:00:00.2068779Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 cpp-13-aarch64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1cross1 [10.8 MB]
+2026-10-03T11:00:00.5231477Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 cpp-aarch64-linux-gnu amd64 4:13.2.0-7ubuntu1 [5332 B]
+2026-10-03T11:00:00.5948443Z Get:6 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 binutils-aarch64-linux-gnu amd64 2.42-4ubuntu2.10 [3711 kB]
+2026-10-03T11:00:00.7522297Z Get:7 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-cross-base all 13.3.0-6ubuntu2~24.04.1cross1 [46.5 kB]
+2026-10-03T11:00:00.8246516Z Get:8 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-14-cross-base all 14.2.0-4ubuntu2~24.04.1cross1 [46.1 kB]
+2026-10-03T11:00:00.8968972Z Get:9 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libc6-arm64-cross all 2.39-0ubuntu8cross1 [1197 kB]
+2026-10-03T11:00:00.9953321Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libgcc-s1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [61.9 kB]
+2026-10-03T11:00:01.0675763Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libgomp1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [110 kB]
+2026-10-03T11:00:01.1414906Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libitm1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [31.1 kB]
+2026-10-03T11:00:01.2133646Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libatomic1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [11.5 kB]
+2026-10-03T11:00:01.2853017Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libasan8-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [524 kB]
+2026-10-03T11:00:01.3684729Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 liblsan0-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [238 kB]
+2026-10-03T11:00:01.4480951Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libtsan2-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [500 kB]
+2026-10-03T11:00:01.5302981Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libstdc++6-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [659 kB]
+2026-10-03T11:00:01.6164252Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libubsan1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [219 kB]
+2026-10-03T11:00:01.6927406Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libhwasan0-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [304 kB]
+2026-10-03T11:00:01.7716152Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libgcc-13-dev-arm64-cross all 13.3.0-6ubuntu2~24.04.1cross1 [2616 kB]
+2026-10-03T11:00:01.9082832Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-aarch64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1cross1 [21.1 MB]
+2026-10-03T11:00:02.4600421Z Get:22 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 gcc-aarch64-linux-gnu amd64 4:13.2.0-7ubuntu1 [1210 B]
+2026-10-03T11:00:02.5318183Z Get:23 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 llvm-runtime amd64 1:18.0-59~exp2 [5496 B]
+2026-10-03T11:00:02.6036051Z Get:24 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 llvm amd64 1:18.0-59~exp2 [4146 B]
+2026-10-03T11:00:02.6753188Z Get:25 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 linux-libc-dev-arm64-cross all 6.8.0-25.25cross1 [1375 kB]
+2026-10-03T11:00:02.7776501Z Get:26 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libc6-dev-arm64-cross all 2.39-0ubuntu8cross1 [1629 kB]
+2026-10-03T11:00:03.0836204Z Fetched 45.2 MB in 3s (15.8 MB/s)
+2026-10-03T11:00:03.1063700Z Selecting previously unselected package clang.
+2026-10-03T11:00:03.1337535Z (Reading database ... 
+2026-10-03T11:00:03.1338110Z (Reading database ... 5%
+2026-10-03T11:00:03.1338470Z (Reading database ... 10%
+2026-10-03T11:00:03.1338801Z (Reading database ... 15%
+2026-10-03T11:00:03.1339116Z (Reading database ... 20%
+2026-10-03T11:00:03.1339432Z (Reading database ... 25%
+2026-10-03T11:00:03.1339748Z (Reading database ... 30%
+2026-10-03T11:00:03.1340063Z (Reading database ... 35%
+2026-10-03T11:00:03.1341441Z (Reading database ... 40%
+2026-10-03T11:00:03.1342039Z (Reading database ... 45%
+2026-10-03T11:00:03.1342556Z (Reading database ... 50%
+2026-10-03T11:00:03.1385527Z (Reading database ... 55%
+2026-10-03T11:00:03.2725414Z (Reading database ... 60%
+2026-10-03T11:00:03.4794546Z (Reading database ... 65%
+2026-10-03T11:00:03.6831082Z (Reading database ... 70%
+2026-10-03T11:00:03.8477884Z (Reading database ... 75%
+2026-10-03T11:00:03.9862662Z (Reading database ... 80%
+2026-10-03T11:00:04.1938069Z (Reading database ... 85%
+2026-10-03T11:00:04.3374470Z (Reading database ... 90%
+2026-10-03T11:00:04.4962514Z (Reading database ... 95%
+2026-10-03T11:00:04.4963049Z (Reading database ... 100%
+2026-10-03T11:00:04.4963716Z (Reading database ... 202296 files and directories currently installed.)
+2026-10-03T11:00:04.5007166Z Preparing to unpack .../00-clang_1%3a18.0-59~exp2_amd64.deb ...
+2026-10-03T11:00:04.5033727Z Unpacking clang (1:18.0-59~exp2) ...
+2026-10-03T11:00:04.5285386Z Selecting previously unselected package gcc-13-aarch64-linux-gnu-base:amd64.
+2026-10-03T11:00:04.5411263Z Preparing to unpack .../01-gcc-13-aarch64-linux-gnu-base_13.3.0-6ubuntu2~24.04.1cross1_amd64.deb ...
+2026-10-03T11:00:04.5417952Z Unpacking gcc-13-aarch64-linux-gnu-base:amd64 (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:04.5632308Z Selecting previously unselected package cpp-13-aarch64-linux-gnu.
+2026-10-03T11:00:04.5757523Z Preparing to unpack .../02-cpp-13-aarch64-linux-gnu_13.3.0-6ubuntu2~24.04.1cross1_amd64.deb ...
+2026-10-03T11:00:04.5787321Z Unpacking cpp-13-aarch64-linux-gnu (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:04.7205371Z Selecting previously unselected package cpp-aarch64-linux-gnu.
+2026-10-03T11:00:04.7332217Z Preparing to unpack .../03-cpp-aarch64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+2026-10-03T11:00:04.7348705Z Unpacking cpp-aarch64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-10-03T11:00:04.7546054Z Selecting previously unselected package binutils-aarch64-linux-gnu.
+2026-10-03T11:00:04.7671471Z Preparing to unpack .../04-binutils-aarch64-linux-gnu_2.42-4ubuntu2.10_amd64.deb ...
+2026-10-03T11:00:04.7686522Z Unpacking binutils-aarch64-linux-gnu (2.42-4ubuntu2.10) ...
+2026-10-03T11:00:04.9035878Z Selecting previously unselected package gcc-13-cross-base.
+2026-10-03T11:00:04.9159615Z Preparing to unpack .../05-gcc-13-cross-base_13.3.0-6ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:04.9166844Z Unpacking gcc-13-cross-base (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:04.9359322Z Selecting previously unselected package gcc-14-cross-base.
+2026-10-03T11:00:04.9485338Z Preparing to unpack .../06-gcc-14-cross-base_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:04.9492832Z Unpacking gcc-14-cross-base (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:04.9685838Z Selecting previously unselected package libc6-arm64-cross.
+2026-10-03T11:00:04.9811584Z Preparing to unpack .../07-libc6-arm64-cross_2.39-0ubuntu8cross1_all.deb ...
+2026-10-03T11:00:04.9819995Z Unpacking libc6-arm64-cross (2.39-0ubuntu8cross1) ...
+2026-10-03T11:00:05.0164939Z Selecting previously unselected package libgcc-s1-arm64-cross.
+2026-10-03T11:00:05.0293424Z Preparing to unpack .../08-libgcc-s1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.0301067Z Unpacking libgcc-s1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.0498856Z Selecting previously unselected package libgomp1-arm64-cross.
+2026-10-03T11:00:05.0631114Z Preparing to unpack .../09-libgomp1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.0644244Z Unpacking libgomp1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.0858162Z Selecting previously unselected package libitm1-arm64-cross.
+2026-10-03T11:00:05.0988195Z Preparing to unpack .../10-libitm1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.0995013Z Unpacking libitm1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.1205651Z Selecting previously unselected package libatomic1-arm64-cross.
+2026-10-03T11:00:05.1337246Z Preparing to unpack .../11-libatomic1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.1344787Z Unpacking libatomic1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.1548954Z Selecting previously unselected package libasan8-arm64-cross.
+2026-10-03T11:00:05.1677616Z Preparing to unpack .../12-libasan8-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.1685557Z Unpacking libasan8-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.1986597Z Selecting previously unselected package liblsan0-arm64-cross.
+2026-10-03T11:00:05.2114809Z Preparing to unpack .../13-liblsan0-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.2121880Z Unpacking liblsan0-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.2351877Z Selecting previously unselected package libtsan2-arm64-cross.
+2026-10-03T11:00:05.2483714Z Preparing to unpack .../14-libtsan2-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.2491793Z Unpacking libtsan2-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.2774178Z Selecting previously unselected package libstdc++6-arm64-cross.
+2026-10-03T11:00:05.2903600Z Preparing to unpack .../15-libstdc++6-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.2911723Z Unpacking libstdc++6-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.3227508Z Selecting previously unselected package libubsan1-arm64-cross.
+2026-10-03T11:00:05.3352981Z Preparing to unpack .../16-libubsan1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.3361033Z Unpacking libubsan1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.3585930Z Selecting previously unselected package libhwasan0-arm64-cross.
+2026-10-03T11:00:05.3714579Z Preparing to unpack .../17-libhwasan0-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.3721210Z Unpacking libhwasan0-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.4003650Z Selecting previously unselected package libgcc-13-dev-arm64-cross.
+2026-10-03T11:00:05.4133664Z Preparing to unpack .../18-libgcc-13-dev-arm64-cross_13.3.0-6ubuntu2~24.04.1cross1_all.deb ...
+2026-10-03T11:00:05.4140756Z Unpacking libgcc-13-dev-arm64-cross (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.5090904Z Selecting previously unselected package gcc-13-aarch64-linux-gnu.
+2026-10-03T11:00:05.5221936Z Preparing to unpack .../19-gcc-13-aarch64-linux-gnu_13.3.0-6ubuntu2~24.04.1cross1_amd64.deb ...
+2026-10-03T11:00:05.5257576Z Unpacking gcc-13-aarch64-linux-gnu (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:05.7847290Z Selecting previously unselected package gcc-aarch64-linux-gnu.
+2026-10-03T11:00:05.7974748Z Preparing to unpack .../20-gcc-aarch64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+2026-10-03T11:00:05.7981728Z Unpacking gcc-aarch64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-10-03T11:00:05.8195974Z Selecting previously unselected package llvm-runtime:amd64.
+2026-10-03T11:00:05.8323359Z Preparing to unpack .../21-llvm-runtime_1%3a18.0-59~exp2_amd64.deb ...
+2026-10-03T11:00:05.8365447Z Unpacking llvm-runtime:amd64 (1:18.0-59~exp2) ...
+2026-10-03T11:00:05.8558369Z Selecting previously unselected package llvm.
+2026-10-03T11:00:05.8686023Z Preparing to unpack .../22-llvm_1%3a18.0-59~exp2_amd64.deb ...
+2026-10-03T11:00:05.8718063Z Unpacking llvm (1:18.0-59~exp2) ...
+2026-10-03T11:00:05.9009753Z Selecting previously unselected package linux-libc-dev-arm64-cross.
+2026-10-03T11:00:05.9140345Z Preparing to unpack .../23-linux-libc-dev-arm64-cross_6.8.0-25.25cross1_all.deb ...
+2026-10-03T11:00:05.9147101Z Unpacking linux-libc-dev-arm64-cross (6.8.0-25.25cross1) ...
+2026-10-03T11:00:06.0891170Z Selecting previously unselected package libc6-dev-arm64-cross.
+2026-10-03T11:00:06.1022804Z Preparing to unpack .../24-libc6-dev-arm64-cross_2.39-0ubuntu8cross1_all.deb ...
+2026-10-03T11:00:06.1029611Z Unpacking libc6-dev-arm64-cross (2.39-0ubuntu8cross1) ...
+2026-10-03T11:00:06.2346313Z Setting up binutils-aarch64-linux-gnu (2.42-4ubuntu2.10) ...
+2026-10-03T11:00:06.2365302Z Setting up gcc-14-cross-base (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2383317Z Setting up clang (1:18.0-59~exp2) ...
+2026-10-03T11:00:06.2591943Z Setting up gcc-13-cross-base (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2614058Z Setting up llvm-runtime:amd64 (1:18.0-59~exp2) ...
+2026-10-03T11:00:06.2637629Z Setting up libc6-arm64-cross (2.39-0ubuntu8cross1) ...
+2026-10-03T11:00:06.2658814Z Setting up llvm (1:18.0-59~exp2) ...
+2026-10-03T11:00:06.2683471Z Setting up libitm1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2753210Z Setting up linux-libc-dev-arm64-cross (6.8.0-25.25cross1) ...
+2026-10-03T11:00:06.2770288Z Setting up gcc-13-aarch64-linux-gnu-base:amd64 (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2785436Z Setting up libgcc-s1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2801996Z Setting up libatomic1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2818763Z Setting up liblsan0-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2837356Z Setting up libgomp1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2869232Z Setting up cpp-13-aarch64-linux-gnu (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2895692Z Setting up libhwasan0-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2912404Z Setting up libc6-dev-arm64-cross (2.39-0ubuntu8cross1) ...
+2026-10-03T11:00:06.2929213Z Setting up libstdc++6-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2945542Z Setting up cpp-aarch64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-10-03T11:00:06.2963510Z Setting up libasan8-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.2995509Z Setting up libtsan2-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.3011358Z Setting up libubsan1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.3027344Z Setting up libgcc-13-dev-arm64-cross (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.3043423Z Setting up gcc-13-aarch64-linux-gnu (13.3.0-6ubuntu2~24.04.1cross1) ...
+2026-10-03T11:00:06.3058906Z Setting up gcc-aarch64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-10-03T11:00:06.3078806Z Processing triggers for man-db (2.12.0-4build2) ...
+2026-10-03T11:00:06.3106414Z Not building database; man-db/auto-update is not 'true'.
+2026-10-03T11:00:06.3117442Z Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+2026-10-03T11:00:06.9739291Z 
+2026-10-03T11:00:06.9740036Z Running kernel seems to be up-to-date.
+2026-10-03T11:00:06.9740525Z 
+2026-10-03T11:00:06.9740748Z No services need to be restarted.
+2026-10-03T11:00:06.9741149Z 
+2026-10-03T11:00:06.9741293Z No containers need to be restarted.
+2026-10-03T11:00:06.9741552Z 
+2026-10-03T11:00:06.9741741Z No user sessions are running outdated binaries.
+2026-10-03T11:00:06.9742048Z 
+2026-10-03T11:00:06.9742331Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-10-03T11:00:07.9578623Z ##[group]Run make simd-asm SIMD_ASM_ARGS="--config aarch64-neoverse-v1 --jobs 1 --report target/asm-reports/aarch64-neoverse-v1.json"
+2026-10-03T11:00:07.9579625Z [36;1mmake simd-asm SIMD_ASM_ARGS="--config aarch64-neoverse-v1 --jobs 1 --report target/asm-reports/aarch64-neoverse-v1.json"[0m
+2026-10-03T11:00:07.9645409Z shell: /usr/bin/bash -e {0}
+2026-10-03T11:00:07.9645680Z env:
+2026-10-03T11:00:07.9645885Z   CARGO_HOME: /home/runner/.cargo
+2026-10-03T11:00:07.9646152Z   CARGO_INCREMENTAL: 0
+2026-10-03T11:00:07.9646378Z   CARGO_TERM_COLOR: always
+2026-10-03T11:00:07.9646613Z ##[endgroup]
+2026-10-03T11:00:08.0328898Z python3 scripts/check-simd-asm.py --doc --config aarch64-neoverse-v1 --jobs 1 --report target/asm-reports/aarch64-neoverse-v1.json
+2026-10-03T11:00:09.5840441Z FAIL: bench `crates/sparql-algebra/benches/scope_checks.rs` has no row in the bench table
+2026-10-03T11:00:09.6017099Z make: *** [Makefile:678: simd-asm] Error 1
+2026-10-03T11:00:09.6036092Z ##[error]Process completed with exit code 2.
+2026-10-03T11:00:09.6156386Z Post job cleanup.
+2026-10-03T11:00:09.7007223Z [command]/usr/bin/git version
+2026-10-03T11:00:09.7044580Z git version 2.55.0
+2026-10-03T11:00:09.7080444Z Temporarily overriding HOME='/home/runner/work/_temp/d9d3f065-b3a5-40b7-97e8-a048a4e5309e' before making global git config changes
+2026-10-03T11:00:09.7082005Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-03T11:00:09.7085067Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-03T11:00:09.7117253Z Removing SSH command configuration
+2026-10-03T11:00:09.7123933Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T11:00:09.7158359Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T11:00:09.7392156Z Removing HTTP extra header
+2026-10-03T11:00:09.7398209Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T11:00:09.7432284Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T11:00:09.7664625Z Removing includeIf entries pointing to credentials config files
+2026-10-03T11:00:09.7670910Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T11:00:09.7702845Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T11:00:09.8074665Z Cleaning up orphan processes
+2026-10-03T11:00:09.8368133Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

@@ -1,0 +1,99 @@
+{
+  "retrieved_utc": "2026-10-03T11:12:16.656910+00:00",
+  "head": "7f137d3e9c3b02961ab2ee368a7ea171c7a282a0",
+  "check_runs": 49,
+  "counts": {
+    "completed:success": 28,
+    "completed:skipped": 1,
+    "completed:failure": 8,
+    "completed:neutral": 1,
+    "in_progress:None": 11
+  },
+  "failures": [
+    {
+      "name": "simd-asm",
+      "id": 111189113325,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37118188444/job/111189113325"
+    },
+    {
+      "name": "simd-asm-config (aarch64-neoverse-v1)",
+      "id": 111188972906,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37118188444/job/111188972906"
+    },
+    {
+      "name": "simd-asm-config (x86_64-v4)",
+      "id": 111188972883,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37118188444/job/111188972883"
+    },
+    {
+      "name": "simd-asm-config (aarch64)",
+      "id": 111188972881,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37118188444/job/111188972881"
+    },
+    {
+      "name": "simd-asm-config (x86_64-v3)",
+      "id": 111188972869,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37118188444/job/111188972869"
+    },
+    {
+      "name": "simd-asm-config (x86_64)",
+      "id": 111188972863,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37118188444/job/111188972863"
+    },
+    {
+      "name": "simd-asm-config (wasm32-simd128)",
+      "id": 111188972862,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37118188444/job/111188972862"
+    },
+    {
+      "name": "simd-asm-config (wasm32)",
+      "id": 111188972858,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/37118188444/job/111188972858"
+    }
+  ],
+  "pending": [
+    "cross-arch-riscv64 (suites)",
+    "cross-arch-riscv64 (determinism-more-workers)",
+    "cross-arch",
+    "wasm-package",
+    "cross-arch-riscv64 (determinism-one-worker)",
+    "test (lib)",
+    "pytest",
+    "test (integration-2)",
+    "test (integration-1)",
+    "capi",
+    "Analyze (rust)"
+  ],
+  "status_contexts": [
+    {
+      "context": "CodeRabbit",
+      "state": "success",
+      "description": "Review completed"
+    },
+    {
+      "context": "CodeRabbit",
+      "state": "pending",
+      "description": "Review in progress"
+    }
+  ],
+  "reviews": [
+    {
+      "id": 5400285091,
+      "head": "92842627b840a755a3fca31a78d8aa274a34fa4b",
+      "state": "COMMENTED",
+      "author": "coderabbitai[bot]"
+    },
+    {
+      "id": 5400321031,
+      "head": "aa529ee697baf39aaea2148db25bc03dfff66e5e",
+      "state": "COMMENTED",
+      "author": "paudley"
+    },
+    {
+      "id": 5400336159,
+      "head": "aa529ee697baf39aaea2148db25bc03dfff66e5e",
+      "state": "COMMENTED",
+      "author": "coderabbitai[bot]"
+    }
+  ]
+}

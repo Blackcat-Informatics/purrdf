@@ -1,0 +1,2024 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The static, typed read view over an RDF dataset. See [`docs/design/purrdf-backend-contract.md`](../../../docs/design/purrdf-backend-contract.md).
+//!
+//! [`DatasetView`] yields `Copy` [`QuadIds`] and typed term guards. Resident
+//! guards borrow [`TermRef`]s without allocating; operational guards retain an
+//! admitted decoded-block pin. Borrowed strings stay inside their guard lifetime.
+//! Pattern probes use the view's own [`ViewTermId`] namespace, with a
+//! [`GraphMatch`]. Backends override access-pattern probes with their indexes.
+//!
+//! This is the **static** trait layer (generic `impl DatasetView`, RPITIT — not
+//! object-safe). Per the backend contract (C1), backend selection is compile-time
+//! and single, so the erased `&mut dyn` layer is deferred; this trait carries no
+//! object-safety obligation.
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use crate::RdfStoreCapabilities;
+use crate::collections::{
+    ListError, ListErrorKind, RdfListError, SoleObject, container_member_index, walk_rdf_list,
+};
+use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
+use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, TermValue};
+
+/// Lock internal operational read state, preserving its invariants after a
+/// poison marker. Host callbacks never execute under these state locks; failed
+/// admissions retain conservative charges and the typed sticky source error.
+pub(crate) fn lock_read_state<T>(state: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+mod sealed {
+    pub trait Sealed {}
+
+    impl Sealed for crate::ir::MutableDataset {}
+}
+
+/// Why [`DatasetView::term_value`] could not resolve an id to a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TermLookupError<ReadError = std::convert::Infallible> {
+    /// The id does not name a well-formed term of the view it was handed to: a literal
+    /// it resolves to has a datatype that is not an IRI, which no view mints for its
+    /// own ids (C0.1), so the id belongs to another view (C0.8).
+    ForeignId,
+    /// The backing read session could not admit or resolve the term.
+    Read(ReadError),
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for TermLookupError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ForeignId => f.write_str(
+                "the term id does not name a term of this view: a literal's datatype does not \
+                 resolve to an IRI",
+            ),
+            Self::Read(error) => error.fmt(f),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for TermLookupError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ForeignId => None,
+            Self::Read(error) => Some(error),
+        }
+    }
+}
+
+/// A scoped pin on a resolved term. References returned by [`Self::term`] cannot
+/// outlive this guard. Resident views use [`TermRef`] directly, without allocation.
+pub trait TermGuard<Id: ViewTermId> {
+    /// Borrow the term while its backing storage remains pinned.
+    fn term(&self) -> TermRef<'_, Id>;
+}
+
+impl<Id: ViewTermId> TermGuard<Id> for TermRef<'_, Id> {
+    #[inline]
+    fn term(&self) -> TermRef<'_, Id> {
+        *self
+    }
+}
+
+/// A resolved row that owns its term pins, rather than borrowing temporary guards.
+#[derive(Debug)]
+pub struct ResolvedQuad<Guard> {
+    s: Guard,
+    p: Guard,
+    o: Guard,
+    g: Option<Guard>,
+}
+
+impl<Guard> ResolvedQuad<Guard> {
+    /// Borrow every row position for the lifetime of this row's pins.
+    pub fn as_ref<Id: ViewTermId>(&self) -> QuadRef<'_, Id>
+    where
+        Guard: TermGuard<Id>,
+    {
+        QuadRef {
+            s: self.s.term(),
+            p: self.p.term(),
+            o: self.o.term(),
+            g: self.g.as_ref().map(TermGuard::term),
+        }
+    }
+}
+
+/// A scoped retained-capacity admission. Allocate only after obtaining it, and
+/// release admitted allocations before dropping it. Resident reads use a zero-sized
+/// reservation, which monomorphized consumers eliminate completely.
+pub trait WorkspaceReservation {
+    /// The backing read session's typed operational refusal.
+    type Error;
+    /// Grow or shrink the admitted retained capacity before changing an allocation.
+    ///
+    /// # Errors
+    /// Refuses a requested growth before it can exceed the live session ceiling.
+    fn resize(&mut self, bytes: u64) -> Result<(), Self::Error>;
+}
+
+/// Zero-sized resident reservation; no heap owner, lock or accounting operation.
+#[derive(Debug)]
+pub struct NoopReservation<E>(core::marker::PhantomData<fn() -> E>);
+impl<E> Default for NoopReservation<E> {
+    fn default() -> Self {
+        Self(core::marker::PhantomData)
+    }
+}
+impl<E> WorkspaceReservation for NoopReservation<E> {
+    type Error = E;
+    fn resize(&mut self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+}
+
+/// The associated id type of a [`DatasetView`]. An id is meaningful only within the
+/// view that minted it (C0.8); these bounds are exactly what the evaluator's
+/// join/index machinery needs of an id (`Copy` to pass by value, `Eq`/`Ord`/`Hash`
+/// to key joins and index probes, `Send`/`Sync`/`'static` to cross the query
+/// boundary). The production id is [`TermId`]; a paged/global backend mints its own.
+///
+/// # Join-key encoding
+///
+/// The evaluator hash-joins on a single [`JoinKeyAtom`](Self::JoinKeyAtom): a `Copy`,
+/// totally-ordered atom that packs *either* a dataset id (via [`encode`](Self::encode))
+/// *or* an evaluator-minted computed-term id (via
+/// [`encode_computed`](Self::encode_computed)) into ONE key space, with the two
+/// disjoint by construction so an id never collides with a computed key (which would
+/// be a wrong join result, not a slowdown). For [`TermId`] the atom is the historical
+/// packed `u64` — dataset ids in `[0, 2^32)`, computed ids in `[2^32, 2^33)` — so the
+/// production hash-join is bit-identical to before the id-generic seam. A wider id
+/// (e.g. `GlobalTermId`) uses a wider atom (`u128`) so the same disjointness holds at
+/// its width.
+pub trait ViewTermId:
+    Copy + Eq + Ord + core::hash::Hash + core::fmt::Debug + Send + Sync + 'static
+{
+    /// A `Copy`, totally-ordered atom that encodes a dataset id OR a computed-term
+    /// id into one hash-join key space (see the trait docs). For [`TermId`] this is
+    /// `u64`; for a wider id it is `u128`.
+    type JoinKeyAtom: Copy + Eq + Ord + core::hash::Hash + Send + Sync + 'static;
+
+    /// Encode this dataset id into the join-key space. The image of `encode` over all
+    /// ids MUST be disjoint from the image of [`encode_computed`](Self::encode_computed)
+    /// over all scratch indices, so an `Existing` binding never shares a key with a
+    /// `Computed` one.
+    fn encode(self) -> Self::JoinKeyAtom;
+
+    /// Encode an evaluator-minted computed-term scratch index (a `u32`) into the join-key
+    /// space, disjoint from every [`encode`](Self::encode) image (see the trait docs).
+    fn encode_computed(scratch_index: u32) -> Self::JoinKeyAtom;
+}
+
+impl ViewTermId for TermId {
+    type JoinKeyAtom = u64;
+
+    #[inline]
+    fn encode(self) -> u64 {
+        let ix = self.index() as u64;
+        debug_assert!(ix < (1 << 32), "TermId index must fit u32");
+        ix
+    }
+
+    #[inline]
+    fn encode_computed(scratch_index: u32) -> u64 {
+        // Dataset ids occupy `[0, 2^32)`; computed ids occupy `[2^32, 2^33)`. Bit 32
+        // is the disjointness tag — byte-identical to the historical `join_key_u64`.
+        (1 << 32) | u64::from(scratch_index)
+    }
+}
+
+/// How a pattern query matches the graph slot of a quad.
+///
+/// Storage keeps `g: Option<TermId>` where `None` is the default graph, so
+/// `Option<TermId>` alone cannot distinguish *any graph* from *the default graph* —
+/// hence this dedicated three-way match. Deliberately exhaustive (NOT
+/// `#[non_exhaustive]`): a quad's graph is either the default or exactly one named
+/// graph, so the three cases are closed.
+///
+/// Generic over the id type `Id` (defaulting to [`TermId`]) so it names a graph in
+/// any [`DatasetView`]'s id space; the bare spelling `GraphMatch` continues to name
+/// the `RdfDataset` (`TermId`) instantiation everywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphMatch<Id = TermId> {
+    /// Match quads in any graph (default or named).
+    Any,
+    /// Match only quads in the default graph (`g == None`).
+    Default,
+    /// Match only quads in the named graph identified by this id.
+    Named(Id),
+}
+
+impl<Id: Copy + PartialEq> GraphMatch<Id> {
+    /// Whether a quad's stored graph slot (`None` = default graph) matches.
+    #[inline]
+    #[must_use]
+    pub fn matches(self, graph: Option<Id>) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Default => graph.is_none(),
+            Self::Named(id) => graph == Some(id),
+        }
+    }
+}
+
+/// How a **write-side** pattern query matches the graph slot of a quad — the
+/// value-based twin of [`GraphMatch`].
+///
+/// The read view ([`DatasetView`]) names a graph by its dataset-local [`TermId`],
+/// which every graph in a frozen dataset has. The mutable write view
+/// ([`DatasetMut`]), however, straddles a frozen base and an in-memory delta: a
+/// *delta-only* named graph (one introduced after branching) has NO base `TermId`,
+/// so a `TermId`-keyed graph filter cannot express it. Worse, it would be
+/// inconsistent with the `s`/`p`/`o` slots, which `DatasetMut` already matches by
+/// *value*. So the write side names a graph by [`TermValue`] too: the implementer
+/// resolves the value to its internal handle WITHOUT minting (a value interned
+/// nowhere matches nothing — an empty filter, exactly like a bound `s`/`p`/`o`
+/// value that misses). This makes both base-named AND delta-only-named graphs
+/// expressible. Deliberately exhaustive (NOT `#[non_exhaustive]`), like
+/// [`GraphMatch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphMatchValue<'a> {
+    /// Match quads in any graph (default or named).
+    Any,
+    /// Match only quads in the default graph.
+    Default,
+    /// Match only quads in the named graph identified by this term value.
+    Named(&'a TermValue),
+}
+
+/// Which graph a dataset-independent configuration reads: the owned, **value**
+/// space selector an index configuration writes down once and applies to any
+/// dataset.
+///
+/// [`GraphMatch::Named`] holds a dataset-local id, which means something only
+/// inside the one dataset that minted it; a configuration may be applied to
+/// several datasets, so it names a graph by its IRI and is resolved against the
+/// dataset in hand by [`GraphSelector::resolve`]. This is the one selector and
+/// the one resolution every derived index (text, geometry) uses.
+///
+/// Deliberately exhaustive, like [`GraphMatch`]: a quad's graph is the default
+/// graph or exactly one named graph, so the three cases are closed.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GraphSelector {
+    /// Read from every graph, default and named alike.
+    Any,
+    /// Read from the default graph only.
+    Default,
+    /// Read from the one named graph this IRI identifies.
+    Named(TermValue),
+}
+
+impl GraphSelector {
+    /// Resolve this selector against `dataset`, without minting.
+    ///
+    /// [`None`] where the selector names a graph the dataset has not interned:
+    /// nothing is in a graph that is not there, so no quad can match and the
+    /// caller reads nothing. An absent graph is distinct from a backing-store
+    /// read failure, which is returned through the view's typed error.
+    ///
+    /// # Errors
+    /// Returns a typed reverse-lookup failure from the backing read session.
+    pub fn resolve<D: DatasetView + ?Sized>(
+        &self,
+        dataset: &D,
+    ) -> Result<Option<GraphMatch<D::Id>>, D::ReadError> {
+        Ok(Some(match self {
+            Self::Any => GraphMatch::Any,
+            Self::Default => GraphMatch::Default,
+            Self::Named(name) => {
+                let Some(id) = dataset.term_id_by_value(name)? else {
+                    return Ok(None);
+                };
+                GraphMatch::Named(id)
+            }
+        }))
+    }
+}
+
+/// A statically dispatched read view over an RDF dataset (purrdf backend contract,
+/// C2/C3/C6). Resident term guards are borrowed and allocation-free. Operational
+/// sessions admit and pin storage and preserve typed read failures.
+///
+/// # Termination
+///
+/// `DatasetView` is public, so this trait cannot enforce the one structural
+/// invariant a generic consumer relies on: resolving a quoted-triple term's
+/// `(s, p, o)` through repeated [`resolve`](Self::resolve) calls, and a literal's
+/// datatype the same way, MUST terminate. Code generic over `D: DatasetView` — the
+/// native-codec serializers foremost among it — walks exactly that recursion with
+/// no depth bound and no visited set, the same discipline every producer of a term
+/// table in this codebase gives its own hot-path walkers. This is the
+/// implementor's obligation, in the spirit of a documented `unsafe` trait
+/// contract: the library cannot check it, only assume it. A view whose
+/// triple-term components resolve back to the term itself hands that recursion an
+/// input it will not return from — the stack overflows, and in Rust that aborts
+/// the process rather than panicking, uncatchable at any call boundary.
+///
+/// Every implementor in this repository satisfies the contract by construction:
+/// each resolves through a dictionary that either interns a triple term's
+/// components strictly before the term itself (ids only ever grow, so a component
+/// id is always smaller than the term naming it), or runs an explicit
+/// freeze-time acyclicity pass before this trait can see the result. An
+/// out-of-tree implementor owes the library the same guarantee directly.
+///
+/// # Snapshot-ingestion obligations
+///
+/// A second class of consumer reads a view *whole*: the canonicalizer, the native
+/// serializers, the pack writer and the archive ingestors all take one pass over
+/// every accessor and write down what they find. For them the accessors are not
+/// three overlapping conveniences but a partition of the dataset, and this trait —
+/// public, and unable to check any of it — can only state the partition and rely on
+/// the implementor, the same documented-`unsafe`-trait spirit as the termination
+/// contract above. The obligations are:
+///
+/// * **No double-counting across the statement layer.** [`quads`](Self::quads) and
+///   [`quad_refs`](Self::quad_refs) yield the ordinary RDF rows ONLY. The virtual
+///   rows [`reifier_quads`](Self::reifier_quads) and
+///   [`annotation_quads`](Self::annotation_quads) resolve — a reifier's
+///   `rdf:reifies` binding, and each annotation triple — must NOT also appear in
+///   `quads()`. An ingestor that trusts the partition writes a duplicate row; one
+///   that defends against it by deduplicating cannot distinguish the duplicate from
+///   a row the dataset genuinely holds twice in two graphs, so no consumer can
+///   repair this from the outside. A backend with no statement layer satisfies the
+///   obligation trivially: both side-table accessors yield nothing.
+///
+/// * **Declaration-only graphs are legitimate.** [`named_graphs`](Self::named_graphs)
+///   MAY name a graph that owns no row at all — a graph declared and left empty is
+///   RDF content, and a view that tracks declarations is expected to surface them.
+///   A consumer therefore must not assume every named graph is reachable from
+///   `quads()`, and must not treat an empty projection as a missing graph.
+///
+/// * **A claimed capability must be enumerable.** Whatever
+///   [`capabilities`](Self::capabilities) claims, the accessors that expose it must
+///   actually answer for it. Claiming an RDF 1.2 statement layer while
+///   `reifier_quads()` and `annotation_quads()` yield nothing is a contract
+///   violation, not an empty dataset: a consumer that branches on capabilities
+///   silently drops the layer it was told to expect, and reports success. Claim what
+///   the view enumerates, and enumerate what it claims.
+pub trait DatasetView {
+    /// The dataset-local id type this view mints and reads in (C0.8). For the
+    /// production [`RdfDataset`] this is [`TermId`]; a paged/global backend supplies
+    /// its own id, which is meaningful only within this view.
+    type Id: ViewTermId;
+
+    /// Typed failures of forward/reverse term access. Resident reads are
+    /// [`std::convert::Infallible`]; operational sessions preserve the root cause.
+    type ReadError: std::error::Error + Clone + Send + Sync + 'static;
+
+    /// The pin returned by one term read. A guard may borrow resident storage or
+    /// own a decoded-block pin; its references never escape its lifetime.
+    type TermGuard<'a>: TermGuard<Self::Id>
+    where
+        Self: 'a;
+
+    /// The first operational failure observed by this read session, including an
+    /// iterator that stopped after a failed admission. Once set it remains sticky.
+    /// Resident implementations return `None` with an uninhabited error type.
+    fn read_error(&self) -> Option<Self::ReadError> {
+        None
+    }
+
+    /// Reserve operator scratch, owned results or output staging before allocation.
+    /// Operational adapters forward this to their shared session's live budget.
+    /// Resident implementations return a zero-sized, infallible no-op.
+    ///
+    /// # Errors
+    /// Returns a typed read/resource failure before the requested allocation.
+    fn reserve_workspace(
+        &self,
+        _: u64,
+    ) -> Result<impl WorkspaceReservation<Error = Self::ReadError> + '_, Self::ReadError> {
+        Ok(NoopReservation::<Self::ReadError>::default())
+    }
+
+    /// A certified upper bound for fully expanded owned term allocation, including
+    /// nested triples and their string/box payloads. `None` makes no bounded claim.
+    fn max_owned_term_bytes(&self) -> Option<u64> {
+        None
+    }
+
+    /// The operational session's total inclusive live ceiling, if it has one.
+    fn storage_live_budget(&self) -> Option<u64> {
+        None
+    }
+
+    /// Publish a drain only if the session was ready before and after it.
+    /// Internal partial rows are discarded when any lazy read or iterator failed.
+    ///
+    /// # Errors
+    /// Returns the first typed operational failure, before or during the drain.
+    fn checked_read<T>(&self, read: impl FnOnce(&Self) -> T) -> Result<T, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        let result = read(self);
+        match self.read_error() {
+            Some(error) => Err(error),
+            None => Ok(result),
+        }
+    }
+
+    /// Inspect a term while its pin is held, releasing the pin before returning.
+    ///
+    /// # Errors
+    /// Returns the first typed term-read failure.
+    fn with_term<T>(
+        &self,
+        id: Self::Id,
+        inspect: impl FnOnce(TermRef<'_, Self::Id>) -> T,
+    ) -> Result<T, Self::ReadError> {
+        let guard = self.resolve(id)?;
+        Ok(inspect(guard.term()))
+    }
+
+    /// Resolve inside a [`Self::checked_read`] drain that will discard partial
+    /// work on failure. A missing guard is an operational stop, never an RDF term.
+    /// This adapter preserves the internal iterator/visitor shape; public lookup
+    /// boundaries use [`Self::resolve`] to retain the typed cause immediately.
+    #[doc(hidden)]
+    fn resolve_if_ready(&self, id: Self::Id) -> Option<Self::TermGuard<'_>> {
+        self.resolve(id).ok()
+    }
+
+    /// Reverse lookup inside a checked drain. Operational failure is sticky and
+    /// the drain may publish no result unless its final checkpoint succeeds.
+    #[doc(hidden)]
+    fn term_id_if_ready(&self, value: &TermValue) -> Option<Self::Id> {
+        self.term_id_by_value(value).ok().flatten()
+    }
+
+    /// The opaque, loop-invariant probe plan a pattern query precomputes once (from
+    /// which axes a pattern binds) and reuses across the probe rows of one
+    /// index-nested-loop join slot (see [`Self::probe_plan`] /
+    /// [`Self::quads_for_pattern_with_plan`]). A backend with no access-pattern index
+    /// uses the unit plan `()`.
+    ///
+    /// `Send + Sync` because the plan is computed once per join slot and then
+    /// captured by value into every parallel probe worker (see the BGP join loop):
+    /// the loop-invariant plan crosses the fork boundary, so it must be shareable.
+    type ProbePlan: Copy + Send + Sync;
+
+    /// Iterate every quad as `Copy` [`QuadIds`] (dataset-local term ids).
+    fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_;
+
+    /// Iterate every quad as a borrowed, resolved [`QuadRef`] (no allocation).
+    ///
+    /// Provided as [`Self::quads`] with each position through [`Self::resolve`]:
+    /// a resolved quad is by definition its id row resolved, so every view shares
+    /// this one body. A view overrides it only when it holds its quads already
+    /// resolved and can hand them out without the per-term lookup.
+    fn quad_refs(
+        &self,
+    ) -> impl Iterator<Item = Result<ResolvedQuad<Self::TermGuard<'_>>, Self::ReadError>> + '_ {
+        self.quads().map(|q| {
+            Ok(ResolvedQuad {
+                s: self.resolve(q.s)?,
+                p: self.resolve(q.p)?,
+                o: self.resolve(q.o)?,
+                g: q.g.map(|id| self.resolve(id)).transpose()?,
+            })
+        })
+    }
+
+    /// Resolve an id, admitting and pinning its backing storage before borrowing.
+    ///
+    /// # Errors
+    /// Returns the session's typed storage, corruption or resource refusal.
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError>;
+
+    /// Resolve a batch without retaining pins beyond each visitor invocation.
+    ///
+    /// # Errors
+    /// Stops at the first typed term-read failure.
+    fn resolve_batch(
+        &self,
+        ids: &[Self::Id],
+        mut visit: impl FnMut(Self::Id, TermRef<'_, Self::Id>),
+    ) -> Result<(), Self::ReadError> {
+        for &id in ids {
+            let guard = self.resolve(id)?;
+            visit(id, guard.term());
+        }
+        Ok(())
+    }
+
+    /// Resolve a dataset-local id to its dataset-independent [`TermValue`], through a
+    /// literal's datatype and a triple term's `(s, p, o)` components: the literal
+    /// datatype is expanded to its IRI string, the blank node keeps its
+    /// `(label, scope)` pair, and a triple term is carried by value (C0.1/C0.2/C0.3).
+    ///
+    /// This is the one resolution from an id to a value; every view, and every
+    /// consumer that reasons over values rather than ids, reads through it. A triple
+    /// term is assembled bottom-up over [`fold_term`](crate::fold_term)'s work list: its
+    /// subject, predicate and object are resolved in that order, each fully before the
+    /// next, so a term of any depth costs no more machine stack.
+    ///
+    /// # Errors
+    ///
+    /// [`TermLookupError::ForeignId`] when the id does not name a well-formed term of
+    /// this view: a literal whose datatype resolves to anything but an IRI. A view
+    /// never mints such a literal (the IR expands every datatype to an interned IRI at
+    /// intern time), so the id was minted by another view. No part of the value is
+    /// invented in its place. [`TermLookupError::Read`] preserves backing-store
+    /// failure. Returned owned values are caller-owned allocations: a bounded
+    /// operation reserves their certified footprint before calling this method and
+    /// retains that reservation until those values are released.
+    fn term_value(&self, id: Self::Id) -> Result<TermValue, TermLookupError<Self::ReadError>> {
+        crate::ir::try_fold_term(
+            self,
+            id,
+            |_, term| {
+                Ok(match term {
+                    TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+                    TermRef::Blank { label, scope } => TermValue::Blank {
+                        label: label.to_owned(),
+                        scope,
+                    },
+                    TermRef::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let guard = self.resolve(datatype).map_err(TermLookupError::Read)?;
+                        let TermRef::Iri(datatype) = guard.term() else {
+                            return Err(TermLookupError::ForeignId);
+                        };
+                        TermValue::Literal {
+                            lexical_form: lexical.to_owned(),
+                            datatype: datatype.to_owned(),
+                            language: language.map(str::to_owned),
+                            direction,
+                        }
+                    }
+                    TermRef::Triple { .. } => {
+                        unreachable!("a triple term is assembled from its components")
+                    }
+                })
+            },
+            |_, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: crate::TermBox::new(s),
+                    p: crate::TermBox::new(p),
+                    o: crate::TermBox::new(o),
+                })
+            },
+            TermLookupError::Read,
+        )
+    }
+
+    /// Quads matching an optional `(s, p, o)` id pattern and a [`GraphMatch`].
+    ///
+    /// The default is an id-equality linear scan (no string resolution); backends
+    /// with access-pattern indexes override this with an indexed lookup.
+    /// Callers resolve term *values* to ids first (`term_id_by_value`).
+    fn quads_for_pattern(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.quads().filter(move |q| {
+            // Closure params named `id` (not s/p/o) to avoid shadowing the outer
+            // `Option<Self::Id>` filters with the unwrapped id.
+            s.is_none_or(|id| q.s == id)
+                && p.is_none_or(|id| q.p == id)
+                && o.is_none_or(|id| q.o == id)
+                && g.matches(q.g)
+        })
+    }
+
+    /// Resolve a term **value** to its dataset-local id, without minting.
+    ///
+    /// A value interned nowhere in this view yields `None` (it names no term), so a
+    /// structural walk keyed on a not-present IRI simply finds nothing — absence is
+    /// an empty match, never an error. Backends with a reverse value index use
+    /// it; others may scan.
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+
+    /// Look up a batch without allocating a whole batch result.
+    ///
+    /// # Errors
+    /// Stops at the first typed reverse-lookup failure.
+    fn lookup_batch(
+        &self,
+        values: &[TermValue],
+        mut visit: impl FnMut(&TermValue, Option<Self::Id>),
+    ) -> Result<(), Self::ReadError> {
+        for value in values {
+            visit(value, self.term_id_by_value(value)?);
+        }
+        Ok(())
+    }
+
+    /// The capabilities this view's backing data exposes (C7).
+    fn capabilities(&self) -> RdfStoreCapabilities;
+
+    /// A size hint for the number of quads, if known.
+    fn len_hint(&self) -> Option<u64> {
+        None
+    }
+
+    /// How deeply the triple terms this view holds can nest, if the view knows a bound:
+    /// no term it resolves holds a chain of more triple terms than this, the outermost
+    /// included (`<<( s p <<( s p o )>> )>>` holds two).
+    ///
+    /// A consumer may answer a pattern whose triple terms nest deeper as matching
+    /// nothing, without resolving or walking it, so a bound must be a guarantee: a view
+    /// that cannot vouch for every term it resolves answers `None`, the default, and is
+    /// matched the long way. Every [`RdfDataset`] is bounded at 16, the limit
+    /// [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze) refuses past.
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        None
+    }
+
+    /// Precompute the loop-invariant [`ProbePlan`](Self::ProbePlan) for a pattern of
+    /// the given bound-axis shape and graph constraint, to be reused across the probe
+    /// rows of an index-nested-loop join slot via
+    /// [`Self::quads_for_pattern_with_plan`]. An index-free backend returns the unit
+    /// plan; [`RdfDataset`] returns its permutation-and-prefix plan.
+    fn probe_plan(
+        &self,
+        s_bound: bool,
+        p_bound: bool,
+        o_bound: bool,
+        g: GraphMatch<Self::Id>,
+    ) -> Self::ProbePlan;
+
+    /// Quads matching `(s, p, o, g)` under a caller-precomputed
+    /// [`ProbePlan`](Self::ProbePlan). Behaviourally identical to
+    /// [`Self::quads_for_pattern`] — the plan only skips the per-row permutation
+    /// selection; the yielded quads and their order are unchanged. An index-free
+    /// backend ignores the (unit) plan and forwards to `quads_for_pattern`.
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &Self::ProbePlan,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_;
+
+    /// An upper-bound cardinality estimate for `(s, p, o, g)`, FOR COST RANKING ONLY
+    /// (never an exact `COUNT`). The default materializes the pattern and counts it;
+    /// a backend with index bounds overrides this with an `O(log n)` estimate.
+    fn cardinality_estimate(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> u64 {
+        self.quads_for_pattern(s, p, o, g).fold(0_u64, |count, _| {
+            count.checked_add(1).expect("quad count fits logical width")
+        })
+    }
+
+    /// The number of distinct interned terms this view addresses.
+    fn term_count(&self) -> u64;
+
+    /// The total UTF-8 byte length of the term strings this view would hand back —
+    /// the size a destination's string arena has to reach to hold a full replay of
+    /// it, if the view can say cheaply.
+    ///
+    /// A SIZING HINT and nothing else. It never bounds a replay, is never a content
+    /// identity, and is never a cache key: a caller reserves against it and keeps
+    /// working if the replay overruns it. The default is `None` — "cannot say" — so a
+    /// view that would have to walk its own terms to answer stays silent rather than
+    /// paying an O(n) scan to save an O(log n) number of reallocations.
+    ///
+    /// A backend that already stores its strings in one arena (an [`RdfDataset`], a
+    /// pack dictionary) answers with that arena's length, which is exact for the
+    /// terms it owns.
+    fn term_bytes_hint(&self) -> Option<u64> {
+        None
+    }
+
+    /// A cheap, deterministic size fingerprint for a dataset-aware cache key (e.g. a
+    /// join-order cache). A *cache discriminator*, not a content digest. The default
+    /// is `0` (no discrimination); [`RdfDataset`] hashes its quad and term counts.
+    fn stats_fingerprint(&self) -> u64 {
+        0
+    }
+
+    /// The RDF 1.2 reifier side-table AS resolved virtual triples: each
+    /// `(reifier, triple-term)` binding becomes a `(reifier, rdf:reifies, triple-term)`
+    /// quad carrying the declaration's own graph slot. Capability-gated: a backend
+    /// with no reifier layer yields nothing (the default).
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        std::iter::empty()
+    }
+
+    /// The reifier side-table rows whose reifier — the virtual quad's SUBJECT — is
+    /// `reifier`: the subject-narrowed twin of [`reifier_quads`](Self::reifier_quads),
+    /// for the very common probe that already knows which reifier it wants.
+    ///
+    /// Yields EXACTLY the rows `reifier_quads().filter(|q| q.s == reifier)` yields, in
+    /// the same order. The default IS that filter, so every backend — including one
+    /// with no reifier layer at all, and one whose side table carries no exploitable
+    /// order — is correct with no per-backend work. A backend whose reifier table is
+    /// keyed on the reifier overrides this with a sub-linear lookup (see
+    /// [`RdfDataset::reifier_quads_of`], `O(log n)` via `partition_point`).
+    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.reifier_quads().filter(move |q| q.s == reifier)
+    }
+
+    /// The RDF 1.2 annotation side-table AS resolved virtual triples: each
+    /// `(reifier, predicate, object)` annotation becomes a quad carrying its own graph
+    /// slot. Capability-gated: a backend with no annotation layer yields nothing.
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        std::iter::empty()
+    }
+
+    /// The `(predicate, object, graph)` annotations declared for `reifier` (`graph`
+    /// `None` ⇒ default graph). Capability-gated: a backend with no annotation layer
+    /// yields nothing (the default ignores `reifier`).
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        let _ = reifier;
+        std::iter::empty()
+    }
+
+    /// The reifier side-table rows scoped to graph `g`: the graph-narrowed twin of
+    /// [`reifier_quads`](Self::reifier_quads), for a caller that already knows the
+    /// active graph scope before it starts the walk (e.g. `GRAPH <g> { ... }`).
+    ///
+    /// Yields EXACTLY the rows `reifier_quads().filter(|q| g.matches(q.g))` yields, in
+    /// the same order. The default IS that filter, so every backend — including one
+    /// with no reifier layer at all — is correct with no per-backend work: this
+    /// method is an OPTIMIZATION SEAM, not a new obligation on implementors that
+    /// don't need it. A backend that can name, without materializing anything, which
+    /// of its own storage units could possibly hold a row in `g` overrides this to
+    /// visit only those units — see [`PagedDataset`](crate::ir::paged::PagedDataset)'s
+    /// and [`PagedQueryView`](crate::ir::paged::PagedQueryView)'s overrides, which
+    /// narrow to the pages a derived graph-postings index names for the reifier
+    /// stream, then still apply the per-row graph filter within each admitted unit
+    /// (a unit named by the index may also hold rows in OTHER graphs).
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.reifier_quads().filter(move |q| g.matches(q.g))
+    }
+
+    /// The annotation side-table rows scoped to graph `g`: the graph-narrowed twin of
+    /// [`annotation_quads`](Self::annotation_quads). See
+    /// [`reifier_quads_in_graph`](Self::reifier_quads_in_graph) for the full contract
+    /// (default-equivalence, optimization-seam status, and the override discipline);
+    /// this is the same seam for the annotation stream.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.annotation_quads().filter(move |q| g.matches(q.g))
+    }
+
+    /// Every named graph this view addresses, in ascending id order (sorted,
+    /// deduplicated). Drives `GRAPH ?g` enumeration, so the order is
+    /// result-observable and must be deterministic. The default derives the set
+    /// from the quads the view can see; a backend that also tracks explicitly
+    /// declared *empty* named graphs (e.g. [`RdfDataset`]) overrides this to
+    /// include them.
+    fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
+        let set: BTreeSet<Self::Id> = self.quads().filter_map(|q| q.g).collect();
+        set.into_iter()
+    }
+
+    /// The distinct objects of `(subject, predicate, ?)` in `graph`, ascending
+    /// by id.
+    ///
+    /// Distinct because an RDF graph is a set: a statement asserted in several
+    /// named graphs is one value when `graph` spans them.
+    fn objects(
+        &self,
+        subject: Self::Id,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Vec<Self::Id> {
+        let mut objects: Vec<Self::Id> = self
+            .quads_for_pattern(Some(subject), Some(predicate), None, graph)
+            .map(|q| q.o)
+            .collect();
+        objects.sort_unstable();
+        objects.dedup();
+        objects
+    }
+
+    /// The distinct objects of `(?, predicate, ?)` in `graph`, ascending by
+    /// id: every value a predicate takes, whatever its subject.
+    ///
+    /// The subject-free twin of [`objects`](Self::objects), with the same set
+    /// reading — a value stated by several subjects, or in several named
+    /// graphs, is one value. It answers SHACL's `sh:targetObjectsOf` and any
+    /// other "range of a predicate" question.
+    fn objects_of_predicate(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Vec<Self::Id> {
+        let mut objects: Vec<Self::Id> = self
+            .quads_for_pattern(None, Some(predicate), None, graph)
+            .map(|q| q.o)
+            .collect();
+        objects.sort_unstable();
+        objects.dedup();
+        objects
+    }
+
+    /// How many distinct objects `(subject, predicate, ?)` has in `graph`,
+    /// counted up to two, without allocating: the one question the strict list
+    /// walker ([`RdfListWalk`](crate::collections::RdfListWalk)) asks of each
+    /// cell. `predicate` is `None` when this view does not intern it, so no
+    /// statement can use it. A statement asserted in several named graphs is
+    /// one object.
+    fn sole_object(
+        &self,
+        subject: Self::Id,
+        predicate: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> SoleObject<Self::Id> {
+        predicate.map_or(SoleObject::None, |predicate| {
+            SoleObject::of(
+                self.quads_for_pattern(Some(subject), Some(predicate), None, graph)
+                    .map(|quad| quad.o),
+            )
+        })
+    }
+
+    /// The members of the RDF Collection headed by `head` in `graph`, in list
+    /// order — the one strict walker.
+    ///
+    /// `head` is `rdf:nil` (the empty list) or a cell; every cell must have
+    /// exactly one distinct `rdf:first` and exactly one distinct `rdf:rest`,
+    /// the `rdf:rest` chain must reach `rdf:nil` without revisiting a cell, and
+    /// `rdf:nil` must carry neither edge (RDF 1.2 Semantics §D.3, SHACL 1.2
+    /// Core §1.4). Anything else is a [`ListError`] naming the broken
+    /// invariant, the node where the walk stopped and every member read before
+    /// it. Nothing else about a cell is constrained: a cell may be an IRI or a
+    /// blank node, may carry `rdf:type rdf:List` or any other statement, and a
+    /// member may be any term — a literal or a triple term included.
+    ///
+    /// The cycle check allocates nothing: Brent's algorithm keeps one saved
+    /// cell and compares each step against it, so a cycle is found within
+    /// twice the walked length and a well-formed list costs no lookup beyond
+    /// its own edges.
+    ///
+    /// # Errors
+    ///
+    /// [`ListError`] when the collection is malformed; see
+    /// [`ListErrorKind`].
+    fn rdf_list_strict(
+        &self,
+        head: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Result<Vec<Self::Id>, ListError<Self::Id>> {
+        let first = self.term_id_if_ready(&TermValue::iri(RDF_FIRST));
+        let rest = self.term_id_if_ready(&TermValue::iri(RDF_REST));
+        let nil = self.term_id_if_ready(&TermValue::iri(RDF_NIL));
+        walk_rdf_list(
+            head,
+            nil,
+            |cell| self.sole_object(cell, first, graph),
+            |cell| self.sole_object(cell, rest, graph),
+        )
+    }
+
+    /// Materialize an `rdf:first`/`rdf:rest`/`rdf:nil` Collection whose head is
+    /// `head`, scoped to `graph`. Returns members in list order.
+    ///
+    /// The lenient reading over [`rdf_list_strict`](Self::rdf_list_strict):
+    /// a head that is `rdf:nil` or no list at all (it carries neither
+    /// `rdf:first` nor `rdf:rest`) yields an empty `Vec`, and a walk that
+    /// meets a cycle, a cell with no `rdf:rest`, or an `rdf:nil` carrying
+    /// edges ends there with the members read so far — the reading of the
+    /// GTS reference walker. Every other malformation is an [`RdfListError`]:
+    /// a cell with no or several `rdf:first`, several `rdf:rest`, or an
+    /// `rdf:rest` to a term that is neither `rdf:nil` nor a cell.
+    ///
+    /// If the `rdf:first` IRI is not interned in this view at all, no Collection can
+    /// exist, so the result is an empty `Vec` (`Ok`), not an error.
+    fn rdf_list(
+        &self,
+        head: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Result<Vec<Self::Id>, RdfListError> {
+        let error = match self.rdf_list_strict(head, graph) {
+            Ok(members) => return Ok(members),
+            Err(error) => error,
+        };
+        match error.kind {
+            ListErrorKind::Cycle | ListErrorKind::MissingRest | ListErrorKind::NonEmptyNil => {
+                Ok(error.members)
+            }
+            ListErrorKind::MultipleFirst => Err(RdfListError::MultipleFirst),
+            ListErrorKind::MultipleRest => Err(RdfListError::MultipleRest),
+            // A node with neither edge: the head is no list, an interior node
+            // is a dangling tail.
+            ListErrorKind::MissingFirst => {
+                let rest = self.term_id_if_ready(&TermValue::iri(RDF_REST));
+                let has_rest = rest.is_some_and(|rest| {
+                    self.quads_for_pattern(Some(error.node), Some(rest), None, graph)
+                        .next()
+                        .is_some()
+                });
+                match (has_rest, error.node == head) {
+                    (true, _) => Err(RdfListError::MissingFirst),
+                    (false, true) => Ok(Vec::new()),
+                    (false, false) => Err(RdfListError::DanglingRest),
+                }
+            }
+        }
+    }
+
+    /// RDF Container members `rdf:_1`..`rdf:_n` of `head` in numeric order, scoped
+    /// to `graph`. Gaps are skipped; ordering is by the numeric suffix, NOT dataset
+    /// order.
+    fn rdf_container_members(&self, head: Self::Id, graph: GraphMatch<Self::Id>) -> Vec<Self::Id> {
+        let mut indexed: Vec<(u64, Self::Id)> = Vec::new();
+        for q in self.quads_for_pattern(Some(head), None, None, graph) {
+            let Some(guard) = self.resolve_if_ready(q.p) else {
+                break;
+            };
+            if let TermRef::Iri(iri) = guard.term()
+                && let Some(n) = container_member_index(iri)
+            {
+                indexed.push((n, q.o));
+            }
+        }
+        // Order by the numeric suffix (`_2` before `_10`), tolerating gaps.
+        indexed.sort_by_key(|&(n, _)| n);
+        indexed.into_iter().map(|(_, o)| o).collect()
+    }
+
+    /// Dispatch by shape: a `head` carrying an `rdf:first` is walked as a Collection
+    /// ([`rdf_list`](Self::rdf_list)); a `head` typed `rdf:Seq`/`rdf:Bag`/`rdf:Alt`
+    /// or carrying any `rdf:_n` property is walked as a Container
+    /// ([`rdf_container_members`](Self::rdf_container_members)). A head matching
+    /// neither yields an empty `Vec`.
+    fn members(
+        &self,
+        head: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Result<Vec<Self::Id>, RdfListError> {
+        // Collection shape wins: an `rdf:first` edge marks a cons cell.
+        if let Some(first_p) = self.term_id_if_ready(&TermValue::iri(RDF_FIRST))
+            && self
+                .quads_for_pattern(Some(head), Some(first_p), None, graph)
+                .next()
+                .is_some()
+        {
+            return self.rdf_list(head, graph);
+        }
+        // Container shape: any `rdf:_n` membership property present.
+        let members = self.rdf_container_members(head, graph);
+        if !members.is_empty() {
+            return Ok(members);
+        }
+        // A head explicitly typed as a container is a container even with no member
+        // properties yet — walking it yields the (empty) member set.
+        if self.is_typed_container(head, graph) {
+            return Ok(members);
+        }
+        Ok(Vec::new())
+    }
+
+    /// Whether `id` is an RDF Collection cons cell in `graph`: it carries an
+    /// `rdf:first` or an `rdf:rest` edge. Internal helper for the list walker's
+    /// dangling-rest validation.
+    #[doc(hidden)]
+    fn is_cons_cell(
+        &self,
+        id: Self::Id,
+        first_p: Self::Id,
+        rest_p: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> bool {
+        if self
+            .quads_for_pattern(Some(id), Some(first_p), None, graph)
+            .next()
+            .is_some()
+        {
+            return true;
+        }
+        rest_p.is_some_and(|rest_p| {
+            self.quads_for_pattern(Some(id), Some(rest_p), None, graph)
+                .next()
+                .is_some()
+        })
+    }
+
+    /// Whether `head` is typed `rdf:Seq`/`rdf:Bag`/`rdf:Alt` in `graph`. Internal
+    /// helper for [`members`](Self::members) container dispatch.
+    #[doc(hidden)]
+    fn is_typed_container(&self, head: Self::Id, graph: GraphMatch<Self::Id>) -> bool {
+        let Some(type_p) = self.term_id_if_ready(&TermValue::iri(RDF_TYPE)) else {
+            return false;
+        };
+        // One reverse lookup (`rdf:type`); the container classes are matched by
+        // resolving each type object's IRI, not by three extra id probes.
+        self.quads_for_pattern(Some(head), Some(type_p), None, graph)
+            .any(|q| {
+                self.with_term(q.o, |term| matches!(term, TermRef::Iri(iri) if iri == RDF_SEQ || iri == RDF_BAG || iri == RDF_ALT)).unwrap_or(false)
+            })
+    }
+}
+
+/// An atomic checkpoint of an operationally fallible dataset view.
+///
+/// [`Ready`](Self::Ready) means no operational failure has been observed *at this
+/// checkpoint*. It becomes a completeness certificate only when an execution engine
+/// samples it after evaluation has stopped. [`Failed`](Self::Failed) carries both the
+/// sticky root cause and the deterministic evidence accumulated before that failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViewOperationStatus<Error, Evidence> {
+    /// The view has not observed an operational failure.
+    Ready {
+        /// Deterministic resource/request evidence accumulated so far.
+        evidence: Evidence,
+    },
+    /// The operation has irreversibly failed; further reads yield no data.
+    Failed {
+        /// The first operational root cause observed by the view.
+        error: Error,
+        /// Deterministic resource/request evidence at the failure boundary.
+        evidence: Evidence,
+    },
+}
+
+impl<Error, Evidence> ViewOperationStatus<Error, Evidence> {
+    /// Borrow the evidence carried by either status variant.
+    #[must_use]
+    pub const fn evidence(&self) -> &Evidence {
+        match self {
+            Self::Ready { evidence } | Self::Failed { evidence, .. } => evidence,
+        }
+    }
+
+    /// Borrow the sticky operational error, if one has occurred.
+    #[must_use]
+    pub const fn error(&self) -> Option<&Error> {
+        match self {
+            Self::Ready { .. } => None,
+            Self::Failed { error, .. } => Some(error),
+        }
+    }
+}
+
+/// A [`DatasetView`] whose backing data can fail during lazy reads.
+///
+/// Implementations preserve the infallible iterator shape required by the evaluator:
+/// the first operational failure becomes sticky, every iterator stops yielding, and
+/// [`operation_status`](Self::operation_status) exposes that root cause. An execution
+/// boundary must sample the status before evaluation and again after all evaluation
+/// and result materialization; it may publish a result as complete only when the final
+/// checkpoint is [`ViewOperationStatus::Ready`]. Internal partial rows are never a
+/// completeness signal. Point-read and workspace-admission errors use the same
+/// type as the checkpoint root cause, so a refused reservation can be propagated
+/// without rendering or allocating a diagnostic first.
+pub trait FallibleDatasetView: DatasetView<ReadError = Self::Error> {
+    /// The typed operational root cause, also [`DatasetView::ReadError`].
+    type Error: std::error::Error + Clone + Send + Sync + 'static;
+    /// Deterministic request and resource evidence.
+    type Evidence: Clone + std::fmt::Debug + PartialEq + Eq + Send + Sync + 'static;
+
+    /// Take an atomic checkpoint of current operational status and evidence.
+    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence>;
+}
+
+/// The frozen dataset never faults: its rows, terms and side tables are already
+/// resident and validated, so every read is total and `operation_status` is
+/// [`Ready`](ViewOperationStatus::Ready) at every checkpoint, before and after
+/// evaluation alike. [`Infallible`](std::convert::Infallible) is the honest root
+/// cause type — the `Failed` variant is uninhabited here, not merely unused — and
+/// the evidence is the unit, because an in-memory read consumes no request budget
+/// a boundary could meter. This impl exists so a `FallibleDatasetView`-bounded
+/// execution path (the one an operational backend needs) also accepts the
+/// production view, instead of forcing callers to pick an entry point by backend.
+impl FallibleDatasetView for RdfDataset {
+    type Error = std::convert::Infallible;
+    type Evidence = ();
+
+    #[inline]
+    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence> {
+        ViewOperationStatus::Ready { evidence: () }
+    }
+}
+
+impl<T: FallibleDatasetView> FallibleDatasetView for Arc<T> {
+    type Error = T::Error;
+    type Evidence = T::Evidence;
+
+    #[inline]
+    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence> {
+        (**self).operation_status()
+    }
+}
+
+/// Which side of a [`checkpointed_drain`] a sample was taken at.
+///
+/// The two-checkpoint completeness law names its own halves: [`Before`](Self::Before)
+/// is sampled before a single row is drained, [`After`](Self::After) after every row
+/// has been drained. A caller surfacing a [`DrainFailure`] reports which one observed
+/// the fault, because the two mean different things — `Before` says the view was
+/// already broken when the drain arrived, `After` says the drain itself ran over a
+/// source that faulted partway through.
+///
+/// Public: it is now part of a public error's own vocabulary rather than an
+/// implementation detail of this module alone. The `purrdf-core` flat-presentation
+/// view-canon entry points (`try_canonicalize_flat_view` and its siblings) carry this
+/// value directly in their own typed refusal, so a caller distinguishing "the view
+/// was already broken" from "the view faulted mid-run" names this type rather than
+/// re-deriving the distinction from a rendered message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainCheckpoint {
+    /// Sampled before a single row was drained.
+    Before,
+    /// Sampled after every row has been drained.
+    After,
+}
+
+/// What [`checkpointed_drain`] returns when a checkpoint observed an operational
+/// failure: which checkpoint, and the view's own typed root cause and evidence at
+/// that boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrainFailure<Error, Evidence> {
+    /// Which checkpoint observed the failure.
+    pub checkpoint: DrainCheckpoint,
+    /// The view's own typed root cause.
+    pub error: Error,
+    /// The view's own evidence at the failure boundary.
+    pub evidence: Evidence,
+}
+
+/// Sample twice; neither sample Ready ⇒ nothing partial is published.
+///
+/// Takes an atomic [`FallibleDatasetView::operation_status`] checkpoint before `drain`
+/// runs and again after, and returns `drain`'s output ONLY when BOTH samples are
+/// [`ViewOperationStatus::Ready`]. A view that faults mid-read stops yielding rather
+/// than erroring, so the first sample alone cannot see a fault introduced during the
+/// drain, and the second alone cannot distinguish an already-broken view from one that
+/// simply finished — checking only one checkpoint would let a boundary publish a
+/// result computed over a truncated read as if it were complete. Either checkpoint
+/// being [`Failed`](ViewOperationStatus::Failed) refuses the whole result and `drain`'s
+/// output is discarded, never returned.
+///
+/// This is the completeness law every checkpointing consumer of a
+/// [`FallibleDatasetView`] needs (first written as the pack encoder's own private
+/// two-sample helper); hoisted here so a second consumer states it once rather than
+/// restating — and risking drifting from — the same rule. Public: it is the reusable
+/// completeness law for any fallible-view drain boundary — sample before, run the
+/// drain, sample after; publish only when both samples are
+/// [`Ready`](ViewOperationStatus::Ready) — so a caller outside this crate wiring up
+/// its own drain boundary over a [`FallibleDatasetView`] can reuse the law rather
+/// than re-deriving it.
+pub fn checkpointed_drain<D, F, T>(
+    view: &D,
+    drain: F,
+) -> Result<T, DrainFailure<D::Error, D::Evidence>>
+where
+    D: FallibleDatasetView,
+    F: FnOnce(&D) -> T,
+{
+    if let ViewOperationStatus::Failed { error, evidence } = view.operation_status() {
+        return Err(DrainFailure {
+            checkpoint: DrainCheckpoint::Before,
+            error,
+            evidence,
+        });
+    }
+    let out = drain(view);
+    match view.operation_status() {
+        ViewOperationStatus::Ready { .. } => Ok(out),
+        ViewOperationStatus::Failed { error, evidence } => Err(DrainFailure {
+            checkpoint: DrainCheckpoint::After,
+            error,
+            evidence,
+        }),
+    }
+}
+
+/// The **write companion** to [`DatasetView`] — the mutation surface a copy-on-write
+/// or backed-by-store dataset exposes (backend contract C4).
+///
+/// Where [`DatasetView`] reads in dataset-local [`TermId`]s, `DatasetMut` mutates by
+/// **value**: its [`Quad`](DatasetMut::Quad) associated type is an owned, dataset-
+/// independent quad (each component a [`TermValue`]). A mutable dataset that straddles
+/// a frozen base and an in-memory delta has no single id space its caller could name a
+/// brand-new term in (C0.8), so a value is the only well-defined mutation identity. The
+/// implementer resolves each value to its internal handle (a base hit, or a freshly
+/// minted delta id) — see [`MutableDataset`](crate::ir::mutable::MutableDataset).
+///
+/// All four methods operate on the **effective** set. `insert`/`remove` return whether
+/// the effective set actually changed (so callers can detect no-ops); `contains` and
+/// `quads_for_pattern` reflect the effective set after any sequence of mutations.
+pub trait DatasetMut: sealed::Sealed {
+    /// The owned, dataset-independent quad value this dataset is mutated with.
+    type Quad;
+
+    /// Insert a quad into the effective set. Returns `Ok(true)` iff the effective set
+    /// changed (a quad already present is a no-op returning `Ok(false)`).
+    ///
+    /// # Errors
+    ///
+    /// [`purrdf_iri::IriError`] if the quad carries a non-absolute IRI in any position — its
+    /// terms, a literal's datatype, or one nested in a triple term. This is the
+    /// **fail-fast** half of the IR-boundary absoluteness invariant: freezing would
+    /// refuse the quad anyway, but by then the error can no longer name the call that
+    /// introduced it, and a mutable dataset may be mutated many times before it is
+    /// frozen. Reported with the workspace's shared
+    /// [`IriError::diagnostic_code`](purrdf_iri::IriError::diagnostic_code) spelling.
+    ///
+    /// `remove` and `contains` stay infallible: they resolve values WITHOUT minting,
+    /// so a quad naming a term interned nowhere is simply absent, not an error.
+    fn insert(&mut self, quad: Self::Quad) -> Result<bool, purrdf_iri::IriError>;
+
+    /// Remove a quad from the effective set. Returns `true` iff the effective set
+    /// changed (removing an absent quad is a no-op returning `false`).
+    fn remove(&mut self, quad: &Self::Quad) -> bool;
+
+    /// Whether the quad is in the effective set.
+    fn contains(&self, quad: &Self::Quad) -> bool;
+
+    /// The effective quads matching an optional `(s, p, o)` value pattern and a
+    /// [`GraphMatchValue`]. Returns owned value-quads (the mutable view has no stable
+    /// id space to borrow into across the base/delta boundary). A bound value — in
+    /// any of `s`/`p`/`o` OR the graph slot — interned in neither the base nor the
+    /// delta matches nothing.
+    ///
+    /// The graph filter is value-based (`GraphMatchValue`, NOT the read side's
+    /// `TermId`-based `GraphMatch`) so a delta-only named graph, which has no base
+    /// `TermId`, is still expressible — consistent with the value-based `s`/`p`/`o`.
+    fn quads_for_pattern(
+        &self,
+        s: Option<&TermValue>,
+        p: Option<&TermValue>,
+        o: Option<&TermValue>,
+        g: GraphMatchValue<'_>,
+    ) -> Vec<Self::Quad>;
+}
+
+/// The widest triple-term nesting bound among `bounds`, or `None` when any of them
+/// vouches for none. A view composed of others is bounded by its widest part; an
+/// empty composition holds no triple term, so its bound is 0.
+pub(crate) fn widest_nesting_bound(
+    bounds: impl IntoIterator<Item = Option<usize>>,
+) -> Option<usize> {
+    bounds
+        .into_iter()
+        .try_fold(0, |widest, bound| bound.map(|bound| widest.max(bound)))
+}
+
+/// The production read view: the immutable value-interned [`RdfDataset`] (C1).
+impl DatasetView for RdfDataset {
+    type Id = TermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
+    type ProbePlan = QuadProbePlan;
+
+    /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
+    /// which refuses a triple term nested past 16.
+    #[inline]
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
+    }
+
+    #[inline]
+    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        // Inherent methods take method-resolution priority over trait methods, so
+        // these delegate to `RdfDataset`'s own impls (no recursion).
+        Self::quads(self)
+    }
+
+    #[inline]
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok(Self::resolve(self, id))
+    }
+
+    #[inline]
+    fn quads_for_pattern(
+        &self,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        // Indexed override (P4b): lazy permutation indexes + a bound-set ->
+        // permutation -> partition_point dispatch, byte-identical to the trait's
+        // default linear scan (differential property test in `ir/dataset.rs`).
+        Self::quads_for_pattern_indexed(self, s, p, o, g)
+    }
+
+    #[inline]
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok({
+            // Delegate to the retained store-once term index (no minting).
+            Self::term_id_by_value(self, value)
+        })
+    }
+
+    #[inline]
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        Self::capabilities(self)
+    }
+
+    #[inline]
+    fn len_hint(&self) -> Option<u64> {
+        ({ Some(Self::quad_count(self)) })
+            .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
+    }
+
+    #[inline]
+    fn probe_plan(
+        &self,
+        s_bound: bool,
+        p_bound: bool,
+        o_bound: bool,
+        g: GraphMatch,
+    ) -> QuadProbePlan {
+        // Inherent `probe_plan` is a value-independent associated fn (no `&self`).
+        Self::probe_plan(s_bound, p_bound, o_bound, g)
+    }
+
+    #[inline]
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::quads_for_pattern_with_plan(self, plan, s, p, o, g)
+    }
+
+    #[inline]
+    fn cardinality_estimate(
+        &self,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> u64 {
+        u64::try_from(Self::cardinality_estimate(self, s, p, o, g))
+            .expect("bounded local count fits u64")
+    }
+
+    #[inline]
+    fn term_count(&self) -> u64 {
+        u64::try_from(Self::term_count(self)).expect("bounded local count fits u64")
+    }
+
+    #[inline]
+    fn term_bytes_hint(&self) -> Option<u64> {
+        ({
+            // The frozen dataset stores every term string in ONE arena, so its length is
+            // exactly the figure the hint asks for.
+            Some(self.rdf_text_bytes())
+        })
+        .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
+    }
+
+    #[inline]
+    fn stats_fingerprint(&self) -> u64 {
+        Self::stats_fingerprint(self)
+    }
+
+    #[inline]
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::reifier_quads(self)
+    }
+
+    #[inline]
+    fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
+        // Indexed override: the frozen reifier table is sorted with the reifier as its
+        // PRIMARY key, so the inherent method addresses one contiguous run via
+        // `partition_point` instead of the trait default's full-table filter.
+        Self::reifier_quads_of(self, reifier)
+    }
+
+    #[inline]
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::annotation_quads(self)
+    }
+
+    #[inline]
+    fn annotations_of_with_graph(
+        &self,
+        reifier: TermId,
+    ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
+        Self::annotations_of_with_graph(self, reifier)
+    }
+
+    #[inline]
+    fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        // The inherent set includes explicitly-declared empty named graphs, which
+        // the quads-derived default would miss, so delegate to it verbatim.
+        Self::named_graphs(self)
+    }
+}
+
+/// A shared [`Arc`]-wrapped read view is itself a read view: every method delegates
+/// to the inner `T`, so `Arc<RdfDataset>` (the engine's `Dataset` handle) plugs into
+/// the generic evaluator directly, byte-for-byte identical to the bare `RdfDataset`.
+/// Every method — including the ones `RdfDataset` overrides for its indexed read path
+/// and RDF 1.2 side-tables — is forwarded, so no default (e.g. an empty reifier layer)
+/// can silently diverge from the inner view.
+impl<T: DatasetView> DatasetView for Arc<T> {
+    type Id = T::Id;
+    type ReadError = T::ReadError;
+    type TermGuard<'a>
+        = T::TermGuard<'a>
+    where
+        Self: 'a;
+    type ProbePlan = T::ProbePlan;
+
+    #[inline]
+    fn reserve_workspace(
+        &self,
+        bytes: u64,
+    ) -> Result<impl WorkspaceReservation<Error = Self::ReadError> + '_, Self::ReadError> {
+        (**self).reserve_workspace(bytes)
+    }
+    fn max_owned_term_bytes(&self) -> Option<u64> {
+        (**self).max_owned_term_bytes()
+    }
+    fn storage_live_budget(&self) -> Option<u64> {
+        (**self).storage_live_budget()
+    }
+    fn read_error(&self) -> Option<Self::ReadError> {
+        (**self).read_error()
+    }
+
+    #[inline]
+    fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads()
+    }
+
+    #[inline]
+    fn quad_refs(
+        &self,
+    ) -> impl Iterator<Item = Result<ResolvedQuad<Self::TermGuard<'_>>, Self::ReadError>> + '_ {
+        (**self).quad_refs()
+    }
+
+    #[inline]
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        (**self).resolve(id)
+    }
+
+    #[inline]
+    fn quads_for_pattern(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads_for_pattern(s, p, o, g)
+    }
+
+    #[inline]
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        (**self).term_id_by_value(value)
+    }
+
+    #[inline]
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        (**self).capabilities()
+    }
+
+    #[inline]
+    fn len_hint(&self) -> Option<u64> {
+        (**self).len_hint()
+    }
+
+    #[inline]
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        (**self).triple_term_nesting_bound()
+    }
+
+    #[inline]
+    fn term_bytes_hint(&self) -> Option<u64> {
+        (**self).term_bytes_hint()
+    }
+
+    #[inline]
+    fn probe_plan(
+        &self,
+        s_bound: bool,
+        p_bound: bool,
+        o_bound: bool,
+        g: GraphMatch<Self::Id>,
+    ) -> Self::ProbePlan {
+        (**self).probe_plan(s_bound, p_bound, o_bound, g)
+    }
+
+    #[inline]
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &Self::ProbePlan,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads_for_pattern_with_plan(plan, s, p, o, g)
+    }
+
+    #[inline]
+    fn cardinality_estimate(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> u64 {
+        (**self).cardinality_estimate(s, p, o, g)
+    }
+
+    #[inline]
+    fn term_count(&self) -> u64 {
+        (**self).term_count()
+    }
+
+    #[inline]
+    fn stats_fingerprint(&self) -> u64 {
+        (**self).stats_fingerprint()
+    }
+
+    #[inline]
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads()
+    }
+
+    #[inline]
+    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads_of(reifier)
+    }
+
+    #[inline]
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).annotation_quads()
+    }
+
+    #[inline]
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        (**self).annotations_of_with_graph(reifier)
+    }
+
+    /// Forwarded per the impl-level doc above: whatever narrowing `T` provides for its
+    /// own [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) override is
+    /// inherited unchanged, so an `Arc`-wrapped paged backend keeps skipping the same
+    /// pages it would skip unwrapped.
+    #[inline]
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads_in_graph(g)
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same unconditional forward, over the ANNOTATION stream.
+    #[inline]
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).annotation_quads_in_graph(g)
+    }
+
+    #[inline]
+    fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
+        (**self).named_graphs()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::RdfDatasetBuilder;
+
+    fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+        b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    #[test]
+    fn graph_match_three_way() {
+        let mut b = RdfDatasetBuilder::new();
+        let g = iri(&mut b, "g");
+        assert!(GraphMatch::<TermId>::Any.matches(None) && GraphMatch::Any.matches(Some(g)));
+        assert!(
+            GraphMatch::<TermId>::Default.matches(None) && !GraphMatch::Default.matches(Some(g))
+        );
+        assert!(GraphMatch::Named(g).matches(Some(g)) && !GraphMatch::Named(g).matches(None));
+    }
+
+    #[test]
+    fn graph_selector_resolves_against_the_dataset_without_minting() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o, g) = (
+            iri(&mut b, "s"),
+            iri(&mut b, "p"),
+            iri(&mut b, "o"),
+            iri(&mut b, "g"),
+        );
+        b.push_quad(s, p, o, Some(g));
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            GraphSelector::Any.resolve(&ds).unwrap(),
+            Some(GraphMatch::Any)
+        );
+        assert_eq!(
+            GraphSelector::Default.resolve(&ds).unwrap(),
+            Some(GraphMatch::Default)
+        );
+        let named = GraphSelector::Named(TermValue::iri("http://example.org/g"));
+        assert_eq!(named.resolve(&ds).unwrap(), Some(GraphMatch::Named(g)));
+        let absent = GraphSelector::Named(TermValue::iri("http://example.org/absent"));
+        assert_eq!(absent.resolve(&ds).unwrap(), None);
+    }
+
+    /// Every value a predicate takes, once, ascending by id: a value stated by
+    /// two subjects and in two graphs is one value, and another predicate's
+    /// values and a graph outside the scope are not reached.
+    #[test]
+    fn objects_of_predicate_is_the_distinct_range_in_scope() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s1, s2, p, q) = (
+            iri(&mut b, "s1"),
+            iri(&mut b, "s2"),
+            iri(&mut b, "p"),
+            iri(&mut b, "q"),
+        );
+        let (o1, o2, o3, g) = (
+            iri(&mut b, "o1"),
+            iri(&mut b, "o2"),
+            iri(&mut b, "o3"),
+            iri(&mut b, "g"),
+        );
+        b.push_quad(s1, p, o2, None);
+        b.push_quad(s2, p, o2, Some(g));
+        b.push_quad(s2, p, o1, None);
+        b.push_quad(s1, q, o3, None);
+        let ds = b.freeze().expect("freeze");
+        let mut expected = vec![o1, o2];
+        expected.sort_unstable();
+        assert_eq!(ds.objects_of_predicate(p, GraphMatch::Any), expected);
+        assert_eq!(ds.objects_of_predicate(p, GraphMatch::Named(g)), vec![o2]);
+        assert_eq!(ds.objects_of_predicate(q, GraphMatch::Default), vec![o3]);
+        assert_eq!(ds.objects_of_predicate(o1, GraphMatch::Any), Vec::new());
+    }
+
+    #[test]
+    fn quads_for_pattern_filters_by_id_and_graph() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o1 = iri(&mut b, "o1");
+        let o2 = iri(&mut b, "o2");
+        let g = iri(&mut b, "g");
+        b.push_quad(s, p, o1, None); // default graph
+        b.push_quad(s, p, o2, Some(g)); // named graph g
+        let ds = b.freeze().expect("freeze");
+
+        // Whole-dataset (Any matches everything).
+        assert_eq!(
+            ds.quads_for_pattern(None, None, None, GraphMatch::Any)
+                .count(),
+            2
+        );
+        assert_eq!(ds.len_hint(), Some(2));
+        // Object filter.
+        assert_eq!(
+            ds.quads_for_pattern(None, None, Some(o1), GraphMatch::Any)
+                .count(),
+            1
+        );
+        // Default graph only.
+        assert_eq!(
+            ds.quads_for_pattern(None, None, None, GraphMatch::Default)
+                .count(),
+            1
+        );
+        // Named graph only.
+        assert_eq!(
+            ds.quads_for_pattern(None, None, None, GraphMatch::Named(g))
+                .count(),
+            1
+        );
+        // s+p match both quads.
+        assert_eq!(
+            ds.quads_for_pattern(Some(s), Some(p), None, GraphMatch::Any)
+                .count(),
+            2
+        );
+        // A non-matching subject yields nothing.
+        assert_eq!(
+            ds.quads_for_pattern(Some(o1), None, None, GraphMatch::Any)
+                .count(),
+            0
+        );
+        // The trait read view agrees with the inherent iterators.
+        assert_eq!(DatasetView::quads(&*ds).count(), 2);
+        assert_eq!(DatasetView::quad_refs(&*ds).count(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // `checkpointed_drain`: the two-checkpoint completeness law, hoisted out of
+    // the pack encoder so any `FallibleDatasetView` consumer can share it.
+    // -----------------------------------------------------------------------
+
+    /// The typed root cause a [`ProbeView`] reports once told to fault.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ProbeFault(&'static str);
+
+    impl std::fmt::Display for ProbeFault {
+        /// Render the fault message verbatim — `ProbeFault` exists only to be
+        /// printed inside a [`DrainFailure`], so there is no format to preserve
+        /// beyond the message itself.
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for ProbeFault {}
+
+    /// A [`FallibleDatasetView`] whose [`operation_status`](FallibleDatasetView::operation_status)
+    /// is driven directly by the test rather than by how many rows have actually been
+    /// read. `checkpointed_drain` only ever calls `operation_status` — never a
+    /// row-reading method — so a real truncating reader (like `BudgetedView` in
+    /// `tests/pack_container.rs`, a separate compilation unit unreachable from this
+    /// in-module test) is not needed to exercise its law: a controllable status is
+    /// the whole surface under test.
+    struct ProbeView {
+        inner: Arc<RdfDataset>,
+        status: std::cell::Cell<u8>,
+    }
+
+    impl ProbeView {
+        /// `0` = Ready, `1` = Failed. A `Cell<u8>` rather than a
+        /// `Cell<ViewOperationStatus<..>>` because the status carries a
+        /// non-`Copy` payload (the fault); the discriminant alone is all
+        /// `operation_status` needs to reconstruct it.
+        fn new(faulted: bool) -> Self {
+            Self {
+                inner: RdfDatasetBuilder::new()
+                    .freeze()
+                    .expect("empty dataset freezes"),
+                status: std::cell::Cell::new(u8::from(faulted)),
+            }
+        }
+
+        /// Flip the status latch to `Failed` — the test's OWN trigger, called
+        /// from the `drain` closure `checkpointed_drain` invokes, standing in
+        /// for a real view that broke partway through its own read.
+        fn fault_now(&self) {
+            self.status.set(1);
+        }
+    }
+
+    impl DatasetView for ProbeView {
+        type Id = TermId;
+        type ReadError = ProbeFault;
+        type TermGuard<'a>
+            = TermRef<'a, Self::Id>
+        where
+            Self: 'a;
+        type ProbePlan = ();
+
+        fn read_error(&self) -> Option<Self::ReadError> {
+            self.operation_status().error().cloned()
+        }
+
+        fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.inner.quads()
+        }
+
+        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            self.checked_read(|_| self.inner.as_ref().resolve(id))
+        }
+
+        fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+            self.checked_read(|_| self.inner.as_ref().term_id_by_value(value))
+        }
+
+        fn capabilities(&self) -> RdfStoreCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            _plan: &(),
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> impl Iterator<Item = QuadIds> + '_ {
+            self.quads_for_pattern(s, p, o, g)
+        }
+
+        fn term_count(&self) -> u64 {
+            self.inner.term_count()
+        }
+    }
+
+    impl FallibleDatasetView for ProbeView {
+        type Error = ProbeFault;
+        type Evidence = u32;
+
+        /// Report the latch's current value verbatim: `Ready` until
+        /// [`fault_now`](ProbeView::fault_now) has been called, `Failed`
+        /// thereafter — the whole point of `ProbeView` is that this is the
+        /// ONLY thing that determines the status a checkpoint observes.
+        fn operation_status(&self) -> ViewOperationStatus<ProbeFault, u32> {
+            if self.status.get() == 0 {
+                ViewOperationStatus::Ready { evidence: 0 }
+            } else {
+                ViewOperationStatus::Failed {
+                    error: ProbeFault("the probe view was told to fault"),
+                    evidence: 1,
+                }
+            }
+        }
+    }
+
+    /// An always-`Ready` view publishes: both checkpoints observe `Ready`, so
+    /// `checkpointed_drain` returns the drain closure's output.
+    #[test]
+    fn an_always_ready_view_publishes() {
+        let view = ProbeView::new(false);
+        let out = checkpointed_drain(&view, DatasetView::term_count);
+        assert_eq!(out, Ok(0));
+    }
+
+    /// A view already `Failed` at the FIRST sample is refused before the drain
+    /// closure ever runs — the `Before` checkpoint's error is returned, and the
+    /// closure's would-be output never reaches the caller.
+    #[test]
+    fn a_view_failed_at_first_sample_returns_the_before_checkpoint_error_without_draining() {
+        let view = ProbeView::new(true);
+        let mut drained = false;
+        let out = checkpointed_drain(&view, |_| {
+            drained = true;
+            "never published"
+        });
+        assert!(!drained, "the drain closure must not run at all");
+        let failure = out.expect_err("an already-failed view must be refused");
+        assert_eq!(failure.checkpoint, DrainCheckpoint::Before);
+        assert_eq!(
+            failure.error,
+            ProbeFault("the probe view was told to fault")
+        );
+    }
+
+    /// A view `Ready` at the first sample but `Failed` by the second — the drain
+    /// faulted partway through — is refused with the `After` checkpoint's error, and
+    /// the closure's output (even though it ran to completion) is NOT published.
+    #[test]
+    fn a_view_that_faults_during_the_drain_returns_the_after_checkpoint_error_and_drops_the_output()
+    {
+        let view = ProbeView::new(false);
+        let out = checkpointed_drain(&view, |v| {
+            // The fault happens INSIDE the drain, after the `Before` checkpoint
+            // already observed `Ready`.
+            v.fault_now();
+            "computed but must never be published"
+        });
+        let failure = out.expect_err("a view that faulted mid-drain must be refused");
+        assert_eq!(failure.checkpoint, DrainCheckpoint::After);
+        assert_eq!(
+            failure.error,
+            ProbeFault("the probe view was told to fault")
+        );
+    }
+}
+
+#[cfg(test)]
+mod term_value_tests {
+    //! [`DatasetView::term_value`]: the one resolution from an id to a value.
+
+    use std::sync::Arc;
+
+    use super::{DatasetView, TermLookupError};
+    use crate::TermBox;
+    use crate::backend::TermFactory as _;
+    use crate::ir::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+    use crate::term_fixture::ForeignDatatypeView;
+
+    const EX: &str = "http://example.org/";
+
+    /// A dataset holding an empty plain literal, a quoted triple term carrying it, and a
+    /// blank node, with their ids.
+    fn fixture() -> (Arc<RdfDataset>, TermId, TermId, TermId) {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let empty = builder.intern_value(&TermValue::simple_literal(""));
+        let quoted = builder.intern_value(&TermValue::Triple {
+            s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+            p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+            o: TermBox::new(TermValue::simple_literal("")),
+        });
+        let blank = builder.intern_value(&TermValue::blank("b"));
+        builder.push_quad(s, p, empty, None);
+        builder.push_quad(s, p, quoted, None);
+        builder.push_quad(blank, p, s, None);
+        let dataset = builder.freeze().expect("the fixture freezes");
+        (dataset, empty, quoted, blank)
+    }
+
+    #[test]
+    fn an_id_whose_literal_datatype_is_not_an_iri_is_foreign() {
+        let (inner, empty, quoted, blank) = fixture();
+        let view = ForeignDatatypeView {
+            inner,
+            datatype: blank,
+            foreign: true,
+        };
+        assert_eq!(
+            view.term_value(empty),
+            Err(TermLookupError::<std::convert::Infallible>::ForeignId)
+        );
+        assert_eq!(
+            view.term_value(quoted),
+            Err(TermLookupError::<std::convert::Infallible>::ForeignId)
+        );
+        // A term with no literal in it still resolves through the same view.
+        assert_eq!(view.term_value(blank), Ok(TermValue::blank("b")));
+    }
+
+    #[test]
+    fn a_present_empty_literal_resolves_to_the_empty_string() {
+        let (inner, empty, quoted, blank) = fixture();
+        let view = ForeignDatatypeView {
+            inner: Arc::clone(&inner),
+            datatype: blank,
+            foreign: false,
+        };
+        assert_eq!(view.term_value(empty), Ok(TermValue::simple_literal("")));
+        assert_eq!(
+            view.term_value(quoted),
+            Ok(TermValue::Triple {
+                s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+                p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+                o: TermBox::new(TermValue::simple_literal("")),
+            })
+        );
+        assert_eq!(
+            DatasetView::term_value(&inner, empty),
+            view.term_value(empty)
+        );
+    }
+
+    /// Every generated term resolves to exactly the value it was interned from.
+    #[test]
+    fn every_interned_value_resolves_to_itself() {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let mut values = Vec::new();
+        for seed in 0..200_u64 {
+            let mut state = seed;
+            let mut budget = 6;
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                crate::term_fixture::TermShape::WellFormed,
+            );
+            let id = builder.intern_value(&value);
+            builder.push_quad(s, p, id, None);
+            values.push((value, id));
+        }
+        let dataset = builder.freeze().expect("the generated values freeze");
+        for (value, id) in values {
+            assert_eq!(DatasetView::term_value(&dataset, id), Ok(value));
+        }
+    }
+
+    #[test]
+    fn the_lookup_error_names_the_foreign_id() {
+        assert!(
+            TermLookupError::<std::convert::Infallible>::ForeignId
+                .to_string()
+                .contains("does not name a term of this view")
+        );
+    }
+}

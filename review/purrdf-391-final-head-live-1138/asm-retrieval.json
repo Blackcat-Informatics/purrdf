@@ -1,0 +1,71 @@
+{
+  "retrieved_utc": "2026-10-03T11:39:41.303506+00:00",
+  "records": [
+    {
+      "name": "job-111193073548-asm-full.log",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073548/logs"
+      ],
+      "exit_code": 0,
+      "bytes": 50710,
+      "sha256": "fb0e0ddb148abffb9dd5c411fecf5f2328c8d9153a72c49e96a1ca3ccee15f4a",
+      "stderr": ""
+    },
+    {
+      "name": "job-111193073495-asm-full.log",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073495/logs"
+      ],
+      "exit_code": 0,
+      "bytes": 71801,
+      "sha256": "8c5dc2f6e6454e6d708975434689b81d7239b76ee95b76cd02dac895b7f3c244",
+      "stderr": ""
+    },
+    {
+      "name": "job-111193073475-asm-full.log",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073475/logs"
+      ],
+      "exit_code": 0,
+      "bytes": 71511,
+      "sha256": "bbb1f1c1f7e262e2a8d38738456bb2a3fce5d26730a9d014a39ba525478dbd4f",
+      "stderr": ""
+    },
+    {
+      "name": "job-111193073431-asm-full.log",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073431/logs"
+      ],
+      "exit_code": 0,
+      "bytes": 50514,
+      "sha256": "b32df5ad2f73e35832c6ebb17e45eca95bb18efcd43b19157504013b23636d59",
+      "stderr": ""
+    },
+    {
+      "name": "artifacts.json",
+      "command": [
+        "gh",
+        "api",
+        "repos/Blackcat-Informatics/purrdf/actions/runs/37119631972/artifacts?per_page=100",
+        "--paginate",
+        "--slurp"
+      ],
+      "exit_code": 0,
+      "bytes": 8124,
+      "sha256": "13c50a58e2eb02d884cb7726690a796385df55d82ff2ef6192a4ffe7f20b0174",
+      "stderr": ""
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "doc": 11,
+    "category": "issue-comments",
+    "id": 5968188416,
+    "url": "https://github.com/Blackcat-Informatics/purrdf/issues/387#issuecomment-5968188416",
+    "line": 9,
+    "text": "The three candidate designs, finite proof domain, independent semantic bags/freshness controls, boundary design, reproducible cost/layout evidence and portable-case separation cover the six original acceptance criteria. An independent adversarial integration/claim audit is running alongside the concrete CI repair. CodeRabbit has no submitted review or inline thread yet and is processing all 110 selected files; its eventual findings will be added individually with repairs, validation and thread replies."
+  },
+  {
+    "doc": 11,
+    "category": "issue-comments",
+    "id": 5968188416,
+    "url": "https://github.com/Blackcat-Informatics/purrdf/issues/387#issuecomment-5968188416",
+    "line": 11,
+    "text": "The mechanical diff scan finds one apparent incomplete-work marker: the comment “This is not an unimplemented graph operator.” Its surrounding code implements extraction of original source leaves from the transformed branch; production graph execution is implemented separately. The declared finite prototype proof domain and typed unavailable proof inputs are explicit investigation outputs, not undelivered production work. Historical implementation-plan choices and intermediate pending-gate updates are assessed against the final evidence rather than treated as completion claims."
+  },
+  {
+    "doc": 19,
+    "category": "pr-discussion",
+    "id": 5968108401,
+    "url": "https://github.com/Blackcat-Informatics/purrdf/pull/391#issuecomment-5968108401",
+    "line": 152,
+    "text": "| Out of Scope Changes check | ✅ Passed | No unrelated change is demonstrated. The carrier, blank-identity, allocation, and governor changes support `#387`’s requested scope boundaries, serialization, runtime-freshness, and template-allocation … |"
+  },
+  {
+    "doc": 22,
+    "category": "pr-discussion",
+    "id": 5968188578,
+    "url": "https://github.com/Blackcat-Informatics/purrdf/pull/391#issuecomment-5968188578",
+    "line": 9,
+    "text": "The three candidate designs, finite proof domain, independent semantic bags/freshness controls, boundary design, reproducible cost/layout evidence and portable-case separation cover the six original acceptance criteria. An independent adversarial integration/claim audit is running alongside the concrete CI repair. CodeRabbit has no submitted review or inline thread yet and is processing all 110 selected files; its eventual findings will be added individually with repairs, validation and thread replies."
+  },
+  {
+    "doc": 22,
+    "category": "pr-discussion",
+    "id": 5968188578,
+    "url": "https://github.com/Blackcat-Informatics/purrdf/pull/391#issuecomment-5968188578",
+    "line": 11,
+    "text": "The mechanical diff scan finds one apparent incomplete-work marker: the comment “This is not an unimplemented graph operator.” Its surrounding code implements extraction of original source leaves from the transformed branch; production graph execution is implemented separately. The declared finite prototype proof domain and typed unavailable proof inputs are explicit investigation outputs, not undelivered production work. Historical implementation-plan choices and intermediate pending-gate updates are assessed against the final evidence rather than treated as completion claims."
+  }
+]

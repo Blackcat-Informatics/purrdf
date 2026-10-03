@@ -1,0 +1,106 @@
+{
+  "retrieved_utc": "2026-10-03T11:31:42.390685+00:00",
+  "repo": "Blackcat-Informatics/purrdf",
+  "requested_head": "28744b104af37faeb43a25bf865c25fa7094bc4d",
+  "requests": {
+    "pull": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/pulls/391"
+    ],
+    "pr_view": [
+      "gh",
+      "pr",
+      "view",
+      "391",
+      "--repo",
+      "Blackcat-Informatics/purrdf",
+      "--json",
+      "headRefOid,baseRefName,state,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup"
+    ],
+    "reviews": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/pulls/391/reviews?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "review_comments": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/pulls/391/comments?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "issue_comments": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/issues/391/comments?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "checks": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/commits/28744b104af37faeb43a25bf865c25fa7094bc4d/check-runs?per_page=100&filter=all",
+      "--paginate",
+      "--slurp"
+    ],
+    "statuses": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/commits/28744b104af37faeb43a25bf865c25fa7094bc4d/statuses?per_page=100",
+      "--paginate",
+      "--slurp"
+    ],
+    "actions": [
+      "gh",
+      "api",
+      "repos/Blackcat-Informatics/purrdf/actions/runs?head_sha=28744b104af37faeb43a25bf865c25fa7094bc4d&per_page=100",
+      "--paginate",
+      "--slurp"
+    ]
+  },
+  "records": [
+    {
+      "record": "pull",
+      "bytes": 27323,
+      "sha256": "ccb4fb057c439fa28d435cd94ca8fe50cee0dd9cce71a50cfe75f44730871ff6"
+    },
+    {
+      "record": "pr_view",
+      "bytes": 13694,
+      "sha256": "c7002cd99370b23554cc319bbba70d5ef82298b266c529050e84f27763e3ccea"
+    },
+    {
+      "record": "reviews",
+      "bytes": 13194,
+      "sha256": "329ad886756296dc0cd30aaa0426ae17b7e0662e70c87386bf5ae7e5d53c9677"
+    },
+    {
+      "record": "review_comments",
+      "bytes": 24724,
+      "sha256": "9083aefb24053b59399a1f765769577cb2cb8d9d2d9f33e3daa4f677aeba2039"
+    },
+    {
+      "record": "issue_comments",
+      "bytes": 53004,
+      "sha256": "0e63e3273951ea825a797ab15d257898801bf1d6f5048d29930c47680ad5c1a8"
+    },
+    {
+      "record": "checks",
+      "bytes": 161470,
+      "sha256": "f5774ff45850ea7671434e982a838e6b35466165bb0c53a4496ab9c582bbd25b"
+    },
+    {
+      "record": "statuses",
+      "bytes": 1493,
+      "sha256": "e9129be23397e623a14b921238d2811addee8a390baea23e6f65859603845a24"
+    },
+    {
+      "record": "actions",
+      "bytes": 42184,
+      "sha256": "73383fa829b60825cced206b61704aaebd112ad22706e489fd34534083046a45"
+    }
+  ]
+}

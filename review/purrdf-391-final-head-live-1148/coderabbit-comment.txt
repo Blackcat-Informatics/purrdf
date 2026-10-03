@@ -1,0 +1,156 @@
+<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- review_stack_entry_start -->
+
+<a href="https://app.coderabbit.ai/change-stack/Blackcat-Informatics/purrdf/pull/391?cs_source=review_comment"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui-dark.svg?v=2" alt="Review in Change Stack →" width="220" height="32"></a>
+
+Navigate logical layers of code changes, visualize relationships, and explore their blast radius.
+
+<!-- review_stack_entry_end -->
+<!-- recent_review_start -->
+
+No actionable comments were generated in the recent review. 🎉
+
+<details>
+<summary>ℹ️ Recent review info</summary>
+
+<details>
+<summary>⚙️ Run configuration</summary>
+
+- **Configuration used**: defaults
+- **Review profile**: CHILL
+- **Plan**: Team
+- **Run ID**: `aae12513-b068-40ef-96ef-93a4b37f6a9a`
+
+</details>
+
+<details>
+<summary>📥 Commits</summary>
+
+Reviewing files that changed from the base of the PR and between 7f137d3e9c3b02961ab2ee368a7ea171c7a282a0 and 28744b104af37faeb43a25bf865c25fa7094bc4d.
+
+</details>
+
+<details>
+<summary>📒 Files selected for processing (2)</summary>
+
+* `docs/design/purrdf-simd.md`
+* `scripts/simd-asm-manifest.toml`
+
+</details>
+
+**Included review availability:** This review used your included allowance. 8 included reviews remain after this review. Your included PR review attempts over the past 7 days set your current allowance at 10 reviews per hour.
+
+</details>
+
+---
+
+
+
+<!-- recent_review_end -->
+<!-- walkthrough_start -->
+
+<details>
+<summary>📝 Walkthrough</summary>
+
+## Walkthrough
+
+### Changes
+
+The pull request adds SPARQL scope validation, carrier serialization rules, and blank-node identity handling across RDF storage and evaluation. It also adds portable scope tests and updates scratch-byte accounting and its profile fixtures.
+
+**SPARQL scope and blank-node identity**
+
+|Layer / File(s)|Summary|
+|:---|:---|
+|**Blank-identity primitives and fallible lists** <br> `crates/lex/src/terminals.rs`, `crates/rdf-core/src/blank_label.rs`, `crates/rdf-core/src/collections.rs`, `crates/rdf-core/src/ir/*`, `crates/rdf-core/src/dataset_view.rs`, `crates/rdf-core/tests/blank_publication.rs`|Blank-label validation is shared from the lexer. RDF terms and datasets expose stored blank identities, including identities embedded in composite literals. RDF-list construction gains a fallible API.|
+|**Algebra scope validation and evidence** <br> `crates/sparql-algebra/src/scope.rs`, `crates/sparql-algebra/src/validate.rs`, `crates/sparql-algebra/src/lib.rs`, `crates/sparql-algebra/tests/scope_*`, `crates/sparql-algebra/tests/support/scope_candidates.rs`, `crates/sparql-algebra/benches/*`, `crates/sparql-algebra/examples/*`, `docs/design/evidence/scope-investigation.json`, `docs/design/purrdf-sparql-scope.md`, `docs/design/purrdf-simd.md`, `scripts/simd-asm-manifest.toml`|The algebra crate adds typed scope diagnostics and iterative checks for hidden-variable observations, output positions, and blank-label ownership. Candidate checks, tests, benchmarks, and evidence record tested cases and boundaries.|
+|**Carrier validation and serialization** <br> `crates/sparql-algebra/src/serialize.rs`, `crates/sparql-algebra/src/algebra.rs`, `crates/sparql-algebra/tests/scoped_carriers.rs`|Carrier rendering validates representability, refuses concrete blank `VALUES` cells, and assigns aliases or witness variables to preserve blank identities. Tests cover projection, identity, and reparsing behavior.|
+|**Evaluation blank identity and minting** <br> `crates/sparql-eval/src/{blank_scope,construct,eval,expr,list_fn,parallel,remote,scratch,template,update,user_fn}.rs`, `crates/sparql-eval/src/engine/graph_build.rs`, `crates/sparql-eval/tests/scope_interactions.rs`, `crates/sparql-eval/tests/governed_*.rs`|Evaluation reserves concrete blank identities and uses collision-aware minting across query, template, update, list, user-function, CONSTRUCT, and SERVICE paths. Tests cover identity separation, mint failures, and scratch-budget outcomes.|
+|**Portable scope fixtures and integration checks** <br> `crates/rdf/tests/scope_portable.rs`, `crates/rdf/tests/scope_profiles.rs`, `crates/shapes/tests/scope_profiles.rs`, `crates/sparql-eval/tests/fixtures/scope/*`, `crates/sparql-eval/tests/scope_interactions.rs`|Portable fixtures define query inputs, datasets, manifests, and expected result bags. Integration tests exercise parsing, execution, retained plans, carriers, normalization, and SHACL constraint admission.|
+|**Scratch accounting and governor profile** <br> `crates/sparql-eval/src/{scratch,eval,governor}*`, `docs/SPARQL-GOVERNOR-PROFILE.md`, `crates/sparql-eval/tests/governed_*.rs`, `crates/sparql-conformance/tests/goldens/evaluator-trace/*`, `vectors/sparql-governors/*`, `scripts/conformance-frozen/vectors-sparql-governors.sha256`|Scratch arenas account for retained values and reserved identities through per-arena growth checkpoints. The governor profile advances to version 10, with corresponding tests, traces, and vector expectations.|
+
+<!-- change_assessment_start -->
+**Priority:** ➖ Normal
+
+**Estimated code review effort:** 5 (Critical) | ~120 minutes
+
+<!-- change_assessment_commit:"28744b104af37faeb43a25bf865c25fa7094bc4d" -->
+
+<!-- change_assessment_end -->
+
+</details>
+
+<!-- walkthrough_end -->
+<!-- final_review_risk_start -->
+**Merge Risk:** _⚪ Minimal_ · up to `28744`
+<!-- final_review_risk_coverage:{"sourceCommitId":"28744b104af37faeb43a25bf865c25fa7094bc4d","coveredCommitId":"28744b104af37faeb43a25bf865c25fa7094bc4d","kind":"reviewed"} -->
+
+The new audit entry matches the inventory, and no gate failure is established. No actionable merge blocker is evident.
+<!-- final_review_risk_end -->
+<!-- pre_merge_checks_walkthrough_start -->
+
+<details>
+<summary>🚥 Pre-merge checks | ✅ 4 | ❌ 1</summary>
+
+### ❌ Failed checks (1 warning)
+
+|     Check name     | Status     | Explanation                                                                                                                                                                                               | Resolution                                                                         |
+| :----------------: | :--------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- |
+| Docstring Coverage | ⚠️ Warning | Docstring coverage is 69.74% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 304 functions across 42 files. (2 skipped… | Write docstrings for the functions missing them to satisfy the coverage threshold. |
+
+<details>
+<summary>✅ Passed checks (4 passed)</summary>
+
+|         Check name         | Status   | Explanation                                                                                                                                                                                               |
+| :------------------------: | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|      Description Check     | ✅ Passed | Check skipped - CodeRabbit’s high-level summary is enabled.                                                                                                                                               |
+|         Title check        | ✅ Passed | The title clearly captures the SPARQL scope investigation and blank-identity work described in the pull request.                                                                                          |
+|     Linked Issues check    | ✅ Passed | `#387`’s coding requirements are met. `crates/sparql-algebra/src/scope.rs` provides shared typed scope checks and deterministic diagnostics. The scope report compares the three requested designs, record… |
+| Out of Scope Changes check | ✅ Passed | No unrelated change is demonstrated. Blank-identity traversal and indexing, carrier serialization, SERVICE remapping, template/list allocation, UPDATE/CONSTRUCT publication, and governor accounting su… |
+
+</details>
+
+<details>
+<summary>Full details: Docstring Coverage</summary>
+
+**Explanation**
+
+Docstring coverage is 69.74% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 304 functions across 42 files. (2 skipped: 2 unsupported.)
+
+</details>
+
+</details>
+
+<!-- pre_merge_checks_walkthrough_end -->
+
+- [ ] <!-- {"checkboxId":"585bb3f6-faf5-4dbf-96d2-74e382adf19a"} --> Fix all pre-merge checks with AI
+<!-- finishing_touch_checkbox_start -->
+
+<details>
+<summary>✨ Finishing Touches</summary>
+
+<details open>
+<summary>🧪 Generate unit tests (beta)</summary>
+
+- [ ] <!-- {"checkboxId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8", "radioGroupId": "utg-output-choice-group-unknown_comment_id"} --> Commit to this branch
+- [ ] <!-- {"checkboxId": "f47ac10b-58cc-4372-a567-0e02b2c3d479", "radioGroupId": "utg-output-choice-group-unknown_comment_id"} --> Create a new PR
+
+</details>
+
+</details>
+
+<!-- finishing_touch_checkbox_end -->
+
+<!-- autopilot:start -->
+- [ ] <!-- {"checkboxId":"2708ad07-9f24-4260-9c11-7dc76a49f2e3"} --> <strong title="Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts">Autopilot</strong> · Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts
+<!-- autopilot:end -->
+<!-- tips_start -->
+
+---
+
+
+
+
+<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>
+
+<!-- tips_end -->

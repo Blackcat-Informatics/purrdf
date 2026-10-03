@@ -1,0 +1,109 @@
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2057 file(s); entailment-overclaim ban swept 38 of 240 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2064 unit(s) outside that set).
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-algebra)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 37.16s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 2 tests
+test eval::tests::bnode_mint_prefix_accepts_a_shapes_style_prefix ... ok
+test eval::tests::bnode_mint_prefix_rejects_an_illegal_prefix ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1352 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 3 tests
+test remote::body_walk_tests::the_blank_node_scan_agrees_with_its_reference_on_generated_terms ... ok
+test remote::body_walk_tests::the_sanitizer_agrees_with_its_reference_on_generated_bodies ... ok
+test remote::body_walk_tests::a_hundred_thousand_level_body_is_sanitized_on_a_128_kib_stack ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1351 filtered out; finished in 0.13s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 12.15s
+     Running tests/scope_interactions.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-eval/40550e21ddab8f70/out/scope_interactions-40550e21ddab8f70)
+
+running 16 tests
+test bnode_allocation_is_fresh_against_default_scope_dataset_blank ... ok
+test ordinary_construct_allocation_is_distinct_from_a_carried_dataset_blank ... ok
+test load_then_insert_preserves_a_nested_identity_without_advancing_the_mint_counter ... ok
+test bnode_allocation_avoids_dataset_blanks_retained_only_inside_triple_terms ... ok
+test later_update_operations_avoid_blanks_retained_only_inside_new_terms ... ok
+test concrete_blank_identity_inside_rdf12_triple_terms_is_structural ... ok
+test concrete_blank_prebindings_preserve_scope_and_never_become_existentials ... ok
+test copied_raw_blank_sites_keep_independent_graph_owners ... ok
+test service_bnode_results_have_response_identity_separation ... ok
+test raw_late_values_cannot_capture_an_earlier_bnode_allocation ... ok
+test bnode_memo_and_prepared_reuse_preserve_scoped_identity_partitions ... ok
+test update_allocations_avoid_reserved_namespaces_and_honor_caller_prefix ... ok
+test lost_connections_and_early_projection_have_independently_distinct_bags ... ok
+test construct_and_insert_allocate_per_duplicate_row_and_per_execution ... ok
+test property_functions_share_existentials_without_leaking_witness_columns ... ok
+test federation_names_preserve_caller_lookalikes_and_zero_column_bags ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-algebra)
+    Finished `test` profile [optimized] target(s) in 0.70s
+     Running tests/scoped_carriers.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-algebra/63b76d6e0e22c12f/out/scoped_carriers-63b76d6e0e22c12f)
+
+running 9 tests
+test concrete_blank_cells_are_legal_algebra_and_refused_before_rendering ... ok
+test a_shared_owner_crossing_required_braces_uses_unprojected_collision_free_names ... ok
+test authored_blank_alias_lookalikes_and_quoted_endpoints_cannot_capture ... ok
+test canonical_source_endpoints_reconcile_raw_siblings_through_generated_union ... ok
+test independent_union_owners_receive_distinct_labels_deterministically ... ok
+test quoted_ground_cells_are_admitted_until_a_concrete_blank_occurs ... ok
+test positive_join_leaves_keep_one_blank_and_parsed_text_keeps_existing_bytes ... ok
+test opaque_raw_labels_receive_injective_legal_aliases_and_keep_repeated_identity ... ok
+test zero_column_and_deep_positive_carriers_preserve_witness_policy ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 16.91s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 27 tests
+test blank_label::tests::a_marker_token_never_merges_with_the_label_it_names ... ok
+test blank_label::tests::a_legal_label_equal_to_an_envelope_is_encoded_away_from_it ... ok
+test blank_label::tests::a_marker_token_outside_the_image_is_verbatim ... ok
+test blank_label::tests::a_token_outside_the_reserved_namespace_is_verbatim ... ok
+test blank_label::tests::ascii_sweep_ncname ... ok
+test blank_label::tests::ascii_sweep_blank_node_label ... ok
+test blank_label::tests::dispatch_via_is_valid_label ... ok
+test blank_label::tests::decode_inverts_encode_and_accepts_nothing_else ... ok
+test blank_label::tests::encode_output_is_always_legal_under_the_target_alphabet ... ok
+test blank_label::tests::encode_is_deterministic_across_runs ... ok
+test blank_label::tests::every_envelope_is_legal_in_every_alphabet ... ok
+test blank_label::tests::encode_is_injective_over_label_scope_pairs ... ok
+test blank_label::tests::structural_blank_node_label ... ok
+test blank_label::tests::internal_tables_match_independent_transcription ... ok
+test blank_label::tests::structural_blank_node_label_prefix ... ok
+test blank_label::tests::legal_prefix_always_yields_a_legal_minted_label ... ok
+test blank_label::tests::rewritten_labels_are_ascii_word_characters_only ... ok
+test blank_label::tests::structural_ncname ... ok
+test blank_label::tests::the_dotted_and_marker_family_stays_five_distinct_labels ... ok
+test blank_label::tests::the_envelope_is_the_documented_grammar ... ok
+test blank_label::tests::unicode_boundary_accepted_blank_node_label ... ok
+test blank_label::tests::unicode_boundary_rejected_blank_node_label ... ok
+test blank_label::tests::retarget_owned_label_equals_a_direct_encode ... ok
+test blank_label::tests::unscoped_legal_labels_are_borrowed_byte_identically ... ok
+test blank_label::tests::xml_text_admits_representable_non_whitespace_and_refuses_the_rest ... ok
+test blank_label::tests::encode_output_is_legal_for_every_scalar_position ... ok
+test blank_label::tests::decode_inverts_encode_for_every_scalar_position ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 1097 filtered out; finished in 0.00s
+
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-algebra)
+ Documenting purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-algebra)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/rdf-core)
+ Documenting purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-results)
+ Documenting purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 5.59s
+   Generated /opt/.cargo/slots/2b79b067da2bb563/0/target/doc/purrdf_core/index.html and 2 other files
+

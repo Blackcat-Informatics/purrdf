@@ -1,0 +1,24 @@
+
+running 13 tests
+scope_layout pointer_bytes=8 type=Variable bytes=16
+scope_layout pointer_bytes=8 type=Binder bytes=12
+scope_layout pointer_bytes=8 type=Identity bytes=40
+scope_layout pointer_bytes=8 type=Atom bytes=64
+scope_layout pointer_bytes=8 type=Contract bytes=72
+scope_layout pointer_bytes=8 type=Evidence bytes=312
+test recursive_term_claims_are_explicitly_unavailable ... ok
+test copied_source_provenance_has_explicit_admission_boundaries ... ok
+test query_head_observers_have_explicit_proof_boundaries ... ok
+test ordinary_projection_and_graph_name_claims_are_explicitly_unavailable ... ok
+test template_graph_and_predicate_positions_have_explicit_proof_boundaries ... ok
+test structural_candidates_have_demonstrated_proof_limits ... ok
+test every_intentional_hazard_violates_the_frozen_contract ... ok
+test every_legal_control_is_admitted_by_all_candidates ... ok
+test property_partitions_cover_every_hazard ... ok
+test intentional_hazards_survive_consistent_reencoding ... ok
+test all_measured_inputs_are_stack_safe_and_reusable ... ok
+test template_and_values_categories_survive_row_variation_and_binder_renumbering ... ok
+test distribution_and_alpha_renaming_preserve_frozen_relationships ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+

@@ -1,0 +1,26 @@
+{
+  "head_at_capture": "36122cc1ffd5580d3368dfad7aa8afaab4519a2d",
+  "working_diff_sha256": "fac2a095f2f3210e80388ef6ecd7222ab55bf99b62a9f75666abbb4219fc6bd7",
+  "captured_utc": "2026-10-03T09:22:30.908092+00:00",
+  "files": {
+    "crates/rdf-core/src/collections.rs": "981073d1771273088c2bb53163f480923bd9f4a698ac4eba51d9bd2323c58bf0",
+    "crates/rdf-core/src/dataset_view.rs": "fb329267d9a1f62d8a94620cd399dbc48b3be6db25037cbd475a95163f5f5c71",
+    "crates/rdf-core/src/ir/global.rs": "0d474539f0cf1950d5e493e1983dfca6ebce18c8bcaf7973d3c8f9788085e96f",
+    "crates/rdf-core/src/ir/mutable.rs": "e117ae76ebac3f576c8fb7924205befd8dbe9edd20413216107602afaaa823a9",
+    "crates/rdf-core/src/ir/term_walk.rs": "4affaae29595d6628c1ceb1982823b9c019317c84e675bbb4f6b926cb554bb3e",
+    "crates/sparql-eval/src/construct.rs": "16f18450d81a5daca3e3c2b09482fb521c0e837b933dadcc947ea00bd05b1f92",
+    "crates/sparql-eval/src/eval.rs": "f096ccae8851104a48df146132023854a4901f2a874ed3d283e859bf79e5a681",
+    "crates/sparql-eval/src/expr.rs": "44ef4343e9ed49a36d212569b634979e40a776e873847f2472b6b12ba861b524",
+    "crates/sparql-eval/src/list_fn.rs": "f03799dd15c0605d4067ee5ca9b4648c96800730f92ad14dbdb8c3a2540b8805",
+    "crates/sparql-eval/src/parallel.rs": "96d137176c55ff72bdcce801ba494bdbaa1ed6c1cc54a3830887b2acc79a03c0",
+    "crates/sparql-eval/src/remote.rs": "16d4e48616d65ce94194566b35afab22463d4bf9824afe1d0a062a0e1b027a3f",
+    "crates/sparql-eval/src/scratch.rs": "318b94a0a7d7ee967f5f519f91a40bbf9089735c439bcddcda6423b94bcea6cc",
+    "crates/sparql-eval/src/template.rs": "c09e532ef18e0a20fb0b6da71aa20d01e48c6479df34780754c1f20f237489d7",
+    "crates/sparql-eval/src/update.rs": "babb3896cc18dda1100cf98d99d0dde68a46a8bc8bd6d783549812f2f8ea6653",
+    "crates/sparql-eval/src/user_fn.rs": "bd552159f98669be7cf389f6baca5bc9a221642d7e3361aa3b037d9cbb5ca725",
+    "crates/sparql-eval/benches/query_eval.rs": "40c2c2213f29e13f39ef6a19fee9cc160eefc43ff40da26684c117787d6a17bf",
+    "Cargo.toml": "02b43e188d489473ab2948e8517910c48e644cd56c9247dea42d251c480f0b60",
+    "Cargo.lock": "90611854529927c5f20e418673217ba07368ea981ceae2104b7bda54af572486",
+    "rust-toolchain.toml": "fb4564a4be0c39a9f5114a0bd965c737884fa9623ebd99800f27d3711ae2e800"
+  }
+}

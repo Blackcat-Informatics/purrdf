@@ -1,0 +1,15 @@
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 32.90s
+     Running unittests src/lib.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 6 tests
+test remote::response_identity_tests::surplus_response_cells_do_not_allocate_discarded_identities ... ok
+test remote::response_identity_tests::separate_responses_avoid_local_callback_and_prior_mint_identities ... ok
+test remote::response_identity_tests::response_identity_partitions_survive_bare_quoted_and_composite_cells ... ok
+test remote::response_identity_tests::union_service_responses_retain_distinct_identities_when_forking_is_requested ... ok
+test remote::response_identity_tests::late_concrete_values_cannot_capture_an_earlier_service_response_blank ... ok
+test remote::response_identity_tests::response_ingest_walks_a_hundred_thousand_level_value_on_small_stack ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1343 filtered out; finished in 0.14s
+

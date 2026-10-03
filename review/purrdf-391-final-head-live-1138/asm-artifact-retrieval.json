@@ -1,0 +1,135 @@
+{
+  "retrieved_utc": "2026-10-03T11:40:12.822171+00:00",
+  "records": [
+    {
+      "name": "artifact-11273207358-simd-asm-aarch64-neoverse-v1.zip",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/artifacts/11273207358/zip"
+      ],
+      "exit_code": 0,
+      "bytes": 2629,
+      "sha256": "f2e85dde91db8698823469b19ada74f82dab1419ef30743f651fb670e9f987b3",
+      "stderr": ""
+    },
+    {
+      "name": "artifact-11273067505-simd-asm-x86_64-v4.zip",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/artifacts/11273067505/zip"
+      ],
+      "exit_code": 0,
+      "bytes": 2815,
+      "sha256": "c50d9fecfc2f5765c3f615fb4066a72e5ea3f4b0bb0cec09574efe306bfcf72c",
+      "stderr": ""
+    },
+    {
+      "name": "artifact-11272852679-simd-asm-wasm32.zip",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/artifacts/11272852679/zip"
+      ],
+      "exit_code": 0,
+      "bytes": 2267,
+      "sha256": "698e2cac48fe0436e11fff9604371b607656d8aa39480c3e726d4fc12844074c",
+      "stderr": ""
+    },
+    {
+      "name": "artifact-11272683408-simd-asm-aarch64.zip",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/artifacts/11272683408/zip"
+      ],
+      "exit_code": 0,
+      "bytes": 2551,
+      "sha256": "dd37cd259af208a338f02990fb50b71601a34c44c06a985412bef5ee6f1b9743",
+      "stderr": ""
+    },
+    {
+      "name": "artifact-11272633384-simd-asm-x86_64-v3.zip",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/artifacts/11272633384/zip"
+      ],
+      "exit_code": 0,
+      "bytes": 2848,
+      "sha256": "ca62b996cbf542e1b97da84146e22be2b625b80469ab90bd7a4609dcc82f4042",
+      "stderr": ""
+    },
+    {
+      "name": "artifact-11272294446-simd-asm-wasm32-simd128.zip",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/artifacts/11272294446/zip"
+      ],
+      "exit_code": 0,
+      "bytes": 2536,
+      "sha256": "d9a4869a93924048ad31076d00d2a30dd588d64fad3416081b50cbe93bb8a756",
+      "stderr": ""
+    },
+    {
+      "name": "artifact-11272134890-simd-asm-x86_64.zip",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/artifacts/11272134890/zip"
+      ],
+      "exit_code": 0,
+      "bytes": 2869,
+      "sha256": "ff3892a2e39522dad555458e861a757380066095d9f6a5599be0898c7e9d9353",
+      "stderr": ""
+    },
+    {
+      "name": "job-111193073450-asm-full.log",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073450/logs"
+      ],
+      "exit_code": 0,
+      "bytes": 51900,
+      "sha256": "12eda941fd9cea2f920383c53b06fe68569d22d569354d2bc14f720e249ee94b",
+      "stderr": ""
+    },
+    {
+      "name": "job-111193073444-asm-full.log",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073444/logs"
+      ],
+      "exit_code": 0,
+      "bytes": 72875,
+      "sha256": "4f94ee0cec3a23e416ea1453bc91304497ffebeb050963560743d708c469b3f1",
+      "stderr": ""
+    },
+    {
+      "name": "job-111193073392-asm-full.log",
+      "command": [
+        "gh",
+        "api",
+        "--allow-escape-sequences",
+        "repos/Blackcat-Informatics/purrdf/actions/jobs/111193073392/logs"
+      ],
+      "exit_code": 0,
+      "bytes": 71239,
+      "sha256": "0374bacac83d39b0cc3669f3bd50dc1d29cf48f006bf2d16e5e9598c236f5f58",
+      "stderr": ""
+    }
+  ]
+}

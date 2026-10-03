@@ -1,0 +1,17 @@
+{
+  "captured_utc": "2026-10-03T11:12:30.329698+00:00",
+  "head": "7f137d3e9c3b02961ab2ee368a7ea171c7a282a0",
+  "base": "97769c0d95026d95211768f0c30ce0c70c7309b3",
+  "files_sha256": {
+    "issue.json": "768227f6bc2c54ca139b4ff676b7f5a2d86bcf9f2a3dd122fbb7d830262f5155",
+    "issue-comments.json": "18ab656c33aa2c2f9605782abf061743e461da65ce255bc74a4b4d6bf9cf5983",
+    "pr.json": "4d807f6f0e9511903327ec328dcadc9282f748df8a3fc6c8d93f3bbf892fd53b",
+    "pr-comments.json": "a9fc074d0b82c1e4cd9ae94d247acf884ba3ae695ffdd129190c672927fc7880",
+    "reviews.json": "c0b39644919d31f9b8769f509e80941dac9a3ce6b35945b8b5c8519160ce13ee",
+    "review-comments.json": "063e1e8b7a0f1219b4f7169f1529f1e33b7640946ab272799ca2507b1788c007",
+    "review-threads.json": "95087016292d9978a86cc40307be0a1ecbe9c628767e81aaaefce389a5364456",
+    "pr-files.json": "4801295d20dea0733dbf49b3b264bb8a8418f234df7b76ae028031d1f06415e8",
+    "head-check-runs.json": "2066bc805da6ed4a5fca84cd06d9a1c0a451734b1af5912658125408e33d9f5b"
+  },
+  "complete_local_diff_sha256": "165023a4167e8ca4dc31d7f7776b4abc20ca66eff8ae4aabfa6e71df9a296496"
+}

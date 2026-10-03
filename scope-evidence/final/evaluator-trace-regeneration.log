@@ -1,0 +1,10 @@
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/387-blank-scope-investigation/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 0.86s
+     Running tests/evaluator_trace.rs (/opt/.cargo/slots/2b79b067da2bb563/0/build/debug/build/purrdf-sparql-conformance/b6640bd4ef6ade42/out/evaluator_trace-b6640bd4ef6ade42)
+
+running 2 tests
+test regenerate_update_trace ... ok
+test regenerate_evaluator_trace ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.30s
+

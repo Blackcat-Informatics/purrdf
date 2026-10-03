@@ -1,0 +1,72 @@
+{
+  "head": "28744b104af37faeb43a25bf865c25fa7094bc4d",
+  "snapshot_utc": "2026-10-03T11:49:08.336525+00:00",
+  "hosted_fully_green": true,
+  "checks_total": 50,
+  "check_counts": {
+    "success": 49,
+    "skipped": 1
+  },
+  "failed_checks": [],
+  "pending_checks": [],
+  "workflow_runs": [
+    {
+      "id": 37119631979,
+      "name": "Docs",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 37119631972,
+      "name": "CI",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 37119630127,
+      "name": "PR #391",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ],
+  "latest_commit_statuses": {
+    "CodeRabbit": {
+      "url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/statuses/28744b104af37faeb43a25bf865c25fa7094bc4d",
+      "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+      "id": 55511468483,
+      "node_id": "SC_kwDOTKq-Ms8AAAAM7L3Jww",
+      "state": "success",
+      "description": "Review completed",
+      "target_url": null,
+      "context": "CodeRabbit",
+      "created_at": "2026-10-03T11:38:19Z",
+      "updated_at": "2026-10-03T11:38:19Z",
+      "creator": {
+        "login": "coderabbitai[bot]",
+        "id": 136622811,
+        "node_id": "BOT_kgDOCCSy2w",
+        "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/coderabbitai%5Bbot%5D",
+        "html_url": "https://github.com/apps/coderabbitai",
+        "followers_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/followers",
+        "following_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/following{/other_user}",
+        "gists_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/subscriptions",
+        "organizations_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/orgs",
+        "repos_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/repos",
+        "events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/received_events",
+        "type": "Bot",
+        "user_view_type": "public",
+        "site_admin": false
+      }
+    }
+  },
+  "formal_current_head_reviews": 0,
+  "thread_total": 1,
+  "unresolved_threads": 0,
+  "source_unchanged": true,
+  "local_gate_boundary": "Parent reports current-head make check and make wasm PASS; full conformance and generated check remain running."
+}
