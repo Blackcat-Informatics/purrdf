@@ -23,6 +23,7 @@
 //! cursor on heap-allocated stacks, so nesting is bounded by memory alone.
 
 use core::fmt;
+use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
 
 /// Why a SPARQL query string failed to parse into the algebra.
 #[derive(Clone, PartialEq, Eq)]
@@ -93,6 +94,68 @@ purrdf_lex::constructors! {
 }
 
 impl ParseError {
+    /// The original parse condition, with stable variant identity and exact typed
+    /// fields. Hosts can distinguish a syntax rejection from lexical, IRI,
+    /// unsupported-construct and arity failures without interpreting English.
+    #[must_use]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "these templates are validated and rendered by DiagnosticPresentation"
+    )]
+    pub fn presentation(&self) -> DiagnosticPresentation {
+        use DiagnosticValue::{Text, Unsigned};
+        let parameter = |name, value| DiagnosticParameter::new(name, value);
+        let (identity, template, parameters) = match self {
+            Self::Lex { reason, at } => (
+                "sparql-parse-lex",
+                "SPARQL lex error at byte {at}: {reason}",
+                vec![
+                    parameter("at", Unsigned(*at as u64)),
+                    parameter("reason", Text(reason.clone())),
+                ],
+            ),
+            Self::Syntax { reason, at } => (
+                "sparql-parse-syntax",
+                "SPARQL syntax error at byte {at}: {reason}",
+                vec![
+                    parameter("at", Unsigned(*at as u64)),
+                    parameter("reason", Text(reason.clone())),
+                ],
+            ),
+            Self::Unsupported(feature) => (
+                "sparql-parse-unsupported",
+                "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 \
+                 query language this processor implements",
+                vec![parameter("feature", Text(feature.clone()))],
+            ),
+            Self::Iri { lexical, reason } => (
+                "sparql-parse-iri",
+                "invalid IRI {lexical:?} in term position: {reason}",
+                vec![
+                    parameter("lexical", Text(lexical.clone())),
+                    parameter("reason", Text(reason.clone())),
+                ],
+            ),
+            Self::CdtArity {
+                iri,
+                expected,
+                found,
+                at,
+            } => (
+                "sparql-parse-cdt-arity",
+                "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}",
+                vec![
+                    parameter("at", Unsigned(*at as u64)),
+                    parameter("iri", Text(iri.clone())),
+                    parameter("expected", Text(expected.clone())),
+                    parameter("found", Unsigned(*found as u64)),
+                ],
+            ),
+        };
+        DiagnosticPresentation::new(identity, template, parameters)
+            .expect("parse error templates and their typed argument sets agree")
+    }
+
     /// The byte offset the failure was reported at, for the position-bearing
     /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)/[`CdtArity`](Self::CdtArity)).
     /// `None` for [`Unsupported`](Self::Unsupported)/[`Iri`](Self::Iri), which are
@@ -122,31 +185,7 @@ impl ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Lex { reason, at } => write!(f, "SPARQL lex error at byte {at}: {reason}"),
-            Self::Syntax { reason, at } => {
-                write!(f, "SPARQL syntax error at byte {at}: {reason}")
-            }
-            Self::Unsupported(feature) => {
-                write!(
-                    f,
-                    "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 \
-                     query language this processor implements"
-                )
-            }
-            Self::Iri { lexical, reason } => {
-                write!(f, "invalid IRI {lexical:?} in term position: {reason}")
-            }
-            Self::CdtArity {
-                iri,
-                expected,
-                found,
-                at,
-            } => write!(
-                f,
-                "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}"
-            ),
-        }
+        f.write_str(self.presentation().english())
     }
 }
 
@@ -166,6 +205,82 @@ pub type Result<T> = core::result::Result<T, ParseError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presentation_preserves_variant_identity_fields_and_english() {
+        let errors = [
+            (
+                ParseError::lex("unexpected character", 7),
+                "sparql-parse-lex",
+                "SPARQL lex error at byte 7: unexpected character",
+            ),
+            (
+                ParseError::syntax("unexpected token", 7),
+                "sparql-parse-syntax",
+                "SPARQL syntax error at byte 7: unexpected token",
+            ),
+            (
+                ParseError::unsupported("a feature"),
+                "sparql-parse-unsupported",
+                "unsupported SPARQL construct: a feature is outside the SPARQL 1.2 query language this processor implements",
+            ),
+            (
+                ParseError::Iri {
+                    lexical: "quoted\"\\漢".into(),
+                    reason: "invalid".into(),
+                },
+                "sparql-parse-iri",
+                "invalid IRI \"quoted\\\"\\\\漢\" in term position: invalid",
+            ),
+            (
+                ParseError::CdtArity {
+                    iri: "http://example.org/function".into(),
+                    expected: "2 arguments".into(),
+                    found: 1,
+                    at: 7,
+                },
+                "sparql-parse-cdt-arity",
+                "SPARQL syntax error at byte 7: <http://example.org/function> takes 2 arguments, not 1",
+            ),
+        ];
+        for (error, identity, english) in errors {
+            let presentation = error.presentation();
+            assert_eq!(presentation.message_id(), identity);
+            assert_eq!(presentation.english(), english);
+            assert_eq!(error.to_string(), english);
+            let json = presentation.to_json();
+            assert_eq!(
+                json.get("messageId")
+                    .and_then(purrdf_lex::json::Value::as_str),
+                Some(identity)
+            );
+        }
+        let syntax = ParseError::syntax("scope violation", 7).presentation();
+        assert_eq!(
+            syntax.parameters()[0].value(),
+            &DiagnosticValue::Unsigned(7)
+        );
+        assert_eq!(
+            syntax.parameters()[1].value(),
+            &DiagnosticValue::Text("scope violation".into())
+        );
+        if let Ok(at) = usize::try_from(9_007_199_254_740_993_u64) {
+            let record = ParseError::syntax("scope violation", at)
+                .presentation()
+                .to_json();
+            assert_eq!(
+                record
+                    .get("parameters")
+                    .unwrap()
+                    .get("at")
+                    .unwrap()
+                    .get("value")
+                    .unwrap()
+                    .as_str(),
+                Some("9007199254740993")
+            );
+        }
+    }
 
     #[test]
     fn byte_offset_only_for_positional_variants() {
