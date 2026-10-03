@@ -177,6 +177,7 @@ jobs:
           name: license-evidence-cargo-c
           path: |
             target/license-evidence-cargo.json
+            target/dist/purrdf-capi-*.tar.gz
             target/dist/*.license-receipt.json
             target/dist/SHA256SUMS
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import json
 import subprocess
 import tempfile
 import unittest
@@ -21,6 +22,15 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 VERSION = "3.0.1"
 SHA = "a" * 40
+
+
+def http_response(code, body, returncode=0):
+    return subprocess.CompletedProcess(
+        [],
+        returncode,
+        f"HTTP/2.0 {code} verdict\r\nContent-Type: application/json\r\n\r\n{body}".encode(),
+        b"",
+    )
 
 
 class FakeGitHub:
@@ -87,6 +97,63 @@ class FakeGitHub:
     def download(self, asset, path):
         self.event("download")
         path.write_bytes(self.bytes[asset["name"]])
+
+
+class PublishedOnlyTransport(FakeGitHub):
+    """Exercise the real gh adapter: tag lookups cannot see draft releases."""
+
+    def __init__(self):
+        super().__init__()
+        self.paths = []
+        self.responses = {}
+        self.catalog = None
+        self.refetch = None
+
+    def __call__(self, arguments, **options):
+        if arguments[:3] == ["gh", "release", "create"]:
+            self.create_draft(
+                arguments[3],
+                arguments[arguments.index("--title") + 1],
+                Path(arguments[arguments.index("--notes-file") + 1]),
+            )
+        elif arguments[:3] == ["gh", "release", "upload"]:
+            self.upload(arguments[3], list(map(Path, arguments[6:-1])))
+        elif arguments[:3] == ["gh", "api", "--include"]:
+            path = arguments[3].removeprefix("repos/owner/repo/")
+            self.paths.append(path)
+            if path in self.responses:
+                return self.responses[path]
+            if path.startswith("git/ref/tags/"):
+                self.event("tag")
+                value = {"object": {"type": "commit", "sha": self.sha}}
+            elif path.startswith("releases/tags/"):
+                self.event("read")
+                if self.record is None or self.record["draft"]:
+                    return http_response(404, "{}", 1)
+                value = self.record
+            elif path.startswith("releases?"):
+                value = [] if self.record is None else [self.record]
+                if self.catalog is not None:
+                    value = self.catalog(copy.deepcopy(value))
+            elif path == f"releases/{self.record['id']}":
+                if "--method" in arguments:
+                    self.edit(self.record["id"], **json.loads(options["input"]))
+                    value = self.record
+                else:
+                    value = copy.deepcopy(self.record)
+                    if self.refetch is not None:
+                        value = self.refetch(value)
+            else:
+                raise AssertionError(f"unexpected API path: {path}")
+            return http_response(200, json.dumps(value))
+        elif arguments[:2] == ["gh", "api"]:
+            self.event("download")
+            asset_id = int(arguments[2].rsplit("/", 1)[1])
+            asset = next(a for a in self.record["assets"] if a["id"] == asset_id)
+            options["stdout"].write(self.bytes[asset["name"]])
+        else:
+            raise AssertionError(f"unexpected gh command: {arguments}")
+        return subprocess.CompletedProcess(arguments, 0, b"", b"")
 
 
 class PublicationTests(unittest.TestCase):
@@ -286,20 +353,292 @@ class PublicationTests(unittest.TestCase):
             self.publish()
         self.assert_no_publication()
 
+    def transport_publish(self, transport):
+        with patch.object(publisher.subprocess, "run", side_effect=transport):
+            publisher.publish(self.root, publisher.GitHub("owner/repo"), VERSION, SHA)
+
+    def test_real_transport_discovers_created_draft_then_verifies_publication(self):
+        transport = PublishedOnlyTransport()
+        self.transport_publish(transport)
+        self.assertTrue(transport.record["immutable"])
+        self.assertEqual(transport.events.count("create"), 1)
+        self.assertEqual(transport.events.count("download"), 8)
+        self.assertEqual(transport.paths.count("releases?per_page=100&page=1"), 3)
+        self.assertEqual(transport.paths.count("releases/12"), 3)
+        self.assertLess(
+            transport.events.index("download"), transport.events.index("publish")
+        )
+
+    def test_real_transport_reuses_draft_and_published_rerun_stays_read_only(self):
+        transport = PublishedOnlyTransport()
+        transport.fail_at = "upload"
+        with self.assertRaises(publisher.ReleaseError):
+            self.transport_publish(transport)
+        self.assertNotIn("publish", transport.events)
+        transport.fail_at = None
+        transport.events.clear()
+        self.transport_publish(transport)
+        self.assertNotIn("create", transport.events)
+        self.assertIn("edit", transport.events)
+        transport.events.clear()
+        transport.paths.clear()
+        for path in self.inputs:
+            path.unlink()
+        with patch.object(
+            publisher.notes_module,
+            "checksum_bytes",
+            side_effect=AssertionError("rebuilt"),
+        ):
+            self.transport_publish(transport)
+        self.assertEqual(set(transport.events), {"tag", "read", "download"})
+        self.assertEqual(
+            transport.paths,
+            [f"git/ref/tags/rust-v{VERSION}", f"releases/tags/rust-v{VERSION}"],
+        )
+
+    def test_catalog_and_refetch_refusals_never_mutate_drafts(self):
+        for failure in (
+            "transport",
+            "shape",
+            "malformed",
+            "duplicate",
+            "published",
+            "id",
+            "tag",
+            "draft",
+            "immutable",
+            "missing",
+            "bound",
+            "refetch-shape",
+            "refetch-http",
+            "bool-id",
+        ):
+            with self.subTest(failure=failure):
+                transport = PublishedOnlyTransport()
+                notes = self.root / "docs/releases/3.0.1.md"
+                transport.create_draft(f"rust-v{VERSION}", f"PurRDF {VERSION}", notes)
+                transport.events.clear()
+                if failure == "transport":
+                    transport.responses["releases?per_page=100&page=1"] = http_response(
+                        403, "{}", 1
+                    )
+                elif failure == "shape":
+                    transport.catalog = lambda _: {}
+                elif failure == "malformed":
+                    transport.catalog = lambda _: [None]
+                elif failure == "duplicate":
+                    transport.catalog = lambda rows: rows + rows
+                elif failure == "published":
+                    transport.catalog = lambda rows: [
+                        {**rows[0], "draft": False, "immutable": True}
+                    ]
+                elif failure == "missing":
+                    transport.responses["releases/12"] = http_response(404, "{}", 1)
+                elif failure == "refetch-shape":
+                    transport.responses["releases/12"] = http_response(200, "[]")
+                elif failure == "refetch-http":
+                    transport.responses["releases/12"] = http_response(500, "{}", 1)
+                elif failure == "bound":
+                    transport.catalog = lambda _: [
+                        {
+                            "id": i + 1,
+                            "tag_name": f"other-{i}",
+                            "draft": True,
+                            "immutable": False,
+                        }
+                        for i in range(100)
+                    ]
+                else:
+                    field, changed = {
+                        "id": ("id", 13),
+                        "bool-id": ("id", True),
+                        "tag": ("tag_name", "rust-vother"),
+                        "draft": ("draft", False),
+                        "immutable": ("immutable", True),
+                    }[failure]
+                    transport.refetch = lambda row, field=field, changed=changed: {
+                        **row,
+                        field: changed,
+                    }
+                with (
+                    patch.object(publisher.GitHub, "RELEASE_PAGE_LIMIT", 1),
+                    self.assertRaises(publisher.ReleaseError),
+                ):
+                    self.transport_publish(transport)
+                self.assertEqual(transport.events, ["tag", "read"])
+                self.assertTrue(transport.record["draft"])
+                self.assertFalse(transport.record["immutable"])
+
 
 class TransportTests(unittest.TestCase):
-    def response(self, code, body, returncode=0):
-        return subprocess.CompletedProcess(
-            [],
-            returncode,
-            f"HTTP/2.0 {code} verdict\r\nContent-Type: application/json\r\n\r\n{body}".encode(),
-            b"",
+    def row(self, identity, tag=None):
+        return {
+            "id": identity,
+            "tag_name": f"other-{identity}" if tag is None else tag,
+            "draft": True,
+            "immutable": False,
+        }
+
+    def test_multi_page_draft_lookup_uses_unique_exact_tag_and_refetches_id(self):
+        github = publisher.GitHub("owner/repo")
+        candidate = self.row(201, "rust-v3.0.1")
+        pages = [
+            [self.row(i + 1) for i in range(100)],
+            [self.row(200, "rust-v3.0.10"), candidate],
+        ]
+        with patch.object(
+            publisher.subprocess,
+            "run",
+            side_effect=[
+                http_response(404, "{}", 1),
+                *(http_response(200, json.dumps(page)) for page in pages),
+                http_response(200, json.dumps(candidate)),
+            ],
+        ) as run:
+            self.assertEqual(github.release("rust-v3.0.1"), candidate)
+        self.assertEqual(
+            [call.args[0][3] for call in run.call_args_list],
+            [
+                "repos/owner/repo/releases/tags/rust-v3.0.1",
+                "repos/owner/repo/releases?per_page=100&page=1",
+                "repos/owner/repo/releases?per_page=100&page=2",
+                "repos/owner/repo/releases/201",
+            ],
         )
+
+    def test_candidate_does_not_stop_catalog_scan_or_hide_later_duplicate(self):
+        candidate = self.row(1, "rust-v3.0.1")
+        full = [candidate, *(self.row(i + 2) for i in range(99))]
+        for last_page in ([], [self.row(200, "rust-v3.0.1")]):
+            with (
+                self.subTest(last_page=last_page),
+                patch.object(
+                    publisher.subprocess,
+                    "run",
+                    side_effect=[
+                        http_response(404, "{}", 1),
+                        http_response(200, json.dumps(full)),
+                        http_response(200, json.dumps(last_page)),
+                        http_response(200, json.dumps(candidate)),
+                    ],
+                ) as run,
+            ):
+                github = publisher.GitHub("owner/repo")
+                if last_page:
+                    with self.assertRaisesRegex(publisher.ReleaseError, "duplicate"):
+                        github.release("rust-v3.0.1")
+                    self.assertEqual(run.call_count, 3)
+                else:
+                    self.assertEqual(github.release("rust-v3.0.1"), candidate)
+                    self.assertEqual(run.call_count, 4)
+
+    def test_no_matching_draft_is_absent_only_after_complete_catalog(self):
+        full = [self.row(i + 1) for i in range(100)]
+        with patch.object(
+            publisher.subprocess,
+            "run",
+            side_effect=[
+                http_response(404, "{}", 1),
+                http_response(200, json.dumps(full)),
+                http_response(200, "[]"),
+            ],
+        ) as run:
+            self.assertIsNone(publisher.GitHub("owner/repo").release("rust-v3.0.1"))
+        self.assertEqual(run.call_count, 3)
+
+    def test_catalog_shape_and_all_rows_are_strict(self):
+        row = self.row(1)
+        malformed = [
+            {},
+            None,
+            True,
+            "record",
+            [],
+            {**row, "id": True},
+            {**row, "id": 0},
+            {**row, "id": "1"},
+            {**row, "tag_name": ""},
+            {**row, "tag_name": True},
+            {**row, "draft": 1},
+            {**row, "immutable": None},
+            {key: value for key, value in row.items() if key != "immutable"},
+        ]
+        pages = [{}, None, "catalog", *([bad] for bad in malformed), [row] * 101]
+        for page in pages:
+            with (
+                self.subTest(page=page),
+                patch.object(
+                    publisher.subprocess,
+                    "run",
+                    side_effect=[
+                        http_response(404, "{}", 1),
+                        http_response(200, json.dumps(page)),
+                    ],
+                ),
+                self.assertRaises(publisher.ReleaseError),
+            ):
+                publisher.GitHub("owner/repo").release("rust-v3.0.1")
+
+    def test_catalog_transport_failure_and_exhaustion_are_not_absence(self):
+        failures = [
+            *(
+                http_response(code, "{}", 1)
+                for code in (401, 403, 404, 422, 429, 500, 503)
+            ),
+            http_response(200, "not JSON"),
+            http_response(200, "[]", 1),
+            subprocess.CompletedProcess([], 1, b"", b"network down"),
+        ]
+        for result in failures:
+            with (
+                self.subTest(result=result),
+                patch.object(
+                    publisher.subprocess,
+                    "run",
+                    side_effect=[http_response(404, "{}", 1), result],
+                ),
+                self.assertRaises(publisher.ReleaseError),
+            ):
+                publisher.GitHub("owner/repo").release("rust-v3.0.1")
+        full = [self.row(i + 1) for i in range(100)]
+        with (
+            patch.object(publisher.GitHub, "RELEASE_PAGE_LIMIT", 2),
+            patch.object(
+                publisher.subprocess,
+                "run",
+                side_effect=[
+                    http_response(404, "{}", 1),
+                    http_response(200, json.dumps(full)),
+                    http_response(200, json.dumps(full)),
+                ],
+            ) as run,
+            self.assertRaisesRegex(publisher.ReleaseError, "bound exhausted"),
+        ):
+            publisher.GitHub("owner/repo").release("rust-v3.0.1")
+        self.assertEqual(run.call_count, 3)
+
+    def test_published_tag_lookup_never_lists_drafts(self):
+        record = {**self.row(1, "rust-v3.0.1"), "draft": False, "immutable": True}
+        with patch.object(
+            publisher.subprocess,
+            "run",
+            return_value=http_response(200, json.dumps(record)),
+        ) as run:
+            self.assertEqual(
+                publisher.GitHub("owner/repo").release("rust-v3.0.1"), record
+            )
+        self.assertEqual(run.call_count, 1)
 
     def test_only_404_authorizes_absent_release(self):
         github = publisher.GitHub("Blackcat-Informatics/purrdf")
         with patch.object(
-            publisher.subprocess, "run", return_value=self.response(404, "{}", 1)
+            publisher.subprocess,
+            "run",
+            side_effect=[
+                http_response(404, "{}", 1),
+                http_response(200, "[]"),
+                http_response(404, "{}", 1),
+            ],
         ):
             self.assertIsNone(github.release("rust-v3.0.1"))
             with self.assertRaises(publisher.ReleaseError):
@@ -310,7 +649,7 @@ class TransportTests(unittest.TestCase):
                 patch.object(
                     publisher.subprocess,
                     "run",
-                    return_value=self.response(code, "{}", 1),
+                    return_value=http_response(code, "{}", 1),
                 ),
                 self.assertRaises(publisher.ReleaseError),
             ):
@@ -319,8 +658,8 @@ class TransportTests(unittest.TestCase):
     def test_bad_transport_and_json_are_not_absence(self):
         for result in (
             subprocess.CompletedProcess([], 1, b"", b"network down"),
-            self.response(200, "not JSON"),
-            self.response(200, "[]"),
+            http_response(200, "not JSON"),
+            http_response(200, "[]"),
         ):
             with (
                 patch.object(publisher.subprocess, "run", return_value=result),
@@ -362,3 +701,9 @@ class TransportTests(unittest.TestCase):
         self.assertIn('--sha "$GITHUB_SHA"', workflow)
         self.assertNotIn("gh release create", workflow)
         self.assertNotIn("gh release upload", workflow)
+        self.assertIn(
+            "target/dist/purrdf-capi-*.tar.gz",
+            workflow.split("name: license-evidence-cargo-c", 1)[1].split("- name:", 1)[
+                0
+            ],
+        )
