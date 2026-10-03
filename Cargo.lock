@@ -750,6 +750,7 @@ dependencies = [
  "purrdf-lex",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
+ "purrdf-sparql-results",
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",

@@ -551,6 +551,10 @@ fn reaches_unsafe_builtin(
                     return true;
                 }
             }
+            // Each SERVICE response receives fresh local blank identities, even
+            // when its endpoint body is pure. The response therefore advances
+            // the same mint state as BNODE and cannot run from a forked counter.
+            Reach::Pattern(GraphPattern::Service { .. }) => return true,
             // A substituted copy's placeholder for a `LATERAL` right operand stands for an
             // operand the walk cannot see: `verdict` answers for it, and one it cannot
             // answer for is judged unsafe rather than safe by omission.

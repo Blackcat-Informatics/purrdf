@@ -30,15 +30,17 @@
 //! it emits documents PurRDF cannot read back.
 //!
 //! These helpers stop at the dataset-independent [`TermValue`]: a bound variable is
-//! resolved via `ctx.scratch.try_value_of(ctx.dataset, term).ok()?`, so the value is valid
-//! across a snapshot→mutable boundary (the UPDATE round-trip).
+//! resolved through the scratch interner, so the value is valid across a
+//! snapshot→mutable boundary (the UPDATE round-trip). Source read failures
+//! propagate separately from unbound positions.
 
 use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, DatasetView, TermValue};
-use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
+use purrdf_sparql_algebra::{NamedNodePattern, QuadPattern, TermPattern, TriplePattern};
 
 use crate::DetHashMap;
 use crate::convert::{literal_to_value, named_node_to_value};
+use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::solution::{Solution, VarSchema};
 
@@ -270,6 +272,7 @@ pub(crate) fn instantiate_ground_term(
     term: &TermPattern,
     blanks: &mut DetHashMap<String, String>,
     counter: &mut u64,
+    prefix: Option<&str>,
 ) -> Option<TermValue> {
     enum Step<'t> {
         Term(&'t TermPattern),
@@ -283,10 +286,9 @@ pub(crate) fn instantiate_ground_term(
             Step::Term(term) => match term {
                 TermPattern::NamedNode(n) => values.push(named_node_to_value(n)),
                 TermPattern::Literal(l) => values.push(literal_to_value(l)),
-                // The DATA path mints unprefixed: it is variable-free ingestion with a
-                // request-local counter, never a per-focus SHACL evaluation.
+                // The destination selects a disjoint namespace before DATA instantiation.
                 TermPattern::BlankNode(b) => {
-                    values.push(mint_blank(b.as_str(), blanks, counter, None));
+                    values.push(mint_blank(b.as_str(), blanks, counter, prefix));
                 }
                 TermPattern::Triple(t) => steps.extend([
                     Step::Assemble,
@@ -341,7 +343,10 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
     row: &Solution<D::Id>,
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Option<TermValue> {
+) -> Result<Option<TermValue>, EvalError> {
+    if ctx.expression_barrier.observed().is_some() {
+        return Ok(None);
+    }
     enum Step<'t> {
         Term(&'t TermPattern, &'t TermOrdinal),
         Predicate(&'t NamedNodePattern, &'t PredicateOrdinal),
@@ -360,12 +365,23 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
                             false,
                             "TermOrdinal must mirror the TermPattern it was resolved from"
                         );
-                        return None;
+                        return Ok(None);
                     };
-                    let term = ord.and_then(|c| row[c])?;
-                    values.push(ctx.scratch.try_value_of(ctx.dataset, term).ok()?);
+                    let Some(term) = ord.and_then(|c| row[c]) else {
+                        return Ok(None);
+                    };
+                    values.push(
+                        ctx.scratch
+                            .try_value_of(ctx.dataset, term)
+                            .map_err(EvalError::source_read)?,
+                    );
                 }
-                TermPattern::BlankNode(b) => values.push(fresh_blank(b.as_str(), blanks, ctx)),
+                TermPattern::BlankNode(b) => {
+                    let Some(value) = fresh_blank(b.as_str(), blanks, ctx)? else {
+                        return Ok(None);
+                    };
+                    values.push(value);
+                }
                 TermPattern::Triple(t) => {
                     // RDF 1.2 quoted-triple term in the template: its three positions
                     // are instantiated in turn, in lock step with their ordinals.
@@ -374,7 +390,7 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
                             false,
                             "TermOrdinal must mirror the TermPattern it was resolved from"
                         );
-                        return None;
+                        return Ok(None);
                     };
                     steps.extend([
                         Step::Assemble,
@@ -385,7 +401,10 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
                 }
             },
             Step::Predicate(predicate, ordinal) => {
-                values.push(instantiate_predicate(predicate, ordinal, row, ctx)?);
+                let Some(value) = instantiate_predicate(predicate, ordinal, row, ctx)? else {
+                    return Ok(None);
+                };
+                values.push(value);
             }
             Step::Assemble => {
                 let o = values
@@ -405,7 +424,7 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
             }
         }
     }
-    values.pop()
+    Ok(values.pop())
 }
 
 /// Instantiate a predicate template position. `None` = an unbound variable.
@@ -417,19 +436,24 @@ pub(crate) fn instantiate_predicate<D: DatasetView + Sync>(
     ordinal: &PredicateOrdinal,
     row: &Solution<D::Id>,
     ctx: &EvalCtx<'_, D>,
-) -> Option<TermValue> {
+) -> Result<Option<TermValue>, EvalError> {
     match predicate {
-        NamedNodePattern::NamedNode(n) => Some(named_node_to_value(n)),
+        NamedNodePattern::NamedNode(n) => Ok(Some(named_node_to_value(n))),
         NamedNodePattern::Variable(_) => {
             let PredicateOrdinal::Variable(ord) = ordinal else {
                 debug_assert!(
                     false,
                     "PredicateOrdinal must mirror the NamedNodePattern it was resolved from"
                 );
-                return None;
+                return Ok(None);
             };
-            let term = ord.and_then(|c| row[c])?;
-            Some(ctx.scratch.try_value_of(ctx.dataset, term).ok()?)
+            let Some(term) = ord.and_then(|c| row[c]) else {
+                return Ok(None);
+            };
+            ctx.scratch
+                .try_value_of(ctx.dataset, term)
+                .map(Some)
+                .map_err(EvalError::source_read)
         }
     }
 }
@@ -444,20 +468,27 @@ pub(crate) fn fresh_blank<D: DatasetView + Sync>(
     template_label: &str,
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
-) -> TermValue {
-    mint_blank(
-        template_label,
-        blanks,
-        &mut ctx.bnode_counter,
-        ctx.bnode_mint_prefix.as_deref(),
-    )
+) -> Result<Option<TermValue>, EvalError> {
+    let label = if let Some(existing) = blanks.get(template_label) {
+        existing.clone()
+    } else {
+        let Some(label) = ctx.try_mint_blank_label("c")? else {
+            return Ok(None);
+        };
+        blanks.insert(template_label.to_owned(), label.clone());
+        label
+    };
+    Ok(Some(TermValue::Blank {
+        label,
+        scope: BlankScope::DEFAULT,
+    }))
 }
 
 /// The blank-minting core (independent of [`EvalCtx`]): first occurrence of
 /// `template_label` mints a unique label from the monotonic `counter`, later
-/// occurrences in the same `blanks` scope reuse it. Used by [`fresh_blank`]
-/// (threading `ctx.bnode_counter` and the context's mint prefix) and the
-/// variable-free DATA path (a local counter, no prefix).
+/// occurrences in the same `blanks` scope reuse it. Used by the variable-free
+/// DATA path after destination namespace selection; evaluation-context mints
+/// also check source and scratch identities through [`fresh_blank`].
 ///
 /// With `prefix: None` the minted label is exactly `c{n}` — byte-identical to
 /// every pre-prefix caller; with `Some(prefix)` it is `{prefix}c{n}`.
@@ -480,6 +511,56 @@ pub(crate) fn mint_blank(
         label: fresh,
         scope: BlankScope::DEFAULT,
     }
+}
+
+/// Choose a deterministic mint namespace disjoint from the destination's blanks.
+/// `occupied(prefix)` reports whether a default-scope identity starts with that
+/// prefix; the empty prefix asks whether any such identity exists. A destination
+/// without default-scope blanks retains the caller's ordinary mint spelling.
+pub(crate) fn destination_mint_prefix(
+    requested: Option<&str>,
+    mut occupied: impl FnMut(&str) -> bool,
+) -> Option<String> {
+    if !occupied("") {
+        return None;
+    }
+    let requested = requested.unwrap_or("");
+    for ordinal in 0_u64.. {
+        let candidate = format!("{requested}append{ordinal}_");
+        if !occupied(&candidate) {
+            return Some(candidate);
+        }
+    }
+    unreachable!("a finite destination cannot occupy every mint namespace")
+}
+
+/// Whether a template has a blank mint position, including quoted triples.
+pub(crate) fn template_has_blank_node(template: &[QuadPattern]) -> bool {
+    // A graph position admits only an IRI or a variable, so it can never hold a
+    // blank node and never needs scanning.
+    template
+        .iter()
+        .any(|quad| triple_pattern_has_blank_node(&quad.triple))
+}
+
+/// The [`TriplePattern`] half of [`template_has_blank_node`]'s scan.
+fn triple_pattern_has_blank_node(tp: &TriplePattern) -> bool {
+    term_pattern_has_blank_node(&tp.subject) || term_pattern_has_blank_node(&tp.object)
+}
+
+/// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, through nested
+/// quoted-triple positions — subject before object, over a work list rather than the
+/// call stack, ending at the first blank node found.
+pub(crate) fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
+    let mut pending: Vec<&TermPattern> = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(_) => return true,
+            TermPattern::Triple(inner) => pending.extend([&inner.object, &inner.subject]),
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -619,13 +700,16 @@ mod term_walk_tests {
                 let term = ord.and_then(|c| row[c])?;
                 Some(ctx.scratch.try_value_of(ctx.dataset, term).ok()?)
             }
-            TermPattern::BlankNode(b) => Some(fresh_blank(b.as_str(), blanks, ctx)),
+            TermPattern::BlankNode(b) => {
+                fresh_blank(b.as_str(), blanks, ctx).expect("the fixture source is readable")
+            }
             TermPattern::Triple(t) => {
                 let TermOrdinal::Triple(to) = ordinal else {
                     panic!("the ordinal mirrors the pattern");
                 };
                 let s = instantiate_reference(&t.subject, &to.subject, row, blanks, ctx)?;
-                let p = instantiate_predicate(&t.predicate, &to.predicate, row, ctx)?;
+                let p = instantiate_predicate(&t.predicate, &to.predicate, row, ctx)
+                    .expect("the fixture source is readable")?;
                 let o = instantiate_reference(&t.object, &to.object, row, blanks, ctx)?;
                 Some(TermValue::Triple {
                     s: TermBox::new(s),
@@ -714,7 +798,8 @@ mod term_walk_tests {
             let mut budget = 5;
             let pattern = pattern(&mut choices, &mut budget);
             let (mut blanks_walk, mut counter_walk) = (DetHashMap::default(), 0_u64);
-            let walked = instantiate_ground_term(&pattern, &mut blanks_walk, &mut counter_walk);
+            let walked =
+                instantiate_ground_term(&pattern, &mut blanks_walk, &mut counter_walk, None);
             let (mut blanks_ref, mut counter_ref) = (DetHashMap::default(), 0_u64);
             let referenced = ground_reference(&pattern, &mut blanks_ref, &mut counter_ref);
             assert_eq!(walked, referenced, "seed {seed}");
@@ -743,7 +828,8 @@ mod term_walk_tests {
                 &row,
                 &mut blanks_walk,
                 &mut ctx_walk,
-            );
+            )
+            .expect("the fixture source is readable");
             let mut ctx_ref = EvalCtx::new(&*dataset);
             let mut blanks_ref = DetHashMap::default();
             let referenced =
@@ -761,7 +847,7 @@ mod term_walk_tests {
 
             let mut blanks = DetHashMap::default();
             let mut counter = 0_u64;
-            let ground = instantiate_ground_term(&pattern, &mut blanks, &mut counter)
+            let ground = instantiate_ground_term(&pattern, &mut blanks, &mut counter, None)
                 .expect("a variable-free template term instantiates");
             let (levels, innermost) = unwind(&ground);
             assert_eq!(levels, DEPTH);
@@ -776,6 +862,7 @@ mod term_walk_tests {
             let ordinal = resolve_term(&pattern, &schema);
             let mut blanks = DetHashMap::default();
             let driven = instantiate_term(&pattern, &ordinal, &row, &mut blanks, &mut ctx)
+                .expect("the fixture source is readable")
                 .expect("a variable-free template term instantiates");
             let (levels, innermost) = unwind(&driven);
             assert_eq!(levels, DEPTH);

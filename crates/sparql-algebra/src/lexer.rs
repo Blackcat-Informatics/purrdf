@@ -660,7 +660,7 @@ impl<'a> Lexer<'a> {
     /// `[#x203F-#x2040]`), and `'.'` may appear only between name characters.
     /// Scanning the head with the tail class accepted `_:-a`, `_:.a` and
     /// `_:\u{300}a` as labels — and that asymmetry had a sharp edge, because
-    /// `purrdf_rdf_core::blank_label::is_valid_blank_node_label` implements the
+    /// [`terminals::is_valid_blank_node_label`] implements the
     /// same production on EGRESS and refuses all three: this parser was reading
     /// labels its own writer would not write, so a round trip through the
     /// workspace's own codecs could not be closed.

@@ -3,7 +3,7 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 9
+**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 10
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Every value in this document is readable from the library rather than only from
@@ -108,7 +108,7 @@ a breaking change rather than a cosmetic edit.
 | `fuel` | abstract execution steps, priced by §4 | sum | yes |
 | `answer-rows` | what the query commits to its **answer sequence** | sum | yes |
 | `intermediate-cells` | the largest single intermediate bag, in `rows × columns` | **max** | yes |
-| `scratch-bytes` | bytes minted into the per-query scratch arena | sum | yes |
+| `scratch-bytes` | computed-term arenas, identity reservations and explicitly charged retained aggregate buffers/state | sum | yes |
 | `remote-requests` | requests issued to a federated endpoint | sum | yes |
 | `udf-depth` | nesting depth of user-defined function invocation | **max** | **no** — fixed at 32 |
 | `pages` | distinct pages a demand-paging operation may admit | sum | via `PagedQueryLimits` |
@@ -153,12 +153,24 @@ corpus's `boundary` band (ceiling = the metered cost) must **complete** while it
 Charging saturates at `u64::MAX` rather than overflowing: an arithmetic panic in a
 resource meter would turn an exhausted budget into a crash.
 
-The scratch ceiling is observed at each operator commit boundary, after that operator's
-value construction has made its exact arena growth knowable. It is not a reservation
-system: the operator that first crosses the ceiling remains in the certified partial
-result, and reported consumption may exceed the ceiling by that one operator's growth.
-This post-mint boundary is deliberate; pre-admitting `CONCAT`, `REPLACE`, aggregate, and
-extension-function output would require guessing bytes before the value exists.
+Each scratch arena charges its own deterministic growth: separately charged aggregate
+buffers/state and other arenas cannot serve as its watermark. A repeated checkpoint
+charges no byte twice. Clear/replacement and independently evaluated copies start their
+own accounting; a different execution receipt accounts retained values independently.
+The arena proxy sums each owned value's lexical/IRI payload plus 32 bytes per term;
+identity reservations likewise charge the retained label's bytes plus 32.
+
+Ordinary computed output is checkpointed at the operator commit boundary, after its
+exact arena growth is knowable. Reported consumption can exceed the ceiling by that
+operator's growth. Pre-admitting `CONCAT`, `REPLACE`, aggregate and extension-function
+output would require guessing bytes before the value exists.
+
+Concrete source-input reservations and each fresh blank mint checkpoint immediately.
+A stateful user-function child retains and charges its own reservation copy. Exhaustion
+remains a typed governor outcome: incomplete expression rows and template/list/SERVICE
+output are withheld, and an UPDATE request aborts its staged mutations before publication.
+These checkpoints stop additional allocation after the first trip; they do not undo a
+certified WHERE prefix reached before that trip.
 
 ## 4. The charge schedule (normative)
 
@@ -500,7 +512,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `9` |
+| `GOVERNOR_PROFILE_VERSION` | `10` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -517,7 +529,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n9\n'
+{ printf 'purrdf-sparql-governors\n10\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -526,7 +538,7 @@ therefore recompute it from this document alone:
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work
 } | sha256sum
-# 0fb77b0d1cea5674584bfae556a47188a1aa2926078e604f0448589680d7cc16
+# d1a2df1c68427c65add1e1d9279bb0d252290f921be8086384b4178531921ea8
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -610,7 +622,7 @@ at the former and a certified positional-prefix `budget-exhausted` at the latter
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = b20fbee8919cfaa3f8b831effd8d68d16b51b0b51ee8466ede4d1d3499720978
+GOVERNOR_CORPUS_DIGEST = ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -655,22 +667,24 @@ increment it. That restraint is what makes the number worth pinning.
 | 6 | `aggregate-invocation` and `aggregate-accumulation` are appended, because the evaluator's third such producer — an aggregate, built-in or a registered custom aggregate alike — folds a group's rows into one answer, and that fold's init/finish and per-value work rode the generic per-node accounting until now. Both points are charged from the one dispatch site that decides which kind of fold a given aggregate expression names, so a built-in and a custom aggregate over the same group shape cost the same fuel. No query without an aggregate charges either point |
 | 7 | `exists-probe-answered`, `exists-definition-answered`, and `exists-inner-solutions-consumed` are appended, because existence evaluation's strategy choice became an observable event: one memoized-probe evaluation, one per-row-definition evaluation (charged once per distinct restriction of the row to the inner's correlated variables, never once per outer row), and one row the definition path's inner materialized before its first-witness stop. The three make the probe/definition split and its witness cost readable off the evidence rather than inferred, which is what lets a ceiling be sized against the strategy a query actually takes. No query without an `EXISTS`/`NOT EXISTS` filter charges any of the three |
 | 8 | `property-function-work` is appended, because v5 priced a host relation by the two quantities the *engine* can see — invocations driven and rows accepted — and for a generator relation neither is where the work is: a nearest-neighbour search examining a million vectors to return five rows charged six units, pricing a million distance computations exactly as it priced a six-row table scan. The count comes from the relation itself through `PfCursor::take_work`, the only party that can see inside its own search, and it is *spent* rather than merely recorded — so over-reporting exhausts the reporter's own caller, and under-reporting (the default, zero) can cost a receipt precision but never costs soundness, because every other ceiling stays in force unchanged. No relation written against v5's seam charges it |
-| **9** | schedule byte-identical; the per-row loops of `FILTER`, `BIND`, `UNFOLD` and every aggregate pass one checkpoint: a trip already latched is observed before the next row, `UNFOLD` admits a row before it ingests it, work is reported to the stop poll exactly once, and a loop forked across threads admits only the rows the remaining fuel covers and commits them in source order, so it trips on the row, spends the fuel and keeps the prefix the sequential loop does. Charge order inside those loops, and where polls fall in forked loops, move |
+| 9 | schedule byte-identical; the per-row loops of `FILTER`, `BIND`, `UNFOLD` and every aggregate pass one checkpoint: a trip already latched is observed before the next row, `UNFOLD` admits a row before it ingests it, work is reported to the stop poll exactly once, and a loop forked across threads admits only the rows the remaining fuel covers and commits them in source order, so it trips on the row, spends the fuel and keeps the prefix the sequential loop does. Charge order inside those loops, and where polls fall in forked loops, move |
+| **10** | fuel schedule byte-identical; each scratch arena charges its own retention independently of aggregate buffers/state and child arenas, so an unrelated scratch charge cannot hide later computed values. Concrete identity registration, fresh blank mints and stateful child reservation copies checkpoint scratch growth immediately. Incomplete expression/template/list/SERVICE output is withheld and staged UPDATE publication is aborted on a trip. Scratch consumption and the point at which a scratch ceiling trips can move |
 
 ### 12.1 What a consumer must re-verify when the version moves
 
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `9` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `10` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
    lying and must be rejected rather than reconciled.
 2. **Re-measure every fuel ceiling** under `QueryGovernors::METERED`, against your own
    representative queries. A ceiling sized against the previous version was sized
-   against work this build may no longer do (v3) or may now do (v4, v5, v6, v7, v8), or does in another order (v9). Do not
-   scale the old number.
+   against work this build may no longer do (v3) or may now do (v4, v5, v6, v7, v8), or does in another order (v9). **Re-measure scratch ceilings too:** v10 counts
+   retention independently and checkpoints concrete identity allocation immediately.
+   Do not scale the old number.
 3. **Re-check ceilings you sized at or near a boundary.** Ceilings are inclusive, so a
    ceiling that was exactly the metered cost completed; after a bump it may be one
    short.
@@ -692,7 +706,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `9` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `10` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

@@ -183,7 +183,7 @@ A **cancellation** is not a clock, so cancellation cases are pinned in full.
 | `aggregate-invocation-fuel-*` | `aggregate-invocation` | the invocation point **alone** — twelve aggregate expressions folding one implicit group whose input matches nothing, so the band contains twelve invocation charges and zero accumulation charges |
 | `aggregate-accumulation-fuel-*` | `aggregate-accumulation` | the accumulation point **alone** — one aggregate expression (`SUM`) folding one implicit group of twelve rows, so the band contains one invocation charge and twelve accumulation charges |
 | `aggregate-custom-fuel-*` | `aggregate-accumulation` data, `aggregate-custom` query | the SAME group shape as `aggregate-accumulation-fuel-*`, folded through a registered custom aggregate instead of the built-in `SUM` — a direct fuel comparison between the two dispatch paths |
-| `aggregate-custom-scratch-bytes-*` | `aggregate-custom-scratch` data, `aggregate-custom` query | 1200 rows in one implicit group, above the evaluator's within-group chunk threshold — the custom accumulator's declared `ScratchBytes` state bound, charged once per live chunk, exercising the ONE dimension no built-in aggregate ever charges at all |
+| `aggregate-custom-scratch-bytes-*` | `aggregate-custom-scratch` data, `aggregate-custom` query | 1200 rows in one implicit group, above the evaluator's within-group chunk threshold — retained input tuples, the final result and the custom accumulator's declared `ScratchBytes` state bound, charged once per live chunk; built-in folds have no host-declared accumulator bound |
 | `answer-rows-*` | `chain` | what the query commits to its answer sequence |
 | `intermediate-cells-*` | `join` | the largest intermediate bag; the zero and over-bound cases are refused at **admission**, because the planner's estimate already exceeds the ceiling |
 | `scratch-bytes-*` | `concat` | arena growth, which is independent of every row and cell count |
@@ -397,8 +397,8 @@ case that took it at all.
 |---|---|---|
 | `aggregate-custom-fuel-boundary` | `aggregate-accumulation` data, `aggregate-custom` query | fuel 45 — identical to `aggregate-accumulation-fuel-boundary`'s; `complete`, 1 row |
 | `aggregate-custom-fuel-over-bound` | `aggregate-accumulation` data, `aggregate-custom` query | fuel 44; `budget-exhausted fuel`, 1 row |
-| `aggregate-custom-scratch-bytes-boundary` | `aggregate-custom-scratch` data, `aggregate-custom` query | scratch-bytes 2112; `complete`, 1 row |
-| `aggregate-custom-scratch-bytes-over-bound` | `aggregate-custom-scratch` data, `aggregate-custom` query | scratch-bytes 2111; `budget-exhausted scratch-bytes`, 1 row |
+| `aggregate-custom-scratch-bytes-boundary` | `aggregate-custom-scratch` data, `aggregate-custom` query | scratch-bytes 92280; `complete`, 1 row |
+| `aggregate-custom-scratch-bytes-over-bound` | `aggregate-custom-scratch` data, `aggregate-custom` query | scratch-bytes 92279; `budget-exhausted scratch-bytes`, 1 row |
 
 `aggregate-custom-fuel-*` drives the identical twelve-row, no-`GROUP BY` shape
 `aggregate-accumulation-fuel-*` does, through a registered custom aggregate
@@ -410,16 +410,21 @@ must be, and is, identical: 45 at the boundary, both times.
 checks this directly against the frozen numbers above, not merely against an
 in-crate unit test that could drift from what the corpus itself pins.
 
-`aggregate-custom-scratch-bytes-*` is the lane no built-in aggregate can ever
-exercise: `ScratchBytes` is charged only against a custom aggregate's declared
-[`CustomAggregate::state_bound`](../../crates/sparql-eval/src/agg_fn.rs), and
-only once the group is large enough to cross the evaluator's within-group
-chunk threshold (1200 rows, one implicit group, well above
-`PARALLEL_MIN_ROWS`). The registered fixture aggregate declares a state bound
-of 64 bytes; the fold plans 33 chunks for 1200 rows, so the pinned charge is
-`64 × 33 = 2112` — the admission charge for the first accumulator plus the
-extra 32 the chunked fold actually allocates. That chunk count, and hence this
-charge, is a pure function of the row count alone: it does not depend on
+`aggregate-custom-scratch-bytes-*` includes the retained input tuples and final
+computed result that built-in folds also charge, plus a custom aggregate's declared
+[`CustomAggregate::state_bound`](../../crates/sparql-eval/src/agg_fn.rs).
+The first accumulator's bound is charged at admission even for a small group;
+additional live accumulators are charged when the group crosses the within-group
+chunk threshold (1200 rows here, one implicit group, well above
+`PARALLEL_MIN_ROWS`). The retained integers 0 through 1199 cost 90,090 proxy bytes.
+The registered fixture aggregate declares a state bound of 64 bytes; the fold
+plans 33 chunks, adding `64 × 33 = 2112` — the admission charge for the first
+accumulator plus the extra 32 the chunked fold actually allocates. The computed
+result `719400` costs another 78 bytes (six lexical bytes, 40 datatype bytes and
+32 overhead), making the total 92,280. Profile 10 charges this independently
+owned result even though the survivor buffer and accumulator state already spent
+more scratch bytes than the arena retained. The chunk count and these charges
+are pure functions of the row count and values: they do not depend on
 `rayon::current_num_threads()`, so the SAME query/data/ceiling triple this
 pair pins is admitted or refused identically on every host, which is exactly
 the property `purrdf_sparql_eval::parallel::aggregate_chunk_size_for`'s own

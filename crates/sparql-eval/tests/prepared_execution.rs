@@ -496,9 +496,11 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 /// query carries three distinct IRIs rather than one: a per-occurrence cost would show
 /// here as a multiple of three.
 ///
-/// The **49**, read off the calling thread's ledger one allocation at a time:
+/// The **48**, read off the calling thread's ledger one allocation at a time:
 ///
-/// * **2** the per-call `Query::validate` walk's traversal stack;
+/// * **1** the per-call `Query::validate` walk's root list; its shared borrowed
+///   traversal keeps this shallow fixture's pending nodes inline, so the former
+///   heap traversal-stack growth is absent;
 /// * **1** the evaluation context;
 /// * **11** the two basic graph patterns — their compiled patterns, working schemas
 ///   and row buffers;
@@ -512,7 +514,7 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 ///
 /// None of it is the plan: the numbered tree and the `FILTER`'s compiled program are
 /// the admitted plan's, built on its first evaluation and shared by every later one.
-const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 49;
+const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 48;
 
 /// The query [`PREPARED_PLAN_CALL_ALLOCATIONS`] is measured over.
 ///
@@ -550,6 +552,17 @@ fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
     let prepared = engine
         .prepare_query_with_options(PREPARED_PLAN_QUERY, None, QueryOptions::EMPTY)
         .expect("the fixture query parses and is admitted");
+
+    let validation_window = CurrentThreadWindow::open();
+    prepared
+        .query()
+        .validate()
+        .expect("admitted query remains valid");
+    assert_eq!(
+        validation_window.close().allocations,
+        1,
+        "the shallow admission walk allocates only its root list"
+    );
 
     let run = || -> u64 {
         let window = CurrentThreadWindow::open();

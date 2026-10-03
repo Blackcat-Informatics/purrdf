@@ -175,8 +175,8 @@ solutions vars=["median", "p50", "p10", "p90"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:p10> "1.4"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n0 <urn:purrdf:conformance:var:p50> "3"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n0 <urn:purrdf:conformance:var:p90> "4.6"^^<http://www.w3.org/2001/XMLSchema#decimal> .
-metered complete fuel=51 answer-rows=1 intermediate-cells=10 scratch-bytes=5556
-explain fuel=51 answer-rows=1 intermediate-cells=10 scratch-bytes=5556
+metered complete fuel=51 answer-rows=1 intermediate-cells=10 scratch-bytes=5779
+explain fuel=51 answer-rows=1 intermediate-cells=10 scratch-bytes=5779
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=8 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=7 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -266,8 +266,8 @@ solutions vars=["variance", "varPop", "stddev", "stddevPop"] rows=1 ordered=fals
 | _:c14n0 <urn:purrdf:conformance:var:stddevPop> "1.4142135623730951E0"^^<http://www.w3.org/2001/XMLSchema#double> .
 | _:c14n0 <urn:purrdf:conformance:var:varPop> "2"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n0 <urn:purrdf:conformance:var:variance> "2.5"^^<http://www.w3.org/2001/XMLSchema#decimal> .
-metered complete fuel=51 answer-rows=1 intermediate-cells=10 scratch-bytes=1716
-explain fuel=51 answer-rows=1 intermediate-cells=10 scratch-bytes=1716
+metered complete fuel=51 answer-rows=1 intermediate-cells=10 scratch-bytes=2046
+explain fuel=51 answer-rows=1 intermediate-cells=10 scratch-bytes=2046
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=8 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=7 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -326,8 +326,8 @@ fuel 51..=64 x14 complete rows=1 digest=ee7bdef16838517e | fuel=51
 == purrdf-extend <http://purrdf.test/extend#aggStatTopk> AGG(...) TOPK(K=3) returns the three largest values, space-joined, descending
 solutions vars=["top"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:top> "5 4 3" .
-metered complete fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=877
-explain fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=877
+metered complete fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=953
+explain fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=953
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Group rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 aggregate-invocation=1 aggregate-accumulation=5
@@ -356,8 +356,8 @@ fuel 24..=64 x41 complete rows=1 digest=17e8ae6c68589f5d | fuel=24
 == purrdf-extend <http://purrdf.test/extend#aggStatTopkDiscriminating> AGG(...) TOPK(K=3) sorts by VALUE, over a permutation uncorrelated with subject/insertion order, so it cannot pass by coincidentally returning the last K rows seen instead
 solutions vars=["top"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:top> "50 40 30" .
-metered complete fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=882
-explain fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=882
+metered complete fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=961
+explain fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=961
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Group rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 aggregate-invocation=1 aggregate-accumulation=5
@@ -633,8 +633,8 @@ fuel 22..=64 x43 complete rows=2 digest=5912a21885e5f706 | fuel=22
 == purrdf-extend <http://purrdf.test/extend#groupConcatOrder> GROUP_CONCAT concatenates in inner-operator row order, proved via a spec-guaranteed ORDER BY DESC subquery rather than incidental store scan order — an exact-string pin through this harness's own load/evaluate path
 solutions vars=["g"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:g> "c-b-a" .
-metered complete fuel=26 answer-rows=1 intermediate-cells=6 scratch-bytes=216
-explain fuel=26 answer-rows=1 intermediate-cells=6 scratch-bytes=216
+metered complete fuel=26 answer-rows=1 intermediate-cells=6 scratch-bytes=292
+explain fuel=26 answer-rows=1 intermediate-cells=6 scratch-bytes=292
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Group rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 aggregate-invocation=1 aggregate-accumulation=3
@@ -1311,8 +1311,8 @@ graph quads=13
 | _:c14n4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:c14n3 .
 | _:c14n5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://purrdf.test/list#y> .
 | _:c14n5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:c14n1 .
-metered complete fuel=6 answer-rows=13 intermediate-cells=3 scratch-bytes=35
-explain fuel=6 answer-rows=13 intermediate-cells=3 scratch-bytes=35
+metered complete fuel=6 answer-rows=13 intermediate-cells=3 scratch-bytes=245
+explain fuel=6 answer-rows=13 intermediate-cells=3 scratch-bytes=245
 node 0 depth=0 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
@@ -1440,8 +1440,8 @@ graph quads=5
 | _:c14n0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:c14n1 .
 | _:c14n1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://purrdf.test/list#z> .
 | _:c14n1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
-metered complete fuel=6 answer-rows=5 intermediate-cells=3 scratch-bytes=181
-explain fuel=6 answer-rows=5 intermediate-cells=3 scratch-bytes=181
+metered complete fuel=6 answer-rows=5 intermediate-cells=3 scratch-bytes=251
+explain fuel=6 answer-rows=5 intermediate-cells=3 scratch-bytes=251
 node 0 depth=0 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
@@ -2128,8 +2128,8 @@ fuel 91 complete rows=2 digest=dc52823e3e5c8c84 | fuel=91
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-sum-01> SUM over a decimal column
 solutions vars=["sum"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:sum> "11.1"^^<http://www.w3.org/2001/XMLSchema#decimal> .
-metered complete fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=375
-explain fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=375
+metered complete fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=451
+explain fuel=24 answer-rows=1 intermediate-cells=10 scratch-bytes=451
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Group rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 aggregate-invocation=1 aggregate-accumulation=5
@@ -4331,8 +4331,8 @@ graph quads=20
 | _:c14n6 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:c14n1 .
 | _:c14n7 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/o1> .
 | _:c14n7 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
-metered complete fuel=9 answer-rows=20 intermediate-cells=12
-explain fuel=9 answer-rows=20 intermediate-cells=12
+metered complete fuel=9 answer-rows=20 intermediate-cells=12 scratch-bytes=272
+explain fuel=9 answer-rows=20 intermediate-cells=12 scratch-bytes=272
 node 0 depth=0 Bgp rows=4 cells=12 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=4
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
 fuel 1..=4 x4 tripped fuel-exhausted consumed=5 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=5
@@ -6106,8 +6106,8 @@ solutions vars=["s1", "s2", "b1", "b2"] rows=4 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:b2> _:c14n9 .
 | _:c14n3 <urn:purrdf:conformance:var:s1> "foo" .
 | _:c14n3 <urn:purrdf:conformance:var:s2> "BAZ" .
-metered complete fuel=212 answer-rows=4 intermediate-cells=196 scratch-bytes=228
-explain fuel=212 answer-rows=4 intermediate-cells=196 scratch-bytes=228
+metered complete fuel=212 answer-rows=4 intermediate-cells=196 scratch-bytes=456
+explain fuel=212 answer-rows=4 intermediate-cells=196 scratch-bytes=456
 node 0 depth=0 Project rows=4 cells=16 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=24 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=20 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -6283,8 +6283,8 @@ fuel 212 complete rows=4 digest=7b5e05d1cdba3a71 | fuel=212
 solutions vars=["b1", "b2"] rows=1 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:b1> _:c14n0 .
 | _:c14n1 <urn:purrdf:conformance:var:b2> _:c14n2 .
-metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=76
-explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=76
+metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=152
+explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=152
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -13037,8 +13037,8 @@ solutions vars=["service", "title"] rows=3 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:title> "Query remote RDF Data" .
 | _:c14n2 <urn:purrdf:conformance:var:service> <http://example1.org/sparql> .
 | _:c14n2 <urn:purrdf:conformance:var:title> "Query multiple SPARQL endpoints" .
-metered complete fuel=34 answer-rows=3 intermediate-cells=15 scratch-bytes=222 remote-requests=2
-explain fuel=34 answer-rows=3 intermediate-cells=15 scratch-bytes=222 remote-requests=2
+metered complete fuel=34 answer-rows=3 intermediate-cells=15 scratch-bytes=342 remote-requests=2
+explain fuel=34 answer-rows=3 intermediate-cells=15 scratch-bytes=342 remote-requests=2
 node 0 depth=0 Project rows=3 cells=6 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Lateral rows=3 cells=15 algebra-node-entry=1 committed-output-row=3
 node 2 depth=2 Filter rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=3
@@ -13815,8 +13815,8 @@ fuel 26..=64 x39 complete rows=4 digest=dd330f25501cb530 | fuel=26
 graph quads=2
 | _:c14n0 <http://example/q> <http://example/z> <urn:purrdf:rdfc:annotation> .
 | _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
-metered complete fuel=2 answer-rows=2
-explain fuel=2 answer-rows=2
+metered complete fuel=2 answer-rows=2 scratch-bytes=34
+explain fuel=2 answer-rows=2 scratch-bytes=34
 node 0 depth=0 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=68eb84f64b95f63f | fuel=2
@@ -13825,8 +13825,8 @@ fuel 2..=64 x63 complete rows=0 digest=68eb84f64b95f63f | fuel=2
 graph quads=2
 | _:c14n0 <http://example/q> <http://example/z> <urn:purrdf:rdfc:annotation> .
 | _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
-metered complete fuel=4 answer-rows=2
-explain fuel=4 answer-rows=2
+metered complete fuel=4 answer-rows=2 scratch-bytes=34
+explain fuel=4 answer-rows=2 scratch-bytes=34
 node 0 depth=0 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=2
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=2
@@ -13843,8 +13843,8 @@ graph quads=8
 | _:c14n3 <urn:purrdf:rdfc:reifies> <<( _:c14n0 <http://example/q> <http://example/z> )>> .
 | _:c14n4 <http://example/source> <http://example/ABC> <urn:purrdf:rdfc:annotation> .
 | _:c14n4 <urn:purrdf:rdfc:reifies> <<( <http://example/s> <http://example/p> <http://example/o> )>> .
-metered complete fuel=9 answer-rows=8 intermediate-cells=12
-explain fuel=9 answer-rows=8 intermediate-cells=12
+metered complete fuel=9 answer-rows=8 intermediate-cells=12 scratch-bytes=136
+explain fuel=9 answer-rows=8 intermediate-cells=12 scratch-bytes=136
 node 0 depth=0 Bgp rows=4 cells=12 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=4
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
 fuel 1..=4 x4 tripped fuel-exhausted consumed=5 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=5
@@ -13858,8 +13858,8 @@ graph quads=3
 | <http://example/a> <http://example/b> <http://example/c> .
 | _:c14n0 <http://example/source> <http://example/ABC> <urn:purrdf:rdfc:annotation> .
 | _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
-metered complete fuel=3 answer-rows=3 intermediate-cells=1
-explain fuel=3 answer-rows=3 intermediate-cells=1
+metered complete fuel=3 answer-rows=3 intermediate-cells=1 scratch-bytes=34
+explain fuel=3 answer-rows=3 intermediate-cells=1 scratch-bytes=34
 node 0 depth=0 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=2
@@ -13871,8 +13871,8 @@ graph quads=4
 | _:c14n0 <http://example/q> <http://example/z> <urn:purrdf:rdfc:annotation> .
 | _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
 | _:c14n1 <urn:purrdf:rdfc:reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
-metered complete fuel=7 answer-rows=4 intermediate-cells=6
-explain fuel=7 answer-rows=4 intermediate-cells=6
+metered complete fuel=7 answer-rows=4 intermediate-cells=6 scratch-bytes=68
+explain fuel=7 answer-rows=4 intermediate-cells=6 scratch-bytes=68
 node 0 depth=0 Bgp rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=4
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=2
@@ -16547,8 +16547,8 @@ fuel 31..=64 x34 complete rows=3 digest=33b5ef1a4e47c96e | fuel=31
 solutions vars=["count", "countPlusOne"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:count> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n0 <urn:purrdf:conformance:var:countPlusOne> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=20 answer-rows=1 intermediate-cells=4 scratch-bytes=584
-explain fuel=20 answer-rows=1 intermediate-cells=4 scratch-bytes=584
+metered complete fuel=20 answer-rows=1 intermediate-cells=4 scratch-bytes=730
+explain fuel=20 answer-rows=1 intermediate-cells=4 scratch-bytes=730
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1

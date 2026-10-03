@@ -1,0 +1,293 @@
+{
+  "license": {
+    "SPDX-FileCopyrightText": "2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>",
+    "SPDX-License-Identifier": "CC-BY-4.0"
+  },
+  "format": "purrdf-scope-runtime-benchmark-v1",
+  "environment": {
+    "captured_utc": "2026-10-03T09:22:30.908092+00:00",
+    "compiler": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1",
+    "platform": "Linux-7.2.7-1-cachyos-x86_64-with-glibc2.44",
+    "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  32\nOn-line CPU(s) list:                     0-31\nVendor ID:                               AuthenticAMD\nModel name:                              AMD RYZEN AI MAX+ 395 w/ Radeon 8060S\nCPU family:                              26\nModel:                                   112\nThread(s) per core:                      2\nCore(s) per socket:                      16\nSocket(s):                               1\nStepping:                                0\nMicrocode version:                       0xb700037\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      79%\nCPU max MHz:                             5187.5000\nCPU min MHz:                             625.0000\nBogoMIPS:                                6000.67\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpuid_fault cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx_vnni avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect movdiri movdir64b overflow_recov succor smca fsrm avx512_vp2intersect flush_l1d amd_lbr_pmc_freeze\nVirtualization:                          AMD-V\nL1d cache:                               768 KiB (16 instances)\nL1i cache:                               512 KiB (16 instances)\nL2 cache:                                16 MiB (16 instances)\nL3 cache:                                64 MiB (2 instances)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-31\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Vulnerable\nVulnerability Spec store bypass:         Vulnerable\nVulnerability Spectre v1:                Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers\nVulnerability Spectre v2:                Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Vulnerable",
+    "load_average": "0.45 5.21 7.46 1/3493 176239",
+    "command": "cargo bench --locked -p purrdf-sparql-eval --bench query_eval -- construct_blank",
+    "sampling": {
+      "samples": 10,
+      "warmup_seconds": 3,
+      "measurement_seconds": 5,
+      "confidence": 0.95,
+      "resamples": 10000
+    },
+    "baseline": {
+      "head": "36122cc1ffd5580d3368dfad7aa8afaab4519a2d",
+      "captured_utc": "2026-10-03T08:57:03.952866+00:00",
+      "files": {
+        "crates/rdf-core/src/collections.rs": "428ac18a397fb1074df64c9c6d3ac963748a114ae7b3de4671fcf7ae75ae098b",
+        "crates/rdf-core/src/dataset_view.rs": "ebdaa3ada15bfc7173d33c572c4fe2d2a40ab20a175ed70ef46911f5af776176",
+        "crates/rdf-core/src/ir/global.rs": "d4207a3c524e08a65367fcd4c05431aa39e4777568133c03127af45cd53c0caa",
+        "crates/rdf-core/src/ir/mutable.rs": "4620eb4024891ceba978541970bb2c28abfea22717b7ab72852b6c2bb8da73e7",
+        "crates/rdf-core/src/ir/term_walk.rs": "36cfcc15fe26d9be4fa442dd81f640e643855a3ae101ff1d7c7440f2e4153470",
+        "crates/sparql-eval/src/construct.rs": "6f2c49d8476535b27b6a2d000bee3b3f5b179142a17ab355165ef79604a0ad20",
+        "crates/sparql-eval/src/eval.rs": "caef391ab2548a1acb2e6d52b85be87d6a0b3473d0afca781d935e4c18567430",
+        "crates/sparql-eval/src/expr.rs": "b1e87c8e7ae975c4bddc07c7f9d32220525590896a6d14ef64f04384779279b4",
+        "crates/sparql-eval/src/list_fn.rs": "42d2ed25a181b5a33a3f0cb6a031879733667128f411454e81475146f1e69bc9",
+        "crates/sparql-eval/src/parallel.rs": "f7eb3247a8abbfa346fb3c9f2887cecad5ecbe48d7cd03984006ed73c3a79491",
+        "crates/sparql-eval/src/remote.rs": "c6b9383ff566767f758c4089fd0924b07f3c2f7a0dceab9746d1f4f9ff5f2bc8",
+        "crates/sparql-eval/src/scratch.rs": "d779b2181fb8d9ef17262e4bcd1106a58ad16e26a14f8ca5c2c4f2ffbf2ec6b3",
+        "crates/sparql-eval/src/template.rs": "334f678fec7b7ae5fa230b0e4e7088bef528b091afd383c2b9157b17c295776a",
+        "crates/sparql-eval/src/update.rs": "8c70b3d736f28077d178696f53ee5b8126910bb0279a2c4b4e441681fe7351a6",
+        "crates/sparql-eval/src/user_fn.rs": "3c7ca9b013b7e93ca01dd6af23a7fec34bdcdf787dfa5c8a11f2453cfd19d24a",
+        "crates/sparql-eval/benches/query_eval.rs": "0e912ff9ef8ceb665dff22f2768574acba7be1896cfcc29a51bbdc3e225b8fc9",
+        "Cargo.toml": "02b43e188d489473ab2948e8517910c48e644cd56c9247dea42d251c480f0b60",
+        "Cargo.lock": "90611854529927c5f20e418673217ba07368ea981ceae2104b7bda54af572486",
+        "rust-toolchain.toml": "fb4564a4be0c39a9f5114a0bd965c737884fa9623ebd99800f27d3711ae2e800"
+      }
+    },
+    "current": {
+      "head_at_capture": "36122cc1ffd5580d3368dfad7aa8afaab4519a2d",
+      "working_diff_sha256": "fac2a095f2f3210e80388ef6ecd7222ab55bf99b62a9f75666abbb4219fc6bd7",
+      "captured_utc": "2026-10-03T09:22:30.908092+00:00",
+      "files": {
+        "crates/rdf-core/src/collections.rs": "981073d1771273088c2bb53163f480923bd9f4a698ac4eba51d9bd2323c58bf0",
+        "crates/rdf-core/src/dataset_view.rs": "fb329267d9a1f62d8a94620cd399dbc48b3be6db25037cbd475a95163f5f5c71",
+        "crates/rdf-core/src/ir/global.rs": "0d474539f0cf1950d5e493e1983dfca6ebce18c8bcaf7973d3c8f9788085e96f",
+        "crates/rdf-core/src/ir/mutable.rs": "e117ae76ebac3f576c8fb7924205befd8dbe9edd20413216107602afaaa823a9",
+        "crates/rdf-core/src/ir/term_walk.rs": "4affaae29595d6628c1ceb1982823b9c019317c84e675bbb4f6b926cb554bb3e",
+        "crates/sparql-eval/src/construct.rs": "16f18450d81a5daca3e3c2b09482fb521c0e837b933dadcc947ea00bd05b1f92",
+        "crates/sparql-eval/src/eval.rs": "f096ccae8851104a48df146132023854a4901f2a874ed3d283e859bf79e5a681",
+        "crates/sparql-eval/src/expr.rs": "44ef4343e9ed49a36d212569b634979e40a776e873847f2472b6b12ba861b524",
+        "crates/sparql-eval/src/list_fn.rs": "f03799dd15c0605d4067ee5ca9b4648c96800730f92ad14dbdb8c3a2540b8805",
+        "crates/sparql-eval/src/parallel.rs": "96d137176c55ff72bdcce801ba494bdbaa1ed6c1cc54a3830887b2acc79a03c0",
+        "crates/sparql-eval/src/remote.rs": "16d4e48616d65ce94194566b35afab22463d4bf9824afe1d0a062a0e1b027a3f",
+        "crates/sparql-eval/src/scratch.rs": "318b94a0a7d7ee967f5f519f91a40bbf9089735c439bcddcda6423b94bcea6cc",
+        "crates/sparql-eval/src/template.rs": "c09e532ef18e0a20fb0b6da71aa20d01e48c6479df34780754c1f20f237489d7",
+        "crates/sparql-eval/src/update.rs": "babb3896cc18dda1100cf98d99d0dde68a46a8bc8bd6d783549812f2f8ea6653",
+        "crates/sparql-eval/src/user_fn.rs": "bd552159f98669be7cf389f6baca5bc9a221642d7e3361aa3b037d9cbb5ca725",
+        "crates/sparql-eval/benches/query_eval.rs": "40c2c2213f29e13f39ef6a19fee9cc160eefc43ff40da26684c117787d6a17bf",
+        "Cargo.toml": "02b43e188d489473ab2948e8517910c48e644cd56c9247dea42d251c480f0b60",
+        "Cargo.lock": "90611854529927c5f20e418673217ba07368ea981ceae2104b7bda54af572486",
+        "rust-toolchain.toml": "fb4564a4be0c39a9f5114a0bd965c737884fa9623ebd99800f27d3711ae2e800"
+      }
+    },
+    "post_capture_documentation": {
+      "change": "Rust documentation comments only; executable bodies are unchanged. Timings refer to the original recorded captures. No additional performance measurement is claimed.",
+      "files": {
+        "crates/sparql-eval/src/eval.rs": {
+          "captured_sha256": "f096ccae8851104a48df146132023854a4901f2a874ed3d283e859bf79e5a681",
+          "documented_sha256": "a2320fbf17fb1fa7ca822de8a86d49050464eed0976b8b65549df53b313676c8"
+        },
+        "crates/sparql-eval/src/remote.rs": {
+          "captured_sha256": "16d4e48616d65ce94194566b35afab22463d4bf9824afe1d0a062a0e1b027a3f",
+          "documented_sha256": "2e72a02d4773d71fed5d3acb2d6b5bb2db97d4c6c6e0dbc490f10e42951f4320"
+        }
+      }
+    }
+  },
+  "profile": {
+    "name": "bench",
+    "opt_level": 3,
+    "lto": "fat",
+    "codegen_units": 1,
+    "debug": 0,
+    "strip": "none"
+  },
+  "workload": "Existing query_eval people dataset; plan and BGP order caches warmed, no governors attached; whole-result construction and destruction timed.",
+  "limits": "Two consecutive native host observations with 10 samples per case; blank-free control also moved. No isolated-kernel, cross-hardware or wasm timing claim.",
+  "measurements": [
+    {
+      "id": "query_eval/i_construct_blank_free",
+      "source_rows": 30000,
+      "expected_statements": 30000,
+      "baseline": {
+        "schema": 1,
+        "unit": "ns",
+        "median": 10100040.350000001,
+        "mad": 69945.25,
+        "ci_low": 10035137.55,
+        "ci_high": 10177188.38,
+        "confidence": 0.95,
+        "resamples": 10000,
+        "iterations_per_sample": 50,
+        "samples": [
+          10100551.32,
+          9989629.56,
+          9970707.72,
+          10099529.38,
+          10218616.5,
+          10080645.54,
+          10177188.38,
+          10121220.9,
+          10037297.88,
+          10179800.1
+        ],
+        "outliers": {
+          "low_severe": 0,
+          "low_mild": 0,
+          "high_mild": 0,
+          "high_severe": 0
+        },
+        "throughput": null
+      },
+      "current": {
+        "schema": 1,
+        "unit": "ns",
+        "median": 9108093.027272727,
+        "mad": 80974.90909090824,
+        "ci_low": 9024760,
+        "ci_high": 9186709.818181816,
+        "confidence": 0.95,
+        "resamples": 10000,
+        "iterations_per_sample": 55,
+        "samples": [
+          9186709.818181816,
+          8916445.945454545,
+          9024760,
+          9023668.945454545,
+          9205074.363636365,
+          9114425.018181818,
+          9101761.036363637,
+          9138938.799999999,
+          9234234.363636363,
+          9047665.672727272
+        ],
+        "outliers": {
+          "low_severe": 0,
+          "low_mild": 0,
+          "high_mild": 0,
+          "high_severe": 0
+        },
+        "throughput": null
+      }
+    },
+    {
+      "id": "query_eval/j_construct_blank_bearing",
+      "source_rows": 30000,
+      "expected_statements": 30000,
+      "baseline": {
+        "schema": 1,
+        "unit": "ns",
+        "median": 15863417.40625,
+        "mad": 172469.21875,
+        "ci_low": 15694872.921875,
+        "ci_high": 16768783.906250002,
+        "confidence": 0.95,
+        "resamples": 10000,
+        "iterations_per_sample": 32,
+        "samples": [
+          15686071,
+          15666689.093749998,
+          15875718.593750002,
+          15695825.375,
+          15853666.781250002,
+          15703674.843750002,
+          15873168.03125,
+          16833045.96875,
+          17021115.5,
+          16768783.906250002
+        ],
+        "outliers": {
+          "low_severe": 0,
+          "low_mild": 0,
+          "high_mild": 0,
+          "high_severe": 0
+        },
+        "throughput": null
+      },
+      "current": {
+        "schema": 1,
+        "unit": "ns",
+        "median": 12741584.5,
+        "mad": 79138.41025641095,
+        "ci_low": 12626377.564102564,
+        "ci_high": 12792788.128205128,
+        "confidence": 0.95,
+        "resamples": 10000,
+        "iterations_per_sample": 39,
+        "samples": [
+          12677129.076923076,
+          12626377.564102564,
+          12764871.461538462,
+          12750170.358974358,
+          12835405.897435898,
+          12613778,
+          12850902.1025641,
+          12749692.717948718,
+          12733476.282051282,
+          12576075.846153846
+        ],
+        "outliers": {
+          "low_severe": 0,
+          "low_mild": 0,
+          "high_mild": 0,
+          "high_severe": 0
+        },
+        "throughput": null
+      }
+    },
+    {
+      "id": "query_eval/q_construct_blank_coref",
+      "source_rows": 30000,
+      "expected_statements": 60000,
+      "baseline": {
+        "schema": 1,
+        "unit": "ns",
+        "median": 29089656.694444448,
+        "mad": 177885.94444444776,
+        "ci_low": 28937468.83333333,
+        "ci_high": 29607485.999999996,
+        "confidence": 0.95,
+        "resamples": 10000,
+        "iterations_per_sample": 18,
+        "samples": [
+          28937468.83333333,
+          29071774.16666667,
+          29734942.611111112,
+          28886072.66666667,
+          29107539.22222222,
+          28823162.38888889,
+          29191777.111111116,
+          29607485.999999996,
+          30189602.555555556,
+          29059409.55555556
+        ],
+        "outliers": {
+          "low_severe": 0,
+          "low_mild": 0,
+          "high_mild": 0,
+          "high_severe": 0
+        },
+        "throughput": null
+      },
+      "current": {
+        "schema": 1,
+        "unit": "ns",
+        "median": 19675769.666666664,
+        "mad": 476038.8541666642,
+        "ci_low": 19138919.416666664,
+        "ci_high": 22669826.6875,
+        "confidence": 0.95,
+        "resamples": 10000,
+        "iterations_per_sample": 24,
+        "samples": [
+          19933124.916666668,
+          19174651.166666668,
+          18993159.375,
+          19224810.458333332,
+          19053028.375,
+          19506334.125,
+          20014686.125,
+          19845205.208333332,
+          25406528.458333332,
+          27938994.5
+        ],
+        "outliers": {
+          "low_severe": 0,
+          "low_mild": 0,
+          "high_mild": 0,
+          "high_severe": 2
+        },
+        "throughput": null
+      }
+    }
+  ]
+}

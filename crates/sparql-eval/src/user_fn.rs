@@ -1222,6 +1222,21 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     let Some(mut child) = ctx.child_for_user_fn()? else {
         return Ok(None);
     };
+    // Pure SELECT/ASK bodies have no blank allocation. The registry-aware effect
+    // test includes nested SPARQL functions; only a body that can mint needs the
+    // parent's concrete identity reservations in its fresh computed-term table.
+    if !child.pattern_is_parallel_safe(crate::eval::query_pattern(body.query())) {
+        child.scratch = ctx.scratch.fresh_for_user_function();
+        // Lazy indexing grows the parent and the copy retains its own labels.
+        // Each arena owns a separate watermark against the same request budget.
+        if let Err(tripped) = ctx
+            .charge_scratch_growth()
+            .and_then(|()| child.charge_scratch_growth())
+        {
+            ctx.expression_barrier.record(tripped);
+            return Ok(None);
+        }
+    }
     // The body's algebra, as bound against the environment in force â already
     // parsed with the relation registry's exact IRIs in `property_fn_iris`, and
     // already feasibility-ordered against those relations' declared access modes.
@@ -2325,6 +2340,170 @@ mod tests {
             err.to_string().contains("recursion"),
             "expected recursion-bound error, got {err}"
         );
+    }
+
+    #[test]
+    fn a_user_function_bnode_allocation_preserves_parent_concrete_inputs() {
+        let mut registry = UserFunctionRegistry::default();
+        registry.insert(
+            EX_INC,
+            UserFunction {
+                params: Vec::new(),
+                required: 0,
+                body: body_text("SELECT (BNODE() AS ?result) WHERE {}"),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let registry = BoundFunctionRegistry::bound_for_test(registry);
+        let (function, body) = registry.resolve(EX_INC).expect("BNODE function");
+        let dataset = empty_dataset();
+        for prefix in [None, Some("caller_")] {
+            let occupied = TermValue::Blank {
+                label: format!("{}bnode1", prefix.unwrap_or_default()),
+                scope: purrdf_core::BlankScope::DEFAULT,
+            };
+            for input in [
+                occupied.clone(),
+                TermValue::Triple {
+                    s: TermValue::Iri(format!("{ENV}s")).into(),
+                    p: TermValue::Iri(format!("{ENV}p")).into(),
+                    o: occupied.clone().into(),
+                },
+                TermValue::Literal {
+                    lexical_form: format!("[_:{}bnode1]", prefix.unwrap_or_default()),
+                    datatype: purrdf_cdt::CDT_LIST.into(),
+                    language: None,
+                    direction: None,
+                },
+            ] {
+                let mut ctx = EvalCtx::new(&*dataset);
+                if let Some(prefix) = prefix {
+                    ctx = ctx.with_bnode_mint_prefix(prefix).expect("caller prefix");
+                }
+                ctx.scratch.intern(&*dataset, input);
+                let result = eval_user_function(function, body, EX_INC, &[], &mut ctx)
+                    .expect("fresh UDF allocation")
+                    .expect("one result");
+                assert_ne!(
+                    result, occupied,
+                    "fresh child scratch retains parent input ownership"
+                );
+                assert_eq!(
+                    result,
+                    TermValue::Blank {
+                        label: format!("{}bnode2", prefix.unwrap_or_default()),
+                        scope: purrdf_core::BlankScope::DEFAULT,
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn user_function_reservation_copies_and_later_parent_growth_each_charge_scratch() {
+        let mut registry = UserFunctionRegistry::default();
+        registry.insert(
+            EX_INC,
+            UserFunction {
+                params: Vec::new(),
+                required: 0,
+                body: body_text("SELECT (BNODE() AS ?result) WHERE {}"),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let registry = BoundFunctionRegistry::bound_for_test(registry);
+        let dataset = empty_dataset();
+        let engine = NativeSparqlEngine::new();
+        let noise = "x".repeat(1024);
+        let bindings =
+            format!("BIND(CONCAT(\"{noise}\", \"y\") AS ?noise) BIND(BNODE() AS ?parent)");
+        let baseline = format!("SELECT * WHERE {{ {bindings} }}");
+        let query = format!(
+            "SELECT * WHERE {{ {bindings} BIND(<{EX_INC}>() AS ?first) \
+             BIND(<{EX_INC}>() AS ?second) }}"
+        );
+        let run = |text: &str, governors: &QueryGovernors| {
+            engine
+                .query_governed(
+                    &dataset,
+                    SparqlRequest {
+                        query: text,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions {
+                        functions: &registry,
+                        ..QueryOptions::EMPTY
+                    },
+                    governors,
+                )
+                .expect("a scratch trip is an outcome, not a function error")
+        };
+        let baseline = run(&baseline, &QueryGovernors::METERED);
+        let parent_bytes = baseline
+            .evidence()
+            .consumed
+            .get(ResourceDimension::ScratchBytes);
+        assert!(
+            parent_bytes > 418,
+            "parent consumption exceeds either child's arena"
+        );
+        let measured = run(&query, &QueryGovernors::METERED);
+        let required = measured
+            .evidence()
+            .consumed
+            .get(ResourceDimension::ScratchBytes);
+        // Labels bnode1/bnode2/bnode3 each cost 6 + 32 bytes. The first child
+        // copies one label (38), mints a label/value (76), and returns a value
+        // retained by the parent (76). The second copies two labels (76),
+        // mints 76, and returns another parent value (76): 190 + 228 = 418.
+        assert_eq!(required, parent_bytes + 418);
+        for limit in [required - 1, required, required + 1] {
+            let outcome = run(
+                &query,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+            );
+            if limit < required {
+                assert!(matches!(
+                    outcome.tripped(),
+                    Some(TrippedGovernor::Budget {
+                        dimension: ResourceDimension::ScratchBytes,
+                        limit: observed,
+                        consumed,
+                    }) if observed == limit && consumed > limit
+                ));
+            } else {
+                let GovernedOutcome::Complete {
+                    result:
+                        SparqlResult::Solutions {
+                            variables, rows, ..
+                        },
+                    ..
+                } = outcome
+                else {
+                    panic!("inclusive budget admits the UDF and parent output");
+                };
+                assert_eq!(rows.len(), 1);
+                let blanks: BTreeSet<_> = ["parent", "first", "second"]
+                    .map(|name| {
+                        let column = variables
+                            .iter()
+                            .position(|variable| variable == name)
+                            .expect("projected blank");
+                        let mut bytes = Vec::new();
+                        rows[0][column]
+                            .as_ref()
+                            .expect("a bound blank")
+                            .canonical_bytes(&mut bytes);
+                        bytes
+                    })
+                    .into_iter()
+                    .collect();
+                assert_eq!(blanks.len(), 3, "each allocation has a distinct identity");
+            }
+        }
     }
 
     #[test]

@@ -49,6 +49,9 @@ use std::hash::Hash;
 
 use hashbrown::HashTable;
 
+/// The deterministic per-term charge for an id/index slot or reserved identity.
+const TERM_OVERHEAD: u64 = 32;
+
 /// An id into a [`ScratchInterner`]'s per-query table of computed terms.
 ///
 /// Local to one query evaluation (like [`TermId`] is local to one dataset); never
@@ -130,16 +133,40 @@ const _: () = assert!(
 /// values to one [`ScratchId`]. Stateless with respect to the dataset: the dataset
 /// is passed to each operation so the interner does not hold a borrow that would
 /// conflict with the evaluator's other dataset access.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct ScratchInterner {
     /// `ScratchId` index → the computed value.
     values: Vec<TermValue>,
     /// Store-once value index: ids only; equality resolves through `values`.
     index: HashTable<ScratchId>,
-    /// The running total of [`value_bytes`] over every value ever minted into
-    /// `values`, which is what [`Self::minted_bytes`] reports and what the
-    /// scratch-arena resource ceiling is charged against.
+    /// Default-scope identities already visible to a fresh blank allocator.
+    /// Activated lazily, so ordinary computed terms keep their existing cost.
+    blank_labels: crate::DetHashSet<String>,
+    track_blank_labels: bool,
+    /// The running total of [`value_bytes`] over computed values, plus the
+    /// retained default-scope identity labels needed by fresh allocation.
+    /// [`Self::minted_bytes`] reports this deterministic scratch-arena charge.
     minted_bytes: u64,
+    /// This arena's already-accounted growth, independent of other contexts
+    /// sharing the execution's governor. Atomic only to retain `Send + Sync`.
+    charged_bytes: std::sync::atomic::AtomicU64,
+}
+
+impl Clone for ScratchInterner {
+    fn clone(&self) -> Self {
+        Self {
+            values: self.values.clone(),
+            index: self.index.clone(),
+            blank_labels: self.blank_labels.clone(),
+            track_blank_labels: self.track_blank_labels,
+            minted_bytes: self.minted_bytes,
+            // An independently evaluated copy owns its retention and charges
+            // it at its own checkpoints. Transient pure row workers retain
+            // their existing law: only outputs re-interned in the parent are
+            // checkpointed, avoiding a thread-geometry-dependent receipt.
+            charged_bytes: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
 }
 
 /// A deterministic byte size for one computed value: the payload it owns, plus a fixed
@@ -159,10 +186,6 @@ pub struct ScratchInterner {
 /// alone would never see them; see `crate::modifier::eval_aggregate`'s doc
 /// comment for why that retained buffer needs its own charge.
 pub(crate) fn value_bytes(value: &TermValue) -> u64 {
-    /// The per-term constant: the `ScratchId`, the index slot, and the enum
-    /// discriminant, none of which vary with the value's payload.
-    const TERM_OVERHEAD: u64 = 32;
-
     // Every term of the value — the triple terms and their components, all the way
     // down — contributes its own payload and one `TERM_OVERHEAD`, summed with
     // saturating addition. The sum is walked over a work list rather than the call
@@ -272,18 +295,24 @@ impl ScratchInterner {
     /// `minted_bytes` is reset rather than carried for the same reason, and it is
     /// the field a careless clear would most plausibly keep "because it is only a
     /// counter": [`crate::eval::EvalCtx::charge_scratch_growth`] charges the
-    /// DIFFERENCE between this total and what the governor has already consumed, so
+    /// DIFFERENCE between this total and this arena's own charged watermark, so
     /// carrying it across runs would silently re-charge one run's minting to the
     /// next and change where a `ScratchBytes` ceiling trips.
     pub(crate) fn clear(&mut self) {
         let Self {
             values,
             index,
+            blank_labels,
+            track_blank_labels,
             minted_bytes,
+            charged_bytes,
         } = self;
         values.clear();
         index.clear();
+        blank_labels.clear();
+        *track_blank_labels = false;
         *minted_bytes = 0;
+        charged_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// A conservative byte charge for the tables this interner is RETAINING — the
@@ -300,6 +329,58 @@ impl ScratchInterner {
             .capacity()
             .saturating_mul(size_of::<TermValue>())
             .saturating_add(self.index.capacity().saturating_mul(size_of::<ScratchId>()))
+            .saturating_add(
+                self.blank_labels
+                    .capacity()
+                    .saturating_mul(size_of::<String>()),
+            )
+    }
+
+    /// Preserve concrete input identities when a user function starts a fresh
+    /// computed-term table. Its counter is shared with the calling evaluation.
+    pub(crate) fn fresh_for_user_function(&mut self) -> Self {
+        // Index parent computed values once. Later interns maintain the index,
+        // so successive stateful calls copy only retained blank labels rather
+        // than repeatedly walking all of the parent's computed terms.
+        self.track_blank_labels();
+        let blank_labels = self.blank_labels.clone();
+        let minted_bytes = blank_labels
+            .iter()
+            .map(|label| {
+                u64::try_from(label.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(TERM_OVERHEAD)
+            })
+            .fold(0_u64, u64::saturating_add);
+        Self {
+            blank_labels,
+            track_blank_labels: true,
+            minted_bytes,
+            ..Self::default()
+        }
+    }
+
+    fn track_blank_labels(&mut self) {
+        if !self.track_blank_labels {
+            self.track_blank_labels = true;
+            for value in &self.values {
+                reserve_value_blanks(value, &mut self.blank_labels, &mut self.minted_bytes);
+            }
+        }
+    }
+
+    /// Reserve a scoped concrete input without resolving it against a dataset.
+    pub(crate) fn reserve_blank_identity(&mut self, label: &str, scope: purrdf_core::BlankScope) {
+        if scope == purrdf_core::BlankScope::DEFAULT {
+            self.track_blank_labels();
+            reserve_blank_label(label, &mut self.blank_labels, &mut self.minted_bytes);
+        }
+    }
+
+    /// A lazily indexed membership check, independent of term interning order.
+    pub(crate) fn blank_label_is_reserved(&mut self, label: &str) -> bool {
+        self.track_blank_labels();
+        self.blank_labels.contains(label)
     }
 
     /// Intern a dataset-independent value to a [`SolutionTerm`], **promoting** it to
@@ -497,6 +578,9 @@ impl ScratchInterner {
             return Ok(SolutionTerm::Computed(sid));
         }
         let sid = ScratchId::from_index(self.values.len());
+        if self.track_blank_labels {
+            reserve_value_blanks(&value, &mut self.blank_labels, &mut self.minted_bytes);
+        }
         self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
         self.values.push(value);
         self.index.insert_unique(hash, sid, |sid| {
@@ -505,9 +589,10 @@ impl ScratchInterner {
         Ok(SolutionTerm::Computed(sid))
     }
 
-    /// The deterministic byte size of everything minted into this arena so far: each
-    /// value's owned payload plus a fixed per-term constant, which makes the total a pure
-    /// function of the values rather than of the allocator.
+    /// The deterministic byte size retained in this arena: each computed value's
+    /// owned payload plus a fixed per-term constant, and each reserved allocation
+    /// label's payload plus that same constant. The total depends on admitted
+    /// identities rather than allocator growth.
     ///
     /// This is the meter behind the scratch-arena resource ceiling. It is its own
     /// dimension because arena growth is independent of any row or cell count:
@@ -520,6 +605,22 @@ impl ScratchInterner {
     #[must_use]
     pub fn minted_bytes(&self) -> u64 {
         self.minted_bytes
+    }
+
+    /// Claim only this arena's growth for the execution's shared scratch meter.
+    /// Repeated checkpoints cannot charge the same bytes twice; a cleared or
+    /// independently evaluated copied arena starts its own accounting from zero.
+    pub(crate) fn claim_uncharged_growth(&self) -> u64 {
+        let charged = self
+            .charged_bytes
+            .fetch_max(self.minted_bytes, std::sync::atomic::Ordering::Relaxed);
+        self.minted_bytes.saturating_sub(charged)
+    }
+
+    /// A different execution receipt accounts this arena's full retained value.
+    /// Attaching the same receipt preserves its existing watermark instead.
+    pub(crate) fn reset_charged_growth(&mut self) {
+        *self.charged_bytes.get_mut() = 0;
     }
 
     /// Materialize a [`SolutionTerm`] to an owned, dataset-independent [`TermValue`].
@@ -618,6 +719,28 @@ impl ScratchInterner {
         self.try_value_of(dataset, term)
             .expect("an id the view handed the evaluator resolves to a value")
     }
+}
+
+fn reserve_blank_label(label: &str, labels: &mut crate::DetHashSet<String>, bytes: &mut u64) {
+    if !labels.contains(label) {
+        labels.insert(label.to_owned());
+        *bytes = bytes
+            .saturating_add(u64::try_from(label.len()).unwrap_or(u64::MAX))
+            .saturating_add(TERM_OVERHEAD);
+    }
+}
+
+fn reserve_value_blanks(
+    value: &TermValue,
+    labels: &mut crate::DetHashSet<String>,
+    bytes: &mut u64,
+) {
+    let _ = value.visit_blank_identities(|label, scope| {
+        if scope == purrdf_core::BlankScope::DEFAULT {
+            reserve_blank_label(label, labels, bytes);
+        }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
 }
 
 /// Resolve a dataset-local id to an owned, dataset-independent [`TermValue`]

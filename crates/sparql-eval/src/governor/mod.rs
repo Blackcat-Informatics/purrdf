@@ -1628,14 +1628,34 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// execution under v9. One sized for a `FILTER EXISTS`, a function-calling `BIND` or a
 /// cell-bounded `UNFOLD` may now stop at a different row, and the number moves so that a
 /// consumer pinning v8 learns it.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 9;
+///
+/// # v10
+///
+/// The fuel schedule remains byte-identical to v9. Scratch accounting follows
+/// ownership: each computed-term arena charges its own growth, independently of
+/// separately charged aggregate survivor buffers, accumulator state and child
+/// arenas. Those charges cannot mask a later arena allocation. Clearing or
+/// replacing an arena starts a new watermark; an independently evaluated copy
+/// charges the retention it owns, while repeated checkpoints charge no byte twice.
+///
+/// Fresh blank allocation retains concrete identity reservations and charges
+/// their labels. Source-input registration and each mint checkpoint the scratch
+/// ceiling immediately; a stateful user-function child also charges its own copy
+/// of the parent's reservations. A trip withholds incomplete expression/template
+/// output and aborts staged UPDATE mutations before publication.
+///
+/// A scratch ceiling sized against v9 can therefore stop earlier under v10,
+/// including after an aggregate's final value is interned. Consumers must
+/// remeasure such ceilings rather than carry the old number across versions.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 10;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
 /// Byte-identical from v1 through v3; v4 appends `update-mutated-quad`, v5 appends the two
 /// property-function points, v6 appends the two aggregate points, v7 appends the three
 /// `EXISTS`-strategy evidence points, and v8 appends `property-function-work`; v9 leaves
-/// it unchanged and moves only the order of charges in a per-row loop — see
+/// it unchanged and moves only the order of charges in a per-row loop; v10 also
+/// leaves it unchanged and corrects scratch ownership and mint checkpoints — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
@@ -1992,7 +2012,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "b20fbee8919cfaa3f8b831effd8d68d16b51b0b51ee8466ede4d1d3499720978";
+    "ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc";
 
 #[cfg(test)]
 mod tests {

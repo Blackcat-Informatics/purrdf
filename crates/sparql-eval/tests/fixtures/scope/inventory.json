@@ -1,0 +1,467 @@
+{
+  "copyright": "2026 Blackcat Informatics Inc.",
+  "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "profiles": {
+    "sparql11-query-over-rdf12": "SPARQL 1.1 query semantics exercised over RDF 1.2 datasets; no SHACL admission claim.",
+    "sparql12-rdf12-triple-terms": "RDF 1.2 triple-term syntax and identity; separate from SPARQL 1.1 conformance."
+  },
+  "cases": [
+    {
+      "id": "alternative-sequence",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "alternative-sequence.rq",
+      "expected": "alternative-sequence.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "UNION",
+        "sequence",
+        "hidden-witness",
+        "bag"
+      ],
+      "rationale": "The p arm has witnesses a and b; the q arm has witness a. All three reach o. The disconnected wrong-to-other edge cannot join.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "repeated-alternatives",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "repeated-alternatives.rq",
+      "expected": "repeated-alternatives.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "UNION",
+        "sequence",
+        "duplicate-arms",
+        "bag"
+      ],
+      "rationale": "Each of two p witnesses matches two identical first arms and two identical second arms: 2 x 2 x 2 = 8 copies of o.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "inverse-sequence",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "inverse-sequence.rq",
+      "expected": "inverse-sequence.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "inverse",
+        "sequence",
+        "UNION"
+      ],
+      "rationale": "Inverting the three legal derivations from s to o reverses the endpoints and preserves their three derivations.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns"
+      ]
+    },
+    {
+      "id": "optional",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "optional.rq",
+      "expected": "optional.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "OPTIONAL",
+        "sequence",
+        "UNION",
+        "VALUES"
+      ],
+      "rationale": "s has three compatible right solutions. lonely has none and survives once with o unbound.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#OptionalMatching",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "minus-correlated",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "minus-correlated.rq",
+      "expected": "minus-correlated.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "MINUS",
+        "sequence",
+        "UNION"
+      ],
+      "rationale": "The right side shares s and removes s through compatibility; it has no row for lonely.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#neg-minus",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "minus-disjoint",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "minus-disjoint.rq",
+      "expected": "minus-disjoint.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "MINUS",
+        "disjoint-domain",
+        "hidden-witness"
+      ],
+      "rationale": "The right relation is nonempty but shares no distinguished variable with the left. MINUS preserves all three left rows.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#neg-minus",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "exists",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "exists.rq",
+      "expected": "exists.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "EXISTS",
+        "sequence",
+        "UNION"
+      ],
+      "rationale": "EXISTS tests presence once per outer row; three s witnesses do not multiply the single s row.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#neg-exists",
+        "https://www.w3.org/TR/sparql11-query/#func-filter-exists"
+      ]
+    },
+    {
+      "id": "not-exists",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "not-exists.rq",
+      "expected": "not-exists.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "NOT EXISTS",
+        "sequence",
+        "UNION"
+      ],
+      "rationale": "s has a compatible witness and is rejected; lonely has no witness and remains.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#neg-notexists",
+        "https://www.w3.org/TR/sparql11-query/#func-filter-exists"
+      ]
+    },
+    {
+      "id": "named-graph",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "named-graph.rq",
+      "expected": "named-graph.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        },
+        {
+          "path": "g1.ttl",
+          "graph": "http://example.org/g1"
+        },
+        {
+          "path": "g2.ttl",
+          "graph": "http://example.org/g2"
+        }
+      ],
+      "categories": [
+        "GRAPH",
+        "sequence",
+        "UNION"
+      ],
+      "rationale": "g1 contains only the p/a/r/o derivation; g2 only the q/b/r/other derivation. Witnesses cannot cross active graph boundaries.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#accessingRdfGraphs",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "subquery-hidden-name",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "subquery-hidden-name.rq",
+      "expected": "subquery-hidden-name.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "subquery",
+        "projection",
+        "VALUES"
+      ],
+      "rationale": "The inner s is not projected, so it cannot join the outer s=lonely binding. The inner query independently emits three o rows.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#subqueries",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "bind-values",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "bind-values.rq",
+      "expected": "bind-values.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "BIND",
+        "VALUES",
+        "bag",
+        "sequence"
+      ],
+      "rationale": "Two identical VALUES rows each join three witnesses. BIND copies o into a distinguished column without changing the six-row bag.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#bind",
+        "https://www.w3.org/TR/sparql11-query/#inline-data",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "source-blank-connection",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "source-blank-connection.rq",
+      "expected": "source-blank-connection.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "pattern-existential",
+        "filter",
+        "sequence",
+        "UNION"
+      ],
+      "rationale": "The same existential in one BGP connects its path endpoint to marker=yes, selecting only s and its three derivations. FILTER does not split the BGP.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#BGPsparql",
+        "https://www.w3.org/TR/sparql11-query/#BGPsparqlBNodes",
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns"
+      ]
+    },
+    {
+      "id": "independent-union-blanks",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "independent-union-blanks.rq",
+      "expected": "independent-union-blanks.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "UNION",
+        "pattern-existential",
+        "independent-scopes"
+      ],
+      "rationale": "Distinct existential labels in the two BGPs are legal and independent. p contributes a, b, dead; q contributes a. UNION preserves both copies of a.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#BGPsparql",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "caller-lookalikes",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "caller-lookalikes.rq",
+      "expected": "caller-lookalikes.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "caller-name",
+        "hidden-witness",
+        "VALUES"
+      ],
+      "rationale": "Both legal user variable spellings remain distinguished and retain their literals for each of three path witnesses; translator names cannot capture them.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns",
+        "https://www.w3.org/TR/sparql11-query/#select"
+      ]
+    },
+    {
+      "id": "zero-visible",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "zero-visible.rq",
+      "expected": "zero-visible.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "zero-visible",
+        "projection",
+        "hidden-witness",
+        "bag"
+      ],
+      "rationale": "Both endpoints are ground. Projecting all hidden witnesses leaves three copies of the empty solution, not one.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns",
+        "https://www.w3.org/TR/sparql11-query/#select",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "distinct-zero-visible",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "distinct-zero-visible.rq",
+      "expected": "distinct-zero-visible.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "zero-visible",
+        "DISTINCT",
+        "hidden-witness"
+      ],
+      "rationale": "The three projected empty solutions compare equal, so DISTINCT yields one empty row.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#modDuplicates",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "distinct-visible",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "distinct-visible.rq",
+      "expected": "distinct-visible.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "DISTINCT",
+        "projection",
+        "hidden-witness"
+      ],
+      "rationale": "All three witnesses project to the same o binding and DISTINCT yields one row.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#modDuplicates",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ]
+    },
+    {
+      "id": "quoted-pattern-blank",
+      "profile": "sparql12-rdf12-triple-terms",
+      "kind": "query-evaluation",
+      "query": "quoted-pattern-blank.rq",
+      "expected": "quoted-pattern-blank.srj",
+      "data": [
+        {
+          "path": "quoted.ttl"
+        }
+      ],
+      "categories": [
+        "RDF1.2-triple-term",
+        "pattern-existential",
+        "shared-identity"
+      ],
+      "rationale": "The existential inside the triple term denotes the same matched node as the outside r edge. There is one reported triple term, whose object is o.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql12-query/#syntaxNestedTriplePatterns",
+        "https://www.w3.org/TR/sparql12-query/#BGPsparqlBNodes"
+      ]
+    },
+    {
+      "id": "illegal-union-label",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "negative-syntax",
+      "query": "illegal-union-label.rq",
+      "categories": [
+        "pattern-existential",
+        "scope-reuse",
+        "UNION"
+      ],
+      "rationale": "A blank label occurs in two separate basic graph patterns; the source query must be rejected before execution.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#BGPsparql"
+      ]
+    },
+    {
+      "id": "illegal-optional-label",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "negative-syntax",
+      "query": "illegal-optional-label.rq",
+      "categories": [
+        "pattern-existential",
+        "scope-reuse",
+        "OPTIONAL"
+      ],
+      "rationale": "A blank label occurs in two separate basic graph patterns; the source query must be rejected before execution.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#BGPsparql"
+      ]
+    },
+    {
+      "id": "illegal-subquery-label",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "negative-syntax",
+      "query": "illegal-subquery-label.rq",
+      "categories": [
+        "pattern-existential",
+        "scope-reuse",
+        "subquery"
+      ],
+      "rationale": "A blank label occurs in two separate basic graph patterns; the source query must be rejected before execution.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#BGPsparql"
+      ]
+    }
+  ]
+}

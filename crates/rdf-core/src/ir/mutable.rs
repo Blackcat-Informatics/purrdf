@@ -231,6 +231,26 @@ impl MutableDataset {
         &self.base
     }
 
+    /// Visit every retained blank identity without freezing or copying the dataset.
+    /// Includes suppressed base terms and blanks nested in delta triple terms or
+    /// composite literals, so fresh publication can avoid all identities this
+    /// destination owns. The first `Break` ends the visit.
+    pub fn visit_blank_identities<B>(
+        &self,
+        mut visit: impl FnMut(&str, crate::BlankScope) -> ControlFlow<B>,
+    ) -> ControlFlow<B> {
+        for index in 0..self.base.term_count() {
+            let id = TermId::from_index(u32::try_from(index).expect("native index fits u32"));
+            if let TermRef::Blank { label, scope } = self.base.resolve(id) {
+                visit(label, scope)?;
+            }
+        }
+        for value in &self.delta.values {
+            value.visit_blank_identities(&mut visit)?;
+        }
+        ControlFlow::Continue(())
+    }
+
     // -- value ↔ MutTermId resolution -------------------------------------------------
 
     /// Resolve a base [`TermId`] to its dataset-independent [`TermValue`], through
@@ -1055,6 +1075,64 @@ mod tests {
             .iter()
             .map(|q| format!("{:?}|{:?}|{:?}|{:?}", q.s, q.p, q.o, q.g))
             .collect()
+    }
+
+    #[test]
+    fn blank_identity_visit_retains_suppressed_and_removed_nested_values() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_blank("base", crate::BlankScope::DEFAULT);
+        let predicate = builder.intern_iri("http://example.org/p");
+        let object = builder.intern_iri("http://example.org/o");
+        builder.push_quad(subject, predicate, object, None);
+        builder.intern_blank("unused", crate::BlankScope(5));
+        let mut mutable = MutableDataset::new(builder.freeze().expect("base freezes"));
+        assert!(mutable.remove(&QuadValues::triple(
+            TermValue::blank("base"),
+            iri_val("p"),
+            iri_val("o"),
+        )));
+        let delta = QuadValues::triple(
+            iri_val("holder"),
+            iri_val("p"),
+            TermValue::Triple {
+                s: TermBox::new(TermValue::blank("delta")),
+                p: TermBox::new(iri_val("p")),
+                o: TermBox::new(TermValue::typed_literal(
+                    "[_:embedded]",
+                    purrdf_cdt::CDT_LIST,
+                )),
+            },
+        );
+        assert!(ins(&mut mutable, delta.clone()));
+        assert!(mutable.remove(&delta));
+        assert_eq!(mutable.effective_value_quads(), []);
+
+        let mut identities = std::collections::BTreeSet::new();
+        let complete = mutable.visit_blank_identities(|label, scope| {
+            identities.insert((label.to_owned(), scope));
+            ControlFlow::<Infallible>::Continue(())
+        });
+        assert_eq!(complete, ControlFlow::Continue(()));
+        assert_eq!(
+            identities,
+            [
+                ("base".to_owned(), crate::BlankScope::DEFAULT),
+                ("unused".to_owned(), crate::BlankScope(5)),
+                ("delta".to_owned(), crate::BlankScope::DEFAULT),
+                ("embedded".to_owned(), crate::BlankScope::DEFAULT),
+            ]
+            .into_iter()
+            .collect()
+        );
+        let mut calls = 0;
+        assert_eq!(
+            mutable.visit_blank_identities(|label, scope| {
+                calls += 1;
+                ControlFlow::Break((label.to_owned(), scope))
+            }),
+            ControlFlow::Break(("base".to_owned(), crate::BlankScope::DEFAULT))
+        );
+        assert_eq!(calls, 1);
     }
 
     /// `base_value_of` and [`RdfDataset::term_value`] are the two resolvers of a

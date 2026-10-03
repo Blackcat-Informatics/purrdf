@@ -26,7 +26,7 @@
 //! The walk is cycle-guarded: a cyclic or torn `rdf:List` is malformed input and
 //! hard-fails ([`EvalError::Data`]) rather than looping forever.
 
-use purrdf_core::collections::{ListVocab, SoleObject, build_rdf_list, walk_rdf_list};
+use purrdf_core::collections::{ListVocab, SoleObject, try_build_rdf_list, walk_rdf_list};
 use purrdf_core::{BlankScope, DatasetView, ListError, ListErrorKind, TermValue};
 use purrdf_sparql_algebra::PurrdfFn;
 use purrdf_xsd::XsdValue;
@@ -162,7 +162,9 @@ fn list_slice<D: DatasetView + Sync>(
     let lo = start.clamp(0, len);
     let hi = end.clamp(lo, len); // also enforces hi >= lo → inverted ranges are empty
     let slice: Vec<TermValue> = members[lo as usize..hi as usize].to_vec();
-    let value = materialize_list(ctx, slice);
+    let Some(value) = materialize_list(ctx, slice)? else {
+        return Ok(None);
+    };
     intern(ctx, value)
 }
 
@@ -180,12 +182,14 @@ fn list_concat<D: DatasetView + Sync>(
         return Ok(None);
     };
     left.extend(right);
-    let value = materialize_list(ctx, left);
+    let Some(value) = materialize_list(ctx, left)? else {
+        return Ok(None);
+    };
     intern(ctx, value)
 }
 
 /// Invent a fresh `rdf:List` carrying `members` in order, returning its head term
-/// ([`build_rdf_list`]).
+/// ([`try_build_rdf_list`]).
 ///
 /// Each cell is a fresh blank node (minted from the shared `bnode_counter`, so
 /// labels never collide with CONSTRUCT-template or `BNODE()` blanks). The cell quads
@@ -195,27 +199,40 @@ fn list_concat<D: DatasetView + Sync>(
 fn materialize_list<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     members: Vec<TermValue>,
-) -> TermValue {
-    let prefix = ctx.bnode_mint_prefix.clone();
-    let mut counter = ctx.bnode_counter;
+) -> Result<Option<TermValue>, EvalError> {
+    enum Aborted {
+        Stopped,
+        Failed(EvalError),
+    }
+    let committed = ctx.constructed.len();
     let mut constructed = std::mem::take(&mut ctx.constructed);
-    let head = build_rdf_list(
+    let head = try_build_rdf_list(
         members,
         &ListVocab::term_values(),
         |_| {
-            counter += 1;
-            // Honors the deterministic mint prefix like every other
-            // `bnode_counter` mint; `None` keeps the exact `lc{n}` spelling.
-            TermValue::Blank {
-                label: crate::eval::minted_label(prefix.as_deref(), "lc", counter),
+            let Some(label) = ctx.try_mint_blank_label("lc").map_err(Aborted::Failed)? else {
+                return Err(Aborted::Stopped);
+            };
+            Ok(TermValue::Blank {
+                label,
                 scope: BlankScope::DEFAULT,
-            }
+            })
         },
-        |cell, predicate, object| constructed.push((cell, predicate, object)),
+        |cell, predicate, object| {
+            constructed.push((cell, predicate, object));
+            Ok(())
+        },
     );
-    ctx.bnode_counter = counter;
+    if head.is_err() {
+        // No incomplete list can escape as a constructed auxiliary graph.
+        constructed.truncate(committed);
+    }
     ctx.constructed = constructed;
-    head
+    match head {
+        Ok(head) => Ok(Some(head)),
+        Err(Aborted::Stopped) => Ok(None),
+        Err(Aborted::Failed(error)) => Err(error),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -777,6 +794,91 @@ mod tests {
     use crate::engine::NativeSparqlEngine;
 
     const RDF_NIL_STR: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>";
+
+    #[test]
+    fn list_cell_reservations_obey_scratch_bytes_and_discard_incomplete_cells() {
+        use crate::{GovernedOutcome, GovernorState, QueryGovernors};
+        use purrdf_core::{ResourceDimension, TrippedGovernor};
+
+        let ds = list_ds();
+        let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
+            .expect("declared list namespace");
+        let engine = NativeSparqlEngine::new();
+        let query = format!(
+            "{PREFIX} SELECT ?s WHERE {{ ?q <http://ex/list> ?l . \
+             BIND(g:listSlice(?l, 0, 2) AS ?s) }}"
+        );
+        let run = |governors: &QueryGovernors| {
+            engine
+                .query_governed(
+                    &ds,
+                    SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions {
+                        env: &env,
+                        ..QueryOptions::EMPTY
+                    },
+                    governors,
+                )
+                .expect("list allocation exhaustion is a typed outcome")
+        };
+        let measured = run(&QueryGovernors::METERED);
+        // Two integer arguments, two retained lc1/lc2 labels, one owned head.
+        let argument_bytes = 2 * (1 + purrdf_xsd::datatype::XSD_INTEGER.len() as u64 + 32);
+        let required = argument_bytes + 3 * (3 + 32);
+        assert_eq!(
+            measured
+                .evidence()
+                .consumed
+                .get(ResourceDimension::ScratchBytes),
+            required
+        );
+        let stopped = run(&QueryGovernors::UNBOUNDED.with_max_scratch_bytes(argument_bytes + 69));
+        assert_eq!(
+            stopped.tripped(),
+            Some(TrippedGovernor::Budget {
+                dimension: ResourceDimension::ScratchBytes,
+                limit: argument_bytes + 69,
+                consumed: argument_bytes + 70,
+            })
+        );
+        for limit in [required, required + 1] {
+            let GovernedOutcome::Complete {
+                result: SparqlResult::Solutions { rows, aux, .. },
+                ..
+            } = run(&QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit))
+            else {
+                panic!("inclusive scratch budget admits a complete list");
+            };
+            assert_eq!(rows.len(), 1);
+            assert_eq!(aux.quad_count(), 4);
+            assert_eq!(
+                members_of(&aux, &head_str(&rows)),
+                vec!["<http://ex/x>", "<http://ex/y>"]
+            );
+        }
+
+        // Exercise the in-flight buffer independently of egress withholding:
+        // the first cell emits rdf:first before the second cell's mint trips.
+        let state = Arc::new(GovernorState::new(
+            &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(69),
+        ));
+        let mut ctx = EvalCtx::new(ds.as_ref()).with_governors(Arc::clone(&state));
+        let result = super::materialize_list(
+            &mut ctx,
+            vec![TermValue::iri("http://ex/x"), TermValue::iri("http://ex/y")],
+        )
+        .expect("a mint trip is not an EvalError");
+        assert_eq!(result, None);
+        assert!(
+            ctx.constructed.is_empty(),
+            "no torn list survives the failed constructor"
+        );
+        assert_eq!(ctx.expression_barrier.observed(), state.tripped());
+    }
 
     /// Resolve a dataset to sorted `(s, p, o)` string triples.
     fn triples(ds: &RdfDataset) -> Vec<(String, String, String)> {

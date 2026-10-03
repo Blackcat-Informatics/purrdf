@@ -1917,6 +1917,84 @@ fn run_aggregate_answer(
     }
 }
 
+#[test]
+fn aggregate_retention_cannot_hide_the_finished_results_scratch_charge() {
+    // The twelve resident inputs are the integers 0..11. Their retained clones
+    // each cost the 40-byte integer datatype IRI, the 32-byte term charge, and
+    // their lexical bytes: ten one-digit and two two-digit values cost 878.
+    // SUM is 66, absent from the dataset: its separately owned result costs 74.
+    // Both owners must be charged, even though the survivor buffer's charge
+    // already exceeds the scratch arena's own growth. This is an independent
+    // byte accounting oracle, rather than a call to the implementation's proxy.
+    const RETAINED_INPUTS: u64 = 878;
+    const FINISHED_RESULT: u64 = 74;
+    const COMPLETE_BYTES: u64 = 952;
+    let dataset = agg_group_dataset(1, 12);
+    let registry = custom_sum_registry();
+    for (pattern, registry) in [
+        (sum_group_pattern(), None),
+        (custom_sum_group_pattern(CUSTOM_SUM_IRI), Some(&registry)),
+    ] {
+        let measured = run_aggregate_answer(
+            &pattern,
+            &dataset,
+            registry,
+            &QueryGovernors::METERED,
+            "total",
+        );
+        assert_eq!(measured.tripped, None);
+        assert_eq!(measured.rows, 1);
+        assert_eq!(measured.answer.as_deref(), Some("66"));
+        assert_eq!(measured.scratch_bytes, COMPLETE_BYTES);
+
+        for ceiling in [COMPLETE_BYTES - 1, COMPLETE_BYTES, COMPLETE_BYTES + 1] {
+            let bounded = run_aggregate_answer(
+                &pattern,
+                &dataset,
+                registry,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(ceiling),
+                "total",
+            );
+            assert_eq!(bounded.scratch_bytes, COMPLETE_BYTES);
+            if ceiling < COMPLETE_BYTES {
+                assert_eq!(
+                    bounded.tripped,
+                    Some(TrippedGovernor::Budget {
+                        dimension: ResourceDimension::ScratchBytes,
+                        limit: ceiling,
+                        consumed: COMPLETE_BYTES,
+                    })
+                );
+            } else {
+                assert_eq!(bounded.tripped, None);
+                assert_eq!(bounded.rows, 1);
+                assert_eq!(bounded.answer.as_deref(), Some("66"));
+            }
+        }
+
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
+        if let Some(registry) = registry {
+            ctx = ctx.with_aggregates(registry);
+        }
+        let evaluated = eval_evaluated(&pattern, &mut ctx).expect("the fold completes");
+        assert!(matches!(evaluated, Evaluated::Complete(_)));
+        assert_eq!(ctx.scratch.minted_bytes(), FINISHED_RESULT);
+        assert_eq!(
+            state.consumed_in(ResourceDimension::ScratchBytes),
+            RETAINED_INPUTS + FINISHED_RESULT
+        );
+        for _ in 0..2 {
+            ctx.charge_scratch_growth()
+                .expect("an already charged result has no further growth");
+            assert_eq!(
+                state.consumed_in(ResourceDimension::ScratchBytes),
+                COMPLETE_BYTES
+            );
+        }
+    }
+}
+
 /// **The exact reported reproduction, as a test.** Before this increment,
 /// `crate::parallel::chunk_size_for` read `rayon::current_num_threads()`, so the SAME
 /// query/data/ceiling triple was admitted on a small pool and refused on a big one — see

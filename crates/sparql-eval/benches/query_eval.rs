@@ -28,13 +28,11 @@
 //!   entry-API dedup path in `modifier.rs`.
 //! - `i_construct_blank_free` — a `CONSTRUCT` template with NO blank-node position,
 //!   over 30k rows each carrying a **data** blank object (`ex:note`). Exercises
-//!   `construct.rs::instantiate`'s fast path: `MintTracker::minted` can never become
-//!   non-empty for this template, so `track_minted`/`track_minted_predicate` are
-//!   skipped outright rather than run only to record dead-weight `data` labels.
+//!   carrying existing identities without invoking the fresh blank allocator.
 //! - `j_construct_blank_bearing` — the SAME `WHERE`, but the template mints a fresh
-//!   blank node per row, so the tracked path (§16.2 freshness bookkeeping) runs for
-//!   real. Comparing this against `i_construct_blank_free` at equal row/data-blank
-//!   volume is what makes the fast path's savings visible in the report.
+//!   blank node per row through the dataset/scratch vacancy check. Comparing this
+//!   against `i_construct_blank_free` at equal row/data-blank volume measures
+//!   allocation and freshness checking beside plain identity carrying.
 //! - `k_property_function_join` — a 30k-row graph arm driving a **property-function**
 //!   call into a host-injected 50-row relation: one `bf` invocation per driving row,
 //!   which is the per-row dispatch path (argument evaluation, cursor open, filtered
@@ -274,9 +272,8 @@ SELECT DISTINCT ?d WHERE {
 
 /// (i) `CONSTRUCT` with a BLANK-FREE template over 30k rows that each carry a
 /// DATA blank (`ex:note`) in object position. The template mints nothing —
-/// `?p`/`?n` are both plain variables — so `construct.rs::instantiate` takes the
-/// untracked fast path: `MintTracker::minted` can never become non-empty for
-/// this template, so no label is ever inserted into either tracker set.
+/// `?p`/`?n` are both plain variables — so template instantiation does not invoke
+/// the fresh allocator or create allocation-label reservations.
 const Q_I: &str = "\
 PREFIX ex: <https://example.org/>
 CONSTRUCT { ?p ex:related ?n } WHERE {
@@ -285,9 +282,8 @@ CONSTRUCT { ?p ex:related ?n } WHERE {
 
 /// (j) The same `WHERE` as (i), but the template MINTS a fresh blank node per
 /// row instead of carrying the data blank through. Same row/data-blank volume
-/// as (i), but every row now runs the full §16.2 freshness bookkeeping
-/// (`track_minted` populates `MintTracker::minted`, and the eventual
-/// `freshness_remap` check actually has something to intersect).
+/// as (i), but every row checks dataset/scratch vacancy and reserves its fresh
+/// identity under §16.2's template allocation rule.
 const Q_J: &str = "\
 PREFIX ex: <https://example.org/>
 CONSTRUCT { ?p ex:related _:x } WHERE {

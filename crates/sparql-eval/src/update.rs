@@ -85,6 +85,7 @@
 //! it wastes less work on a request that is going to be discarded, and discards it either
 //! way.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -104,8 +105,8 @@ use crate::governor::{ChargePoint, GovernorState, StopSignal};
 use crate::plan_cache::BoundedOrderCache;
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
-    TripleOrdinal, instantiate_ground_term, instantiate_predicate, instantiate_term,
-    positionally_ill_formed, resolve_triple,
+    TripleOrdinal, destination_mint_prefix, instantiate_ground_term, instantiate_predicate,
+    instantiate_term, positionally_ill_formed, resolve_triple, template_has_blank_node,
 };
 
 /// Why an UPDATE request stopped before applying.
@@ -522,9 +523,12 @@ fn insert_data(
     counter: &mut u64,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
+    let prefix = template_has_blank_node(data)
+        .then(|| mutable_mint_prefix(m, None))
+        .flatten();
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
-        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
+        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter, prefix.as_deref()) {
             // Charged per quad rather than per operation because an ill-formed template
             // quad is skipped rather than inserted (§16.2), and fuel counts what the store
             // actually did.
@@ -545,7 +549,7 @@ fn delete_data(
 ) -> Result<(), UpdateAbort> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
-        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
+        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter, None) {
             charge_mutations(governors, 1)?;
             m.remove(&q);
         }
@@ -637,6 +641,22 @@ fn delete_insert(
     // minted by this operation (template blanks, `BNODE()`, `rdf:List` cells) stay
     // disjoint from every other operation's in the same request.
     ctx.bnode_counter = *bnode_counter;
+    // The counter separates this request's mints; the namespace also separates
+    // them from the destination, including earlier requests and LOAD operations.
+    // Reuse the registry-aware stateful-effect test: a pure, blank-free update
+    // neither inventories destination identities nor allocates a mint namespace.
+    if (template_has_blank_node(insert) || !ctx.pattern_is_parallel_safe(pattern))
+        && let Some(prefix) = mutable_mint_prefix(m, cfg.options.bnode_mint_prefix)
+    {
+        ctx = ctx.with_bnode_mint_prefix(&prefix).map_err(|error| {
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                error.to_string(),
+            )
+        })?;
+    }
+
+    ctx.reserve_concrete_blank_inputs(pattern);
 
     // Scope the WHERE active dataset (§3.1.3): USING (if present) builds a custom
     // dataset and replaces WITH's effect on the WHERE; otherwise WITH scopes the WHERE
@@ -702,14 +722,24 @@ fn delete_insert(
     for row in &seq.rows {
         del_blanks.clear();
         for (qp, ordinal) in delete.iter().zip(&delete_ordinals) {
-            if let Some(q) = instantiate_quad_with_default(
+            let instantiated = instantiate_quad_with_default(
                 qp,
                 ordinal,
                 row,
                 &mut del_blanks,
                 &mut ctx,
                 with_value.as_ref(),
-            ) {
+            )
+            .map_err(|error| {
+                RdfDiagnostic::error(
+                    crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                    error.to_string(),
+                )
+            })?;
+            if let Some(tripped) = ctx.expression_barrier.observed() {
+                return Err(UpdateAbort::Tripped(tripped));
+            }
+            if let Some(q) = instantiated {
                 observe_staged_mutation(
                     cfg.governors,
                     to_remove.len().saturating_add(to_insert.len()),
@@ -719,14 +749,24 @@ fn delete_insert(
         }
         ins_blanks.clear();
         for (qp, ordinal) in insert.iter().zip(&insert_ordinals) {
-            if let Some(q) = instantiate_quad_with_default(
+            let instantiated = instantiate_quad_with_default(
                 qp,
                 ordinal,
                 row,
                 &mut ins_blanks,
                 &mut ctx,
                 with_value.as_ref(),
-            ) {
+            )
+            .map_err(|error| {
+                RdfDiagnostic::error(
+                    crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                    error.to_string(),
+                )
+            })?;
+            if let Some(tripped) = ctx.expression_barrier.observed() {
+                return Err(UpdateAbort::Tripped(tripped));
+            }
+            if let Some(q) = instantiated {
                 observe_staged_mutation(
                     cfg.governors,
                     to_remove.len().saturating_add(to_insert.len()),
@@ -1066,6 +1106,22 @@ fn graph_op_move(
 
 // ── shared helpers ───────────────────────────────────────────────────────────
 
+/// Apply the shared publication namespace law to a mutable destination without
+/// publishing a snapshot or cloning its term payloads.
+fn mutable_mint_prefix(destination: &MutableDataset, requested: Option<&str>) -> Option<String> {
+    destination_mint_prefix(requested, |prefix| {
+        destination
+            .visit_blank_identities(|label, scope| {
+                if scope == purrdf_core::BlankScope::DEFAULT && label.starts_with(prefix) {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
+            .is_break()
+    })
+}
+
 /// Instantiate a **variable-free** `DATA` quad (`INSERT DATA` / `DELETE DATA`) into a
 /// concrete [`QuadValues`] with no dataset/snapshot. `None` if the triple is
 /// positionally ill-formed (§16.2) or — a parser-invariant guard — any position holds
@@ -1075,13 +1131,14 @@ fn instantiate_ground_quad(
     qp: &QuadPattern,
     blanks: &mut DetHashMap<String, String>,
     counter: &mut u64,
+    prefix: Option<&str>,
 ) -> Option<QuadValues> {
-    let s = instantiate_ground_term(&qp.triple.subject, blanks, counter)?;
+    let s = instantiate_ground_term(&qp.triple.subject, blanks, counter, prefix)?;
     let p = match &qp.triple.predicate {
         NamedNodePattern::NamedNode(n) => named_node_to_value(n),
         NamedNodePattern::Variable(_) => return None,
     };
-    let o = instantiate_ground_term(&qp.triple.object, blanks, counter)?;
+    let o = instantiate_ground_term(&qp.triple.object, blanks, counter, prefix)?;
     if positionally_ill_formed(&s, &p, &o) {
         return None;
     }
@@ -1133,41 +1190,55 @@ fn instantiate_quad_with_default<D: purrdf_core::DatasetView + Sync>(
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
     default_graph: Option<&TermValue>,
-) -> Option<QuadValues> {
-    let s = instantiate_term(
+) -> Result<Option<QuadValues>, crate::error::EvalError> {
+    let Some(s) = instantiate_term(
         &qp.triple.subject,
         &ordinal.triple.subject,
         row,
         blanks,
         ctx,
-    )?;
-    let p = instantiate_predicate(&qp.triple.predicate, &ordinal.triple.predicate, row, ctx)?;
-    let o = instantiate_term(&qp.triple.object, &ordinal.triple.object, row, blanks, ctx)?;
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(p) = instantiate_predicate(&qp.triple.predicate, &ordinal.triple.predicate, row, ctx)?
+    else {
+        return Ok(None);
+    };
+    let Some(o) = instantiate_term(&qp.triple.object, &ordinal.triple.object, row, blanks, ctx)?
+    else {
+        return Ok(None);
+    };
 
     // Positional validity (§16.2 / template rules): an asserted subject that is not
     // an IRI or a blank node, a non-IRI predicate, or an object triple term whose own
     // components are illegal makes the quad ill-formed → skip it (do not error).
     if positionally_ill_formed(&s, &p, &o) {
-        return None;
+        return Ok(None);
     }
 
     // Graph slot: explicit pattern graph → else the WITH default → else None.
     let g = match &qp.graph {
         Some(NamedNodePattern::NamedNode(n)) => Some(named_node_to_value(n)),
         Some(NamedNodePattern::Variable(_)) => {
-            let term = ordinal.graph.and_then(|c| row[c])?;
-            let value = ctx.scratch.try_value_of(ctx.dataset, term).ok()?;
+            let Some(term) = ordinal.graph.and_then(|c| row[c]) else {
+                return Ok(None);
+            };
+            let value = ctx
+                .scratch
+                .try_value_of(ctx.dataset, term)
+                .map_err(crate::error::EvalError::source_read)?;
             // A graph name must be an IRI; a non-IRI binding makes the quad
             // ill-formed → skip.
             if !matches!(value, TermValue::Iri(_)) {
-                return None;
+                return Ok(None);
             }
             Some(value)
         }
         None => default_graph.cloned(),
     };
 
-    Some(QuadValues { s, p, o, g })
+    Ok(Some(QuadValues { s, p, o, g }))
 }
 
 /// Re-key a quad's graph slot to `dest` (`None` = default graph).
@@ -1308,6 +1379,49 @@ mod tests {
         let frozen = m.freeze().expect("freeze");
         assert_eq!(frozen.quad_count(), 1);
         assert!(frozen.term_id_by_value(&iri("a")).is_some());
+    }
+
+    #[test]
+    fn late_raw_values_preserve_fresh_bnode_identity_in_update_where() {
+        use purrdf_sparql_algebra::{BlankNode, GraphPattern, GroundTerm, Variable};
+
+        for prefix in [None, Some("caller_")] {
+            for (comparison, expected) in [("=", 0), ("!=", 1)] {
+                let mut update = parse(&format!(
+                    "INSERT {{ ex:fresh ex:p ex:o }} WHERE {{ BIND(BNODE() AS ?fresh) \
+                     FILTER(?fresh {comparison} ?existing) }}"
+                ));
+                let GraphUpdateOperation::DeleteInsert { pattern, .. } = &mut update.operations[0]
+                else {
+                    panic!("INSERT WHERE operation");
+                };
+                let GraphPattern::Filter { inner, .. } = &mut **pattern else {
+                    panic!("FILTER body");
+                };
+                *inner = GraphPattern::Join {
+                    left: inner.clone(),
+                    right: GraphPattern::Values {
+                        variables: vec![Variable::new("existing")],
+                        bindings: vec![vec![Some(GroundTerm::BlankNode(BlankNode::new(format!(
+                            "{}bnode1",
+                            prefix.unwrap_or_default()
+                        ))))]],
+                    }
+                    .into(),
+                }
+                .into();
+                let mut target = mut_with(&[]);
+                let cache = BoundedOrderCache::default();
+                let mut config = ungoverned(&cache);
+                config.options = config.options.with_bnode_mint_prefix(prefix);
+                eval_update(&update, &mut target, None, &config).expect("raw late VALUES UPDATE");
+                assert_eq!(
+                    quad_set(&target).len(),
+                    expected,
+                    "fresh allocation is distinct from the later concrete input"
+                );
+            }
+        }
     }
 
     /// Regression guard for the UPDATE side (`crate::construct` carries

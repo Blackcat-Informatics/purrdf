@@ -600,6 +600,14 @@ pub trait DatasetView {
     /// structural walk keyed on a not-present IRI simply finds nothing — absence is
     /// an empty match, never an error. Backends with a reverse value index use
     /// it; others may scan.
+    ///
+    /// Reverse lookup must cover every concrete blank identity carried by a stored
+    /// term, including quoted-triple components and composite literals.
+    /// Such a blank must resolve by its exact label and scope
+    /// even when it occurs in no bare quad position. Ingress registers these
+    /// identities in the same term space; consumers may test freshness through
+    /// this lookup without enumerating the dataset. Out-of-tree views owe the
+    /// same coherence between their forward terms and reverse identities.
     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
 
     /// Look up a batch without allocating a whole batch result.

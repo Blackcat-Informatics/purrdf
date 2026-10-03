@@ -80,6 +80,7 @@ pub mod lexer;
 mod owned;
 pub mod parser;
 mod retained_size;
+pub mod scope;
 pub mod serialize;
 pub mod substitute;
 mod traits;
@@ -104,6 +105,7 @@ pub use parser::{
     ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
     builtin_function_keyword,
 };
+pub use scope::{ObserverRole, ScopeError, ScopeHazard, ScopeRegion, ScopeSite};
 pub use serialize::{
     pattern_to_select_query, pattern_to_select_query_with_options, try_pattern_to_select_query,
     try_pattern_to_select_query_with_options,

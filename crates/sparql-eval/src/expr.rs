@@ -290,7 +290,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
                 break;
             }
             row.resize(width, None);
-            // §17.4.2.2: BNODE(strExpr) memoizes per solution — see `ctx.current_row`'s
+            // §17.4.2.9: BNODE(strExpr) memoizes per solution — see `ctx.current_row`'s
             // doc. This Extend maps `seq`'s rows 1:1 in order, so the row's position
             // here matches its position in every other Extend of the same chain. A
             // BNODE-bearing `expr` is exactly what forces this sequential branch.
@@ -3819,10 +3819,10 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::StrLangDir => eval_str_lang_dir(ctx, vals),
         Function::StrDt => eval_str_dt(ctx, vals),
         // BNODE(): always mints a fresh blank node, even called twice in the same
-        // solution (contrast BNODE(strExpr) below — SPARQL 1.1 §17.4.2.2).
-        Function::BNode if vals.is_empty() => Ok(Some(mint_bnode(ctx)?)),
+        // solution (contrast BNODE(strExpr) below — SPARQL 1.1 §17.4.2.9).
+        Function::BNode if vals.is_empty() => mint_bnode(ctx),
         // BNODE(strExpr): the SAME argument string within the SAME query solution
-        // (§17.4.2.2) reuses the previously-minted blank; see `ctx.bnode_memo`'s
+        // (§17.4.2.9) reuses the previously-minted blank; see `ctx.bnode_memo`'s
         // doc for the row-identity mechanism and its scope.
         Function::BNode => {
             let Some((s, _)) = string_arg(vals, 0) else {
@@ -3832,7 +3832,9 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
             if let Some(existing) = ctx.bnode_memo.get(&key) {
                 return Ok(Some(*existing));
             }
-            let term = mint_bnode(ctx)?;
+            let Some(term) = mint_bnode(ctx)? else {
+                return Ok(None);
+            };
             ctx.bnode_memo.insert(key, term);
             Ok(Some(term))
         }
@@ -5264,16 +5266,17 @@ const fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
 
 /// Mint a fresh blank node (`BNODE()`/`BNODE(strExpr)`'s cache-miss path).
 /// Honors the context's deterministic [`EvalCtx::bnode_mint_prefix`], like every
-/// other mint drawing on `bnode_counter`; with no prefix the label is exactly
-/// `bnode{n}`, byte-identical to an unprefixed evaluation.
+/// other mint drawing on `bnode_counter`; the shared mint skips existing scoped
+/// identities while preserving the ordinary `bnode{n}` bytes when unoccupied.
 fn mint_bnode<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionTerm<D::Id>, EvalError> {
-    ctx.bnode_counter += 1;
-    let label =
-        crate::eval::minted_label(ctx.bnode_mint_prefix.as_deref(), "bnode", ctx.bnode_counter);
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let Some(label) = ctx.try_mint_blank_label("bnode")? else {
+        return Ok(None);
+    };
     ctx.scratch
         .try_intern_blank(ctx.dataset, label, BlankScope::DEFAULT)
+        .map(Some)
         .map_err(EvalError::source_read)
 }
 
@@ -5542,6 +5545,9 @@ mod tests {
         view.refuse_reverse = true;
         let error = intern_integer(&mut EvalCtx::new(&view), 9).unwrap_err();
         assert!(matches!(error, EvalError::SourceRead(_)));
+        let error = mint_bnode(&mut EvalCtx::new(&view)).unwrap_err();
+        assert!(matches!(error, EvalError::SourceRead(_)));
+        assert_eq!(error.diagnostic_code(), Some("native-sparql-source-read"));
         // Neither failure was inserted into either cache as a successful missing term.
         assert!(view.read_error().is_some());
     }
