@@ -52,6 +52,37 @@ impl PositivePlan {
         active_graph: GraphMatch<D::Id>,
         root: &GraphPattern,
     ) -> Result<Option<Self>, EvalError> {
+        Self::build_with_seed(dataset, active_dataset, active_graph, root, None)
+    }
+
+    /// Ordinary joins may drive a pure relation from any upstream binding bag.
+    /// This does not substitute expressions or cross a scope/modifier boundary.
+    pub(crate) fn build_seeded<D: DatasetView>(
+        dataset: &D,
+        active_dataset: &ActiveDataset<D::Id>,
+        active_graph: GraphMatch<D::Id>,
+        root: &GraphPattern,
+        seed: &SeedEstimate,
+    ) -> Result<Option<Self>, EvalError> {
+        let schema = crate::eval::syntactic_schema(root);
+        if !seed
+            .schema
+            .vars()
+            .iter()
+            .any(|variable| schema.index_of(variable).is_some())
+        {
+            return Ok(None);
+        }
+        Self::build_with_seed(dataset, active_dataset, active_graph, root, Some(seed))
+    }
+
+    fn build_with_seed<D: DatasetView>(
+        dataset: &D,
+        active_dataset: &ActiveDataset<D::Id>,
+        active_graph: GraphMatch<D::Id>,
+        root: &GraphPattern,
+        seed: Option<&SeedEstimate>,
+    ) -> Result<Option<Self>, EvalError> {
         let mut scan = purrdf_lex::walk::WorkList::<_, 16>::with(root);
         let mut has_union = false;
         while let Some(node) = scan.pop() {
@@ -65,7 +96,7 @@ impl PositivePlan {
                 _ => return Ok(None),
             }
         }
-        if !has_union {
+        if !has_union && seed.is_none() {
             return Ok(None);
         }
         let mut pending = vec![(root, false)];
@@ -223,8 +254,8 @@ impl PositivePlan {
         let mut drivers = DetHashMap::default();
         let mut pending = vec![ChoiceStep::Visit(
             root,
-            std::sync::Arc::new(SeedEstimate::default()),
-            false,
+            std::sync::Arc::new(seed.cloned().unwrap_or_default()),
+            seed.is_some(),
         )];
         while let Some(step) = pending.pop() {
             let ChoiceStep::Visit(node, input, has_input) = step else {
@@ -384,6 +415,19 @@ impl PositivePlan {
         root: &GraphPattern,
         survey: &mut PlanSurvey,
     ) -> Result<(), EvalError> {
+        self.survey_seeded(dataset, active_dataset, active_graph, root, None, survey)
+    }
+
+    /// Forecast the exact seeded schedule that execution will consume.
+    pub(crate) fn survey_seeded<D: DatasetView>(
+        &self,
+        dataset: &D,
+        active_dataset: &ActiveDataset<D::Id>,
+        active_graph: GraphMatch<D::Id>,
+        root: &GraphPattern,
+        input: Option<&SeedEstimate>,
+        survey: &mut PlanSurvey,
+    ) -> Result<(), EvalError> {
         enum Step<'a> {
             Visit(&'a GraphPattern, std::sync::Arc<SeedEstimate>, bool),
             Second {
@@ -403,8 +447,8 @@ impl PositivePlan {
         }
         let mut steps = vec![Step::Visit(
             root,
-            std::sync::Arc::new(SeedEstimate::default()),
-            false,
+            std::sync::Arc::new(input.cloned().unwrap_or_default()),
+            input.is_some(),
         )];
         while let Some(step) = steps.pop() {
             match step {

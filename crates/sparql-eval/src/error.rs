@@ -103,6 +103,14 @@ pub enum EvalError {
     /// The certified worst-case workspace bound exceeds the logical byte width.
     WorkspaceBoundOverflow,
 
+    /// The host could not allocate storage for materialized query solutions.
+    /// An operational failure, not an expression error or a governor trip: no
+    /// partial answer is certified when its result storage cannot be grown.
+    AllocationFailed {
+        /// The result storage whose allocation failed.
+        construct: &'static str,
+    },
+
     /// A well-formed construct this evaluator does not (or cannot) evaluate.
     ///
     /// This is the hard-fail boundary. `SERVICE` federation, `LATERAL`,
@@ -470,6 +478,7 @@ impl EvalError {
             Self::ExchangeIdExhausted => Some("native-sparql-exchange-id-exhausted"),
             Self::WorkspaceUnpriced(_) => Some("native-sparql-workspace-unpriced"),
             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
+            Self::AllocationFailed { .. } => Some(Self::ALLOCATION_FAILED_CODE),
             Self::Unsupported { kind, .. } => kind.map(UnsupportedKind::code),
             Self::Parse(_)
             | Self::Dataset(_)
@@ -546,6 +555,9 @@ impl EvalError {
     /// endpoint for. The classified residue keeps its own [`UnsupportedKind::code`].
     pub const UNSUPPORTED_CODE: &'static str = "native-sparql-unsupported";
 
+    /// The stable diagnostic code for a failed solution-storage reservation.
+    pub const ALLOCATION_FAILED_CODE: &'static str = "native-sparql-allocation-failed";
+
     /// The stable, machine-readable diagnostic code
     /// [`Self::RelationIncomplete`] maps to at the `SparqlEngine` boundary.
     ///
@@ -594,6 +606,9 @@ impl core::fmt::Display for EvalError {
             ),
             Self::WorkspaceBoundOverflow => {
                 f.write_str("bounded query workspace price exceeds the logical byte width")
+            }
+            Self::AllocationFailed { construct } => {
+                write!(f, "memory allocation failed for {construct}")
             }
             Self::Unsupported { what, .. } => {
                 write!(f, "unsupported: {what}")

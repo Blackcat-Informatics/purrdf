@@ -1580,6 +1580,30 @@ fn exists_prepared<D: DatasetView + Sync>(
         .iter()
         .any(|v| schema.index_of(v).is_some_and(|i| row[i].is_some()));
 
+    // A positive body can be restricted by native identities without changing
+    // any expression scope. Its full independent bag can contain a disconnected
+    // product that no outer row ever needs. Keep the indexed singleton fast path
+    // for one triple, where the once-built probe is already bounded by one index.
+    let native_positive = correlated
+        && !stateful
+        && !matches!(normalized.as_ref(), GraphPattern::Bgp { patterns } if patterns.len() <= 1);
+    #[cfg(test)]
+    let native_positive =
+        native_positive && FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get).is_none();
+    if native_positive
+        && let Some(answer) = exists_positive_seeded(
+            site.key,
+            normalized,
+            free_vars,
+            ledger_source,
+            row,
+            schema,
+            ctx,
+        )?
+    {
+        return Ok(answer);
+    }
+
     if exists_use_probe(correlated, stateful, normalized, analysis, schema) {
         // ---- Memoized probe path ----
         //
@@ -1757,6 +1781,103 @@ fn exists_prepared<D: DatasetView + Sync>(
         }
         Ok(answer)
     }
+}
+
+/// Native restriction of a pure EXISTS relation; `None` keeps the ordinary
+/// definition/probe strategy for any expression or modifier boundary.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the EXISTS site and its row scope are independent borrowed inputs"
+)]
+fn exists_positive_seeded<D: DatasetView + Sync>(
+    site: usize,
+    normalized: &GraphPattern,
+    free_vars: &DetHashSet<Variable>,
+    ledger_source: &Arc<SubstitutionSourceMap>,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<bool>, EvalError> {
+    let memo_key = (ctx.options.exists_memo && !ctx.in_substituted_exists).then(|| {
+        (
+            site,
+            ctx.graph_key(),
+            crate::eval::schema_fingerprint(schema),
+            definition_restriction_key(row, schema, free_vars),
+        )
+    });
+    if let Some(key) = &memo_key
+        && let Some(&answer) = ctx.exists_definition_memo.get(key)
+    {
+        return Ok(Some(answer));
+    }
+    let mut seed_schema = VarSchema::default();
+    let mut seed_row = Solution::new();
+    for (column, variable) in schema.vars().iter().enumerate() {
+        if free_vars.contains(variable) {
+            seed_schema.push(variable.clone());
+            seed_row.push(row[column]);
+        }
+    }
+    let input = SolutionSeq {
+        schema: Arc::new(seed_schema),
+        rows: vec![seed_row],
+    };
+    let seed = crate::bgp::SeedEstimate::from_rows(&input);
+    let Some(plan) = crate::bgp::PositivePlan::build_seeded(
+        ctx.dataset,
+        &ctx.active_dataset,
+        ctx.active_graph,
+        normalized,
+        &seed,
+    )?
+    else {
+        return Ok(None);
+    };
+    let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
+    if track_ledger {
+        ctx.correlated_node_maps.push(Arc::clone(ledger_source));
+    }
+    // Emptiness is settled by one witness. Price and execute the restriction
+    // against the original immutable body, preserving its source attribution.
+    let previous_pushdown = ctx.cap_pushdown.take();
+    let previous_cursor = ctx.cap_at;
+    ctx.cap_pushdown = Some(Arc::new(crate::governor::soundness::plan_cap_pushdown(
+        normalized,
+        Some(1),
+    )));
+    let evaluated = crate::eval::eval_positive_evaluated(
+        normalized,
+        Some(crate::eval::PositiveInput::owned(input)),
+        &plan,
+        ctx,
+    );
+    ctx.cap_pushdown = previous_pushdown;
+    ctx.cap_at = previous_cursor;
+    if track_ledger {
+        ctx.correlated_node_maps.pop();
+    }
+    let evaluated = evaluated?;
+    if let Evaluated::Truncated(truncation) = &evaluated {
+        ctx.expression_barrier.record(truncation.tripped());
+        return Ok(Some(false));
+    }
+    if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
+        return Ok(Some(false));
+    }
+    for _ in &evaluated.rows().rows {
+        if charge_exists_evidence(
+            ctx,
+            crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
+        ) {
+            return Ok(Some(false));
+        }
+    }
+    let answer = !evaluated.rows().is_empty();
+    if let Some(key) = memo_key {
+        ctx.exists_definition_memo.insert(key, answer);
+    }
+    Ok(Some(answer))
 }
 
 /// Answer a nested `EXISTS` the substitution walk left as a placeholder, for the current
