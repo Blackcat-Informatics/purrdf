@@ -246,24 +246,7 @@ impl MutableDataset {
             }
         }
         for value in &self.delta.values {
-            value.visit_terms(|term| {
-                match term {
-                    TermValue::Blank { label, scope } => visit(label, *scope)?,
-                    TermValue::Literal {
-                        lexical_form,
-                        datatype,
-                        ..
-                    } => {
-                        for (label, scope) in
-                            crate::cdt_blank::cdt_embedded_blanks(lexical_form, datatype)
-                        {
-                            visit(&label, scope)?;
-                        }
-                    }
-                    TermValue::Iri(_) | TermValue::Triple { .. } => {}
-                }
-                ControlFlow::Continue(())
-            })?;
+            value.visit_blank_identities(&mut visit)?;
         }
         ControlFlow::Continue(())
     }
@@ -1092,6 +1075,64 @@ mod tests {
             .iter()
             .map(|q| format!("{:?}|{:?}|{:?}|{:?}", q.s, q.p, q.o, q.g))
             .collect()
+    }
+
+    #[test]
+    fn blank_identity_visit_retains_suppressed_and_removed_nested_values() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_blank("base", crate::BlankScope::DEFAULT);
+        let predicate = builder.intern_iri("http://example.org/p");
+        let object = builder.intern_iri("http://example.org/o");
+        builder.push_quad(subject, predicate, object, None);
+        builder.intern_blank("unused", crate::BlankScope(5));
+        let mut mutable = MutableDataset::new(builder.freeze().expect("base freezes"));
+        assert!(mutable.remove(&QuadValues::triple(
+            TermValue::blank("base"),
+            iri_val("p"),
+            iri_val("o"),
+        )));
+        let delta = QuadValues::triple(
+            iri_val("holder"),
+            iri_val("p"),
+            TermValue::Triple {
+                s: TermBox::new(TermValue::blank("delta")),
+                p: TermBox::new(iri_val("p")),
+                o: TermBox::new(TermValue::typed_literal(
+                    "[_:embedded]",
+                    purrdf_cdt::CDT_LIST,
+                )),
+            },
+        );
+        assert!(ins(&mut mutable, delta.clone()));
+        assert!(mutable.remove(&delta));
+        assert_eq!(mutable.effective_value_quads(), []);
+
+        let mut identities = std::collections::BTreeSet::new();
+        let complete = mutable.visit_blank_identities(|label, scope| {
+            identities.insert((label.to_owned(), scope));
+            ControlFlow::<Infallible>::Continue(())
+        });
+        assert_eq!(complete, ControlFlow::Continue(()));
+        assert_eq!(
+            identities,
+            [
+                ("base".to_owned(), crate::BlankScope::DEFAULT),
+                ("unused".to_owned(), crate::BlankScope(5)),
+                ("delta".to_owned(), crate::BlankScope::DEFAULT),
+                ("embedded".to_owned(), crate::BlankScope::DEFAULT),
+            ]
+            .into_iter()
+            .collect()
+        );
+        let mut calls = 0;
+        assert_eq!(
+            mutable.visit_blank_identities(|label, scope| {
+                calls += 1;
+                ControlFlow::Break((label.to_owned(), scope))
+            }),
+            ControlFlow::Break(("base".to_owned(), crate::BlankScope::DEFAULT))
+        );
+        assert_eq!(calls, 1);
     }
 
     /// `base_value_of` and [`RdfDataset::term_value`] are the two resolvers of a

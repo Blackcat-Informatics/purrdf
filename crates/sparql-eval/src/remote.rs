@@ -90,6 +90,8 @@ use crate::solution::{SolutionSeq, VarSchema};
 
 /// One remote `SELECT` result set, dataset-independent (egress [`TermValue`]
 /// space). Dense over `variables`; a `None` cell is an unbound binding.
+/// Blank identities are local to this response. Ingestion preserves sharing
+/// within it and allocates identities distinct from the caller and other responses.
 #[derive(Debug, Clone)]
 pub struct ResolvedBindings {
     /// The result variables, in result order.
@@ -1201,14 +1203,24 @@ fn ingest<D: DatasetView + Sync>(
         Some(crate::governor::ChargePoint::RemoteRowIngested),
     );
     let mut rows = Vec::with_capacity(ingest.capacity_for(resolved_rows.len()));
+    let mut blanks = crate::DetHashMap::default();
     let mut tripped = None;
-    for binding in resolved_rows {
+    'bindings: for mut binding in resolved_rows {
         match ingest.admit(ctx, rows.len()) {
             crate::row_ingest::IngestVerdict::Abandoned(governor) => {
                 tripped = governor;
                 break;
             }
             crate::row_ingest::IngestVerdict::Admitted => {}
+        }
+        for value in binding.iter_mut().take(schema.len()) {
+            if let Some(term) = value.take() {
+                let Some(remapped) = response_blank_value(term, &mut blanks, ctx)? else {
+                    tripped = ctx.expression_barrier.observed();
+                    break 'bindings;
+                };
+                *value = Some(remapped);
+            }
         }
         let row = ingest.intern_row(ctx, binding)?;
         rows.push(row);
@@ -1219,6 +1231,90 @@ fn ingest<D: DatasetView + Sync>(
         tripped = ctx.observe_cell_count(attempted_cells).err();
     }
     Ok((SolutionSeq { schema, rows }, tripped))
+}
+
+/// Carry a response's blank-node equivalence classes into the caller's mint space.
+/// The same map covers bare blanks, triple terms and embedded composite blanks.
+fn response_blank_value<D: DatasetView + Sync>(
+    value: TermValue,
+    blanks: &mut crate::DetHashMap<purrdf_core::BlankScope, crate::DetHashMap<String, String>>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<TermValue>, EvalError> {
+    let mut has_blanks = false;
+    let visited = value.visit_blank_identities(|label, scope| {
+        has_blanks = true;
+        let labels = blanks.entry(scope).or_default();
+        if !labels.contains_key(label) {
+            match ctx.try_mint_blank_label("service") {
+                Ok(Some(fresh)) => {
+                    labels.insert(label.to_owned(), fresh);
+                }
+                Ok(None) => return core::ops::ControlFlow::Break(Ok(())),
+                Err(error) => return core::ops::ControlFlow::Break(Err(error)),
+            }
+        }
+        core::ops::ControlFlow::Continue(())
+    });
+    if let core::ops::ControlFlow::Break(aborted) = visited {
+        aborted?;
+        return Ok(None);
+    }
+    if !has_blanks {
+        return Ok(Some(value));
+    }
+    value
+        .try_fold_owned(
+            |term| {
+                Ok(match term {
+                    TermValue::Blank { label, scope } => TermValue::Blank {
+                        label: blanks[&scope][&label].clone(),
+                        scope: purrdf_core::BlankScope::DEFAULT,
+                    },
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let rewritten = purrdf_core::cdt_blank::rewrite_cdt_blank_terms(
+                            &lexical_form,
+                            &datatype,
+                            &mut |token| {
+                                let (label, scope) = purrdf_core::blank_label::decode_blank_label(
+                                    token,
+                                    purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
+                                );
+                                let encoded = purrdf_core::blank_label::encode_blank_label(
+                                    &blanks[&scope][label.as_ref()],
+                                    purrdf_core::BlankScope::DEFAULT,
+                                    purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
+                                );
+                                Some(format!("_:{encoded}"))
+                            },
+                        );
+                        let lexical_form = match rewritten {
+                            std::borrow::Cow::Borrowed(_) => lexical_form,
+                            std::borrow::Cow::Owned(rewritten) => rewritten,
+                        };
+                        TermValue::Literal {
+                            lexical_form,
+                            datatype,
+                            language,
+                            direction,
+                        }
+                    }
+                    term => term,
+                })
+            },
+            |s, p, o| {
+                Ok(TermValue::Triple {
+                    s: purrdf_core::TermBox::new(s),
+                    p: purrdf_core::TermBox::new(p),
+                    o: purrdf_core::TermBox::new(o),
+                })
+            },
+        )
+        .map(Some)
 }
 
 /// Reclassify an error raised by a forwarded in-memory evaluation for the resolver seam.
@@ -3549,5 +3645,471 @@ mod body_walk_tests {
             assert!(!ground_term_has_blank_node(&without));
         })
         .expect("spawn");
+    }
+}
+
+#[cfg(test)]
+mod response_identity_tests {
+    use super::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver, ingest};
+    use crate::eval::{EvalCtx, Outcome, evaluate_query, materialize_solutions, minted_label};
+    use core::convert::Infallible;
+    use core::ops::ControlFlow;
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, TermBox, TermValue};
+    use purrdf_sparql_algebra::{
+        BlankNode, Child, GraphPattern, GroundTerm, Query, SparqlParser, Variable,
+    };
+    use std::collections::BTreeSet;
+
+    fn blank_occurrences(value: &TermValue) -> Vec<(String, BlankScope)> {
+        let mut identities = Vec::new();
+        let complete = value.visit_blank_identities(|label, scope| {
+            identities.push((label.to_owned(), scope));
+            ControlFlow::<Infallible>::Continue(())
+        });
+        assert_eq!(complete, ControlFlow::Continue(()));
+        identities
+    }
+
+    struct OneBlankResponse {
+        variable: &'static str,
+    }
+
+    impl ServiceResolver for OneBlankResponse {
+        fn resolve(&self, _: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+            Ok(ResolvedBindings {
+                variables: vec![Variable::new(self.variable)],
+                rows: vec![vec![Some(TermValue::blank("shared"))]],
+                cell_limit_exceeded_at: None,
+            })
+        }
+    }
+
+    #[test]
+    fn response_identity_partitions_survive_bare_quoted_and_composite_cells() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let shared = TermValue::Blank {
+            label: "shared".to_owned(),
+            scope: BlankScope(4),
+        };
+        let other = TermValue::Blank {
+            label: "other".to_owned(),
+            scope: BlankScope(4),
+        };
+        let same_label_other_scope = TermValue::Blank {
+            label: "shared".to_owned(),
+            scope: BlankScope(5),
+        };
+        let quoted = TermValue::Triple {
+            s: TermBox::new(shared.clone()),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::Triple {
+                s: TermBox::new(other),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(shared.clone()),
+            }),
+        };
+        let shared_token = BlankScope(4).qualify_label("shared").into_owned();
+        let other_token = BlankScope(4).qualify_label("other").into_owned();
+        let reserved_prefix = format!("{}5_", purrdf_core::blank_label::ESCAPE_MARKER);
+        for (datatype, lexical) in [
+            (
+                purrdf_cdt::CDT_LIST,
+                format!(
+                    "[_:{shared_token}, [_:{other_token}], \
+                     {{'again': _:{shared_token}}}, '_:opaque']"
+                ),
+            ),
+            (
+                purrdf_cdt::CDT_MAP,
+                format!(
+                    "{{'first': _:{shared_token}, 'nested': [_:{other_token}], \
+                     'again': _:{shared_token}, 'opaque': '_:opaque'}}"
+                ),
+            ),
+        ] {
+            for prefix in [None, Some(reserved_prefix.as_str())] {
+                let mut ctx = EvalCtx::new(dataset.as_ref());
+                if let Some(prefix) = prefix {
+                    ctx = ctx.with_bnode_mint_prefix(prefix).expect("valid prefix");
+                }
+                let row = vec![
+                    Some(shared.clone()),
+                    Some(quoted.clone()),
+                    Some(TermValue::typed_literal(lexical.clone(), datatype)),
+                    Some(same_label_other_scope.clone()),
+                    None,
+                    Some(TermValue::simple_literal("_:opaque")),
+                ];
+                let resolved = ResolvedBindings {
+                    variables: [
+                        "bare",
+                        "quoted",
+                        "composite",
+                        "other_scope",
+                        "unbound",
+                        "text",
+                    ]
+                    .map(Variable::new)
+                    .to_vec(),
+                    rows: vec![row.clone(), row],
+                    cell_limit_exceeded_at: None,
+                };
+                let (seq, tripped) = ingest(resolved, &mut ctx).expect("response admitted");
+                assert!(tripped.is_none());
+                let (variables, rows) = materialize_solutions(&seq, &ctx).expect("response values");
+                assert_eq!(
+                    variables,
+                    [
+                        "bare",
+                        "quoted",
+                        "composite",
+                        "other_scope",
+                        "unbound",
+                        "text"
+                    ]
+                );
+                assert_eq!(rows.len(), 2, "duplicate response rows retain multiplicity");
+                assert_eq!(rows[0], rows[1]);
+                assert_eq!(rows[0][4], None);
+                assert_eq!(rows[0][5], Some(TermValue::simple_literal("_:opaque")));
+
+                let bare = blank_occurrences(rows[0][0].as_ref().expect("bare blank"));
+                let quoted = blank_occurrences(rows[0][1].as_ref().expect("quoted triple"));
+                let composite = blank_occurrences(rows[0][2].as_ref().expect("composite"));
+                let scoped = blank_occurrences(rows[0][3].as_ref().expect("other scope"));
+                assert_eq!(bare.len(), 1);
+                assert_eq!(scoped.len(), 1);
+                assert_eq!(quoted.len(), 3);
+                assert_eq!(composite, quoted);
+                assert_eq!(quoted[0], bare[0]);
+                assert_eq!(quoted[2], bare[0]);
+                assert_ne!(quoted[1], bare[0]);
+                assert_ne!(scoped[0], bare[0]);
+                assert_ne!(scoped[0], quoted[1]);
+                for (_, scope) in bare.iter().chain(&quoted).chain(&composite).chain(&scoped) {
+                    assert_eq!(*scope, BlankScope::DEFAULT);
+                }
+                let TermValue::Literal {
+                    lexical_form,
+                    datatype: actual_datatype,
+                    ..
+                } = rows[0][2].as_ref().expect("composite literal")
+                else {
+                    panic!("a composite remains a literal");
+                };
+                assert_eq!(actual_datatype, datatype);
+                assert!(lexical_form.contains("'_:opaque'"));
+            }
+        }
+    }
+
+    #[test]
+    fn union_service_responses_retain_distinct_identities_when_forking_is_requested() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let source = OneBlankResponse { variable: "remote" };
+        let query = SparqlParser::new()
+            .parse_query(
+                "SELECT DISTINCT ?remote WHERE { \
+                 { SERVICE <http://example.org/left> { ?remote <http://example.org/p> ?o } } \
+                 UNION \
+                 { SERVICE <http://example.org/right> { ?remote <http://example.org/p> ?o } } }",
+            )
+            .expect("SERVICE UNION query");
+        for force_parallel in [false, true] {
+            let _parallel = crate::parallel::force_parallel_for_test(force_parallel);
+            let mut ctx = EvalCtx::new(dataset.as_ref()).with_remote(&source);
+            let Outcome::Solutions(seq) = evaluate_query(&query, &mut ctx).expect("SERVICE UNION")
+            else {
+                panic!("SELECT produces solutions");
+            };
+            let (variables, rows) = materialize_solutions(&seq, &ctx).expect("response values");
+            assert_eq!(variables, ["remote"]);
+            assert_eq!(
+                rows.len(),
+                2,
+                "DISTINCT retains both independent response blanks"
+            );
+            let identities: BTreeSet<_> = rows
+                .iter()
+                .map(|row| {
+                    assert_eq!(row.len(), 1);
+                    let identities = blank_occurrences(row[0].as_ref().expect("remote blank"));
+                    assert_eq!(identities.len(), 1);
+                    identities[0].clone()
+                })
+                .collect();
+            assert_eq!(identities.len(), 2);
+            assert!(
+                identities
+                    .iter()
+                    .all(|(_, scope)| *scope == BlankScope::DEFAULT)
+            );
+        }
+    }
+
+    #[test]
+    fn late_concrete_values_cannot_capture_an_earlier_service_response_blank() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let source = OneBlankResponse { variable: "fresh" };
+        for prefix in [None, Some("caller_")] {
+            let mut query = SparqlParser::new()
+                .parse_query(
+                    "SELECT ?fresh ?existing WHERE { \
+                     SERVICE <http://example.org/remote> { ?fresh <http://example.org/p> ?o } \
+                     FILTER(?fresh != ?existing) }",
+                )
+                .expect("SERVICE inequality query");
+            let Query::Select {
+                pattern: GraphPattern::Project { inner, .. },
+                ..
+            } = &mut query
+            else {
+                panic!("SELECT projection");
+            };
+            let GraphPattern::Filter { inner, .. } = &mut **inner else {
+                panic!("inequality FILTER");
+            };
+            let concrete = minted_label(prefix, "service", 1);
+            *inner = Child::new(GraphPattern::Join {
+                left: inner.clone(),
+                right: Child::new(GraphPattern::Values {
+                    variables: vec![Variable::new("existing")],
+                    bindings: vec![vec![Some(GroundTerm::BlankNode(BlankNode::new(&concrete)))]],
+                }),
+            });
+            for raw_entry in [false, true] {
+                let mut ctx = EvalCtx::new(dataset.as_ref()).with_remote(&source);
+                if let Some(prefix) = prefix {
+                    ctx = ctx.with_bnode_mint_prefix(prefix).expect("valid prefix");
+                }
+                let seq = if raw_entry {
+                    crate::eval::eval(query.pattern(), &mut ctx).expect("raw SERVICE pattern")
+                } else {
+                    let Outcome::Solutions(seq) =
+                        evaluate_query(&query, &mut ctx).expect("SERVICE query")
+                    else {
+                        panic!("SELECT produces solutions");
+                    };
+                    seq
+                };
+                let (variables, rows) = materialize_solutions(&seq, &ctx).expect("response values");
+                assert_eq!(variables, ["fresh", "existing"]);
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "freshness makes the inequality accept its row"
+                );
+                assert_eq!(rows[0].len(), 2);
+                assert_eq!(rows[0][1], Some(TermValue::blank(&concrete)));
+                assert_ne!(rows[0][0], rows[0][1]);
+                let fresh = blank_occurrences(rows[0][0].as_ref().expect("fresh response blank"));
+                assert_eq!(fresh.len(), 1);
+                assert_eq!(fresh[0].1, BlankScope::DEFAULT);
+                assert!(fresh[0].0.starts_with(prefix.unwrap_or_default()));
+            }
+        }
+    }
+
+    #[test]
+    fn separate_responses_avoid_local_callback_and_prior_mint_identities() {
+        const PREFIX: &str = "caller_";
+        let callback_label = minted_label(Some(PREFIX), "service", 1);
+        let dataset_label = minted_label(Some(PREFIX), "service", 2);
+        let embedded_label = minted_label(Some(PREFIX), "service", 3);
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/local");
+        let predicate = builder.intern_iri("http://example.org/p");
+        let bare = builder.intern_value(&TermValue::blank(&dataset_label));
+        let embedded = builder.intern_value(&TermValue::typed_literal(
+            format!("[[_:{embedded_label}]]"),
+            purrdf_cdt::CDT_LIST,
+        ));
+        builder.push_quad(subject, predicate, bare, None);
+        builder.push_quad(subject, predicate, embedded, None);
+        let dataset = builder.freeze().expect("local graph");
+        let mut ctx = EvalCtx::new(dataset.as_ref())
+            .with_bnode_mint_prefix(PREFIX)
+            .expect("valid caller prefix");
+        let callback_value = TermValue::Triple {
+            s: TermBox::new(TermValue::blank(&callback_label)),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::typed_literal(
+                format!("[[_:{callback_label}]]"),
+                purrdf_cdt::CDT_LIST,
+            )),
+        };
+        ctx.scratch
+            .try_intern(dataset.as_ref(), callback_value)
+            .expect("callback value retained");
+        let local_mint = ctx
+            .try_mint_blank_label("service")
+            .expect("local source readable")
+            .expect("ungoverned local mint");
+        let mut occupied: BTreeSet<_> = [callback_label, dataset_label, embedded_label, local_mint]
+            .map(|label| (label, BlankScope::DEFAULT))
+            .into_iter()
+            .collect();
+        assert_eq!(
+            occupied.len(),
+            4,
+            "a local mint avoids all existing identities"
+        );
+
+        let shared = TermValue::Blank {
+            label: "shared".to_owned(),
+            scope: BlankScope(3),
+        };
+        let shared_token = BlankScope(3).qualify_label("shared").into_owned();
+        let other_token = BlankScope(3).qualify_label("other").into_owned();
+        let row = vec![
+            Some(shared.clone()),
+            Some(TermValue::Blank {
+                label: "shared".to_owned(),
+                scope: BlankScope(4),
+            }),
+            Some(TermValue::Triple {
+                s: TermBox::new(shared),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::Blank {
+                    label: "other".to_owned(),
+                    scope: BlankScope(3),
+                }),
+            }),
+            Some(TermValue::typed_literal(
+                format!("[_:{shared_token}, [_:{other_token}], _:{shared_token}]"),
+                purrdf_cdt::CDT_LIST,
+            )),
+            None,
+            Some(TermValue::iri("http://example.org/constant")),
+        ];
+        let resolved = ResolvedBindings {
+            variables: [
+                "bare",
+                "scoped",
+                "quoted",
+                "composite",
+                "unbound",
+                "constant",
+            ]
+            .map(Variable::new)
+            .to_vec(),
+            rows: vec![row.clone(), row],
+            cell_limit_exceeded_at: None,
+        };
+        for _ in 0..3 {
+            let (seq, tripped) = ingest(resolved.clone(), &mut ctx).expect("response admitted");
+            assert!(tripped.is_none());
+            let (variables, rows) = materialize_solutions(&seq, &ctx).expect("response values");
+            assert_eq!(
+                variables,
+                [
+                    "bare",
+                    "scoped",
+                    "quoted",
+                    "composite",
+                    "unbound",
+                    "constant"
+                ]
+            );
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0], rows[1]);
+            assert_eq!(rows[0][4], None);
+            assert_eq!(
+                rows[0][5],
+                Some(TermValue::iri("http://example.org/constant"))
+            );
+            let identities: BTreeSet<_> = rows[0]
+                .iter()
+                .flatten()
+                .flat_map(blank_occurrences)
+                .collect();
+            assert_eq!(
+                identities.len(),
+                3,
+                "the source has exactly three identities"
+            );
+            assert!(identities.is_disjoint(&occupied));
+            assert!(identities.iter().all(|(label, scope)| {
+                label.starts_with(PREFIX) && *scope == BlankScope::DEFAULT
+            }));
+            let bare = blank_occurrences(rows[0][0].as_ref().expect("bare blank"));
+            let quoted = blank_occurrences(rows[0][2].as_ref().expect("quoted triple"));
+            let composite = blank_occurrences(rows[0][3].as_ref().expect("composite"));
+            assert_eq!(quoted[0], bare[0]);
+            assert_eq!(
+                composite,
+                [bare[0].clone(), quoted[1].clone(), bare[0].clone()]
+            );
+            occupied.extend(identities);
+        }
+        assert_eq!(
+            occupied.len(),
+            13,
+            "three independent responses add three identities each"
+        );
+    }
+
+    #[test]
+    fn surplus_response_cells_do_not_allocate_discarded_identities() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let mut ctx = EvalCtx::new(dataset.as_ref());
+        let before_counter = ctx.bnode_counter;
+        let before_bytes = ctx.scratch.minted_bytes();
+        let resolved = ResolvedBindings {
+            variables: Vec::new(),
+            rows: vec![
+                vec![Some(TermValue::blank("discarded"))],
+                vec![Some(TermValue::typed_literal(
+                    "[[_:discarded_composite]]",
+                    purrdf_cdt::CDT_LIST,
+                ))],
+            ],
+            cell_limit_exceeded_at: None,
+        };
+        let (seq, tripped) = ingest(resolved, &mut ctx).expect("zero-width response admitted");
+        assert!(tripped.is_none());
+        let (variables, rows) = materialize_solutions(&seq, &ctx).expect("empty response rows");
+        assert_eq!(variables, [] as [String; 0]);
+        assert_eq!(rows, [Vec::<Option<TermValue>>::new(), Vec::new()]);
+        assert_eq!(ctx.bnode_counter, before_counter);
+        assert_eq!(ctx.scratch.minted_bytes(), before_bytes);
+    }
+
+    #[test]
+    fn response_ingest_walks_a_hundred_thousand_level_value_on_small_stack() {
+        const LEVELS: usize = 100_000;
+        purrdf_stack::on_stack(128 * 1024, || {
+            let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+            let mut ctx = EvalCtx::new(dataset.as_ref());
+            let mut value = TermValue::typed_literal("[_:deep, [_:deep]]", purrdf_cdt::CDT_LIST);
+            for _ in 0..LEVELS {
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(value),
+                };
+            }
+            let resolved = ResolvedBindings {
+                variables: vec![Variable::new("value")],
+                rows: vec![vec![Some(value)]],
+                cell_limit_exceeded_at: None,
+            };
+            let (seq, tripped) = ingest(resolved, &mut ctx).expect("deep response admitted");
+            assert!(tripped.is_none());
+            let (variables, rows) = materialize_solutions(&seq, &ctx).expect("deep response value");
+            assert_eq!(variables, ["value"]);
+            assert_eq!(rows.len(), 1);
+            let value = rows[0][0].as_ref().expect("deep value");
+            assert_eq!(
+                value.fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o)),
+                LEVELS
+            );
+            let identities = blank_occurrences(value);
+            assert_eq!(identities.len(), 2);
+            assert_eq!(identities[0], identities[1]);
+            assert_eq!(identities[0].1, BlankScope::DEFAULT);
+        })
+        .expect("the thread starts");
     }
 }

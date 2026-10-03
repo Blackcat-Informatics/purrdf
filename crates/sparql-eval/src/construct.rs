@@ -20,7 +20,6 @@
 //! layer, so blank-node labels and quad ordering here need not be stable —
 //! `freeze` sorts and de-duplicates, and canonicalization relabels blanks.
 
-use purrdf_core::TermBox;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -42,7 +41,6 @@ use crate::solution::{Solution, VarSchema};
 use crate::template::{
     PredicateOrdinal, TermOrdinal, TripleOrdinal, instantiate_predicate, instantiate_term,
     positionally_ill_formed, resolve_predicate, resolve_term, resolve_triple,
-    template_has_blank_node,
 };
 use crate::{DetHashMap, DetHashSet};
 
@@ -243,7 +241,7 @@ pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<StagedConstruct<D::Id>, EvalError> {
-    let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
+    let (mut seq, mut certificate) = match eval_evaluated(pattern, ctx)? {
         Evaluated::Complete(seq) => (seq, None),
         Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
     };
@@ -280,14 +278,6 @@ pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
         .map(|(i, _)| i)
         .collect();
 
-    // Scanned ONCE before the row loop (see `template_has_blank_node`'s doc
-    // comment for why this exact condition is what makes minted-label tracking
-    // worth doing at all): a template with no blank-node position can never
-    // populate `MintTracker::minted`, which makes every `track_minted` /
-    // `track_minted_predicate` call — and the `BTreeSet` insert + `String`
-    // clone each performs — dead weight for every row of this evaluation.
-    let has_blank_positions = template_has_blank_node(template);
-
     let plan = ConstructPlan {
         template,
         uniform_graph: uniform_template_graph(template),
@@ -296,33 +286,18 @@ pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
         reifier_decl_indices: &reifier_decl_indices,
     };
 
-    // Pass 1: the ordinary single-pass build, additionally recording which blank
-    // labels the template MINTED versus which arrived DATA-CARRIED in bindings.
-    let counter_start = ctx.bnode_counter;
-    let mut tracker = MintTracker::new(has_blank_positions);
-    let graph = build_construct_graph(&plan, &seq, ctx, &mut tracker)?;
-
-    // §16.2 freshness: a template blank must denote a blank node distinct from
-    // every blank node in the queried data. The mint counter guarantees that only
-    // against other mints, so when a minted label collides with a data-carried
-    // label in this result the two conflate at intern time. The (rare) fix is a
-    // deterministic remap of exactly the colliding minted labels, replayed over
-    // the same rows with the counter rewound so every non-colliding label is
-    // byte-identical to pass 1. No collision — the overwhelmingly common case —
-    // keeps the pass-1 graph untouched.
-    let graph = match tracker.freshness_remap(&graph) {
-        None => graph,
-        Some(remap) => {
-            // `tracker.minted`/`.data` are intentionally NOT cleared before this
-            // second pass: `eval_construct` computes `freshness_remap` exactly
-            // once per evaluation, so the re-pass never re-reads those sets for
-            // a fresh collision check — only `remap` (just set) and `enabled`
-            // are consulted below.
-            tracker.remap = remap;
-            ctx.bnode_counter = counter_start;
-            build_construct_graph(&plan, &seq, ctx, &mut tracker)?
-        }
-    };
+    // Template allocation shares the dataset/scratch vacancy check with BNODE
+    // and list constructors, so the graph is built once without a relabel replay.
+    let graph = build_construct_graph(&plan, &seq, ctx)?;
+    if certificate.is_none()
+        && let Some(tripped) = ctx.expression_barrier.observed()
+    {
+        // A template stopped after WHERE completed. No partially instantiated
+        // graph is committed; the empty graph is a certified lower bound and
+        // positional prefix independently of the template's emission order.
+        seq = crate::solution::SolutionSeq::empty(seq.schema);
+        certificate = Some(Truncation::origin(seq.clone(), tripped));
+    }
     Ok(StagedConstruct {
         builder: graph,
         rows: seq,
@@ -330,9 +305,7 @@ pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
     })
 }
 
-/// The immutable inputs of one CONSTRUCT template pass, bundled so the pass can
-/// run twice (see [`eval_construct`]'s freshness re-pass) without re-deriving
-/// them.
+/// The immutable inputs of one CONSTRUCT template-instantiation pass.
 struct ConstructPlan<'a> {
     /// The CONSTRUCT template quads: a statement pattern each, carrying the
     /// graph that statement is instantiated into.
@@ -451,16 +424,18 @@ impl<'a> GraphSlot<'a> {
         row: &Solution<D::Id>,
         builder: &mut RdfDatasetBuilder,
         ctx: &EvalCtx<'_, D>,
-    ) -> Option<GraphId> {
+    ) -> Result<Option<GraphId>, EvalError> {
         match self {
-            Self::Default => Some(GraphId::DEFAULT),
-            Self::Fixed(id) => Some(GraphId(Some(*id))),
+            Self::Default => Ok(Some(GraphId::DEFAULT)),
+            Self::Fixed(id) => Ok(Some(GraphId(Some(*id)))),
             Self::Bound(pattern, ordinal) => {
-                let value = instantiate_predicate(pattern, ordinal, row, ctx)?;
+                let Some(value) = instantiate_predicate(pattern, ordinal, row, ctx)? else {
+                    return Ok(None);
+                };
                 if !matches!(value, TermValue::Iri(_)) {
-                    return None;
+                    return Ok(None);
                 }
-                Some(GraphId(Some(builder.intern_value(&value))))
+                Ok(Some(GraphId(Some(builder.intern_value(&value)))))
             }
         }
     }
@@ -478,17 +453,11 @@ impl<'a> GraphSlot<'a> {
 
 /// One full template-instantiation pass over the `WHERE`'s solution rows,
 /// interning into a fresh builder and freezing the result.
-///
-/// `tracker` records the minted/data-carried blank-label split as the pass runs;
-/// on the freshness re-pass its `remap` renames exactly the colliding minted
-/// labels at their minted positions. Replaying is deterministic because the
-/// caller rewinds `ctx.bnode_counter` to its pre-pass value and every other
-/// input (`plan`, `seq`, the scratch interner) is read-only here.
+/// Fresh identities are admitted at allocation by the shared context mint.
 fn build_construct_graph<D: DatasetView + Sync>(
     plan: &ConstructPlan<'_>,
     seq: &crate::solution::SolutionSeq<D::Id>,
     ctx: &mut EvalCtx<'_, D>,
-    tracker: &mut MintTracker,
 ) -> Result<ValidatedRdfDatasetBuilder, EvalError> {
     let schema = &seq.schema;
     let template = plan.template;
@@ -547,12 +516,12 @@ fn build_construct_graph<D: DatasetView + Sync>(
     let reifies_id = builder.intern_iri(RDF_REIFIES);
 
     // Template blank labels are fresh per solution row; the map co-refers a label
-    // within this row only, so it is CLEARED per row (`mint_blank` only reads via
+    // within this row only, so it is CLEARED per row (`fresh_blank` only reads via
     // `get` and inserts; the cross-row freshness comes from `ctx.bnode_counter`, not
     // from this map) — hoisted so its table allocation is reused across rows.
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
 
-    for row in &seq.rows {
+    'rows: for row in &seq.rows {
         blanks.clear();
 
         if !has_reifier_decls {
@@ -562,18 +531,15 @@ fn build_construct_graph<D: DatasetView + Sync>(
                 // The graph is resolved FIRST: a statement its graph slot skips
                 // is not instantiated at all, so it mints no blank labels and
                 // consumes no counter values on the way to being dropped.
-                let Some(graph_id) = slot.resolve(row, &mut builder, ctx) else {
+                let Some(graph_id) = slot.resolve(row, &mut builder, ctx)? else {
                     continue;
                 };
-                if let Some((s, p, o)) = instantiate(
-                    &quad.triple,
-                    ordinal,
-                    row,
-                    &mut builder,
-                    &mut blanks,
-                    ctx,
-                    tracker,
-                ) {
+                let instantiated =
+                    instantiate(&quad.triple, ordinal, row, &mut builder, &mut blanks, ctx)?;
+                if ctx.expression_barrier.observed().is_some() {
+                    break 'rows;
+                }
+                if let Some((s, p, o)) = instantiated {
                     builder.push_quad(s, p, o, graph_id.term());
                 }
             }
@@ -587,20 +553,32 @@ fn build_construct_graph<D: DatasetView + Sync>(
                 .iter()
                 .zip(&graph_slots)
                 .zip(&template_ordinals)
-                .map(|((quad, slot), ordinal)| {
-                    let graph = slot.resolve(row, &mut builder, ctx)?;
-                    let (s, p, o) = instantiate(
-                        &quad.triple,
-                        ordinal,
-                        row,
-                        &mut builder,
-                        &mut blanks,
-                        ctx,
-                        tracker,
-                    )?;
-                    Some(Instantiated { s, p, o, graph })
-                })
-                .collect();
+                .map(
+                    |((quad, slot), ordinal)| -> Result<Option<Instantiated>, EvalError> {
+                        if ctx.expression_barrier.observed().is_some() {
+                            return Ok(None);
+                        }
+                        let Some(graph) = slot.resolve(row, &mut builder, ctx)? else {
+                            return Ok(None);
+                        };
+                        let Some((s, p, o)) = instantiate(
+                            &quad.triple,
+                            ordinal,
+                            row,
+                            &mut builder,
+                            &mut blanks,
+                            ctx,
+                        )?
+                        else {
+                            return Ok(None);
+                        };
+                        Ok(Some(Instantiated { s, p, o, graph }))
+                    },
+                )
+                .collect::<Result<_, _>>()?;
+            if ctx.expression_barrier.observed().is_some() {
+                break 'rows;
+            }
 
             // Pass 1: emit reifier declarations and build the per-row reifier set.
             //
@@ -659,7 +637,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
             // a non-IRI) skips the declaration exactly as it skips a statement:
             // the row emitted nothing into a graph, so there is no graph to
             // declare the loss in.
-            && let Some(graph_id) = uniform_slot.resolve(row, &mut builder, ctx)
+            && let Some(graph_id) = uniform_slot.resolve(row, &mut builder, ctx)?
         {
             emit_dropped_losses(
                 plan.dropped,
@@ -669,7 +647,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
                 ctx,
                 ids,
                 graph_id.term(),
-            );
+            )?;
         }
     }
 
@@ -687,7 +665,11 @@ fn build_construct_graph<D: DatasetView + Sync>(
     // every statement is in that graph and so are its list cells), and the
     // default graph otherwise — no single row, hence no binding, can decide a
     // graph VARIABLE for a set of cells drawn from all of them.
-    if !ctx.constructed.is_empty() {
+    if ctx.expression_barrier.observed().is_some() {
+        // Neither an in-flight template nor an auxiliary list may publish after
+        // template allocation stops. The caller attaches the typed certificate.
+        builder = RdfDatasetBuilder::new();
+    } else if !ctx.constructed.is_empty() {
         let constructed_graph_id = uniform_slot.ground_graph();
         let (_, rows) = crate::eval::materialize_solutions(seq, ctx)?;
         for (s, p, o) in ctx.reachable_constructed(&rows) {
@@ -699,236 +681,6 @@ fn build_construct_graph<D: DatasetView + Sync>(
     }
 
     builder.validate().map_err(EvalError::Dataset)
-}
-
-/// Blank-label bookkeeping for SPARQL §16.2 template freshness across one
-/// `CONSTRUCT` evaluation.
-///
-/// §16.2 requires a template blank node to denote a **fresh** blank node —
-/// distinct from every blank node in the queried data. The mint draws labels from
-/// a monotonic counter, which makes them fresh against other *minted* labels but
-/// says nothing about the labels data-carried bindings bring into the same output
-/// graph: data already containing `_:c1` would conflate with the first minted
-/// blank at intern time. The tracker records, while a pass runs, which labels the
-/// template minted and which arrived data-carried — classification follows the
-/// **template position** that produced each term (never the label text), so a
-/// data blank that happens to spell like a mint is still counted as data.
-struct MintTracker {
-    /// Labels minted at template blank-node positions this evaluation.
-    minted: BTreeSet<String>,
-    /// Blank labels carried into the result by every non-minting template
-    /// position (variable bindings, including blanks nested in bound triple
-    /// terms).
-    data: BTreeSet<String>,
-    /// The freshness re-pass relabeling for colliding minted labels; empty on the
-    /// first pass, so the first pass rewrites nothing.
-    remap: DetHashMap<String, String>,
-    /// `false` when [`template_has_blank_node`] found no `TermPattern::BlankNode`
-    /// position anywhere in the template. `track_minted`/`track_minted_predicate`
-    /// check this once per call and, when it is `false`, pass their value through
-    /// unchanged with no `BTreeSet` insert and no `String` clone: `minted` can
-    /// never become non-empty for such a template (its only insertion site is
-    /// gated on a `TermPattern::BlankNode` match), so `freshness_remap`'s
-    /// `minted.intersection(&data)` is provably empty regardless of what `data`
-    /// would have accumulated — recording it at all would be dead weight on the
-    /// hottest path of every `CONSTRUCT` row.
-    enabled: bool,
-}
-
-impl MintTracker {
-    /// A tracker for one `CONSTRUCT` evaluation. `enabled` is
-    /// `template_has_blank_node(template)`, decided once before the row loop
-    /// starts.
-    fn new(enabled: bool) -> Self {
-        Self {
-            minted: BTreeSet::new(),
-            data: BTreeSet::new(),
-            remap: DetHashMap::default(),
-            enabled,
-        }
-    }
-
-    /// The deterministic freshness remap for minted labels colliding with a
-    /// data-carried label, or `None` when the closed result is already fresh.
-    ///
-    /// A pure function of the result's label sets: each colliding minted label
-    /// `L`, taken in lexicographic order, becomes `{L}r{k}` for the smallest
-    /// `k >= 0` such that the candidate avoids **every** label present in
-    /// `graph` and every replacement already chosen — so a replacement can
-    /// collide neither with data, nor with another minted label, nor with
-    /// another replacement, whatever the mint prefix was. The `r{k}` suffix is
-    /// ASCII-alphanumeric, so a legal label stays inside the
-    /// `BLANK_NODE_LABEL` alphabet.
-    fn freshness_remap(
-        &self,
-        graph: &ValidatedRdfDatasetBuilder,
-    ) -> Option<DetHashMap<String, String>> {
-        let colliding: Vec<&String> = self.minted.intersection(&self.data).collect();
-        if colliding.is_empty() {
-            return None;
-        }
-        let mut used: BTreeSet<String> = (0..graph.term_count())
-            .filter_map(|index| {
-                let id =
-                    TermId::from_index(u32::try_from(index).expect("validated term index fits"));
-                match graph.resolve(id) {
-                    TermRef::Blank { label, scope } => {
-                        Some(scope.qualify_label(label).into_owned())
-                    }
-                    _ => None,
-                }
-            })
-            .collect();
-        let mut remap = DetHashMap::default();
-        for label in colliding {
-            let mut k = 0u64;
-            let fresh = loop {
-                let candidate = format!("{label}r{k}");
-                if !used.contains(&candidate) {
-                    break candidate;
-                }
-                k += 1;
-            };
-            used.insert(fresh.clone());
-            remap.insert(label.clone(), fresh);
-        }
-        Some(remap)
-    }
-}
-
-/// Collect every blank-node label inside an owned term value, over a work list of its
-/// nested positions.
-///
-/// A label already present in `out` is left alone rather than re-inserted: a
-/// `BTreeSet<String>` insert of an already-present key still requires the
-/// caller to have an owned `String` to offer it, so `label.clone()` would run
-/// unconditionally on every call otherwise. Checking membership by `&str`
-/// first (no allocation) and cloning only on the *first* sighting of a given
-/// label matters here because a data-carried blank's label routinely repeats —
-/// the same blank subject spans every triple it participates in, within a row
-/// and often across rows — so the common case is a set that has already seen
-/// the label. This is unconditionally sound: it changes nothing about *which*
-/// labels end up in `out`, only how many times an already-recorded one is
-/// cloned to no effect.
-///
-/// A stronger-looking optimization — skip recording `data` labels entirely
-/// until the first mint happens, since [`MintTracker::freshness_remap`] only
-/// cares about labels that intersect `minted` — was considered and rejected as
-/// unsound: template positions are walked subject-then-predicate-then-object
-/// per triple, and triples in template order, so a data-carrying position
-/// (e.g. a plain variable in subject position) routinely precedes a minting
-/// position (e.g. a blank node later in the same triple, or in a later
-/// template triple) within the very same row. A data label recorded "too
-/// early" under that scheme would be silently dropped from `data`, and a mint
-/// that later collides with it would go undetected — a real freshness bug, not
-/// just a missed optimization. `MintTracker`'s sets are also accumulated
-/// across the *entire* row loop and checked only once at the end, so there is
-/// no valid "before the first mint" window to skip in the first place.
-///
-/// A triple term's components are visited subject, predicate, object, each fully
-/// before the next, over a work list rather than the call stack.
-fn collect_value_blank_labels(value: &TermValue, out: &mut BTreeSet<String>) {
-    let mut pending: purrdf_core::SmallVec<[&TermValue; 8]> = purrdf_core::smallvec![value];
-    while let Some(value) = pending.pop() {
-        match value {
-            TermValue::Blank { label, .. } => {
-                if !out.contains(label.as_str()) {
-                    out.insert(label.clone());
-                }
-            }
-            TermValue::Triple { s, p, o } => pending.extend([&**o, &**p, &**s]),
-            TermValue::Iri(_) | TermValue::Literal { .. } => {}
-        }
-    }
-}
-
-/// Classify one instantiated subject/object position into `tracker` and apply the
-/// freshness re-pass `remap` to **minted** blank labels.
-///
-/// The walk is pattern-parallel: the template position — never the label text —
-/// decides whether a blank was minted or data-carried. A
-/// [`TermPattern::BlankNode`] position holds a label the mint produced; every
-/// other position's blanks (however deeply nested in a bound triple term) came
-/// from the data. Nested quoted-triple templates are walked position by position.
-///
-/// A no-op pass-through when `tracker.enabled` is `false` — see the field's doc
-/// comment for why that is sound, not just fast, for a blank-free template.
-///
-/// A quoted-triple position is walked subject, predicate, object — each classified
-/// fully before the next, so the tracker's sets are written in written order — and
-/// its value is reassembled once all three are back. The walk keeps its own work
-/// list, so a term nested to any depth costs no more machine stack.
-fn track_minted(pattern: &TermPattern, value: TermValue, tracker: &mut MintTracker) -> TermValue {
-    if !tracker.enabled {
-        return value;
-    }
-    enum Step<'t> {
-        Term(&'t TermPattern, TermValue),
-        Predicate(&'t NamedNodePattern, TermValue),
-        Assemble,
-    }
-    let mut steps: Vec<Step<'_>> = vec![Step::Term(pattern, value)];
-    let mut values: Vec<TermValue> = Vec::new();
-    while let Some(step) = steps.pop() {
-        match step {
-            Step::Term(pattern, value) => match (pattern, value) {
-                (TermPattern::BlankNode(_), TermValue::Blank { label, scope }) => {
-                    tracker.minted.insert(label.clone());
-                    let label = tracker.remap.get(&label).cloned().unwrap_or(label);
-                    values.push(TermValue::Blank { label, scope });
-                }
-                (TermPattern::Triple(tp), TermValue::Triple { s, p, o }) => steps.extend([
-                    Step::Assemble,
-                    Step::Term(&tp.object, o.into_inner()),
-                    Step::Predicate(&tp.predicate, p.into_inner()),
-                    Step::Term(&tp.subject, s.into_inner()),
-                ]),
-                (_, value) => {
-                    collect_value_blank_labels(&value, &mut tracker.data);
-                    values.push(value);
-                }
-            },
-            Step::Predicate(pattern, value) => {
-                values.push(track_minted_predicate(pattern, value, tracker));
-            }
-            Step::Assemble => {
-                let o = values
-                    .pop()
-                    .expect("a quoted triple's object is classified");
-                let p = values
-                    .pop()
-                    .expect("a quoted triple's predicate is classified");
-                let s = values
-                    .pop()
-                    .expect("a quoted triple's subject is classified");
-                values.push(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                });
-            }
-        }
-    }
-    values
-        .pop()
-        .expect("the position's value is the last one reassembled")
-}
-
-/// The predicate-position twin of [`track_minted`]: a predicate can never be a
-/// template blank, so only a variable-bound value can carry data blanks (inside a
-/// nested triple term) worth recording.
-///
-/// A no-op pass-through when `tracker.enabled` is `false`, for the same reason
-/// as [`track_minted`].
-fn track_minted_predicate(
-    pattern: &NamedNodePattern,
-    value: TermValue,
-    tracker: &mut MintTracker,
-) -> TermValue {
-    if tracker.enabled && matches!(pattern, NamedNodePattern::Variable(_)) {
-        collect_value_blank_labels(&value, &mut tracker.data);
-    }
-    value
 }
 
 /// A reifies-pattern in the `WHERE` whose reifier variable the template drops.
@@ -1114,16 +866,16 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     (proj_loss_id, loss_code_id, lost_reifies_id): (TermId, TermId, TermId),
     graph_id: Option<TermId>,
-) {
+) -> Result<(), EvalError> {
     // One blank-label scope per dropped reifier, exactly as before — CLEARED per
-    // iteration rather than reallocated (`mint_blank` only `get`s and inserts here).
+    // iteration rather than reallocated (`fresh_blank` only `get`s and inserts here).
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for (d, ordinal) in dropped.iter().zip(ordinals) {
         // Materialize the concrete reified triple term for this row. An unbound
         // inner variable yields `None` — there is no concrete triple to declare
         // lost, so the declaration is (correctly) skipped for this row.
         blanks.clear();
-        let Some(inner_term) = instantiate_term(&d.inner, ordinal, row, &mut blanks, ctx) else {
+        let Some(inner_term) = instantiate_term(&d.inner, ordinal, row, &mut blanks, ctx)? else {
             continue;
         };
 
@@ -1168,6 +920,7 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
             );
         }
     }
+    Ok(())
 }
 
 /// Push `<loss_node> <lossCode> "<code>"^^xsd:string .` into `builder`.
@@ -1207,15 +960,6 @@ fn loss_node_label(code: &str, inner: &TermValue) -> String {
 /// Instantiate one template triple for `row`, interning into `builder`. Returns
 /// `None` if the triple is skipped (an unbound variable or an ill-formed position).
 ///
-/// A kept triple's positions are classified into `tracker` (minted versus
-/// data-carried blank labels) — after the ill-formed gate, so a skipped triple
-/// contributes no labels to the freshness accounting — and the freshness
-/// re-pass remap is applied at the minted positions on the way in.
-///
-/// `track_minted`/`track_minted_predicate` are called unconditionally here —
-/// the `template_has_blank_node` fast path lives inside `tracker.enabled`
-/// (checked by those two functions themselves, see their doc comments) rather
-/// than as a parameter here, so this signature stays independent of it.
 fn instantiate<D: DatasetView + Sync>(
     tp: &TriplePattern,
     ordinal: &TripleOrdinal,
@@ -1223,33 +967,35 @@ fn instantiate<D: DatasetView + Sync>(
     builder: &mut RdfDatasetBuilder,
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
-    tracker: &mut MintTracker,
-) -> Option<(TermId, TermId, TermId)> {
-    let s = instantiate_term(&tp.subject, &ordinal.subject, row, blanks, ctx)?;
-    let p = instantiate_predicate(&tp.predicate, &ordinal.predicate, row, ctx)?;
-    let o = instantiate_term(&tp.object, &ordinal.object, row, blanks, ctx)?;
+) -> Result<Option<(TermId, TermId, TermId)>, EvalError> {
+    let Some(s) = instantiate_term(&tp.subject, &ordinal.subject, row, blanks, ctx)? else {
+        return Ok(None);
+    };
+    let Some(p) = instantiate_predicate(&tp.predicate, &ordinal.predicate, row, ctx)? else {
+        return Ok(None);
+    };
+    let Some(o) = instantiate_term(&tp.object, &ordinal.object, row, blanks, ctx)? else {
+        return Ok(None);
+    };
 
     // Positional validity (§16.2): the asserted subject must be an IRI or a blank
     // node, the predicate must be an IRI, and an object triple term must itself be
     // well-formed. Ill-formed instantiations are skipped, not errored.
     if positionally_ill_formed(&s, &p, &o) {
-        return None;
+        return Ok(None);
     }
 
-    let s = track_minted(&tp.subject, s, tracker);
-    let p = track_minted_predicate(&tp.predicate, p, tracker);
-    let o = track_minted(&tp.object, o, tracker);
-
-    Some((
+    Ok(Some((
         builder.intern_value(&s),
         builder.intern_value(&p),
         builder.intern_value(&o),
-    ))
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::TermBox;
 
     /// The loss-node label is FNV-1a 64 over the framed loss code and the
     /// inner triple term's canonical bytes: frozen here, so a change of either
@@ -1873,7 +1619,7 @@ mod tests {
     /// SPARQL §16.2 freshness: data already containing a blank labeled `c1` — the
     /// label the first template mint would spell — must NOT conflate with the
     /// minted blank. The result holds TWO distinct blank nodes, the data one
-    /// untouched and the minted one deterministically reminted.
+    /// untouched and the occupied mint candidate deterministically skipped.
     #[test]
     fn template_blank_is_fresh_against_data_labels() {
         let mut b = RdfDatasetBuilder::new();
@@ -1913,15 +1659,14 @@ mod tests {
             "the minted blank must be fresh w.r.t. data labels — two distinct nodes"
         );
         assert_eq!(
-            o_label, "c1r0",
-            "the remint takes the smallest deterministic suffix"
+            o_label, "c2",
+            "the allocator skips the occupied deterministic counter value"
         );
     }
 
-    /// The freshness re-pass is itself deterministic and leaves non-colliding
-    /// mints byte-identical across independent evaluations.
+    /// Collision skipping is deterministic across independent evaluations.
     #[test]
-    fn freshness_remint_is_deterministic_across_runs() {
+    fn freshness_allocation_is_deterministic_across_runs() {
         let build = || {
             let mut b = RdfDatasetBuilder::new();
             let p = b.intern_iri("http://ex/p");
@@ -2693,268 +2438,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod term_walk_tests {
-    //! The blank-label walks over instantiated terms — the minted/data classification
-    //! and the label collection — checked against recursive references over generated
-    //! (template position, value) pairs: the same value back, the same minted set and
-    //! the same data set; and a position a hundred thousand levels deep, classified on
-    //! a thread with a 128 KiB stack.
-
-    use super::{MintTracker, collect_value_blank_labels, track_minted, track_minted_predicate};
-    use crate::template::term_pattern_has_blank_node;
-    use purrdf_core::{BlankScope, TermBox, TermValue};
-    use purrdf_sparql_algebra::{
-        BlankNode, Child, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
-    };
-    use std::collections::BTreeSet;
-
-    const EX: &str = "http://example.org/";
-    const LABELS: [&str; 4] = ["c1", "c2", "d1", "d2"];
-    const DEPTH: usize = 100_000;
-    const SMALL_STACK: usize = 128 * 1024;
-
-    /// A deterministic choice sequence.
-    struct Choices {
-        state: purrdf_testkit::rng::SplitMix64,
-    }
-
-    impl Choices {
-        const fn new(seed: u64) -> Self {
-            Self {
-                state: purrdf_testkit::rng::SplitMix64::new(seed),
-            }
-        }
-
-        /// One choice below `n`.
-        fn choose(&mut self, n: usize) -> usize {
-            self.state.below_usize(n)
-        }
-    }
-
-    fn iri(local: &str) -> NamedNode {
-        NamedNode::new_unchecked(format!("{EX}{local}"))
-    }
-
-    /// A generated template position: an IRI, a blank node, a variable, or — while
-    /// `budget` lasts — a quoted triple.
-    fn pattern(choices: &mut Choices, budget: &mut usize) -> TermPattern {
-        match choices.choose(if *budget > 0 { 4 } else { 3 }) {
-            0 => TermPattern::NamedNode(iri("n")),
-            1 => TermPattern::BlankNode(BlankNode::new(["b0", "b1"][choices.choose(2)])),
-            2 => TermPattern::Variable(Variable::new("v")),
-            _ => {
-                *budget -= 1;
-                let subject = pattern(choices, budget);
-                let predicate = if choices.choose(2) == 0 {
-                    NamedNodePattern::Variable(Variable::new("p"))
-                } else {
-                    NamedNodePattern::NamedNode(iri("p"))
-                };
-                let object = pattern(choices, budget);
-                TermPattern::Triple(Child::new(TriplePattern {
-                    subject,
-                    predicate,
-                    object,
-                }))
-            }
-        }
-    }
-
-    /// A generated leaf value.
-    fn leaf(choices: &mut Choices) -> TermValue {
-        match choices.choose(3) {
-            0 => TermValue::Iri(format!("{EX}i")),
-            1 => TermValue::Blank {
-                label: LABELS[choices.choose(LABELS.len())].to_owned(),
-                scope: BlankScope::DEFAULT,
-            },
-            _ => TermValue::Literal {
-                lexical_form: "x".to_owned(),
-                datatype: format!("{EX}dt"),
-                language: None,
-                direction: None,
-            },
-        }
-    }
-
-    /// A value for `pattern`: one that mirrors a quoted-triple position most of the
-    /// time, a blank at a blank position most of the time, and otherwise a leaf or a
-    /// triple term that does not mirror the position.
-    fn value_for(pattern: &TermPattern, choices: &mut Choices, budget: &mut usize) -> TermValue {
-        match pattern {
-            TermPattern::Triple(tp) if *budget > 0 && choices.choose(4) != 0 => {
-                *budget -= 1;
-                let s = value_for(&tp.subject, choices, budget);
-                let p = leaf(choices);
-                let o = value_for(&tp.object, choices, budget);
-                TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                }
-            }
-            TermPattern::BlankNode(_) if choices.choose(4) != 0 => TermValue::Blank {
-                label: LABELS[choices.choose(LABELS.len())].to_owned(),
-                scope: BlankScope::DEFAULT,
-            },
-            _ if *budget > 0 && choices.choose(3) == 0 => {
-                *budget -= 1;
-                TermValue::Triple {
-                    s: TermBox::new(leaf(choices)),
-                    p: TermBox::new(leaf(choices)),
-                    o: TermBox::new(leaf(choices)),
-                }
-            }
-            _ => leaf(choices),
-        }
-    }
-
-    /// The recursive reference for [`collect_value_blank_labels`].
-    fn collect_reference(value: &TermValue, out: &mut BTreeSet<String>) {
-        match value {
-            TermValue::Blank { label, .. } => {
-                if !out.contains(label.as_str()) {
-                    out.insert(label.clone());
-                }
-            }
-            TermValue::Triple { s, p, o } => {
-                collect_reference(s, out);
-                collect_reference(p, out);
-                collect_reference(o, out);
-            }
-            TermValue::Iri(_) | TermValue::Literal { .. } => {}
-        }
-    }
-
-    /// The recursive reference for [`track_minted`].
-    fn track_reference(
-        pattern: &TermPattern,
-        value: TermValue,
-        tracker: &mut MintTracker,
-    ) -> TermValue {
-        if !tracker.enabled {
-            return value;
-        }
-        match (pattern, value) {
-            (TermPattern::BlankNode(_), TermValue::Blank { label, scope }) => {
-                tracker.minted.insert(label.clone());
-                let label = tracker.remap.get(&label).cloned().unwrap_or(label);
-                TermValue::Blank { label, scope }
-            }
-            (TermPattern::Triple(tp), TermValue::Triple { s, p, o }) => {
-                let s = track_reference(&tp.subject, s.into_inner(), tracker);
-                let p = track_minted_predicate(&tp.predicate, p.into_inner(), tracker);
-                let o = track_reference(&tp.object, o.into_inner(), tracker);
-                TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                }
-            }
-            (_, value) => {
-                collect_reference(&value, &mut tracker.data);
-                value
-            }
-        }
-    }
-
-    /// A tracker on its freshness re-pass, relabeling `c1`.
-    fn tracker() -> MintTracker {
-        let mut tracker = MintTracker::new(true);
-        tracker.remap.insert("c1".to_owned(), "c1r0".to_owned());
-        tracker
-    }
-
-    /// How many triple terms `value`'s object chain nests, and its innermost object.
-    fn unwind(value: &TermValue) -> (usize, &TermValue) {
-        let mut levels = 0;
-        let mut term = value;
-        while let TermValue::Triple { o, .. } = term {
-            levels += 1;
-            term = o;
-        }
-        (levels, term)
-    }
-
-    #[test]
-    fn the_classification_agrees_with_the_recursive_reference() {
-        for seed in 0..200_u64 {
-            let mut choices = Choices::new(seed);
-            let mut budget = 5;
-            let pattern = pattern(&mut choices, &mut budget);
-            let mut budget = 5;
-            let value = value_for(&pattern, &mut choices, &mut budget);
-
-            let mut tracker_walk = tracker();
-            let walked = track_minted(&pattern, value.clone(), &mut tracker_walk);
-            let mut tracker_ref = tracker();
-            let referenced = track_reference(&pattern, value.clone(), &mut tracker_ref);
-            assert_eq!(walked, referenced, "seed {seed}");
-            assert_eq!(tracker_walk.minted, tracker_ref.minted, "seed {seed}");
-            assert_eq!(tracker_walk.data, tracker_ref.data, "seed {seed}");
-
-            let mut labels_walk = BTreeSet::new();
-            collect_value_blank_labels(&value, &mut labels_walk);
-            let mut labels_ref = BTreeSet::new();
-            collect_reference(&value, &mut labels_ref);
-            assert_eq!(labels_walk, labels_ref, "seed {seed}");
-
-            let mut disabled = MintTracker::new(false);
-            assert_eq!(
-                track_minted(&pattern, value.clone(), &mut disabled),
-                value,
-                "seed {seed}: a disabled tracker passes the value through"
-            );
-        }
-    }
-
-    /// A blank position at every level, minting `_:m`, over a data blank `_:d` at the
-    /// bottom.
-    #[test]
-    fn a_hundred_thousand_level_position_is_classified_on_a_128_kib_stack() {
-        purrdf_stack::on_stack(SMALL_STACK, || {
-            let mut pattern = TermPattern::Variable(Variable::new("v"));
-            let mut value = TermValue::Blank {
-                label: "d".to_owned(),
-                scope: BlankScope::DEFAULT,
-            };
-            for _ in 0..DEPTH {
-                pattern = TermPattern::Triple(Child::new(TriplePattern {
-                    subject: TermPattern::BlankNode(BlankNode::new("b")),
-                    predicate: NamedNodePattern::NamedNode(iri("p")),
-                    object: pattern,
-                }));
-                value = TermValue::Triple {
-                    s: TermBox::new(TermValue::Blank {
-                        label: "m".to_owned(),
-                        scope: BlankScope::DEFAULT,
-                    }),
-                    p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
-                    o: TermBox::new(value),
-                };
-            }
-            assert!(term_pattern_has_blank_node(&pattern));
-
-            let mut labels = BTreeSet::new();
-            collect_value_blank_labels(&value, &mut labels);
-            assert_eq!(labels, BTreeSet::from(["d".to_owned(), "m".to_owned()]));
-
-            let mut tracker = MintTracker::new(true);
-            let tracked = track_minted(&pattern, value, &mut tracker);
-            assert_eq!(tracker.minted, BTreeSet::from(["m".to_owned()]));
-            assert_eq!(tracker.data, BTreeSet::from(["d".to_owned()]));
-            let (levels, innermost) = unwind(&tracked);
-            assert_eq!(levels, DEPTH);
-            assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "d"));
-        })
-        .expect("spawn");
-    }
-}
-
-/// The `WHERE` triple-pattern collection checked against a recursive reference over
-/// generated algebra — the same conjuncts, the same nodes, in the same pre-order — and
-/// over a pattern a hundred thousand operators deep on a thread with a 128 KiB stack.
 #[cfg(test)]
 mod where_walk_tests {
     use purrdf_sparql_algebra::{

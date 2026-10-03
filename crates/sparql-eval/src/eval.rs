@@ -465,7 +465,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub bnode_mint_prefix: Option<Arc<str>>,
     /// The row ordinal of the solution currently being extended, set by
     /// [`crate::expr::eval_extend`] right before it evaluates that row's
-    /// expression. `BNODE(strExpr)` (SPARQL 1.1 §17.4.2.2) uses this to
+    /// expression. `BNODE(strExpr)` (SPARQL 1.1 §17.4.2.9) uses this to
     /// memoize per-solution: the row/argument pair identifies "the same query
     /// solution" across the chain of `Extend` nodes one `SELECT`'s
     /// `(expr AS ?v)` list (or a `WHERE`-clause `BIND`) lowers to, since each
@@ -474,7 +474,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub(crate) current_row: u64,
     /// Per-solution memo for `BNODE(strExpr)`, keyed by `(current_row, argument
     /// string)`: two calls with an equal argument at the same row ordinal reuse
-    /// the same minted blank (SPARQL 1.1 §17.4.2.2); the zero-argument `BNODE()`
+    /// the same minted blank (SPARQL 1.1 §17.4.2.9); the zero-argument `BNODE()`
     /// form bypasses this entirely and always mints fresh. Query-scoped like the
     /// other caches on this context — never cleared mid-query, since a later row
     /// never revisits an earlier row's ordinal within the same `Extend` chain.
@@ -913,6 +913,59 @@ impl<D: DatasetView + Sync> Drop for EvalScopeGuard<'_, '_, D> {
 }
 
 impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+    /// Register concrete source inputs only when evaluation can allocate a fresh
+    /// blank, including registry-defined stateful functions. Shared by query,
+    /// raw-pattern and UPDATE entry points before they evaluate either sibling.
+    pub(crate) fn reserve_concrete_blank_inputs(&mut self, pattern: &GraphPattern) {
+        if self.expression_barrier.observed().is_none() && !self.pattern_is_parallel_safe(pattern) {
+            register_concrete_blank_inputs(pattern, self);
+        }
+    }
+
+    /// Allocate one deterministic default-scope identity, skipping existing
+    /// dataset and concrete-input identities. No dataset census is needed;
+    /// reverse-lookup failures remain ordinary source-read failures. `None`
+    /// records a scratch-budget trip on the existing expression barrier, never
+    /// on the disjoint hard-error channel.
+    pub(crate) fn try_mint_blank_label(&mut self, stem: &str) -> Result<Option<String>, EvalError> {
+        if self.expression_barrier.observed().is_some() {
+            return Ok(None);
+        }
+        // A graph template over certified partial WHERE rows is the existing
+        // free lift. It does not spend a budget that already stopped the WHERE.
+        let lifting = self
+            .governor_state()
+            .is_some_and(|state| state.tripped().is_some());
+        loop {
+            self.bnode_counter += 1;
+            let label = minted_label(self.bnode_mint_prefix.as_deref(), stem, self.bnode_counter);
+            if self.scratch.blank_label_is_reserved(&label) {
+                continue;
+            }
+            let candidate = TermValue::Blank {
+                label,
+                scope: purrdf_core::BlankScope::DEFAULT,
+            };
+            if self
+                .dataset
+                .term_id_by_value(&candidate)
+                .map_err(EvalError::source_read)?
+                .is_some()
+            {
+                continue;
+            }
+            let TermValue::Blank { label, scope } = candidate else {
+                unreachable!("a minted candidate is a blank identity");
+            };
+            self.scratch.reserve_blank_identity(&label, scope);
+            if !lifting && let Err(tripped) = self.charge_scratch_growth() {
+                self.expression_barrier.record(tripped);
+                return Ok(None);
+            }
+            return Ok(Some(label));
+        }
+    }
+
     /// A fresh context over `dataset`, scoped to the default graph.
     pub fn new(dataset: &'d D) -> Self {
         Self::at(
@@ -1258,6 +1311,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// than a refusal.
     #[must_use]
     pub fn with_governors(mut self, governors: Arc<GovernorState>) -> Self {
+        if self
+            .governors
+            .as_ref()
+            .is_none_or(|previous| !Arc::ptr_eq(previous, &governors))
+        {
+            self.scratch.reset_charged_growth();
+        }
         self.governors = Some(governors);
         self
     }
@@ -1892,9 +1952,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
     /// Charge the scratch arena's growth since it was last charged.
     ///
-    /// The arena's minted-byte total is monotone and the charged total is exactly the
-    /// consumption recorded on [`ResourceDimension::ScratchBytes`](purrdf_core::ResourceDimension::ScratchBytes),
-    /// so the difference is the uncharged growth and calling this repeatedly cannot
+    /// Each arena keeps its own charged watermark: other contexts sharing this
+    /// execution's governor cannot hide its growth, and a copied arena charges
+    /// the retention it owns independently. Repeated checkpoints cannot
     /// double-charge. That is what lets it run at every operator boundary — which is
     /// what makes the ceiling act *promptly*, rather than after the query has already
     /// minted its way out of memory.
@@ -1914,15 +1974,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !state.is_engaged_in(purrdf_core::ResourceDimension::ScratchBytes) {
             return Ok(());
         }
-        let minted = self.scratch.minted_bytes();
-        let charged = state.consumed_in(purrdf_core::ResourceDimension::ScratchBytes);
-        if minted <= charged {
+        let growth = self.scratch.claim_uncharged_growth();
+        if growth == 0 {
             return Ok(());
         }
-        state.charge(
-            purrdf_core::ResourceDimension::ScratchBytes,
-            minted - charged,
-        )
+        state.charge(purrdf_core::ResourceDimension::ScratchBytes, growth)
     }
 
     /// Charge `count` rows against fuel **without discarding any of them**, reporting the
@@ -2339,7 +2395,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bounded_workspace: WorkspaceAdmission::Unpriced,
             // Fresh: the body is an independent query that mints its own computed
             // terms; its parameter inputs ride in as ground substitutions, not
-            // scratch ids, so no parent scratch state is needed.
+            // scratch ids. The invocation carries parent blank reservations
+            // only when the body's effects can reach fresh allocation.
             scratch: ScratchInterner::default(),
             // The body evaluates as a root query; `evaluate_query` re-installs the
             // body's own FROM/base, so seed the default graph here.
@@ -3287,6 +3344,7 @@ pub fn eval<D: DatasetView + Sync>(
         ));
     }
     crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
+    ctx.reserve_concrete_blank_inputs(pattern);
     let source_pattern = pattern;
     // Raw algebra has not passed admission, which is where a blank node label shared
     // by two pieces of one basic graph pattern is made the one variable it is — so
@@ -3554,6 +3612,10 @@ pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
 ) -> Result<(), EvalError> {
     admit_version(AdmittedRequest::Query(query))?;
     crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
+    // Concrete ground inputs can occur after a stateful expression in written
+    // order. Reserve their identities before any allocator can capture them;
+    // ordinary pure queries retain their existing scratch allocation path.
+    ctx.reserve_concrete_blank_inputs(query_pattern(query));
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
@@ -3568,6 +3630,30 @@ pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
     ctx.install_plan_handle(plan.clone());
     install_answer_cap_pushdown(query, &plan, ctx);
     Ok(())
+}
+
+fn register_concrete_blank_inputs<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) {
+    use purrdf_sparql_algebra::{Flow, GroundTerm, NodeRef, Visit, walk_pre_post};
+    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+        if visit == Visit::Enter
+            && let NodeRef::Ground(GroundTerm::BlankNode(blank)) = node
+        {
+            let (label, scope) = purrdf_core::BlankScope::unqualify_label(blank.as_str());
+            if scope == purrdf_core::BlankScope::DEFAULT {
+                ctx.scratch.reserve_blank_identity(&label, scope);
+                if let Err(tripped) = ctx.charge_scratch_growth() {
+                    ctx.expression_barrier.record(tripped);
+                    return Flow::Stop;
+                }
+            }
+        }
+        // An algebra literal's embedded labels are bound by literal_to_value
+        // into QUERY_BLANK_SCOPE, so they cannot capture a DEFAULT allocation.
+        Flow::Descend
+    });
 }
 
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
@@ -3953,6 +4039,142 @@ mod tests {
             panic!("unit bag completes")
         };
         assert_eq!(rows.rows.len(), 1);
+    }
+
+    #[test]
+    fn late_values_reservation_stops_at_the_first_over_budget_identity() {
+        use purrdf_sparql_algebra::{BlankNode, GroundTerm, SparqlParser};
+
+        const INPUTS: usize = 128;
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty source");
+        let mut query = SparqlParser::new()
+            .parse_query("SELECT (BNODE() AS ?fresh) WHERE {}")
+            .expect("allocation query");
+        let Query::Select { pattern, .. } = &mut query else {
+            panic!("SELECT form");
+        };
+        *pattern = GraphPattern::Join {
+            left: pattern.clone().into(),
+            right: GraphPattern::Values {
+                variables: vec![Variable::new("input")],
+                bindings: (0..INPUTS)
+                    .map(|index| {
+                        vec![Some(GroundTerm::BlankNode(BlankNode::new(format!(
+                            "late{index:04}"
+                        ))))]
+                    })
+                    .collect(),
+            }
+            .into(),
+        };
+        let state = Arc::new(GovernorState::new(
+            &crate::QueryGovernors::UNBOUNDED.with_max_scratch_bytes(0),
+        ));
+        let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
+        let outcome = evaluate_query_evaluated(&query, &mut ctx)
+            .expect("admission exhaustion remains a governor outcome");
+        assert!(matches!(outcome, EvaluatedOutcome::Truncated { .. }));
+        assert_eq!(ctx.bnode_counter, 0, "the allocator never started");
+        assert_eq!(
+            ctx.scratch.minted_bytes(),
+            40,
+            "only the first eight-byte label was retained"
+        );
+        assert_eq!(
+            state.tripped(),
+            Some(TrippedGovernor::Budget {
+                dimension: purrdf_core::ResourceDimension::ScratchBytes,
+                limit: 0,
+                consumed: 40,
+            })
+        );
+        // Each input costs a retained eight-byte label and an owned blank;
+        // the independent fresh result costs a six-byte label and owned blank.
+        let required = INPUTS as u64 * 80 + 76;
+        for limit in [required, required + 1] {
+            let state = Arc::new(GovernorState::new(
+                &crate::QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+            ));
+            let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
+            let EvaluatedOutcome::Complete(Outcome::Solutions(rows)) =
+                evaluate_query_evaluated(&query, &mut ctx)
+                    .expect("inclusive input reservation budget")
+            else {
+                panic!("all injected inputs and the allocator complete");
+            };
+            assert_eq!(rows.rows.len(), INPUTS);
+            assert_eq!(state.tripped(), None);
+            assert_eq!(
+                state.consumed_in(purrdf_core::ResourceDimension::ScratchBytes),
+                required
+            );
+        }
+    }
+
+    #[test]
+    fn arena_clear_replacement_and_independent_copy_preserve_shared_scratch_accounting() {
+        use purrdf_sparql_algebra::SparqlParser;
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty source");
+        let query = SparqlParser::new()
+            .parse_query("SELECT (BNODE() AS ?blank) WHERE {}")
+            .expect("allocation query");
+        for mode in ["clear", "replace", "copy"] {
+            let state = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+            let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
+            assert!(matches!(
+                evaluate_query_evaluated(&query, &mut ctx).expect("first run"),
+                EvaluatedOutcome::Complete(_)
+            ));
+            assert_eq!(
+                state.consumed_in(purrdf_core::ResourceDimension::ScratchBytes),
+                76
+            );
+            match mode {
+                "clear" => ctx.scratch.clear(),
+                "replace" => ctx.scratch = ScratchInterner::default(),
+                "copy" => ctx.scratch = ctx.scratch.clone(),
+                _ => unreachable!("enumerated arena transitions"),
+            }
+            assert!(matches!(
+                evaluate_query_evaluated(&query, &mut ctx).expect("second run"),
+                EvaluatedOutcome::Complete(_)
+            ));
+            let expected = if mode == "copy" { 228 } else { 152 };
+            assert_eq!(
+                state.consumed_in(purrdf_core::ResourceDimension::ScratchBytes),
+                expected,
+                "{mode}"
+            );
+            ctx.charge_scratch_growth().expect("repeated checkpoint");
+            assert_eq!(
+                state.consumed_in(purrdf_core::ResourceDimension::ScratchBytes),
+                expected,
+                "no double charge after {mode}"
+            );
+        }
+        let original = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+        let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&original));
+        evaluate_query_evaluated(&query, &mut ctx).expect("initial receipt");
+        ctx = ctx.with_governors(Arc::clone(&original));
+        evaluate_query_evaluated(&query, &mut ctx).expect("same receipt, another allocation");
+        assert_eq!(
+            original.consumed_in(purrdf_core::ResourceDimension::ScratchBytes),
+            152,
+            "reattaching the same Arc preserves previously charged growth"
+        );
+        let replacement = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+        ctx = ctx.with_governors(Arc::clone(&replacement));
+        evaluate_query_evaluated(&query, &mut ctx).expect("new receipt, retained arena");
+        assert_eq!(
+            replacement.consumed_in(purrdf_core::ResourceDimension::ScratchBytes),
+            228,
+            "the new receipt accounts both retained blanks and its new allocation"
+        );
+        assert_eq!(
+            original.consumed_in(purrdf_core::ResourceDimension::ScratchBytes),
+            152,
+            "a new receipt cannot change the old evidence"
+        );
     }
 
     #[test]

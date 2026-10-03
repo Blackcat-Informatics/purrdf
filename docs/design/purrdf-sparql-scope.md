@@ -301,6 +301,54 @@ whose registered expressions cannot have stateful effects avoids this census.
 The namespace remains under a caller's requested prefix for INSERT templates;
 the variable-free DATA path keeps its existing prefix contract.
 
+Runtime allocation has a separate obligation from BGP ownership. Under
+[SPARQL 1.1 §17.4.2.9](https://www.w3.org/TR/sparql11-query/#func-bnode),
+`BNODE()` must not reuse a dataset blank. The evaluator's shared fallible mint
+seam skips occupied default-scope identities through reverse lookup and a lazy
+index of concrete inputs, including blanks inside triple terms and composite
+literals. Stateful raw, prepared and UPDATE patterns register ground inputs
+before either sibling evaluates. User-function bodies that can allocate inherit
+the caller's reservations. Reserved label storage is charged to the scratch
+governor; a reverse-lookup failure remains a source-read error.
+Input registration stops at the first scratch-budget trip. Each independently
+evaluated arena tracks its own charged growth against the shared request budget,
+including reservation copies in user functions. Inclusive budget controls cover
+the exact retained-label charges. A template trip produces a typed exhausted
+query outcome with an empty certified graph; UPDATE publishes no staged mutation.
+
+BNODE, template and list-cell allocations use that seam. CONSTRUCT builds once
+instead of replaying the template after a counter collision. A destination with
+an existing `_:c1` therefore receives the fresh `_:c2`, while no-collision labels
+retain their counter spelling. This collision case deliberately changes the
+emitted label bytes while keeping the carried dataset identity distinct.
+
+SERVICE ingestion treats `(label, scope)` as response-local identity. One mapping
+per response preserves repeated identities across rows, bare bindings, triple
+terms and composite literals, and gives separate responses identities distinct
+from local data, computed inputs and prior allocations. It remaps only admitted
+schema cells; surplus cells in a malformed response cannot allocate discarded
+identities. Controls assert exact partitions and bag multiplicity, including
+100,000-level triple terms on a 128 KiB stack. These execution obligations are
+not proofs obtainable from the scope prototype's AST alone.
+
+The existing end-to-end CONSTRUCT benchmark measures this execution seam over
+30,000 source rows, with warm plan/order caches and no governors attached.
+Two consecutive native runs on the recorded host used ten samples per case:
+
+| Template | Previous allocator median (ms) | Shared allocator median (ms) |
+| --- | ---: | ---: |
+| Carries dataset blanks, allocates none | 10.100 | 9.108 |
+| One fresh blank per row | 15.863 | 12.742 |
+| One fresh blank shared by two output triples per row | 29.090 | 19.676 |
+
+The blank-free control also moved, so these observations do not isolate a
+kernel's causal speedup. The co-reference run has two high severe outliers;
+its median interval is 19.14–22.67 ms. Full samples, intervals, source hashes,
+compiler and workload parameters are in
+[scope-runtime-benchmarks.json](evidence/scope-runtime-benchmarks.json).
+These are native execution measurements, separate from the scope-prototype
+timings and its measured wasm layouts.
+
 Opaque raw pattern labels use the allocation-free
 `purrdf_lex::terminals::is_valid_blank_node_label`, also re-exported at the
 existing core codec API. Out-of-alphabet labels receive injective fresh aliases;
@@ -319,6 +367,7 @@ established by the available input.
 cargo test --locked -p purrdf-sparql-algebra --test scope_invariants --test scope_candidates --test scoped_carriers
 cargo run --locked -p purrdf-sparql-algebra --example scope_investigation
 cargo bench --locked -p purrdf-sparql-algebra --bench scope_checks
+cargo bench --locked -p purrdf-sparql-eval --bench query_eval -- construct_blank
 cargo test --locked -p purrdf-sparql-eval --test scope_interactions
 cargo test --locked -p purrdf-rdf --test scope_portable
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$PWD/scripts/wasm-test-runner.sh" \

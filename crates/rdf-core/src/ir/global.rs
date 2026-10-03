@@ -521,6 +521,10 @@ impl GlobalDictionary {
     /// an already-interned IRI [`GlobalTermId`], and the language, if present, is
     /// expected already-lowercased by the caller (as the frozen IR's builder does at
     /// intern time). The lexical form is preserved byte-for-byte.
+    ///
+    /// Composite literals also intern their referenced blank identities, with
+    /// their existing scopes intact, before the literal. Reverse lookup therefore
+    /// finds those identities even when no bare statement position carries them.
     pub fn intern_literal(
         &mut self,
         lexical: &str,
@@ -528,6 +532,13 @@ impl GlobalDictionary {
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
     ) -> GlobalTermId {
+        let blanks = match self.resolve(datatype) {
+            TermRef::Iri(iri) => crate::cdt_blank::cdt_embedded_blanks(lexical, iri),
+            _ => Vec::new(),
+        };
+        for (label, scope) in blanks {
+            self.intern_blank(&label, scope);
+        }
         self.intern_lookup(GlobalTermLookup::Literal {
             lexical,
             datatype,
@@ -1039,6 +1050,120 @@ mod tests {
             let id = intern(&mut dict, v);
             assert_eq!(dict.term_id_by_value(v), Some(id), "value {v:?}");
         }
+    }
+
+    #[test]
+    fn intern_literal_registers_nested_composite_identities_with_their_scopes() {
+        let scoped = BlankScope(9).qualify_label("same").into_owned();
+        let lexical = format!(
+            "[_:bnode1, {{'again': _:bnode1, 'scoped': _:{scoped}, \
+             'list': '[_:nested]'^^<{}>, \
+             'triple': <<( _:subject <http://example.org/p> _:object )>>, \
+             'opaque': '_:quoted'}}]",
+            purrdf_cdt::CDT_LIST
+        );
+        let mut dict = GlobalDictionary::new();
+        let datatype = dict
+            .intern_iri(purrdf_cdt::CDT_LIST)
+            .expect("absolute datatype");
+        let literal = dict.intern_literal(&lexical, datatype, None, None);
+        assert_eq!(
+            dict.term_value(literal),
+            TermValue::typed_literal(&lexical, purrdf_cdt::CDT_LIST),
+            "registration preserves the literal's exact lexical bytes"
+        );
+        let expected = [
+            ("bnode1", BlankScope::DEFAULT),
+            ("same", BlankScope(9)),
+            ("nested", BlankScope::DEFAULT),
+            ("subject", BlankScope::DEFAULT),
+            ("object", BlankScope::DEFAULT),
+        ];
+        for (offset, (label, scope)) in expected.into_iter().enumerate() {
+            let value = TermValue::Blank {
+                label: label.to_owned(),
+                scope,
+            };
+            let id = dict
+                .term_id_by_value(&value)
+                .expect("embedded identity exists");
+            assert_eq!(id.index(), u64::try_from(offset + 1).expect("small index"));
+            assert_eq!(dict.intern_blank(label, scope), id);
+        }
+        for label in ["same", "quoted"] {
+            assert_eq!(
+                dict.term_id_by_value(&TermValue::blank(label)),
+                None,
+                "a scoped identity and a quoted string cannot introduce a default blank"
+            );
+        }
+        let count = dict.len();
+        assert_eq!(dict.intern_literal(&lexical, datatype, None, None), literal);
+        assert_eq!(dict.len(), count, "repeated registration is store-once");
+    }
+
+    #[test]
+    fn intern_value_registers_composite_blanks_inside_triple_terms() {
+        let scoped = BlankScope(7).qualify_label("bnode1").into_owned();
+        let value = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://example.org/holder")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::typed_literal(
+                format!(
+                    "{{'root': _:bnode1, 'nested': [_:{scoped}, \
+                     '[_:deep]'^^<{}>], 'opaque': '_:quoted'}}",
+                    purrdf_cdt::CDT_LIST
+                ),
+                purrdf_cdt::CDT_MAP,
+            )),
+        };
+        let mut dict = GlobalDictionary::new();
+        let triple = dict.intern(&value).expect("absolute nested IRIs");
+        assert_eq!(dict.term_value(triple), value);
+        let default = dict
+            .term_id_by_value(&TermValue::blank("bnode1"))
+            .expect("default identity exists without a bare input term");
+        let scoped = dict
+            .term_id_by_value(&TermValue::Blank {
+                label: "bnode1".to_owned(),
+                scope: BlankScope(7),
+            })
+            .expect("scoped identity exists without a bare input term");
+        assert_ne!(default, scoped);
+        assert!(
+            dict.term_id_by_value(&TermValue::blank("deep")).is_some(),
+            "a nested typed composite contributes its concrete identity"
+        );
+        assert_eq!(dict.term_id_by_value(&TermValue::blank("quoted")), None);
+        let count = dict.len();
+        assert_eq!(dict.intern(&value).expect("repeated valid input"), triple);
+        assert_eq!(dict.reintern_validated(&value), triple);
+        assert_eq!(dict.term_id_by_value(&value), Some(triple));
+        assert_eq!(dict.len(), count);
+    }
+
+    #[test]
+    fn ordinary_literal_ingress_preserves_opaque_bytes_and_insertion_order() {
+        let mut dict = GlobalDictionary::new();
+        let datatype = dict
+            .intern_iri(purrdf_xsd::datatype::XSD_STRING)
+            .expect("absolute string datatype");
+        let literal = dict.intern_literal("[_:bnode1]", datatype, None, None);
+        let next = dict
+            .intern_iri("http://example.org/next")
+            .expect("absolute IRI");
+        assert_eq!([datatype.index(), literal.index(), next.index()], [0, 1, 2]);
+        assert_eq!(
+            dict.term_value(literal),
+            TermValue::simple_literal("[_:bnode1]")
+        );
+        assert_eq!(dict.term_id_by_value(&TermValue::blank("bnode1")), None);
+        assert_eq!(
+            dict.intern(&TermValue::simple_literal("[_:bnode1]"))
+                .expect("plain literal"),
+            literal
+        );
+        assert_eq!(dict.len(), 3);
     }
 
     #[test]

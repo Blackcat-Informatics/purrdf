@@ -756,6 +756,310 @@ fn construct_and_insert_allocate_per_duplicate_row_and_per_execution() {
 }
 
 #[test]
+fn bnode_allocation_is_fresh_against_default_scope_dataset_blank() {
+    let mut builder = RdfDatasetBuilder::new();
+    let existing = builder.intern_blank("bnode1", BlankScope::DEFAULT);
+    let predicate = builder.intern_iri(&format!("{EX}p"));
+    let object = builder.intern_iri(&format!("{EX}o"));
+    builder.push_quad(existing, predicate, object, None);
+    let dataset = builder.freeze().expect("existing default-scope blank");
+    let engine = NativeSparqlEngine::new();
+    let text = format!(
+        "{PREFIX}SELECT ?existing WHERE {{ ?existing ex:p ex:o \
+         BIND(BNODE() AS ?fresh) FILTER(?fresh = ?existing) }}"
+    );
+    let result = engine
+        .query(
+            &dataset,
+            SparqlRequest {
+                query: &text,
+                base_iri: None,
+                substitutions: &[],
+            },
+        )
+        .expect("BNODE allocation query");
+    assert_eq!(
+        solutions(result).1.len(),
+        0,
+        "BNODE() must allocate an identity distinct from existing dataset blanks"
+    );
+}
+
+#[test]
+fn bnode_memo_and_prepared_reuse_preserve_scoped_identity_partitions() {
+    let engine = NativeSparqlEngine::new();
+    let text = format!(
+        "{PREFIX}SELECT ?existing (BNODE(\"same\") AS ?first) \
+         (BNODE(\"same\") AS ?again) (BNODE(\"other\") AS ?other) \
+         WHERE {{ ?existing ex:p ex:o }}"
+    );
+    let prepared = engine
+        .prepare_query(&text, None)
+        .expect("prepared memo query");
+    for prefix in [None, Some("caller_")] {
+        for scope in [BlankScope::DEFAULT, BlankScope(7)] {
+            let mut builder = RdfDatasetBuilder::new();
+            let predicate = builder.intern_iri(&format!("{EX}p"));
+            let object = builder.intern_iri(&format!("{EX}o"));
+            for ordinal in [1, 2] {
+                let label = format!("{}bnode{ordinal}", prefix.unwrap_or_default());
+                let blank = builder.intern_blank(&label, scope);
+                builder.push_quad(blank, predicate, object, None);
+            }
+            let dataset = builder.freeze().expect("occupied mint spellings");
+            let mut previous = None;
+            for _ in 0..3 {
+                let result = engine
+                    .query_prepared(
+                        &dataset,
+                        &prepared,
+                        &[],
+                        QueryOptions::EMPTY.with_bnode_mint_prefix(prefix),
+                    )
+                    .expect("scoped memo execution");
+                let (variables, rows) = solutions(result);
+                assert_eq!(variables, ["existing", "first", "again", "other"]);
+                assert_eq!(rows.len(), 2);
+                let mut allocations = BTreeSet::new();
+                for cells in &rows {
+                    assert_eq!(
+                        cells[1], cells[2],
+                        "same argument in one solution shares identity"
+                    );
+                    assert_ne!(
+                        cells[1], cells[3],
+                        "different arguments allocate independently"
+                    );
+                    for index in [1, 3] {
+                        let Some(TermValue::Blank {
+                            label,
+                            scope: allocated_scope,
+                        }) = &cells[index]
+                        else {
+                            panic!("BNODE produces a concrete blank");
+                        };
+                        assert_eq!(*allocated_scope, BlankScope::DEFAULT);
+                        if scope == BlankScope::DEFAULT {
+                            assert_ne!(
+                                cells[index], cells[0],
+                                "dataset identity is never captured"
+                            );
+                            assert!(![1, 2].into_iter().any(|ordinal| label
+                                == &format!("{}bnode{ordinal}", prefix.unwrap_or_default())));
+                        }
+                        assert!(
+                            allocations.insert((label.clone(), *allocated_scope)),
+                            "different solutions allocate distinct identities"
+                        );
+                    }
+                }
+                let first = if scope == BlankScope::DEFAULT { 3 } else { 1 };
+                assert!(
+                    allocations.contains(&(
+                        format!("{}bnode{first}", prefix.unwrap_or_default()),
+                        BlankScope::DEFAULT
+                    )),
+                    "no-collision labels retain their exact bytes"
+                );
+                if let Some(previous) = &previous {
+                    assert_eq!(
+                        &rows, previous,
+                        "independent result executions retain deterministic spelling"
+                    );
+                }
+                previous = Some(rows);
+            }
+        }
+    }
+}
+
+#[test]
+fn bnode_allocation_avoids_dataset_blanks_retained_only_inside_triple_terms() {
+    let engine = NativeSparqlEngine::new();
+    let text = format!(
+        "{PREFIX}SELECT ?existing ?fresh WHERE {{ ex:holder ex:term ?quoted \
+         BIND(SUBJECT(?quoted) AS ?existing) BIND(BNODE() AS ?fresh) }}"
+    );
+    let prepared = engine
+        .prepare_query(&text, None)
+        .expect("quoted identity query");
+    for prefix in [None, Some("caller_")] {
+        for scope in [BlankScope::DEFAULT, BlankScope(7)] {
+            let mut builder = RdfDatasetBuilder::new();
+            let blank =
+                builder.intern_blank(&format!("{}bnode1", prefix.unwrap_or_default()), scope);
+            let predicate = builder.intern_iri(&format!("{EX}p"));
+            let object = builder.intern_iri(&format!("{EX}o"));
+            let quoted = builder.intern_triple(blank, predicate, object);
+            let holder = builder.intern_iri(&format!("{EX}holder"));
+            let term = builder.intern_iri(&format!("{EX}term"));
+            builder.push_quad(holder, term, quoted, None);
+            let dataset = builder.freeze().expect("quoted dataset blank");
+            let (_, rows) = solutions(
+                engine
+                    .query_prepared(
+                        &dataset,
+                        &prepared,
+                        &[],
+                        QueryOptions::EMPTY.with_bnode_mint_prefix(prefix),
+                    )
+                    .expect("quoted identity execution"),
+            );
+            assert_eq!(rows.len(), 1);
+            assert_ne!(rows[0][0], rows[0][1]);
+            assert_eq!(
+                rows[0][1],
+                Some(TermValue::Blank {
+                    label: format!(
+                        "{}bnode{}",
+                        prefix.unwrap_or_default(),
+                        if scope == BlankScope::DEFAULT { 2 } else { 1 }
+                    ),
+                    scope: BlankScope::DEFAULT,
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_late_values_cannot_capture_an_earlier_bnode_allocation() {
+    let dataset = RdfDatasetBuilder::new().freeze().expect("empty raw input");
+    for prefix in [None, Some("caller_")] {
+        let source = format!(
+            "{PREFIX}SELECT ?fresh ?existing WHERE {{ BIND(BNODE() AS ?fresh) \
+             FILTER(?fresh = ?existing) }}"
+        );
+        let mut query = SparqlParser::new()
+            .parse_query(&source)
+            .expect("allocation/filter source");
+        let Query::Select {
+            pattern: GraphPattern::Project { inner, .. },
+            ..
+        } = &mut query
+        else {
+            panic!("SELECT projection");
+        };
+        let GraphPattern::Filter { inner, .. } = &mut **inner else {
+            panic!("FILTER body");
+        };
+        *inner = GraphPattern::Join {
+            left: inner.clone(),
+            right: GraphPattern::Values {
+                variables: vec![Variable::new("existing")],
+                bindings: vec![vec![Some(GroundTerm::BlankNode(BlankNode::new(format!(
+                    "{}bnode1",
+                    prefix.unwrap_or_default()
+                ))))]],
+            }
+            .into(),
+        }
+        .into();
+        let options = QueryOptions::EMPTY.with_bnode_mint_prefix(prefix);
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine
+            .prepare_algebra(query.clone(), options)
+            .expect("raw concrete input");
+        for _ in 0..3 {
+            assert_eq!(
+                solutions(
+                    engine
+                        .query_prepared(&dataset, &prepared, &[], options)
+                        .expect("late VALUES execution")
+                )
+                .1
+                .len(),
+                0
+            );
+        }
+        let mut context = purrdf_sparql_eval::EvalCtx::new(&*dataset);
+        if let Some(prefix) = prefix {
+            context = context
+                .with_bnode_mint_prefix(prefix)
+                .expect("caller prefix");
+        }
+        assert!(
+            purrdf_sparql_eval::eval(query.pattern(), &mut context)
+                .expect("raw eval entry")
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn ordinary_construct_allocation_is_distinct_from_a_carried_dataset_blank() {
+    let mut builder = RdfDatasetBuilder::new();
+    let existing = builder.intern_blank("c1", BlankScope::DEFAULT);
+    let predicate = builder.intern_iri(&format!("{EX}p"));
+    let object = builder.intern_iri(&format!("{EX}o"));
+    builder.push_quad(existing, predicate, object, None);
+    let dataset = builder
+        .freeze()
+        .expect("existing default-scope template spelling");
+    let text = format!(
+        "{PREFIX}CONSTRUCT {{ ?existing ex:kept ex:o . _:fresh ex:allocated ex:o }} \
+         WHERE {{ ?existing ex:p ex:o }}"
+    );
+    let result = NativeSparqlEngine::new()
+        .query(
+            &dataset,
+            SparqlRequest {
+                query: &text,
+                base_iri: None,
+                substitutions: &[],
+            },
+        )
+        .expect("ordinary CONSTRUCT");
+    let SparqlResult::Graph(graph) = result else {
+        panic!("CONSTRUCT graph");
+    };
+    let subjects: BTreeSet<_> = graph
+        .quads()
+        .map(|quad| {
+            let TermValue::Blank { label, scope } = graph.term_value(quad.s) else {
+                panic!("both CONSTRUCT subjects are blank identities");
+            };
+            (label, scope)
+        })
+        .collect();
+    assert_eq!(
+        subjects.len(),
+        2,
+        "carried and allocated identities must remain distinct"
+    );
+}
+
+#[test]
+fn service_bnode_results_have_response_identity_separation() {
+    let dataset = RdfDatasetBuilder::new()
+        .freeze()
+        .expect("empty local dataset");
+    let resolver =
+        InProcessServiceResolver::new().with_endpoint(format!("{EX}svc"), Arc::clone(&dataset));
+    let text = format!(
+        "{PREFIX}SELECT ?local ?remote WHERE {{ BIND(BNODE() AS ?local) \
+         SERVICE ex:svc {{ BIND(BNODE() AS ?remote) }} FILTER(?local = ?remote) }}"
+    );
+    let result = NativeSparqlEngine::new()
+        .query_with_source(
+            &dataset,
+            SparqlRequest {
+                query: &text,
+                base_iri: None,
+                substitutions: &[],
+            },
+            &resolver,
+            QueryOptions::EMPTY,
+        )
+        .expect("independent SERVICE BNODE result");
+    assert_eq!(
+        solutions(result).1.len(),
+        0,
+        "endpoint result blanks are distinct from local allocations"
+    );
+}
+
+#[test]
 fn update_allocations_avoid_reserved_namespaces_and_honor_caller_prefix() {
     let engine = NativeSparqlEngine::new();
     for prefix in [None, Some("caller_")] {

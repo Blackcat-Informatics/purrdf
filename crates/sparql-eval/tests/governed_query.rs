@@ -76,6 +76,140 @@ fn one_remote_binding(_: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
 /// The all-rows SELECT the ceiling tests bound.
 const ALL_ROWS: &str = "SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o }";
 
+#[test]
+fn construct_blank_reservations_obey_scratch_bytes_after_where_completes() {
+    let reifies = purrdf_iri::vocab::rdf::REIFIES;
+    for (query, required, statements) in [
+        (
+            "CONSTRUCT { _:fresh <http://example.org/p> <http://example.org/o> } WHERE {}"
+                .to_owned(),
+            34,
+            1,
+        ),
+        (
+            "CONSTRUCT { _:first <http://example.org/p> <http://example.org/o> . \
+             _:second <http://example.org/p> <http://example.org/o> } WHERE {}"
+                .to_owned(),
+            68,
+            2,
+        ),
+        (
+            format!(
+                "CONSTRUCT {{ _:fresh <{reifies}> \
+                 <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> . \
+                 _:fresh <http://example.org/p> <http://example.org/o> }} WHERE {{}}"
+            ),
+            34,
+            2,
+        ),
+    ] {
+        // The WHERE has no computed values. Each retained c1/c2 label costs
+        // its two payload bytes plus the governor's fixed 32-byte term charge.
+        let metered = governed(&query, &QueryGovernors::METERED);
+        assert_eq!(
+            metered
+                .evidence()
+                .consumed
+                .get(ResourceDimension::ScratchBytes),
+            required,
+            "template allocation must be charged after WHERE: {query}"
+        );
+        let GovernedOutcome::Complete { result, .. } = metered else {
+            panic!("the metered template must complete");
+        };
+        assert_eq!(statement_count(graph_of(&result)), statements);
+
+        let stopped = governed(
+            &query,
+            &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(required - 1),
+        );
+        let (tripped, partial, evidence) = exhausted(&stopped);
+        assert_eq!(
+            tripped,
+            TrippedGovernor::Budget {
+                dimension: ResourceDimension::ScratchBytes,
+                limit: required - 1,
+                consumed: required,
+            }
+        );
+        assert_eq!(evidence.tripped, Some(tripped));
+        let PartialAnswers::Certain(partial) = partial else {
+            panic!("discarding an in-flight graph leaves a certain empty prefix");
+        };
+        assert_eq!(statement_count(graph_of(partial.result())), 0);
+
+        for limit in [required, required + 1] {
+            let admitted = governed(
+                &query,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+            );
+            let GovernedOutcome::Complete {
+                result, evidence, ..
+            } = admitted
+            else {
+                panic!("equality and larger scratch budgets must complete");
+            };
+            assert_eq!(evidence.tripped, None);
+            assert_eq!(statement_count(graph_of(&result)), statements);
+        }
+    }
+}
+
+#[test]
+fn bnode_reservation_exhaustion_is_a_governor_outcome_not_an_unbound_answer() {
+    let query = "SELECT (BNODE() AS ?blank) WHERE {}";
+    let metered = governed(query, &QueryGovernors::METERED);
+    // One retained bnode1 label and one owned computed blank: 2 × (6 + 32).
+    assert_eq!(
+        metered
+            .evidence()
+            .consumed
+            .get(ResourceDimension::ScratchBytes),
+        76
+    );
+    for limit in [0, 37, 75] {
+        let stopped = governed(
+            query,
+            &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+        );
+        assert!(matches!(
+            exhausted(&stopped).0,
+            TrippedGovernor::Budget {
+                dimension: ResourceDimension::ScratchBytes,
+                limit: observed,
+                consumed,
+            } if observed == limit && consumed > limit
+        ));
+    }
+    for limit in [76, 77] {
+        let admitted = governed(
+            query,
+            &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+        );
+        let GovernedOutcome::Complete { result, .. } = admitted else {
+            panic!("inclusive scratch budget must admit BNODE");
+        };
+        assert_eq!(row_count(&result), 1);
+    }
+    let observer = "SELECT ?blank WHERE { BIND(BNODE() AS ?blank) FILTER(!BOUND(?blank)) }";
+    let GovernedOutcome::Complete { result, .. } = governed(observer, &QueryGovernors::METERED)
+    else {
+        panic!("the unbounded observer completes");
+    };
+    assert_eq!(
+        row_count(&result),
+        0,
+        "BNODE binds the value on a completed row"
+    );
+    assert!(matches!(
+        governed(
+            observer,
+            &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(0)
+        ),
+        GovernedOutcome::BudgetExhausted(_)
+    ));
+}
+
 /// Run `query` over the fixture under `governors`, asserting only that it is not an
 /// error — a trip is an outcome, never an `Err`.
 fn governed(query: &str, governors: &QueryGovernors) -> GovernedOutcome {

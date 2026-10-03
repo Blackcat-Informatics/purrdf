@@ -19,6 +19,8 @@
 //! accord: [`TermValue::fold`] and [`TermValue::try_fold`] assemble an answer bottom-up,
 //! [`TermValue::try_fold_owned`] does so while consuming the term,
 //! [`TermValue::visit_terms`] visits every term in pre-order, and
+//! [`TermValue::visit_blank_identities`] visits its direct and composite-embedded
+//! blank nodes without erasing their scopes;
 //! [`TermValue::visit_terms_pre_post`] brackets each triple term around its components,
 //! so a writer can open and close it, and [`TermValue::try_write_nested`] writes a term
 //! with each triple term spelled between an opening, separators and a closing. [`fold_term`] is the same bottom-up fold over the
@@ -182,6 +184,39 @@ impl TermValue {
             }
         }
         ControlFlow::Continue(())
+    }
+
+    /// Visit every blank identity in this term, including triple components and
+    /// nodes embedded in composite literals. Triple components arrive in subject,
+    /// predicate, object order; embedded nodes arrive in lexical order. Repeated
+    /// occurrences remain repeated and their [`crate::BlankScope`] is preserved.
+    ///
+    /// Direct labels are borrowed from the term. Composite labels are decoded by
+    /// [`crate::cdt_blank::cdt_embedded_blanks`] and borrowed for the callback.
+    /// The first `Break` ends the visit and is returned. Triple nesting is walked
+    /// iteratively through [`Self::visit_terms`].
+    pub fn visit_blank_identities<B>(
+        &self,
+        mut visit: impl FnMut(&str, crate::BlankScope) -> ControlFlow<B>,
+    ) -> ControlFlow<B> {
+        self.visit_terms(|term| {
+            match term {
+                Self::Blank { label, scope } => visit(label, *scope)?,
+                Self::Literal {
+                    lexical_form,
+                    datatype,
+                    ..
+                } => {
+                    for (label, scope) in
+                        crate::cdt_blank::cdt_embedded_blanks(lexical_form, datatype)
+                    {
+                        visit(&label, scope)?;
+                    }
+                }
+                Self::Iri(_) | Self::Triple { .. } => {}
+            }
+            ControlFlow::Continue(())
+        })
     }
 
     /// Visit every term of this one in pre-order, with each triple term reported once
@@ -962,6 +997,98 @@ mod tests {
 
     // ── The folds and visits ───────────────────────────────────────────────────────
 
+    #[test]
+    fn blank_identity_visit_preserves_nested_order_scopes_and_occurrences() {
+        let scoped = BlankScope(9).qualify_label("scoped").into_owned();
+        for (datatype, lexical) in [
+            (
+                purrdf_cdt::CDT_LIST,
+                format!("[_:shared, [_:{scoped}], {{'again': _:shared}}, '_:opaque']"),
+            ),
+            (
+                purrdf_cdt::CDT_MAP,
+                format!(
+                    "{{'first': _:shared, 'nested': [_:{scoped}], 'again': _:shared, \
+                     'opaque': '_:opaque'}}"
+                ),
+            ),
+        ] {
+            let term = TermValue::Triple {
+                s: TermBox::new(TermValue::blank("shared")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::Triple {
+                    s: TermBox::new(TermValue::Blank {
+                        label: "shared".to_owned(),
+                        scope: BlankScope(7),
+                    }),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(TermValue::typed_literal(lexical, datatype)),
+                }),
+            };
+            let mut identities = Vec::new();
+            let complete = term.visit_blank_identities(|label, scope| {
+                identities.push((label.to_owned(), scope));
+                ControlFlow::<Infallible>::Continue(())
+            });
+            assert_eq!(complete, ControlFlow::Continue(()));
+            assert_eq!(
+                identities,
+                [
+                    ("shared".to_owned(), BlankScope::DEFAULT),
+                    ("shared".to_owned(), BlankScope(7)),
+                    ("shared".to_owned(), BlankScope::DEFAULT),
+                    ("scoped".to_owned(), BlankScope(9)),
+                    ("shared".to_owned(), BlankScope::DEFAULT),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn blank_identity_visit_sees_embedded_triples_and_typed_composites() {
+        let lexical = format!(
+            "[ <<( _:subject <http://example.org/p> _:object )>>, \
+             '[_:embedded]'^^<{}>, '_:opaque' ]",
+            purrdf_cdt::CDT_LIST
+        );
+        let term = TermValue::typed_literal(lexical, purrdf_cdt::CDT_LIST);
+        let mut labels = Vec::new();
+        let complete = term.visit_blank_identities(|label, scope| {
+            assert_eq!(scope, BlankScope::DEFAULT);
+            labels.push(label.to_owned());
+            ControlFlow::<Infallible>::Continue(())
+        });
+        assert_eq!(complete, ControlFlow::Continue(()));
+        assert_eq!(labels, ["subject", "object", "embedded"]);
+        assert_eq!(
+            TermValue::simple_literal("_:opaque").visit_blank_identities(|_, _| {
+                ControlFlow::Break("a plain literal must remain opaque")
+            }),
+            ControlFlow::Continue(())
+        );
+    }
+
+    #[test]
+    fn blank_identity_visit_stops_at_first_embedded_match() {
+        let term = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::typed_literal(
+                "[_:first, _:second]",
+                purrdf_cdt::CDT_LIST,
+            )),
+        };
+        let mut calls = 0;
+        let stopped = term.visit_blank_identities(|label, scope| {
+            calls += 1;
+            assert_eq!(label, "first");
+            assert_eq!(scope, BlankScope::DEFAULT);
+            ControlFlow::Break(37)
+        });
+        assert_eq!(stopped, ControlFlow::Break(37));
+        assert_eq!(calls, 1);
+    }
+
     /// The recursive reference of [`TermValue::try_fold`].
     fn reference_try_fold<T, E>(
         term: &TermValue,
@@ -1139,7 +1266,7 @@ mod tests {
     fn a_hundred_thousand_level_triple_term_is_folded_and_visited_without_recursion() {
         const LEVELS: usize = 100_000;
         purrdf_stack::on_stack(128 * 1024, || {
-            let mut term = TermValue::iri("o");
+            let mut term = TermValue::typed_literal("[_:deep]", purrdf_cdt::CDT_LIST);
             for _ in 0..LEVELS {
                 term = TermValue::Triple {
                     s: TermBox::new(TermValue::iri("s")),
@@ -1174,6 +1301,15 @@ mod tests {
                 _ => unreachable!("the chain holds IRIs and triple terms"),
             });
             assert_eq!(stopped, ControlFlow::Break("s".to_owned()));
+            let mut blanks = 0;
+            let complete = term.visit_blank_identities(|label, scope| {
+                assert_eq!(label, "deep");
+                assert_eq!(scope, BlankScope::DEFAULT);
+                blanks += 1;
+                ControlFlow::<Infallible>::Continue(())
+            });
+            assert_eq!(complete, ControlFlow::Continue(()));
+            assert_eq!(blanks, 1, "the deepest composite identity is visited");
             let owned_depth = term.try_fold_owned(
                 |_| Ok::<usize, Infallible>(0),
                 |s, p, o| Ok(1 + s.max(p).max(o)),

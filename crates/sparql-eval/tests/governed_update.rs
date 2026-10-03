@@ -210,6 +210,77 @@ fn cancelled_governors() -> QueryGovernors {
     QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag))
 }
 
+#[test]
+fn insert_template_blank_reservations_trip_atomically_after_where_completes() {
+    for (body, required, added) in [
+        ("INSERT { _:fresh ex:p ex:o } WHERE {}", 34, 1),
+        (
+            "INSERT DATA { ex:earlier ex:p ex:o }; \
+             INSERT { _:first ex:p ex:o . _:second ex:p ex:o } WHERE {}",
+            68,
+            3,
+        ),
+        (
+            "INSERT { _:first ex:p ex:o } WHERE {}; \
+             INSERT { _:second ex:p ex:o } WHERE {}",
+            // c1 costs 34 bytes. The next operation avoids that published
+            // identity with append0_c2 (10 payload bytes + 32): 34 + 42.
+            76,
+            2,
+        ),
+    ] {
+        let update = format!("{PREFIX}{body}");
+        let (control, metered) = governed(&update, &QueryGovernors::METERED);
+        assert!(metered.is_applied());
+        assert_eq!(
+            metered
+                .evidence()
+                .consumed
+                .get(ResourceDimension::ScratchBytes),
+            required,
+            "fresh arenas in successive operations each charge their retention"
+        );
+        assert_eq!(control.quad_count(), fixture().quad_count() + added);
+
+        let engine = NativeSparqlEngine::new();
+        let mut dataset = fixture();
+        let handle_before = Arc::clone(&dataset);
+        let image_before = store_image(&dataset);
+        let stopped = engine
+            .update_governed(
+                &mut dataset,
+                request(&update),
+                QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(required - 1),
+            )
+            .expect("reservation exhaustion remains a typed governor outcome");
+        assert_eq!(
+            stopped.tripped(),
+            Some(TrippedGovernor::Budget {
+                dimension: ResourceDimension::ScratchBytes,
+                limit: required - 1,
+                consumed: required,
+            })
+        );
+        assert!(Arc::ptr_eq(&dataset, &handle_before));
+        assert_eq!(store_image(&dataset), image_before);
+
+        for limit in [required, required + 1] {
+            let (admitted, outcome) = governed(
+                &update,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+            );
+            assert!(
+                outcome.is_applied(),
+                "inclusive scratch boundary: {outcome:?}"
+            );
+            assert_eq!(outcome.tripped(), None);
+            assert_eq!(admitted.quad_count(), control.quad_count());
+            assert_eq!(store_image(&admitted), store_image(&control));
+        }
+    }
+}
+
 // ── the guarantee ────────────────────────────────────────────────────────────
 
 /// A three-operation request whose third operation trips leaves the store byte-identical.

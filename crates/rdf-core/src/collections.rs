@@ -501,25 +501,56 @@ where
     T: Clone,
     I: IntoIterator<Item = T>,
 {
+    try_build_rdf_list(
+        members,
+        vocab,
+        |index| Ok::<_, core::convert::Infallible>(cell(index)),
+        |subject, predicate, object| {
+            emit(subject, predicate, object);
+            Ok(())
+        },
+    )
+    .expect("infallible RDF list callbacks cannot fail")
+}
+
+/// Build an RDF list with fallible cell allocation and statement emission.
+///
+/// Allocation and emission follow [`build_rdf_list`]'s order. The first error
+/// stops the construction immediately; a caller requiring atomic publication
+/// stages the emitted statements until this returns successfully.
+///
+/// # Errors
+///
+/// Returns the first error from `cell` or `emit`.
+pub fn try_build_rdf_list<T, I, E>(
+    members: I,
+    vocab: &ListVocab<T>,
+    mut cell: impl FnMut(usize) -> Result<T, E>,
+    mut emit: impl FnMut(T, T, T) -> Result<(), E>,
+) -> Result<T, E>
+where
+    T: Clone,
+    I: IntoIterator<Item = T>,
+{
     let mut members = members.into_iter().peekable();
     if members.peek().is_none() {
-        return vocab.nil.clone();
+        return Ok(vocab.nil.clone());
     }
-    let head = cell(0);
+    let head = cell(0)?;
     let mut current = head.clone();
     let mut index = 0;
     while let Some(member) = members.next() {
-        emit(current.clone(), vocab.first.clone(), member);
+        emit(current.clone(), vocab.first.clone(), member)?;
         let next = if members.peek().is_some() {
             index += 1;
-            cell(index)
+            cell(index)?
         } else {
             vocab.nil.clone()
         };
-        emit(current, vocab.rest.clone(), next.clone());
+        emit(current, vocab.rest.clone(), next.clone())?;
         current = next;
     }
-    head
+    Ok(head)
 }
 
 /// How a well-formed list cell is referenced, as [`convertible_list_cells`]
@@ -1195,6 +1226,57 @@ mod tests {
                 (head, TermValue::iri(RDF_REST), TermValue::iri(RDF_NIL)),
             ]
         );
+    }
+
+    #[test]
+    fn fallible_list_construction_stops_at_the_first_callback_error() {
+        let vocab = ListVocab {
+            first: 4,
+            rest: 5,
+            nil: 6,
+        };
+        let calls = core::cell::Cell::new(0);
+        let mut emitted = Vec::new();
+        let result = try_build_rdf_list(
+            [1, 2, 3],
+            &vocab,
+            |_| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 2 {
+                    Err("allocation")
+                } else {
+                    Ok(7)
+                }
+            },
+            |s, p, o| {
+                emitted.push((s, p, o));
+                Ok(())
+            },
+        );
+        assert_eq!(result, Err("allocation"));
+        assert_eq!(calls.get(), 2);
+        assert_eq!(emitted, [(7, 4, 1)]);
+
+        calls.set(0);
+        let result = try_build_rdf_list(
+            [1, 2],
+            &vocab,
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(7)
+            },
+            |_, _, _| Err("emission"),
+        );
+        assert_eq!(result, Err("emission"));
+        assert_eq!(calls.get(), 1);
+
+        let result = try_build_rdf_list(
+            Vec::<i32>::new(),
+            &vocab,
+            |_| Err("empty allocation"),
+            |_, _, _| Err("empty emission"),
+        );
+        assert_eq!(result, Ok(vocab.nil));
     }
 
     /// The walker over a plain statement slice: the edge source a merged graph
