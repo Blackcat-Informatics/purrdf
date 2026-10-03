@@ -274,7 +274,7 @@ store quads=3
 | <http://example.org/s> <http://example.org/p> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <http://example.org/g3> .
 | <http://example.org/s> <http://example.org/p> <http://example.org/o> .
 | <http://example.org/s> <http://example.org/q> <http://example.org/r> .
-metered applied fuel=36 intermediate-cells=6 scratch-bytes=73
+metered applied fuel=36 intermediate-cells=6 scratch-bytes=149
 fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
@@ -315,7 +315,7 @@ store quads=3
 | <http://example.org/s> <http://example.org/p> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <http://example.org/g3> .
 | <http://example.org/s> <http://example.org/p> <http://example.org/o> .
 | <http://example.org/s> <http://example.org/q> <http://example.org/r> .
-metered applied fuel=34 intermediate-cells=6 scratch-bytes=73
+metered applied fuel=34 intermediate-cells=6 scratch-bytes=149
 fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
@@ -1448,7 +1448,7 @@ store quads=6
 | _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/s1> <http://example/p1> <http://example/o1> )>> .
 | _:c14n1 <http://example/source> <http://example/g2> <urn:purrdf:rdfc:annotation> .
 | _:c14n1 <urn:purrdf:rdfc:reifies> <<( <http://example/s2> <http://example/p2> <http://example/o2> )>> .
-metered applied fuel=13 intermediate-cells=16
+metered applied fuel=13 intermediate-cells=16 scratch-bytes=68
 fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
@@ -1468,7 +1468,7 @@ store quads=6
 | _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/s1> <http://example/p1> <http://example/o1> )>> .
 | _:c14n1 <http://example/source> <http://example/g2> <urn:purrdf:rdfc:annotation> .
 | _:c14n1 <urn:purrdf:rdfc:reifies> <<( <http://example/s2> <http://example/p2> <http://example/o2> )>> .
-metered applied fuel=17 intermediate-cells=32
+metered applied fuel=17 intermediate-cells=32 scratch-bytes=68
 fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3

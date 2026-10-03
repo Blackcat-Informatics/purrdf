@@ -311,7 +311,7 @@ fuel 51 tripped budget fuel fuel-exhausted limit=K consumed=52 certificate certa
 fuel 52 tripped budget fuel fuel-exhausted limit=K consumed=53 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=42d6e584f15c69c2 | fuel=53 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 53..=64 x12 complete rows=1 quads=0 digest=42d6e584f15c69c2 | fuel=53 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 == aggregate-accumulation-fuel-boundary cases/aggregate-accumulation.ttl cases/aggregate-accumulation.rq none emits=0
-metered complete | fuel=45 answer-rows=1 intermediate-cells=24 scratch-bytes=879 remote-requests=0
+metered complete | fuel=45 answer-rows=1 intermediate-cells=24 scratch-bytes=953 remote-requests=0
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Group rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 aggregate-invocation=1 aggregate-accumulation=12
@@ -352,7 +352,7 @@ fuel 43 tripped budget fuel fuel-exhausted limit=K consumed=44 certificate certa
 fuel 44 tripped budget fuel fuel-exhausted limit=K consumed=45 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=4eb327b4fb733816 | fuel=45 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 45..=64 x20 complete rows=1 quads=0 digest=4eb327b4fb733816 | fuel=45 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 == aggregate-custom-fuel-boundary cases/aggregate-accumulation.ttl cases/aggregate-custom.rq aggregate emits=0
-metered complete | fuel=45 answer-rows=1 intermediate-cells=24 scratch-bytes=943 remote-requests=0
+metered complete | fuel=45 answer-rows=1 intermediate-cells=24 scratch-bytes=1017 remote-requests=0
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Group rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 aggregate-invocation=1 aggregate-accumulation=12
@@ -393,7 +393,7 @@ fuel 43 tripped budget fuel fuel-exhausted limit=K consumed=44 certificate certa
 fuel 44 tripped budget fuel fuel-exhausted limit=K consumed=45 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=4eb327b4fb733816 | fuel=45 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 45..=64 x20 complete rows=1 quads=0 digest=4eb327b4fb733816 | fuel=45 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 == aggregate-custom-scratch-bytes-boundary cases/aggregate-custom-scratch.ttl cases/aggregate-custom.rq aggregate emits=0
-metered complete | fuel=3609 answer-rows=1 intermediate-cells=2400 scratch-bytes=92202 remote-requests=0
+metered complete | fuel=3609 answer-rows=1 intermediate-cells=2400 scratch-bytes=92280 remote-requests=0
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Group rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 aggregate-invocation=1 aggregate-accumulation=1200

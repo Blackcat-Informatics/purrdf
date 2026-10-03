@@ -97,10 +97,12 @@
 //! group shape `aggregate-accumulation-*` does through the custom path instead of the
 //! built-in one, so the two lanes' fuel is directly comparable
 //! ([`a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape`]).
-//! `aggregate-custom-scratch-bytes-*` bands the ONE dimension no built-in aggregate ever
-//! charges at all — [`CustomAggregate::state_bound`](purrdf_sparql_eval::CustomAggregate::state_bound)
-//! — over a group large enough to cross the within-group chunk threshold, freezing the claim
-//! that this charge (and the fold's answer) is a pure function of the group's row count,
+//! `aggregate-custom-scratch-bytes-*` bands retained argument tuples, the final computed
+//! result and the custom accumulator's declared
+//! [`CustomAggregate::state_bound`](purrdf_sparql_eval::CustomAggregate::state_bound)
+//! over a group large enough to cross the within-group chunk threshold. Built-in folds
+//! have no host-declared accumulator bound. The corpus freezes the claim that these
+//! charges (and the fold's answer) are a pure function of the group's row count and values,
 //! never of the host's thread count
 //! (see [`the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state`]).
 //!

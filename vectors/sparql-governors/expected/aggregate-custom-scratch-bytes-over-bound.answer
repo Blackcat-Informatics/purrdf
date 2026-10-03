@@ -1,3 +1,5 @@
 outcome	budget-exhausted
-tripped	budget	scratch-bytes	scratch-exhausted	limit=92201	consumed=92202
-certificate	unknown	barrier=Group
+tripped	budget	scratch-bytes	scratch-exhausted	limit=92279	consumed=92280
+certificate	certain	positional-prefix=true
+variables	total
+row	"719400"^^<http://www.w3.org/2001/XMLSchema#integer>

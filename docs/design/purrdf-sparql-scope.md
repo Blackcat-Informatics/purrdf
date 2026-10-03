@@ -316,6 +316,14 @@ including reservation copies in user functions. Inclusive budget controls cover
 the exact retained-label charges. A template trip produces a typed exhausted
 query outcome with an empty certified graph; UPDATE publishes no staged mutation.
 
+These ownership and allocation checkpoints are specified by governor profile 10.
+Separately charged aggregate buffers and child arenas cannot mask a later arena
+allocation: the twelve-input SUM fixture retains 879 bytes of input values plus
+its separate 74-byte result, costing 953 scratch bytes. The first-party profile
+corpus pins the measured costs and inclusive boundaries under its new version
+and content identity; consumers must remeasure scratch ceilings sized for the
+preceding profile. Official conformance and GTS corpus bytes are unchanged.
+
 BNODE, template and list-cell allocations use that seam. CONSTRUCT builds once
 instead of replaying the template after a counter collision. A destination with
 an existing `_:c1` therefore receives the fresh `_:c2`, while no-collision labels
