@@ -194,10 +194,6 @@ pub struct Contract {
     declarations: BTreeMap<Identity, Binder>,
 }
 
-fn named(value: impl Into<String>) -> NamedNode {
-    NamedNode::new_unchecked(value)
-}
-
 fn user(name: &str) -> TermPattern {
     TermPattern::Variable(Variable::new(name))
 }
@@ -210,7 +206,9 @@ fn edge(site: u32, subject: TermPattern, object: TermPattern) -> GraphPattern {
     GraphPattern::Bgp {
         patterns: vec![TriplePattern {
             subject,
-            predicate: NamedNodePattern::NamedNode(named(format!("{SITE}{site}"))),
+            predicate: NamedNodePattern::NamedNode(
+                NamedNode::new(format!("{SITE}{site}")).expect("valid research source IRI"),
+            ),
             object,
         }],
     }
@@ -1366,7 +1364,9 @@ pub fn cases() -> Vec<Case> {
     let mut escape = base.clone();
     escape.query = select(join(
         GraphPattern::Graph {
-            name: NamedNodePattern::NamedNode(named(format!("{REGION}99"))),
+            name: NamedNodePattern::NamedNode(
+                NamedNode::new(format!("{REGION}99")).expect("valid research region IRI"),
+            ),
             inner: (**left).clone().into(),
         },
         (**right).clone(),
@@ -1483,11 +1483,15 @@ pub fn cases() -> Vec<Case> {
     ));
     raw_split.query = select(join(
         GraphPattern::Graph {
-            name: NamedNodePattern::NamedNode(named("http://example.org/left_graph")),
+            name: NamedNodePattern::NamedNode(
+                NamedNode::new("http://example.org/left_graph").expect("valid research graph IRI"),
+            ),
             inner: edge(1, user("s"), TermPattern::BlankNode(BlankNode::new("same"))).into(),
         },
         GraphPattern::Graph {
-            name: NamedNodePattern::NamedNode(named("http://example.org/right_graph")),
+            name: NamedNodePattern::NamedNode(
+                NamedNode::new("http://example.org/right_graph").expect("valid research graph IRI"),
+            ),
             inner: edge(2, TermPattern::BlankNode(BlankNode::new("same")), user("o")).into(),
         },
     ));
@@ -1694,7 +1698,10 @@ fn template_fixture() -> Evidence {
             .map(|(index, allocation)| purrdf_sparql_algebra::QuadPattern {
                 triple: TriplePattern {
                     subject: TermPattern::BlankNode(BlankNode::new(allocation)),
-                    predicate: NamedNodePattern::NamedNode(named(format!("{SITE}{}", index + 5))),
+                    predicate: NamedNodePattern::NamedNode(
+                        NamedNode::new(format!("{SITE}{}", index + 5))
+                            .expect("valid research source IRI"),
+                    ),
                     object: user("o"),
                 },
                 graph: None,
@@ -1760,7 +1767,10 @@ pub fn unsupported_terms() -> Vec<(&'static str, Evidence)> {
         TermPattern::Triple(
             TriplePattern {
                 subject: user("s"),
-                predicate: NamedNodePattern::NamedNode(named("http://example.org/nested")),
+                predicate: NamedNodePattern::NamedNode(
+                    NamedNode::new("http://example.org/nested")
+                        .expect("valid research predicate IRI"),
+                ),
                 object: witness("inside_quote"),
             }
             .into(),
@@ -1785,8 +1795,11 @@ pub fn unsupported_terms() -> Vec<(&'static str, Evidence)> {
     };
     bindings[0][0] = Some(GroundTerm::Triple(
         purrdf_sparql_algebra::GroundTriple {
-            subject: GroundTerm::NamedNode(named("http://example.org/s")),
-            predicate: named("http://example.org/nested"),
+            subject: GroundTerm::NamedNode(
+                NamedNode::new("http://example.org/s").expect("valid research subject IRI"),
+            ),
+            predicate: NamedNode::new("http://example.org/nested")
+                .expect("valid research predicate IRI"),
             object: GroundTerm::BlankNode(BlankNode::new("allocation")),
         }
         .into(),
@@ -1846,7 +1859,9 @@ pub fn graph_name_boundary() -> (Evidence, Evidence) {
 pub fn raw_owner_boundary() -> (Evidence, Evidence) {
     let triple = edge(1, user("s"), TermPattern::BlankNode(BlankNode::new("same")));
     let graph = |inner: GraphPattern| GraphPattern::Graph {
-        name: NamedNodePattern::NamedNode(named("http://example.org/g")),
+        name: NamedNodePattern::NamedNode(
+            NamedNode::new("http://example.org/g").expect("valid research graph IRI"),
+        ),
         inner: inner.into(),
     };
     let query = select(join(graph(triple.clone()), graph(triple.clone())));
@@ -2019,7 +2034,9 @@ pub fn measured_inputs() -> Vec<(String, Evidence)> {
         let mut pattern = edge(1, user("s"), user("o"));
         for _ in 0..depth {
             pattern = GraphPattern::Graph {
-                name: NamedNodePattern::NamedNode(named("http://example.org/g")),
+                name: NamedNodePattern::NamedNode(
+                    NamedNode::new("http://example.org/g").expect("valid research graph IRI"),
+                ),
                 inner: pattern.into(),
             };
         }
