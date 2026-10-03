@@ -154,7 +154,7 @@ impl DatasetView for Source {
 impl FallibleDatasetView for Source {
     type Error = RefusedRead;
     type Evidence = bool;
-    /// For the final-checkpoint fixture, refuse the second check after healthy evaluation.
+    /// Inject the selected final-checkpoint fault only at the second status sample.
     fn operation_status(&self) -> ViewOperationStatus<RefusedRead, bool> {
         let prior = self.checkpoints.fetch_add(1, Ordering::Relaxed);
         if self.site == RefusalSite::FinalCheckpoint && prior == 1 {
@@ -191,7 +191,7 @@ fn assert_source_refusal<T: std::fmt::Debug, V: std::fmt::Debug>(
     assert!(error.tripped().is_none());
     error
 }
-/// Exercise every owned fallible entry at both lazy iterator and term-materialization failures.
+/// Exercise owned text and prepared fallible boundaries at iterator and term-materialization failures.
 fn typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures() {
     for site in [RefusalSite::Iterator, RefusalSite::Term] {
         let engine = NativeSparqlEngine::new();

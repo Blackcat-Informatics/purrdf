@@ -69,7 +69,7 @@ fn equal_results(left: SparqlResult, right: SparqlResult) {
     }
 }
 
-/// Matching and absent SHACL focus bindings must charge the same work after preparation.
+/// Preparation must preserve answers and charges for matching and absent SHACL focus bindings.
 #[test]
 fn prepared_operations_match_text_with_shacl_prebinding_for_each_result_form() {
     let engine = NativeSparqlEngine::new();
