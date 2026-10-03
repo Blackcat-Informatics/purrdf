@@ -329,6 +329,7 @@ fn two_page_faulting_dataset(fault: ScriptedFault) -> PagedDataset {
 }
 
 #[test]
+/// A provider failure after the first measuring page discards the entire EXPLAIN ledger.
 fn fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure() {
     let paged = two_page_faulting_dataset(ScriptedFault::Provider);
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
@@ -353,6 +354,7 @@ fn fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure()
 }
 
 #[test]
+/// Cold, cached, configured, and inert-stop EXPLAIN entries preserve resident bytes.
 fn healthy_fallible_explain_is_byte_identical_on_cold_warm_and_signalled_entries() {
     let rows = [
         ("a", "p", "x"),
@@ -821,6 +823,7 @@ fn pair_relation() -> PropertyFunctionRegistry {
 }
 
 #[test]
+/// Registered relations keep resident EXPLAIN semantics without probing unrelated pages.
 fn fallible_explain_options_measure_the_same_registered_relation_as_resident() {
     let resident = page();
     let paged =
@@ -861,6 +864,7 @@ fn fallible_explain_options_measure_the_same_registered_relation_as_resident() {
 }
 
 #[test]
+/// A previously failed paged source retains its root and evidence despite cancellation.
 fn a_failed_paged_view_outranks_an_explain_stop_signal() {
     let paged = cancelled_paged();
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);

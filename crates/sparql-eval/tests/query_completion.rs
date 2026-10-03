@@ -25,6 +25,7 @@ enum RefusedRead {
     Lookup,
 }
 impl std::fmt::Display for RefusedRead {
+    /// Gives each typed refusal a distinct diagnostic label for precedence checks.
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         out.write_str(match self {
             Self::FinalRead => "source refused the final read",
@@ -72,6 +73,7 @@ struct Source {
     last_checkpoint: Mutex<Receipt>,
 }
 impl Source {
+    /// Creates a one-row source that refuses at one selected operational boundary.
     fn at(site: RefusalSite) -> Self {
         Self {
             resident: support::local_dataset([("s", "p", "o")]),
@@ -85,13 +87,16 @@ impl Source {
             last_checkpoint: Mutex::new(Receipt::default()),
         }
     }
+    /// Latches a source failure so later checkpoints must retain its root cause.
     fn refuse(&self) {
         self.failed.store(true, Ordering::Relaxed);
     }
+    /// Verifies that returning from an operation releases both workspace owners.
     fn assert_released(&self) {
         assert_eq!(self.reporting_guards.load(Ordering::Relaxed), 0);
         assert_eq!(self.execution_guards.load(Ordering::Relaxed), 0);
     }
+    /// Requires the published receipt to match the last checkpoint before cleanup.
     fn assert_receipt(&self, receipt: &Receipt) {
         assert_eq!(
             receipt,
@@ -106,11 +111,13 @@ struct Reservation<'a> {
 }
 impl WorkspaceReservation for Reservation<'_> {
     type Error = RefusedRead;
+    /// Keeps this lifetime-tracking fixture independent of byte-capacity failures.
     fn resize(&mut self, _: u64) -> Result<(), RefusedRead> {
         Ok(())
     }
 }
 impl Drop for Reservation<'_> {
+    /// Releases exactly one owner, exposing leaked or duplicate guard lifetimes.
     fn drop(&mut self) {
         let live = if self.execution {
             &self.source.execution_guards
@@ -125,6 +132,7 @@ impl DatasetView for Source {
     type ReadError = RefusedRead;
     type TermGuard<'a> = <RdfDataset as DatasetView>::TermGuard<'a>;
     type ProbePlan = ();
+    /// Enables bounded admission without letting capacity mask the scripted refusal.
     fn storage_live_budget(&self) -> Option<u64> {
         matches!(
             self.site,
@@ -137,9 +145,11 @@ impl DatasetView for Source {
         )
         .then_some(u64::MAX)
     }
+    /// Supplies the finite term bound required to price this one-row fixture.
     fn max_owned_term_bytes(&self) -> Option<u64> {
         Some(256)
     }
+    /// Tracks reporting and execution owners and injects direct or sticky refusals.
     fn reserve_workspace(
         &self,
         bytes: u64,
@@ -184,11 +194,13 @@ impl DatasetView for Source {
             execution,
         })
     }
+    /// Exposes the latched root separately from a direct admission error.
     fn read_error(&self) -> Option<RefusedRead> {
         self.failed
             .load(Ordering::Relaxed)
             .then_some(RefusedRead::FinalRead)
     }
+    /// Can hide the sole row only after latching a failure that forbids empty success.
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.resident.as_ref().quads().filter(|_| {
             self.reads.fetch_add(1, Ordering::Relaxed);
@@ -200,6 +212,7 @@ impl DatasetView for Source {
             }
         })
     }
+    /// Injects a sticky term-read failure to exercise checked result materialization.
     fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, RefusedRead> {
         self.reads.fetch_add(1, Ordering::Relaxed);
         if self.site == RefusalSite::Term {
@@ -211,6 +224,7 @@ impl DatasetView for Source {
                 .expect("resident term resolution is infallible"),
         )
     }
+    /// Refuses admission lookup directly without creating a sticky source failure.
     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<TermId>, RefusedRead> {
         self.reads.fetch_add(1, Ordering::Relaxed);
         if self.site == RefusalSite::Lookup {
@@ -254,6 +268,7 @@ impl DatasetView for Source {
 impl FallibleDatasetView for Source {
     type Error = RefusedRead;
     type Evidence = Receipt;
+    /// Captures live owners and injects checkpoint failure while execution is admitted.
     fn operation_status(&self) -> ViewOperationStatus<RefusedRead, Receipt> {
         if self.site == RefusalSite::Checkpoint && self.execution_guards.load(Ordering::Relaxed) > 0
         {
@@ -282,19 +297,24 @@ fn request(query: &str) -> SparqlRequest<'_> {
         substitutions: &[],
     }
 }
+/// Extracts the storage checkpoint uniformly from plain and governed egresses.
 trait ViewReceipt {
+    /// Selects the storage receipt used to verify publication and guard ownership.
     fn view_receipt(&self) -> &Receipt;
 }
 impl ViewReceipt for Receipt {
+    /// The plain egress carries its storage checkpoint directly.
     fn view_receipt(&self) -> &Receipt {
         self
     }
 }
 impl ViewReceipt for GovernedEvidence<Receipt> {
+    /// Keeps storage ownership checks separate from governor consumption evidence.
     fn view_receipt(&self) -> &Receipt {
         &self.view
     }
 }
+/// Requires an exact operational cause and checkpoint without a partial answer.
 fn assert_source_refusal<T: std::fmt::Debug, V: std::fmt::Debug + ViewReceipt>(
     result: Result<T, FallibleSparqlError<RefusedRead, V>>,
     source: &Source,
@@ -328,6 +348,7 @@ const LOCAL_ROUTES: [QueryRoute; 4] = [
 ];
 struct RefusingService(AtomicUsize);
 impl purrdf_sparql_eval::remote::ServiceResolver for RefusingService {
+    /// Records attempted SERVICE work while respecting a stop before dispatch.
     fn resolve(
         &self,
         request: purrdf_sparql_eval::remote::ServiceRequest<'_>,
@@ -340,6 +361,7 @@ impl purrdf_sparql_eval::remote::ServiceResolver for RefusingService {
         Err(purrdf_sparql_eval::remote::RemoteError::Disabled)
     }
 }
+/// Checks typed refusal across query routes without allowing outbound SERVICE work.
 fn assert_query_refusal(
     engine: &NativeSparqlEngine,
     source: &Source,
@@ -422,6 +444,7 @@ fn assert_query_refusal(
     }
     assert_eq!(remote.0.load(Ordering::Relaxed), 0);
 }
+/// Iterator and term failures must prevent publication across owned and governed routes.
 fn typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures() {
     let engine = NativeSparqlEngine::new();
     for site in [RefusalSite::Iterator, RefusalSite::Term] {
@@ -436,6 +459,7 @@ fn typed_owned_and_governed_queries_never_publish_iterator_or_materialization_fa
         }
     }
 }
+/// Preflight preserves a latched storage cause before parsing or empty-pattern success.
 fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
     let engine = NativeSparqlEngine::new();
     let source = Source::at(RefusalSite::Never);
@@ -464,6 +488,7 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
         RefusedRead::FinalRead,
     );
 }
+/// Visitor reads remain checked, and a retained execution can retry on a healthy source.
 fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
@@ -497,6 +522,7 @@ fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
     assert_eq!(value, 7);
     assert_held_receipt(&source, &receipt);
 }
+/// Reporting refusal stays operational and precedes parsing, execution, and reads.
 fn refused_reporting_admission_remains_typed_even_before_sticky_failure() {
     let engine = NativeSparqlEngine::new();
     for route in LOCAL_ROUTES {
@@ -522,6 +548,7 @@ fn refused_reporting_admission_remains_typed_even_before_sticky_failure() {
     );
     assert!(source.read_error().is_none());
 }
+/// Direct reservation and lookup refusals retain their cause without a sticky failure.
 fn direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence() {
     let engine = NativeSparqlEngine::new();
     for site in [
@@ -571,6 +598,7 @@ fn direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence
         );
     }
 }
+/// A latched storage root takes precedence over the admission error that exposed it.
 fn sticky_operational_root_outranks_the_direct_admission_error() {
     let engine = NativeSparqlEngine::new();
     for site in [RefusalSite::ReportingSticky, RefusalSite::ExecutionSticky] {
@@ -581,6 +609,7 @@ fn sticky_operational_root_outranks_the_direct_admission_error() {
         }
     }
 }
+/// Admission failure prevents visitor entry and leaves the retained handle reusable.
 fn refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry() {
     let engine = NativeSparqlEngine::new();
     for site in [
@@ -627,10 +656,12 @@ fn refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry() {
         assert_held_receipt(&healthy, &receipt);
     }
 }
+/// Requires successful reads and workspace ownership through the final checkpoint.
 fn assert_held_receipt(source: &Source, receipt: &Receipt) {
     assert_workspace_receipt(source, receipt);
     assert!(receipt.reads > 0);
 }
+/// Verifies one execution owner at publication and complete guard release on return.
 fn assert_workspace_receipt(source: &Source, receipt: &Receipt) {
     source.assert_receipt(receipt);
     assert!(!receipt.failed);
@@ -644,6 +675,7 @@ fn assert_workspace_receipt(source: &Source, receipt: &Receipt) {
     assert_eq!(receipt.execution_attempts, executions);
     assert_eq!(receipt.reservations, executions + 2);
 }
+/// Rejects vacuous success and checks the one-row result's final storage receipt.
 fn assert_complete_query<V: ViewReceipt>(
     source: &Source,
     answer: purrdf_sparql_eval::CompleteSparqlResult<V>,
@@ -653,6 +685,7 @@ fn assert_complete_query<V: ViewReceipt>(
     );
     assert_held_receipt(source, answer.evidence.view_receipt());
 }
+/// Successful query routes retain workspace through publication for bounded and unbounded views.
 fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(QUERY, None).expect("prepare fixture");
@@ -704,6 +737,7 @@ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
         }
     }
 }
+/// A final checkpoint can invalidate evaluated rows and visitor output before publication.
 fn final_checkpoint_failure_discards_success_and_keeps_workspace_held() {
     let engine = NativeSparqlEngine::new();
     for route in LOCAL_ROUTES {
@@ -741,6 +775,7 @@ fn final_checkpoint_failure_discards_success_and_keeps_workspace_held() {
         1
     );
 }
+/// Seeds a destination with a sentinel quad to detect any partial graph publication.
 fn destination() -> RdfDatasetBuilder {
     let mut destination = RdfDatasetBuilder::new();
     let s = destination.intern_iri("https://example.org/retained");
@@ -749,6 +784,7 @@ fn destination() -> RdfDatasetBuilder {
     destination.push_quad(s, p, o, None);
     destination
 }
+/// Graph failures preserve the destination; successful publication appends only after checking.
 fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
     let engine = NativeSparqlEngine::new();
     let prepared = engine
@@ -829,6 +865,7 @@ const EXPLAIN_ROUTES: [ExplainRoute; 3] = [
     clippy::result_large_err,
     reason = "test helper preserves the public operational result shared by all three EXPLAIN entries"
 )]
+/// Dispatches each checked EXPLAIN entry with equivalent options and an inert stop.
 fn explain(
     engine: &NativeSparqlEngine,
     source: &Source,
@@ -852,6 +889,7 @@ fn explain(
         ),
     }
 }
+/// Every EXPLAIN entry preserves admission causes and publishes no measuring ledger.
 fn explain_admission_failures_remain_typed_without_an_explanation() {
     let engine = NativeSparqlEngine::new();
     for site in [
@@ -892,6 +930,7 @@ fn explain_admission_failures_remain_typed_without_an_explanation() {
         }
     }
 }
+/// A preexisting storage failure wins before EXPLAIN can parse malformed text.
 fn explain_preflight_failure_outranks_malformed_query() {
     let engine = NativeSparqlEngine::new();
     for route in EXPLAIN_ROUTES {
@@ -906,6 +945,7 @@ fn explain_preflight_failure_outranks_malformed_query() {
         assert_eq!(error.evidence().reads, 0);
     }
 }
+/// Measuring reads and the final checkpoint can each invalidate the entire explanation.
 fn explain_measuring_and_final_checkpoint_failures_publish_no_ledger() {
     let engine = NativeSparqlEngine::new();
     for site in [
@@ -931,6 +971,7 @@ fn explain_measuring_and_final_checkpoint_failures_publish_no_ledger() {
         }
     }
 }
+/// Checked EXPLAIN preserves resident bytes and governor evidence while holding workspace.
 fn healthy_explain_is_identical_to_resident_and_holds_admission_through_publication() {
     let engine = NativeSparqlEngine::new();
     for site in [RefusalSite::Never, RefusalSite::BoundedHealthy] {
@@ -960,6 +1001,7 @@ fn healthy_explain_is_identical_to_resident_and_holds_admission_through_publicat
     assert_eq!(actual.render(), expected.render());
     assert_held_receipt(&source, &receipt);
 }
+/// Query diagnostics retain exact final evidence unless a later storage root supersedes them.
 fn healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence() {
     let engine = NativeSparqlEngine::new();
     for query in [
@@ -998,6 +1040,7 @@ fn healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence
     );
     assert_eq!(error.evidence().execution_guards, 1);
 }
+/// Unpriced context is refused before parsing, cache access, reads, or SERVICE dispatch.
 fn explain_refuses_unpriced_supplied_inputs_before_parsing_or_reading() {
     let engine = NativeSparqlEngine::new();
     let remote = RefusingService(AtomicUsize::new(0));
@@ -1027,11 +1070,13 @@ fn explain_refuses_unpriced_supplied_inputs_before_parsing_or_reading() {
 #[derive(Debug)]
 struct FailureAndStop(Arc<Source>);
 impl StopSignal for FailureAndStop {
+    /// Presents cancellation and a newly latched storage root in the same observation.
     fn poll(&self) -> Option<StopCause> {
         self.0.refuse();
         Some(StopCause::Cancelled)
     }
 }
+/// Cancellation preserves a healthy stopped explanation, but concurrent storage failure wins.
 fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence() {
     let engine = NativeSparqlEngine::new();
     for site in [RefusalSite::Never, RefusalSite::BoundedHealthy] {

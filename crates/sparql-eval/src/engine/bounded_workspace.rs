@@ -44,6 +44,8 @@ purrdf_lex::variant_from!(impl<E> AdmissionError<E> {
 });
 
 impl<E: std::fmt::Display> AdmissionError<E> {
+    /// Project either cause into the resident diagnostic boundary; operational
+    /// callers keep the typed variant instead of using this lossy projection.
     fn into_diagnostic(self) -> RdfDiagnostic {
         match self {
             Self::Query(error) => error,

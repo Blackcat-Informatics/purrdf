@@ -2437,6 +2437,8 @@ impl NativeSparqlEngine {
         self.explain_fallible_for(dataset, query_text, base_iri, options, Some(stop))
     }
 
+    /// Admit reporting before preparation and retain both guards until the final
+    /// storage checkpoint decides whether the measured explanation may escape.
     fn explain_fallible_for<'d, D>(
         &'d self,
         dataset: &'d D,
@@ -3479,6 +3481,8 @@ where
     }
 }
 
+/// Admit receipt scaffolding before allocation, preserving a direct typed refusal
+/// even when the source has not latched it into its operation status.
 fn reserve_fallible_reporting<D>(
     dataset: &D,
 ) -> Result<

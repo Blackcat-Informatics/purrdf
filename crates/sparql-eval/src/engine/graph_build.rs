@@ -254,6 +254,9 @@ impl NativeSparqlEngine {
         )
     }
 
+    /// Stage the complete graph under the caller's admitted guard. This body
+    /// reads destination identities but leaves append and its final checkpoint
+    /// to the ingress, so a failed run cannot modify the destination.
     #[allow(
         clippy::too_many_arguments,
         reason = "the one staging body keeps its destination, governor and sequencing under the admitted guard"

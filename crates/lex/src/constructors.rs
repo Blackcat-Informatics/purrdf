@@ -355,6 +355,8 @@ mod tests {
     struct GenericSource<T>(T);
 
     impl<T> core::fmt::Display for GenericSource<T> {
+        /// Render without inspecting `T`, so the conversion test can detect an
+        /// unintended trait bound on an otherwise opaque generic parameter.
         fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             output.write_str("generic source")
         }
@@ -439,6 +441,7 @@ mod tests {
         );
     }
 
+    /// A generic wrapping conversion moves its source without cloning the owner.
     #[test]
     fn variant_from_wraps_a_generic_source_without_cloning() {
         let source = Arc::new(String::from("owned source"));
@@ -448,6 +451,7 @@ mod tests {
         assert_eq!(Arc::strong_count(&witness), 2);
     }
 
+    /// Each fixed source converts independently of the target's opaque parameters.
     #[test]
     fn variant_from_wraps_each_source_for_multiple_type_parameters() {
         let error = "z".parse::<u8>().unwrap_err();
@@ -469,6 +473,8 @@ mod tests {
         ));
     }
 
+    /// Grouped rendering accepts both fixed and generic sources without imposing
+    /// a display or clone bound on the target's operational error parameter.
     #[test]
     fn variant_from_renders_fixed_and_generic_sources_for_a_generic_error() {
         let error = "z".parse::<u8>().unwrap_err();

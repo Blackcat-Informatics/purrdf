@@ -430,6 +430,7 @@ fn unpriced_request_inputs_refuse_before_copying_parameter_metadata() {
 }
 
 #[test]
+/// Real segmented EXPLAIN stays within charged capacity and releases workspace between runs.
 fn fallible_explain_measures_the_segmented_store_within_its_certified_reservation() {
     let (image, resident) = fixture();
     let engine = NativeSparqlEngine::new();
@@ -498,6 +499,7 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
 }
 
 #[test]
+/// Capacity and algebra admission failures precede row probes and release every guard.
 fn fallible_explain_refuses_tight_capacity_and_unpriced_algebra_before_probing() {
     let (image, _) = fixture();
     let initial = open(&image, CEILING);
@@ -547,6 +549,7 @@ fn fallible_explain_refuses_tight_capacity_and_unpriced_algebra_before_probing()
 }
 
 #[test]
+/// Unpriced configuration is rejected before copying it, consulting the cache, or reading data.
 fn fallible_explain_refuses_unpriced_options_before_cache_lookup_or_data_reads() {
     let (image, _) = fixture();
     let long_prefix = "x".repeat(100_000);
@@ -586,6 +589,7 @@ fn fallible_explain_refuses_unpriced_options_before_cache_lookup_or_data_reads()
 }
 
 #[test]
+/// A real segmented cardinality-read failure preserves its typed cause over cancellation.
 fn fallible_explain_preserves_a_segmented_provider_fault_over_a_fired_stop() {
     let (image, _) = fixture();
     let provider = Arc::new(RefusingProvider {

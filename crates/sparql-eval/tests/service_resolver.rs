@@ -233,6 +233,8 @@ fn an_in_process_service_is_answered_without_the_network_transport_being_touched
 }
 
 #[test]
+/// Checked EXPLAIN preserves configured SERVICE routing, denials, and stopped resident outcomes.
+/// Its storage receipt describes the request dataset even when SERVICE uses another source.
 fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes() {
     let resident = local_dataset();
     let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![Arc::clone(

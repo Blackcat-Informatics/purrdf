@@ -262,6 +262,7 @@ fn cross_page_join_order_is_cost_driven_and_flips_with_skew() {
 }
 
 #[test]
+/// Inverse store cardinalities reverse join order without loading pages the join cannot use.
 fn operational_explain_uses_store_cardinalities_without_materializing_unneeded_pages() {
     let engine = NativeSparqlEngine::new();
     let first = skew_fixture("pa", "pb");

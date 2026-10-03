@@ -164,6 +164,7 @@ class GitSyncTests(unittest.TestCase):
         self.assertNotIn("refs/tags/light", self.identities(self.remote))
 
     def test_timeout_kills_git_and_hook_children_and_fails(self):
+        """A blocked receiver loses its whole process group and publishes no refs."""
         self.hook("pre-receive", "echo attempt >> attempts\nsleep 20 &\n"
                   "child=$!\nprintf '%s %s\\n' \"$$\" \"$child\" >> hook-children\n"
                   "wait \"$child\"\nexit 1")
@@ -174,9 +175,11 @@ class GitSyncTests(unittest.TestCase):
         timeout_elapsed = []
 
         def recorded_children():
+            """Read the hook's readiness evidence and owned child identities."""
             return children.read_text().splitlines() if children.exists() else []
 
         def kill_and_reap(process, communicate):
+            """Bound cleanup even if the Git parent exited before its descendants."""
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -184,6 +187,7 @@ class GitSyncTests(unittest.TestCase):
             communicate(timeout=2)
 
         def start_ready_push(arguments, **options):
+            """Start real Git, postponing the short deadline until its hook is ready."""
             previous = len(recorded_children())
             process = original_popen(arguments, **options)
             if arguments[:2] != ["git", "push"]:
@@ -193,6 +197,7 @@ class GitSyncTests(unittest.TestCase):
             ready = None
 
             def communicate(input=None, timeout=None):
+                """Drain bounded startup, then delegate the production timeout unchanged."""
                 nonlocal ready
                 if ready is None:
                     # The host's real pre-push hooks must finish before this
@@ -220,11 +225,13 @@ class GitSyncTests(unittest.TestCase):
             return process
 
         def timed_push(arguments, timeout):
+            """Apply the short budget only to the blocked push under examination."""
             # Source inspection and destination preflight are not the blocked
             # process subtree this case exercises; retain their normal budget.
             return original_git(arguments, timeout if arguments[0] == "push" else 45)
 
         def cleanup_pushes():
+            """Reap every fixture-owned group, including when an assertion fails."""
             for process, communicate in pushes:
                 kill_and_reap(process, communicate)
 
