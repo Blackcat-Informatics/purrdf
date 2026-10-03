@@ -1979,6 +1979,7 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                 optional,
             } => {
                 if !PositivePlan::pure_eligible(right) {
+                    drop(seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)));
                     steps.push(Step::Visit(right, graph));
                     continue;
                 }
