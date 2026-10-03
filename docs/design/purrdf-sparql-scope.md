@@ -57,7 +57,7 @@ produces six `o` rows and three `other` rows.
 | Premature projection | Remove a junction before the next edge joins it | Remove it at final visible result egress, retaining each row | Binding liveness and projection boundary contract |
 | Explicit observation | Project, group, calculate with or emit a hidden witness | Use it in match terms or internal match VALUES | Typed role admission |
 | Carrier alias capture | Reuse a caller's legal name as an internal alias | Fresh legal aliases after a complete caller-name census | Alias map, reserved ordinary names and visible projection |
-| Lost bag multiplicity | Replace `ex:p|ex:p` with one arm | Reassociate joins or distribute a join over all UNION arms | Source branch multiset and the transformation's bag law |
+| Lost bag multiplicity | Replace `ex:p\|ex:p` with one arm | Reassociate joins or distribute a join over all UNION arms | Source branch multiset and the transformation's bag law |
 | Template identity reuse | Allocate the same output blank for two solution rows | Repeated label within one instantiated template | Runtime allocation and result graph controls |
 | Dataset/category confusion | Replace a pre-bound concrete blank with pattern blank syntax | Keep the scoped dataset term in the binding carrier | Concrete term identity and native/prepared execution controls |
 
