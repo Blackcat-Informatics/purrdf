@@ -19,6 +19,7 @@ use std::sync::{Arc, LazyLock};
 
 type LocalId = DeltaViewId;
 type Pattern<I> = (Option<I>, Option<I>, Option<I>, GraphMatch<I>);
+type ProbeRows<'a, I> = Box<dyn Iterator<Item = QuadIds<I>> + 'a>;
 
 // Physical plans depend only on four bound-axis bits. Cache the small, fixed
 // set once, including graph-unbound variants needed by placement and the
@@ -486,164 +487,88 @@ impl CompositeSource {
         table: Table,
         subject: Option<LocalId>,
         g: GraphMatch<LocalId>,
-    ) -> impl Iterator<Item = QuadIds<LocalId>> + '_ {
-        let reifiers = matches!(table, Table::Reifier);
-        let annotations = matches!(table, Table::Annotation);
-        let native_subject = match subject {
-            Some(LocalId::Base(id)) => Some(id),
-            _ => None,
-        };
-        let native = self
-            .native()
-            .filter(move |_| !matches!(subject, Some(LocalId::Delta(_))))
-            .zip(local_native_graph(g))
-            .into_iter()
-            .flat_map(move |(ds, graph)| {
-                native_subject
-                    .into_iter()
-                    .filter(move |_| reifiers)
-                    .flat_map(move |s| ds.reifier_quads_of(s))
-                    .chain(
-                        std::iter::once(ds)
-                            .filter(move |_| reifiers && subject.is_none())
-                            .flat_map(move |ds| ds.reifier_quads_in_graph(graph)),
-                    )
-                    .chain(
-                        native_subject
-                            .into_iter()
-                            .filter(move |_| annotations)
-                            .flat_map(move |s| {
-                                ds.annotations_of_with_graph(s)
-                                    .map(move |(p, o, g)| QuadIds { s, p, o, g })
-                            }),
-                    )
-                    .chain(
-                        std::iter::once(ds)
-                            .filter(move |_| annotations && subject.is_none())
-                            .flat_map(move |ds| ds.annotation_quads_in_graph(graph)),
-                    )
-                    .map(|q| q.map_ids(LocalId::Base))
-            });
-        let delta = self.delta_ref().into_iter().flat_map(move |ds| {
-            subject
-                .into_iter()
-                .filter(move |_| reifiers)
-                .flat_map(move |s| ds.reifier_quads_of(s))
-                .chain(
-                    std::iter::once(ds)
-                        .filter(move |_| reifiers && subject.is_none())
-                        .flat_map(move |ds| ds.reifier_quads_in_graph(g)),
+    ) -> ProbeRows<'_, LocalId> {
+        match &self.carrier {
+            Carrier::Native(ds) => {
+                let Some(graph) = local_native_graph(g) else {
+                    return Box::new(std::iter::empty());
+                };
+                let subject = match subject {
+                    None => None,
+                    Some(LocalId::Base(id)) => Some(id),
+                    Some(LocalId::Delta(_)) => return Box::new(std::iter::empty()),
+                };
+                Box::new(
+                    metadata_probe(ds.as_ref(), table, subject, graph)
+                        .map(|q| q.map_ids(LocalId::Base)),
                 )
-                .chain(
-                    subject
-                        .into_iter()
-                        .filter(move |_| annotations)
-                        .flat_map(move |s| {
-                            ds.annotations_of_with_graph(s)
-                                .map(move |(p, o, g)| QuadIds { s, p, o, g })
-                        }),
+            }
+            Carrier::Delta(ds) => metadata_probe(ds.as_ref(), table, subject, g),
+            Carrier::Selected(selection) => {
+                let Some(graph) = selection.graph_match(g) else {
+                    return Box::new(std::iter::empty());
+                };
+                let narrowed = match subject {
+                    None => None,
+                    Some(id) => {
+                        let Some(inner) = selection.inner(id) else {
+                            return Box::new(std::iter::empty());
+                        };
+                        Some(inner)
+                    }
+                };
+                Box::new(
+                    metadata_probe(selection.view.as_ref(), table, narrowed, graph)
+                        .filter(move |q| q.g.is_some_and(|graph| selection.graphs.contains(&graph)))
+                        .map(move |q| q.map_ids(|id| selection.local(id))),
                 )
-                .chain(
-                    std::iter::once(ds)
-                        .filter(move |_| annotations && subject.is_none())
-                        .flat_map(move |ds| ds.annotation_quads_in_graph(g)),
-                )
-        });
-        // ONE selection over both statement layers: a row is visible exactly when
-        // its OWN graph slot was selected, which is the same test the ordinary
-        // quads run — the statement layer is keyed per graph in this IR, so a
-        // reifier declared in two graphs contributes only the selected one's row.
-        // Every pull out of the retained composite is type-erased for the same
-        // reason `probe_graph` is: a selection's rows come FROM a composite, so
-        // a transparent pull here would put the composite's opaque iterator
-        // inside itself.
-        type ErasedRows<'a> = Box<dyn Iterator<Item = QuadIds<CompositeViewId>> + 'a>;
-        let selected = self
-            .selected()
-            .and_then(|selection| Some((selection, selection.graph_match(g)?)))
-            .into_iter()
-            .flat_map(move |(selection, graph)| {
-                let view: &CompositeDatasetView = &selection.view;
-                let narrowed = subject.and_then(|id| selection.inner(id));
-                narrowed
-                    .into_iter()
-                    .filter(move |_| reifiers)
-                    .flat_map(move |s| -> ErasedRows<'_> { Box::new(view.reifier_quads_of(s)) })
-                    .chain(
-                        std::iter::once(view)
-                            .filter(move |_| reifiers && subject.is_none())
-                            .flat_map(move |view| -> ErasedRows<'_> {
-                                Box::new(view.reifier_quads_in_graph(graph))
-                            }),
-                    )
-                    .chain(narrowed.into_iter().filter(move |_| annotations).flat_map(
-                        move |s| -> ErasedRows<'_> {
-                            Box::new(
-                                view.annotations_of_with_graph(s)
-                                    .map(move |(p, o, g)| QuadIds { s, p, o, g }),
-                            )
-                        },
-                    ))
-                    .chain(
-                        std::iter::once(view)
-                            .filter(move |_| annotations && subject.is_none())
-                            .flat_map(move |view| -> ErasedRows<'_> {
-                                Box::new(view.annotation_quads_in_graph(graph))
-                            }),
-                    )
-                    .filter(move |q| q.g.is_some_and(|graph| selection.graphs.contains(&graph)))
-                    .map(move |q| q.map_ids(|id| selection.local(id)))
-            });
-        native.chain(delta).chain(selected)
+            }
+        }
     }
+
+    /// Dispatch before type erasure: a cursor carries only the active carrier
+    /// and table, rather than all inactive indexed/metadata iterator branches.
+    /// Sources and values stay borrowed, including recursive selections.
     fn probe(
         &self,
         table: Table,
         plan: QuadProbePlan,
         (s, p, o, g): Pattern<LocalId>,
-    ) -> impl Iterator<Item = QuadIds<LocalId>> + '_ {
-        let ordinary = matches!(table, Table::Ordinary);
-        let native_pattern = local_native_pattern(s, p, o, g);
-        let native = self
-            .native()
-            .filter(move |_| ordinary)
-            .into_iter()
-            .flat_map(move |ds| {
-                native_pattern
-                    .into_iter()
-                    .flat_map(move |(s, p, o, g)| ds.quads_for_pattern_with_plan(&plan, s, p, o, g))
-                    .map(|q| q.map_ids(LocalId::Base))
-            });
-        let delta = self
-            .delta_ref()
-            .filter(move |_| ordinary)
-            .into_iter()
-            .flat_map(move |ds| ds.quads_for_pattern_with_plan(&plan, s, p, o, g));
-        // The projection reads the retained composite ONE selected graph at a time,
-        // so the physical pattern is graph-bound however the logical one was
-        // spelled. The caller's plan describes a different graph-boundness and a
-        // graph-bound prefix chosen for it would name the wrong rows, so this axis
-        // is re-planned here — the same reason placement re-plans its sources.
-        let selected_plan = physical_plan([s.is_some(), p.is_some(), o.is_some(), true]);
-        let selected = self
-            .selected()
-            .filter(move |_| ordinary)
-            .into_iter()
-            .flat_map(move |selection| {
-                selection
-                    .probe_pattern((s, p, o, g))
-                    .into_iter()
-                    .flat_map(move |(s, p, o, only)| {
-                        selection.targets(only).flat_map(move |graph| {
-                            selection.probe_graph(selected_plan, s, p, o, graph)
+    ) -> ProbeRows<'_, LocalId> {
+        if !matches!(table, Table::Ordinary) {
+            return Box::new(
+                self.metadata_rows(table, s, g)
+                    .filter(move |q| matches_pattern(*q, s, p, o, g)),
+            );
+        }
+        match &self.carrier {
+            Carrier::Native(ds) => {
+                let Some((s, p, o, g)) = local_native_pattern(s, p, o, g) else {
+                    return Box::new(std::iter::empty());
+                };
+                Box::new(
+                    ds.quads_for_pattern_with_plan(&plan, s, p, o, g)
+                        .map(|q| q.map_ids(LocalId::Base)),
+                )
+            }
+            Carrier::Delta(ds) => Box::new(ds.quads_for_pattern_with_plan(&plan, s, p, o, g)),
+            Carrier::Selected(selection) => {
+                // Selection physically probes one named graph however the
+                // caller's logical graph axis was spelled.
+                let selected_plan = physical_plan([s.is_some(), p.is_some(), o.is_some(), true]);
+                Box::new(
+                    selection
+                        .probe_pattern((s, p, o, g))
+                        .into_iter()
+                        .flat_map(move |(s, p, o, only)| {
+                            selection.targets(only).flat_map(move |graph| {
+                                selection.probe_graph(selected_plan, s, p, o, graph)
+                            })
                         })
-                    })
-                    .map(move |q| q.map_ids(|id| selection.local(id)))
-            });
-        native.chain(delta).chain(selected).chain(
-            self.metadata_rows(table, s, g)
-                .filter(move |q| matches_pattern(*q, s, p, o, g)),
-        )
+                        .map(move |q| q.map_ids(|id| selection.local(id))),
+                )
+            }
+        }
     }
     fn estimate(
         &self,
@@ -2004,6 +1929,32 @@ enum Table {
     Reifier,
     Annotation,
 }
+/// One active statement-table cursor over any borrowed dataset view.
+/// Carrier adapters retain their own graph/identity translations.
+fn metadata_probe<D: DatasetView>(
+    source: &D,
+    table: Table,
+    subject: Option<D::Id>,
+    graph: GraphMatch<D::Id>,
+) -> ProbeRows<'_, D::Id> {
+    match (table, subject) {
+        (Table::Ordinary, _) => Box::new(std::iter::empty()),
+        (Table::Reifier, Some(subject)) => Box::new(source.reifier_quads_of(subject)),
+        (Table::Reifier, None) => Box::new(source.reifier_quads_in_graph(graph)),
+        (Table::Annotation, Some(subject)) => Box::new(
+            source
+                .annotations_of_with_graph(subject)
+                .map(move |(p, o, g)| QuadIds {
+                    s: subject,
+                    p,
+                    o,
+                    g,
+                }),
+        ),
+        (Table::Annotation, None) => Box::new(source.annotation_quads_in_graph(graph)),
+    }
+}
+
 fn matches_pattern<I: Copy + Eq>(
     q: QuadIds<I>,
     s: Option<I>,
