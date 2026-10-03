@@ -116,6 +116,11 @@ purrdf-testkit = { workspace = true }
 # named cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs
 # natively.
 [[test]]
+# Execute the same full-scale binding and EXPLAIN regressions natively and in Node.
+name = "boundary_join_scaling"
+harness = false
+
+[[test]]
 name = "knn_wasm_determinism"
 harness = false
 

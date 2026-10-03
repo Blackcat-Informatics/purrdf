@@ -776,7 +776,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		bash scripts/check-wasm-test-runner.sh \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated --test stack_refusal --test query_completion \
+			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated --test stack_refusal --test query_completion --test boundary_join_scaling \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-hnsw --test wasm_reassociated \
@@ -784,7 +784,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated --test stack_refusal --test query_completion \
+			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated --test stack_refusal --test query_completion --test boundary_join_scaling \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
