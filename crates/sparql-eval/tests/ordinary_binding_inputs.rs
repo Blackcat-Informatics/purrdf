@@ -6,7 +6,9 @@
 mod support;
 
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlRequest};
-use purrdf_sparql_eval::{EvalOptions, NativeSparqlEngine, QueryGovernors, QueryOptions};
+use purrdf_sparql_eval::{
+    EvalOptions, NativeSparqlEngine, PartialAnswers, QueryGovernors, QueryOptions,
+};
 use support::{EX, render_cell, row, sorted_rows};
 
 #[test]
@@ -127,5 +129,181 @@ fn computed_existing_missing_and_quoted_slots_use_dataset_identity_before_scanni
             .into_complete()
             .expect("bounded term identity relation");
         assert_eq!(sorted_rows(&result, render_cell), vec![expected], "{query}");
+    }
+}
+
+/// Repeated BGP occurrences share a layout while masks vary by driver. Every
+/// fuel, cell and answer cut must keep a true subbag, including empty padding.
+#[test]
+fn retained_optional_preparation_preserves_masks_and_every_governor_cut() {
+    let mut builder = RdfDatasetBuilder::new();
+    let [a, b, p, q, v1, v2, v3, z1, z2, z3, record, has, o] = [
+        "a", "b", "p", "q", "v1", "v2", "v3", "z1", "z2", "z3", "record", "has", "o",
+    ]
+    .map(|local| builder.intern_iri(&format!("{EX}{local}")));
+    for (s, predicate, object) in [
+        (a, p, v1),
+        (a, p, v2),
+        (b, p, v3),
+        (v1, q, z1),
+        (v2, q, z2),
+        (v3, q, z3),
+    ] {
+        builder.push_quad(s, predicate, object, None);
+    }
+    let quote = builder.intern_triple(a, q, o);
+    builder.push_quad(record, has, quote, None);
+    let dataset = builder.freeze().expect("retained BGP fixture");
+    let iri = |local| format!("<{EX}{local}>");
+    let matches = |include_v| {
+        let mut expected = Vec::new();
+        for (x, v, z, copies) in [
+            ("a", "v1", "z1", 3),
+            ("a", "v2", "z2", 3),
+            ("b", "v3", "z3", 2),
+        ] {
+            for _ in 0..copies {
+                let mut fields = vec![("x", iri(x)), ("z", iri(z)), ("mark", "fresh".into())];
+                if include_v {
+                    fields.push(("v", iri(v)));
+                }
+                expected.push(row(&fields
+                    .iter()
+                    .map(|(k, v)| (*k, v.as_str()))
+                    .collect::<Vec<_>>()));
+            }
+        }
+        let mut fields = vec![
+            ("x", iri("missing")),
+            ("z", "UNBOUND".into()),
+            ("mark", "fresh".into()),
+        ];
+        if include_v {
+            fields.push(("v", "UNBOUND".into()));
+        }
+        expected.push(row(&fields
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect::<Vec<_>>()));
+        expected
+    };
+    let drivers = "VALUES ?x { ex:a UNDEF ex:b ex:a ex:missing } BIND(\"fresh\" AS ?mark)";
+    let missing_ground = ["a", "UNBOUND", "b", "a", "missing"]
+        .map(|x| {
+            row(&[
+                ("x", &if x == "UNBOUND" { x.into() } else { iri(x) }),
+                ("v", "UNBOUND"),
+                ("z", "UNBOUND"),
+                ("mark", "fresh"),
+            ])
+        })
+        .to_vec();
+    let cases = [
+        (
+            "?x ?v ?z ?mark",
+            format!("{drivers} OPTIONAL {{ ?x ex:p ?v . ?v ex:q ?z }}"),
+            matches(true),
+        ),
+        (
+            "?x ?z ?mark",
+            format!("{drivers} OPTIONAL {{ ?x ex:p _:value . _:value ex:q ?z }}"),
+            matches(false),
+        ),
+        (
+            "?x ?v ?z ?mark",
+            format!("{drivers} OPTIONAL {{ ?x ex:absent ?v . ?v ex:q ?z }}"),
+            missing_ground,
+        ),
+        (
+            "?x ?record ?mark",
+            "VALUES ?x { ex:a ex:missing UNDEF } BIND(\"fresh\" AS ?mark) \
+             OPTIONAL { ?record ex:has <<( ?x ex:q ex:o )>> }"
+                .into(),
+            vec![
+                row(&[
+                    ("x", &iri("a")),
+                    ("record", &iri("record")),
+                    ("mark", "fresh"),
+                ]),
+                row(&[
+                    ("x", &iri("a")),
+                    ("record", &iri("record")),
+                    ("mark", "fresh"),
+                ]),
+                row(&[
+                    ("x", &iri("missing")),
+                    ("record", "UNBOUND"),
+                    ("mark", "fresh"),
+                ]),
+            ],
+        ),
+    ];
+    for force_sequential in [false, true] {
+        let engine = NativeSparqlEngine::new().with_eval_options(EvalOptions {
+            force_sequential,
+            ..EvalOptions::default()
+        });
+        for (projection, body, expected) in &cases {
+            let query = format!("PREFIX ex: <{EX}> SELECT {projection} WHERE {{ {body} }}");
+            let request = SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            };
+            let measured = engine
+                .query_governed(
+                    &dataset,
+                    request,
+                    QueryOptions::EMPTY,
+                    &QueryGovernors::METERED,
+                )
+                .expect("measure retained OPTIONAL");
+            let fuel = measured.evidence().consumed_in(ResourceDimension::Fuel);
+            let cells = measured
+                .evidence()
+                .consumed_in(ResourceDimension::IntermediateCells);
+            let mut expected = expected.clone();
+            expected.sort();
+            assert_eq!(
+                sorted_rows(
+                    &measured
+                        .into_complete()
+                        .expect("complete retained OPTIONAL"),
+                    render_cell
+                ),
+                expected,
+                "{query}",
+            );
+            let allowances = (0..=fuel)
+                .map(|cap| QueryGovernors::METERED.with_fuel(cap))
+                .chain(
+                    (0..=cells).map(|cap| QueryGovernors::METERED.with_max_intermediate_cells(cap)),
+                )
+                .chain(
+                    (0..=expected.len() as u64)
+                        .map(|cap| QueryGovernors::METERED.with_max_answers(cap)),
+                );
+            for governors in allowances {
+                let outcome = engine
+                    .query_governed(&dataset, request, QueryOptions::EMPTY, &governors)
+                    .expect("each cut returns a typed outcome");
+                let actual = if let Some(exhausted) = outcome.exhausted() {
+                    let PartialAnswers::Certain(partial) = &exhausted.partial else {
+                        panic!("{query}: monotone OPTIONAL cut {governors:?}: {exhausted:?}");
+                    };
+                    sorted_rows(partial.result(), render_cell)
+                } else {
+                    sorted_rows(&outcome.into_complete().expect("uncut result"), render_cell)
+                };
+                for group in actual.chunk_by(|a, b| a == b) {
+                    let before = expected.partition_point(|candidate| candidate < &group[0]);
+                    let through = expected.partition_point(|candidate| candidate <= &group[0]);
+                    assert!(
+                        group.len() <= through - before,
+                        "{query}: cut {governors:?} fabricated multiplicity {group:?}"
+                    );
+                }
+            }
+        }
     }
 }

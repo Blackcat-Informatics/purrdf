@@ -1370,30 +1370,36 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
     let cell_ceiling = ctx.cell_row_ceiling(schema.len());
     let row_ceiling = ctx.row_ceiling();
     let mut rows = Vec::new();
+    let mut bgp = None;
     'driver: for row in left.rows {
         let unit = SolutionSeq {
             schema: Arc::clone(&left.schema),
             rows: vec![row],
         };
-        let evaluated = crate::eval::eval_positive_evaluated(
-            right,
-            Some(crate::eval::PositiveInput::from_rows(&unit)),
-            plan,
-            ctx,
-        )?;
+        let input = crate::eval::PositiveInput::from_rows(&unit);
+        let evaluated = if matches!(right, GraphPattern::Bgp { .. }) {
+            crate::eval::eval_cached_bgp_evaluated(right, input, &mut bgp, ctx)?
+        } else {
+            crate::eval::eval_positive_evaluated(right, Some(input), plan, ctx)?
+        };
         if matches!(evaluated, Evaluated::Truncated(_)) {
             drop(lift.absorb(1, evaluated));
             break;
         }
-        // The singleton has multiplicity one, so this reuses the ordinary
-        // condition/padding law without multiplying the already-seeded bag.
-        let block = left_join_lift(
-            node,
-            Evaluated::Complete(unit),
-            |_, _| Ok(evaluated),
-            expression,
-            ctx,
-        )?;
+        // Every seeded row already contains this singleton's compatible values.
+        // An unfiltered nonempty block needs no second join or index. Empty
+        // blocks and inline conditions retain the ordinary padding/filter law.
+        let block = if expression.is_none() && !evaluated.rows().is_empty() {
+            evaluated
+        } else {
+            left_join_lift(
+                node,
+                Evaluated::Complete(unit),
+                |_, _| Ok(evaluated),
+                expression,
+                ctx,
+            )?
+        };
         let block = match block {
             Evaluated::Complete(block) => block.reorder_like(&schema),
             truncated @ Evaluated::Truncated(_) => {

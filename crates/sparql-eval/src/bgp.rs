@@ -168,6 +168,33 @@ struct CompiledPattern<I: ViewTermId = TermId> {
     o: Pos<I>,
 }
 
+/// Immutable positions and column layout for repeated occurrences of one BGP.
+/// The input schema stays fixed; binding masks and candidate scans remain local
+/// to each occurrence. A missing ground term retains the full empty header.
+pub(crate) struct CompiledBgp<I: ViewTermId> {
+    working: VarSchema,
+    compiled: Option<Vec<CompiledPattern<I>>>,
+    projection: Option<BgpProjection>,
+}
+
+impl<I: ViewTermId> CompiledBgp<I> {
+    /// Keep every real output column even when compilation or a scan yields no row.
+    fn empty(&self) -> SolutionSeq<I> {
+        self.projection.as_ref().map_or_else(
+            || empty_over_real_vars(&self.working),
+            |projection| SolutionSeq::empty(Arc::clone(&projection.schema)),
+        )
+    }
+
+    /// Remove only BGP-local blank slots; retain row order and multiplicity.
+    fn project(&self, rows: Vec<Solution<I>>) -> SolutionSeq<I> {
+        match &self.projection {
+            Some(projection) => projection.apply(rows),
+            None => project_out_blanks(&self.working, rows),
+        }
+    }
+}
+
 /// Evaluate a basic graph pattern to a multiset of solutions over its real
 /// (non-blank) variables.
 /// # A leaf of the partial-lift channel
@@ -198,31 +225,58 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     selected_order: Option<Arc<[usize]>>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let borrowed = input.as_ref().map(crate::eval::PositiveInput::rows);
     if patterns.is_empty() {
         return Ok(input.map_or_else(SolutionSeq::unit, crate::eval::PositiveInput::into_sequence));
     }
+    let schema = input.as_ref().map(|input| input.rows().schema.as_ref());
+    let compiled = compile_bgp(patterns, schema, false, ctx)?;
+    eval_compiled_bgp(&compiled, input, selected_order, ctx)
+}
 
+/// Prepare a seeded OPTIONAL leaf lazily inside its normal node checkpoint, then
+/// reuse its immutable layout and positions for later driver occurrences.
+pub(crate) fn eval_bgp_seeded_cached<D: DatasetView + Sync>(
+    patterns: &[TriplePattern],
+    input: crate::eval::PositiveInput<'_, D::Id>,
+    cache: &mut Option<CompiledBgp<D::Id>>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    if patterns.is_empty() {
+        return Ok(input.into_sequence());
+    }
+    if cache.is_none() {
+        *cache = Some(compile_bgp(
+            patterns,
+            Some(&input.rows().schema),
+            true,
+            ctx,
+        )?);
+    }
+    let compiled = cache.as_ref().expect("the BGP was prepared above");
+    debug_assert_eq!(
+        &compiled.working.vars()[..input.rows().schema.len()],
+        input.rows().schema.vars(),
+        "repeated BGP occurrences retain the same input column layout"
+    );
+    eval_compiled_bgp(compiled, Some(input), None, ctx)
+}
+
+fn compile_bgp<D: DatasetView + Sync>(
+    patterns: &[TriplePattern],
+    input: Option<&VarSchema>,
+    retain_projection: bool,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<CompiledBgp<D::Id>, EvalError> {
     // Pass 1: collect every slot variable (real + synthetic blank) in first-seen
     // (subject, predicate, object) order — the working column layout.
-    let mut working = borrowed.map_or_else(VarSchema::default, |input| (*input.schema).clone());
+    let mut working = input.cloned().unwrap_or_default();
     for pattern in patterns {
         for key in slot_keys(pattern) {
             working.push(key);
         }
     }
 
-    let initial: Vec<bool> = borrowed.map_or_else(Vec::new, |input| {
-        working
-            .vars()
-            .iter()
-            .map(|variable| {
-                input.schema.index_of(variable).is_some_and(|column| {
-                    !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
-                })
-            })
-            .collect()
-    });
+    let projection = retain_projection.then(|| BgpProjection::new(&working));
 
     // Pass 2: compile each pattern; a ground constant absent from the dataset makes
     // the whole BGP empty.
@@ -230,14 +284,57 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     for pattern in patterns {
         match compile_pattern(pattern, &working, ctx.dataset)? {
             Some(cp) => compiled.push(cp),
-            None => return Ok(empty_over_real_vars(&working)),
+            None => {
+                return Ok(CompiledBgp {
+                    working,
+                    compiled: None,
+                    projection,
+                });
+            }
         }
     }
+    Ok(CompiledBgp {
+        working,
+        compiled: Some(compiled),
+        projection,
+    })
+}
+
+/// The single indexed BGP execution kernel, shared by ordinary and retained
+/// preparation. Every occurrence chooses its own binding mask and order.
+fn eval_compiled_bgp<D: DatasetView + Sync>(
+    program: &CompiledBgp<D::Id>,
+    input: Option<crate::eval::PositiveInput<'_, D::Id>>,
+    selected_order: Option<Arc<[usize]>>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    let working = &program.working;
+    let borrowed = input.as_ref().map(crate::eval::PositiveInput::rows);
+    let Some(compiled) = &program.compiled else {
+        return Ok(program.empty());
+    };
+    // A singleton has only one order, regardless of nullable bindings. Retained
+    // preparation needs no per-occurrence mask allocation for that fixed order.
+    let initial: Vec<bool> = if program.projection.is_some() && compiled.len() == 1 {
+        Vec::new()
+    } else {
+        borrowed.map_or_else(Vec::new, |input| {
+            working
+                .vars()
+                .iter()
+                .map(|variable| {
+                    input.schema.index_of(variable).is_some_and(|column| {
+                        !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
+                    })
+                })
+                .collect()
+        })
+    };
     // An empty producer cannot extend this relation. Keep the full logical
     // header, but do not charge or allocate the ordinary unit seed: there is no
     // intermediate row. Ground-term compilation above retains read failures.
     if borrowed.is_some_and(|input| input.rows.is_empty()) {
-        return Ok(empty_over_real_vars(&working));
+        return Ok(program.empty());
     }
 
     // The graph scope for this BGP (resolved once — `active_graph` is fixed across a
@@ -255,17 +352,11 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     // heuristic instead; because the reorder is still just a permutation, the result
     // multiset must stay identical.
     let order = if ctx.options.force_structural_bgp_order {
-        Arc::from(structural_order(&compiled))
+        Arc::from(structural_order(compiled))
     } else if let Some(order) = selected_order.filter(|_| input.is_none()) {
         order
     } else {
-        plan_or_cached_order(
-            &compiled,
-            ctx.dataset,
-            &scope,
-            &initial,
-            ctx.bgp_order_cache,
-        )
+        plan_or_cached_order(compiled, ctx.dataset, &scope, &initial, ctx.bgp_order_cache)
     };
 
     // The interned id of `rdf:reifies`, resolved once. `None` ⇒ the dataset has no
@@ -318,7 +409,7 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     let cell_ceiling = ctx.cell_row_ceiling(working.len());
     if cell_ceiling == Some(0) {
         let _ = ctx.observe_cells(1, working.len());
-        return Ok(empty_over_real_vars(&working));
+        return Ok(program.empty());
     }
     let input_rows = borrowed.map_or(1, |input| input.rows.len());
     if cell_ceiling.is_some_and(|ceiling| input_rows > ceiling) {
@@ -326,7 +417,7 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
             cell_ceiling.expect("a ceiling exists").saturating_add(1),
             working.len(),
         );
-        return Ok(empty_over_real_vars(&working));
+        return Ok(program.empty());
     }
     let unit_driven = input.is_none();
     let mut rows: Vec<Solution<D::Id>> = match input {
@@ -340,7 +431,7 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
         None => vec![purrdf_core::smallvec![None; working.len()]],
     };
     if rows.is_empty() {
-        return Ok(empty_over_real_vars(&working));
+        return Ok(program.empty());
     }
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
@@ -548,7 +639,7 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
         }
     }
 
-    Ok(project_out_blanks(&working, rows))
+    Ok(program.project(rows))
 }
 
 /// The retired most-constrained-first STRUCTURAL heuristic, reproduced here as
@@ -2437,30 +2528,46 @@ fn project_out_blanks<I: ViewTermId>(
     working: &VarSchema,
     rows: Vec<Solution<I>>,
 ) -> SolutionSeq<I> {
-    // The working columns that survive, in order.
-    let keep: purrdf_core::SmallVec<[usize; 8]> = working
-        .vars()
-        .iter()
-        .enumerate()
-        .filter_map(|(i, v)| (!is_blank_var(v)).then_some(i))
-        .collect();
+    BgpProjection::new(working).apply(rows)
+}
 
-    // Fast path: no blank columns — reuse rows as-is.
-    if keep.len() == working.len() {
-        return SolutionSeq {
+/// One BGP's real columns, retained when many occurrences share its layout.
+struct BgpProjection {
+    schema: Arc<VarSchema>,
+    keep: purrdf_core::SmallVec<[usize; 8]>,
+    has_blanks: bool,
+}
+
+impl BgpProjection {
+    /// Record real columns in working order for every occurrence of this layout.
+    fn new(working: &VarSchema) -> Self {
+        let keep: purrdf_core::SmallVec<[usize; 8]> = working
+            .vars()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| (!is_blank_var(v)).then_some(i))
+            .collect();
+        Self {
             schema: Arc::new(real_var_schema(working)),
-            rows,
-        };
+            has_blanks: keep.len() != working.len(),
+            keep,
+        }
     }
 
-    let schema = Arc::new(real_var_schema(working));
-    let projected = rows
-        .into_iter()
-        .map(|row| keep.iter().map(|&i| row[i]).collect())
-        .collect();
-    SolutionSeq {
-        schema,
-        rows: projected,
+    /// Rows cover the full working layout. Reuse them when no blank slot is hidden,
+    /// otherwise select exactly the retained columns without changing the bag.
+    fn apply<I: ViewTermId>(&self, rows: Vec<Solution<I>>) -> SolutionSeq<I> {
+        let rows = if self.has_blanks {
+            rows.into_iter()
+                .map(|row| self.keep.iter().map(|&i| row[i]).collect())
+                .collect()
+        } else {
+            rows
+        };
+        SolutionSeq {
+            schema: Arc::clone(&self.schema),
+            rows,
+        }
     }
 }
 

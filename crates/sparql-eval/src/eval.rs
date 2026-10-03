@@ -2654,6 +2654,22 @@ pub(crate) fn eval_positive_evaluated<D: DatasetView + Sync>(
     })
 }
 
+/// Repeated occurrences of a BGP OPTIONAL leaf keep its immutable compilation,
+/// while each occurrence enters the same fallible node checkpoint and scan.
+pub(crate) fn eval_cached_bgp_evaluated<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    input: PositiveInput<'_, D::Id>,
+    cache: &mut Option<crate::bgp::CompiledBgp<D::Id>>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let GraphPattern::Bgp { patterns } = pattern else {
+        return Err(EvalError::internal("a retained BGP must be a BGP leaf"));
+    };
+    eval_evaluated_with(pattern, ctx, |ctx| {
+        crate::bgp::eval_bgp_seeded_cached(patterns, input, cache, ctx).map(Evaluated::Complete)
+    })
+}
+
 fn eval_evaluated_with<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
