@@ -255,19 +255,19 @@ Median microseconds per operation:
 
 | Input | Current role check | Explicit check | Variable declaration preparation | Contract preparation | Reuse check |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Representative | 0.177 | 2.715 | 0.455 | 2.628 | 3.013 |
-| 256 branches | 6.339 | 120.449 | 10.634 | 116.308 | 123.779 |
-| 1,024-triple BGP | 18.572 | 478.767 | 37.232 | 494.002 | 513.843 |
-| 64 nested GRAPH nodes | 0.451 | 2.513 | 0.595 | 2.891 | 4.518 |
-| 512 nested GRAPH nodes | 6.033 | 19.235 | 3.729 | 18.668 | 25.641 |
-| 100,000 nested GRAPH nodes | 1,327.180 | 4,877.764 | 927.377 | 5,922.712 | 6,659.993 |
+| Representative | 0.253 | 4.150 | 0.682 | 3.548 | 4.477 |
+| 256 branches | 8.288 | 125.937 | 13.174 | 112.907 | 156.210 |
+| 1,024-triple BGP | 18.599 | 536.501 | 44.315 | 494.946 | 494.447 |
+| 64 nested GRAPH nodes | 0.585 | 2.580 | 0.667 | 4.952 | 5.142 |
+| 512 nested GRAPH nodes | 3.370 | 16.277 | 2.960 | 17.464 | 17.197 |
+| 100,000 nested GRAPH nodes | 940.842 | 5,346.298 | 759.970 | 4,107.285 | 3,763.334 |
 
 These measurements establish the cost of this prototype on the recorded host.
 There is no timing acceptance threshold or cross-hardware speed claim. Reuse
 saves retention/preparation work but still pays for the output's incidence
 extraction and comparison; it is not uniformly faster than preparation.
-At depth 100,000, the role-check median interval is 1.311–1.346 ms and the reuse
-interval is 6.308–7.249 ms. The complete samples, intervals, outliers, compiler,
+At depth 100,000, the role-check median interval is 0.869–1.053 ms and the reuse
+interval is 3.738–3.809 ms. The complete samples, intervals, outliers, compiler,
 hardware and source hashes are retained in
 [scope-benchmarks.json](evidence/scope-benchmarks.json).
 [scope-investigation.json](evidence/scope-investigation.json) records all supported

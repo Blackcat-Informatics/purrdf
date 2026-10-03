@@ -958,10 +958,10 @@
         "peak_working_bytes": 6144
       },
       "explicit_check": {
-        "allocations": 3218,
-        "requested_bytes": 495587,
+        "allocations": 3215,
+        "requested_bytes": 494915,
         "retained_bytes": 0,
-        "peak_working_bytes": 405688
+        "peak_working_bytes": 405016
       },
       "encoded_variable_declaration_prepare": {
         "allocations": 13,
@@ -970,16 +970,16 @@
         "peak_working_bytes": 6336
       },
       "contract_prepare": {
-        "allocations": 3226,
-        "requested_bytes": 502404,
+        "allocations": 3223,
+        "requested_bytes": 501732,
         "retained_bytes": 75425,
-        "peak_working_bytes": 405688
+        "peak_working_bytes": 405016
       },
       "contract_reuse_check": {
-        "allocations": 3225,
-        "requested_bytes": 501919,
+        "allocations": 3222,
+        "requested_bytes": 501247,
         "retained_bytes": 0,
-        "peak_working_bytes": 405688
+        "peak_working_bytes": 405016
       }
     },
     {
