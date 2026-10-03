@@ -1395,12 +1395,19 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
     let mut rows = Vec::new();
     let mut bgp = None;
     for row in left.rows {
+        let (seed, padding) = if expression.is_none() {
+            (row.clone(), Some(row))
+        } else {
+            (row, None)
+        };
         let unit = SolutionSeq {
             schema: Arc::clone(&left.schema),
-            rows: vec![row],
+            rows: vec![seed],
         };
-        let SeededOptionalBlock { evaluated, padding } =
-            seeded_optional_block(node, unit, right, expression, plan, &mut bgp, ctx)?;
+        let SeededOptionalBlock {
+            evaluated,
+            pad_unmatched,
+        } = seeded_optional_block(node, unit, right, expression, plan, &mut bgp, ctx)?;
         let block = match evaluated {
             Evaluated::Complete(block) => block,
             truncated @ Evaluated::Truncated(_) => {
@@ -1410,7 +1417,7 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
         };
         if !append_seeded_optional_block(
             block,
-            padding,
+            padding.as_ref().filter(|_| pad_unmatched),
             &mut rows,
             &schema,
             row_ceiling,
@@ -1423,11 +1430,11 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
     Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
-/// One driver's inspected relation. Padding cells accompany only a complete
-/// empty unfiltered relation; a truncated relation can never license padding.
+/// One driver's inspected relation. Only a complete empty unfiltered relation
+/// licenses padding; its cells are constructed after sink admission.
 struct SeededOptionalBlock<I: ViewTermId> {
     evaluated: Evaluated<I>,
-    padding: Option<Solution<I>>,
+    pad_unmatched: bool,
 }
 
 /// Execute each driver through the same node/read/stop checkpoints. Unfiltered
@@ -1441,7 +1448,6 @@ fn seeded_optional_block<D: DatasetView + Sync>(
     bgp: &mut Option<crate::bgp::CompiledBgp<D::Id>>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SeededOptionalBlock<D::Id>, EvalError> {
-    let padding = expression.is_none().then(|| unit.rows[0].clone());
     let mut unit = Some(unit);
     let input = if expression.is_none() {
         crate::eval::PositiveInput::owned(unit.take().expect("the driver is present"))
@@ -1456,12 +1462,15 @@ fn seeded_optional_block<D: DatasetView + Sync>(
     if evaluated.is_truncated() {
         return Ok(SeededOptionalBlock {
             evaluated,
-            padding: None,
+            pad_unmatched: false,
         });
     }
     if expression.is_none() {
-        let padding = evaluated.rows().is_empty().then_some(padding).flatten();
-        return Ok(SeededOptionalBlock { evaluated, padding });
+        let pad_unmatched = evaluated.rows().is_empty();
+        return Ok(SeededOptionalBlock {
+            evaluated,
+            pad_unmatched,
+        });
     }
     Ok(SeededOptionalBlock {
         evaluated: left_join_lift(
@@ -1471,7 +1480,7 @@ fn seeded_optional_block<D: DatasetView + Sync>(
             expression,
             ctx,
         )?,
-        padding: None,
+        pad_unmatched: false,
     })
 }
 
@@ -1479,7 +1488,7 @@ fn seeded_optional_block<D: DatasetView + Sync>(
 /// across serial execution and the ungoverned indexed chunk reduction.
 fn append_seeded_optional_block<D: DatasetView + Sync>(
     block: SolutionSeq<D::Id>,
-    padding: Option<Solution<D::Id>>,
+    padding: Option<&Solution<D::Id>>,
     rows: &mut Vec<Solution<D::Id>>,
     schema: &Arc<VarSchema>,
     row_ceiling: Option<usize>,
@@ -1494,7 +1503,7 @@ fn append_seeded_optional_block<D: DatasetView + Sync>(
             return Ok(false);
         }
         return push_seeded_join_row(rows, schema.len(), row_ceiling, cell_ceiling, ctx, || {
-            padded_left_row(&padding, schema.len())
+            padded_left_row(padding, schema.len())
         });
     }
     for row in block.reorder_like(schema).rows {
@@ -1525,14 +1534,24 @@ fn parallel_seeded_optional<D: DatasetView + Sync>(
                 schema: Arc::clone(&left.schema),
                 rows: vec![row.clone()],
             };
-            let SeededOptionalBlock { evaluated, padding } =
-                seeded_optional_block(node, unit, right, None, plan, bgp, child)?;
+            let SeededOptionalBlock {
+                evaluated,
+                pad_unmatched,
+            } = seeded_optional_block(node, unit, right, None, plan, bgp, child)?;
             let Evaluated::Complete(block) = evaluated else {
                 return Err(EvalError::internal(
                     "an ungoverned uncapped BGP driver unexpectedly truncated",
                 ));
             };
-            if !append_seeded_optional_block(block, padding, rows, schema, None, None, child)? {
+            if !append_seeded_optional_block(
+                block,
+                pad_unmatched.then_some(row),
+                rows,
+                schema,
+                None,
+                None,
+                child,
+            )? {
                 return Err(EvalError::internal(
                     "an ungoverned uncapped BGP driver unexpectedly reached a cap",
                 ));
