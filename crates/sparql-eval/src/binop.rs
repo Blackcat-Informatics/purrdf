@@ -2248,7 +2248,10 @@ mod tests {
         ));
         let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
         let evaluated = eval_evaluated(&plan, &mut ctx).expect("raw combined caps");
-        assert!(evaluated.is_truncated(), "{evaluated:?}");
+        assert!(
+            evaluated.is_truncated(),
+            "the padded width trips the cell cap"
+        );
         assert!(evaluated.rows().is_empty());
         assert_eq!(
             state.tripped(),
