@@ -1,19 +1,72 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 name: Sync to Gitee
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/gitee.yml
+      - scripts/sync-git-refs.py
+      - scripts/test_git_sync.py
   push:
     branches:
-      - main  # Change to master if your default branch is master
+      - main
+    tags:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  sync:
+  test:
+    name: Git sync regressions
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Mirror to Gitee
-        uses: jikkai/sync-gitee@v1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: 'blackcat-informatics/purrdf' # Replace with your target Gitee path
-          username: ${{ secrets.GITEE_USERNAME }}
-          password: ${{ secrets.GITEE_PASSWORD }}
-          tags: true
-          branches: main
+          persist-credentials: false
+      - run: python3 scripts/test_git_sync.py
+
+  sync:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: purrdf-gitee-sync
+      cancel-in-progress: false
+    steps:
+      - name: Checkout current main and all tags
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Push and verify main and tags
+        shell: bash
+        env:
+          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
+          GITEE_PASSWORD: ${{ secrets.GITEE_PASSWORD }}
+          LC_ALL: C
+        run: |
+          set -euo pipefail
+          test -n "$GITEE_USERNAME" || { echo 'Missing GITEE_USERNAME secret' >&2; exit 1; }
+          test -n "$GITEE_PASSWORD" || { echo 'Missing GITEE_PASSWORD secret' >&2; exit 1; }
+          askpass=$(mktemp)
+          trap 'rm -f "$askpass"' EXIT
+          cat > "$askpass" <<'ASKPASS'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "$1" in
+            "Username for 'https://gitee.com': "*) printf '%s\n' "$GITEE_USERNAME" ;;
+            "Password for 'https://"*"@gitee.com': "*) printf '%s\n' "$GITEE_PASSWORD" ;;
+            *) exit 1 ;;
+          esac
+          ASKPASS
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=''
+          python3 scripts/sync-git-refs.py https://gitee.com/blackcat-informatics/purrdf.git
