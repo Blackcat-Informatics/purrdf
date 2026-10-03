@@ -150,3 +150,6 @@ mod unicode_tables;
 pub mod walk;
 pub mod xml;
 pub mod yaml;
+
+/// Typed diagnostic presentation and validated compatibility rendering.
+pub mod diagnostic;

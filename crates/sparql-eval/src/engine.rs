@@ -4093,7 +4093,7 @@ fn parse_diagnostic(
     error: &purrdf_sparql_algebra::ParseError,
     code: &'static str,
 ) -> RdfDiagnostic {
-    RdfDiagnostic::error(code, error.to_string())
+    RdfDiagnostic::error(code, "").with_presentation(error.presentation())
 }
 
 /// Admit `query`'s structure: its height against the stack left here, for the recursive
