@@ -1,0 +1,17 @@
+ghprsq PR head backlink metadata
+
+parent_hashes: 2d7074d46962f45b0a8cfbc260f4d06c200cf3e7
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 390
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/390
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 9fbd8209c252e7662d455280295b58991a633612
+GhpRsq-Head-Ref: paudley/fix-gitee-transport
+GhpRsq-Head-OID: 2d7074d46962f45b0a8cfbc260f4d06c200cf3e7
+GhpRsq-Result-Tree: 804e9835f17e58f9a253b7220194262f681e6ea2
+GhpRsq-Result-Commit: 3e3418354a049111c7db2604a5eee2c8fd425a45
+GhpRsq-Parent-Hashes: 2d7074d46962f45b0a8cfbc260f4d06c200cf3e7
+GhpRsq-Squash-Notes-SHA256: a34018b271a0a492111919f0898f6c67a34602692a01c891b0c422f3e6ad8a28
