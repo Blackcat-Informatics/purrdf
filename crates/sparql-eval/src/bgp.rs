@@ -40,7 +40,6 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_xsd::ieee::{Binary64, Binary64Scope};
 
-use crate::DetHashSet;
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
 use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
@@ -50,6 +49,7 @@ use crate::plan::PlanShape;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::statement_layer::{self, StatementProbe};
+use crate::{DetHashMap, DetHashSet};
 use std::sync::Arc;
 
 mod positive;
@@ -57,10 +57,30 @@ pub(crate) use positive::PositivePlan;
 
 /// The guaranteed incoming bindings and row forecast of a positive driver.
 #[derive(Clone)]
-struct SeedEstimate {
-    schema: VarSchema,
-    bound: DetHashSet<Variable>,
-    rows: u64,
+pub(crate) struct SeedEstimate {
+    pub(crate) schema: VarSchema,
+    pub(crate) bound: DetHashSet<Variable>,
+    pub(crate) rows: u64,
+}
+
+impl SeedEstimate {
+    /// Price exactly the binding mask the indexed kernel can rely on for a bag.
+    pub(crate) fn from_rows<I: ViewTermId>(input: &SolutionSeq<I>) -> Self {
+        Self {
+            schema: (*input.schema).clone(),
+            bound: input
+                .schema
+                .vars()
+                .iter()
+                .enumerate()
+                .filter(|(column, _)| {
+                    !input.rows.is_empty() && input.rows.iter().all(|row| row[*column].is_some())
+                })
+                .map(|(_, variable)| variable.clone())
+                .collect(),
+            rows: input.rows.len() as u64,
+        }
+    }
 }
 
 impl Default for SeedEstimate {
@@ -148,6 +168,33 @@ struct CompiledPattern<I: ViewTermId = TermId> {
     o: Pos<I>,
 }
 
+/// Immutable positions and column layout for repeated occurrences of one BGP.
+/// The input schema stays fixed; binding masks and candidate scans remain local
+/// to each occurrence. A missing ground term retains the full empty header.
+pub(crate) struct CompiledBgp<I: ViewTermId> {
+    working: VarSchema,
+    compiled: Option<Vec<CompiledPattern<I>>>,
+    projection: Option<BgpProjection>,
+}
+
+impl<I: ViewTermId> CompiledBgp<I> {
+    /// Keep every real output column even when compilation or a scan yields no row.
+    fn empty(&self) -> SolutionSeq<I> {
+        self.projection.as_ref().map_or_else(
+            || empty_over_real_vars(&self.working),
+            |projection| SolutionSeq::empty(Arc::clone(&projection.schema)),
+        )
+    }
+
+    /// Remove only BGP-local blank slots; retain row order and multiplicity.
+    fn project(&self, rows: Vec<Solution<I>>) -> SolutionSeq<I> {
+        match &self.projection {
+            Some(projection) => projection.apply(rows),
+            None => project_out_blanks(&self.working, rows),
+        }
+    }
+}
+
 /// Evaluate a basic graph pattern to a multiset of solutions over its real
 /// (non-blank) variables.
 /// # A leaf of the partial-lift channel
@@ -166,9 +213,10 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     eval_bgp_seeded(patterns, None, None, ctx)
 }
 
-/// The same indexed kernel, driven by a pure positive relation. Such relations
-/// produce dataset identities only; expression/VALUES producers stay outside this
-/// physical path. Duplicate and partially-bound input rows remain independent.
+/// The same indexed kernel, driven by a compatible binding bag. Computed terms
+/// remain in their source columns; a computed term in a pattern slot cannot match
+/// a dataset identity and is rejected before scanning. Duplicate and partially-bound
+/// input rows remain independent.
 /// A retained unit order applies only without a seed; the differential structural
 /// override and an actual seed's mask keep their existing ordering paths.
 pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
@@ -177,31 +225,58 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     selected_order: Option<Arc<[usize]>>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let borrowed = input.as_ref().map(crate::eval::PositiveInput::rows);
     if patterns.is_empty() {
         return Ok(input.map_or_else(SolutionSeq::unit, crate::eval::PositiveInput::into_sequence));
     }
+    let schema = input.as_ref().map(|input| input.rows().schema.as_ref());
+    let compiled = compile_bgp(patterns, schema, false, ctx)?;
+    eval_compiled_bgp(&compiled, input, selected_order, ctx)
+}
 
+/// Prepare a seeded OPTIONAL leaf lazily inside its normal node checkpoint, then
+/// reuse its immutable layout and positions for later driver occurrences.
+pub(crate) fn eval_bgp_seeded_cached<D: DatasetView + Sync>(
+    patterns: &[TriplePattern],
+    input: crate::eval::PositiveInput<'_, D::Id>,
+    cache: &mut Option<CompiledBgp<D::Id>>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    if patterns.is_empty() {
+        return Ok(input.into_sequence());
+    }
+    if cache.is_none() {
+        *cache = Some(compile_bgp(
+            patterns,
+            Some(&input.rows().schema),
+            true,
+            ctx,
+        )?);
+    }
+    let compiled = cache.as_ref().expect("the BGP was prepared above");
+    debug_assert_eq!(
+        &compiled.working.vars()[..input.rows().schema.len()],
+        input.rows().schema.vars(),
+        "repeated BGP occurrences retain the same input column layout"
+    );
+    eval_compiled_bgp(compiled, Some(input), None, ctx)
+}
+
+fn compile_bgp<D: DatasetView + Sync>(
+    patterns: &[TriplePattern],
+    input: Option<&VarSchema>,
+    retain_projection: bool,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<CompiledBgp<D::Id>, EvalError> {
     // Pass 1: collect every slot variable (real + synthetic blank) in first-seen
     // (subject, predicate, object) order — the working column layout.
-    let mut working = borrowed.map_or_else(VarSchema::default, |input| (*input.schema).clone());
+    let mut working = input.cloned().unwrap_or_default();
     for pattern in patterns {
         for key in slot_keys(pattern) {
             working.push(key);
         }
     }
 
-    let initial: Vec<bool> = borrowed.map_or_else(Vec::new, |input| {
-        working
-            .vars()
-            .iter()
-            .map(|variable| {
-                input.schema.index_of(variable).is_some_and(|column| {
-                    !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
-                })
-            })
-            .collect()
-    });
+    let projection = retain_projection.then(|| BgpProjection::new(&working));
 
     // Pass 2: compile each pattern; a ground constant absent from the dataset makes
     // the whole BGP empty.
@@ -209,14 +284,57 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     for pattern in patterns {
         match compile_pattern(pattern, &working, ctx.dataset)? {
             Some(cp) => compiled.push(cp),
-            None => return Ok(empty_over_real_vars(&working)),
+            None => {
+                return Ok(CompiledBgp {
+                    working,
+                    compiled: None,
+                    projection,
+                });
+            }
         }
     }
+    Ok(CompiledBgp {
+        working,
+        compiled: Some(compiled),
+        projection,
+    })
+}
+
+/// The single indexed BGP execution kernel, shared by ordinary and retained
+/// preparation. Every occurrence chooses its own binding mask and order.
+fn eval_compiled_bgp<D: DatasetView + Sync>(
+    program: &CompiledBgp<D::Id>,
+    input: Option<crate::eval::PositiveInput<'_, D::Id>>,
+    selected_order: Option<Arc<[usize]>>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    let working = &program.working;
+    let borrowed = input.as_ref().map(crate::eval::PositiveInput::rows);
+    let Some(compiled) = &program.compiled else {
+        return Ok(program.empty());
+    };
+    // A singleton has only one order, regardless of nullable bindings. Retained
+    // preparation needs no per-occurrence mask allocation for that fixed order.
+    let initial: Vec<bool> = if program.projection.is_some() && compiled.len() == 1 {
+        Vec::new()
+    } else {
+        borrowed.map_or_else(Vec::new, |input| {
+            working
+                .vars()
+                .iter()
+                .map(|variable| {
+                    input.schema.index_of(variable).is_some_and(|column| {
+                        !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
+                    })
+                })
+                .collect()
+        })
+    };
     // An empty producer cannot extend this relation. Keep the full logical
     // header, but do not charge or allocate the ordinary unit seed: there is no
     // intermediate row. Ground-term compilation above retains read failures.
     if borrowed.is_some_and(|input| input.rows.is_empty()) {
-        return Ok(empty_over_real_vars(&working));
+        return Ok(program.empty());
     }
 
     // The graph scope for this BGP (resolved once — `active_graph` is fixed across a
@@ -234,17 +352,11 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     // heuristic instead; because the reorder is still just a permutation, the result
     // multiset must stay identical.
     let order = if ctx.options.force_structural_bgp_order {
-        Arc::from(structural_order(&compiled))
+        Arc::from(structural_order(compiled))
     } else if let Some(order) = selected_order.filter(|_| input.is_none()) {
         order
     } else {
-        plan_or_cached_order(
-            &compiled,
-            ctx.dataset,
-            &scope,
-            &initial,
-            ctx.bgp_order_cache,
-        )
+        plan_or_cached_order(compiled, ctx.dataset, &scope, &initial, ctx.bgp_order_cache)
     };
 
     // The interned id of `rdf:reifies`, resolved once. `None` ⇒ the dataset has no
@@ -297,7 +409,7 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     let cell_ceiling = ctx.cell_row_ceiling(working.len());
     if cell_ceiling == Some(0) {
         let _ = ctx.observe_cells(1, working.len());
-        return Ok(empty_over_real_vars(&working));
+        return Ok(program.empty());
     }
     let input_rows = borrowed.map_or(1, |input| input.rows.len());
     if cell_ceiling.is_some_and(|ceiling| input_rows > ceiling) {
@@ -305,7 +417,7 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
             cell_ceiling.expect("a ceiling exists").saturating_add(1),
             working.len(),
         );
-        return Ok(empty_over_real_vars(&working));
+        return Ok(program.empty());
     }
     let unit_driven = input.is_none();
     let mut rows: Vec<Solution<D::Id>> = match input {
@@ -319,7 +431,7 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
         None => vec![purrdf_core::smallvec![None; working.len()]],
     };
     if rows.is_empty() {
-        return Ok(empty_over_real_vars(&working));
+        return Ok(program.empty());
     }
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
@@ -341,6 +453,21 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
         let expand = |acc: &mut crate::parallel::RowSink<'_, Solution<D::Id>>,
                       fuel: &mut u64,
                       row: &Solution<D::Id>| {
+            // Scratch identities are absent from the dataset by the interner's
+            // promotion law. Treating one as an unbound probe would scan a whole
+            // index just to reject every candidate during unification. The same
+            // rule covers slots nested inside quoted triple patterns.
+            if !unit_driven {
+                let mut absent = false;
+                for pos in [&cp.s, &cp.p, &cp.o] {
+                    for_each_slot(pos, &mut |column| {
+                        absent |= matches!(row[column], Some(SolutionTerm::Computed(_)));
+                    });
+                }
+                if absent {
+                    return;
+                }
+            }
             let s = query_id(&cp.s, row);
             let p = query_id(&cp.p, row);
             let o = query_id(&cp.o, row);
@@ -512,7 +639,7 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
         }
     }
 
-    Ok(project_out_blanks(&working, rows))
+    Ok(program.project(rows))
 }
 
 /// The retired most-constrained-first STRUCTURAL heuristic, reproduced here as
@@ -1167,13 +1294,31 @@ pub(crate) fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Varia
 /// Append a triple pattern's slot variables, through nested quoted triples, in
 /// `(s, p, o)` order.
 fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut impl Extend<Variable>) {
-    collect_slot_keys(
+    visit_triple_slots(pattern, |key| {
+        keys.extend([match key {
+            SlotKey::Variable(variable) => variable.clone(),
+            SlotKey::Blank(label) => blank_var(label),
+        }]);
+    });
+}
+
+/// One borrowed slot identity. Only an owning consumer spells a blank label as
+/// its synthetic variable; an eligibility check never needs that allocation.
+pub(crate) enum SlotKey<'a> {
+    Variable(&'a Variable),
+    Blank(&'a str),
+}
+
+/// Read every slot without cloning variables or constructing blank identities.
+/// The same iterative walk supplies the indexed kernel's owning slot census.
+pub(crate) fn visit_triple_slots<'a>(pattern: &'a TriplePattern, visit: impl FnMut(SlotKey<'a>)) {
+    visit_slot_keys(
         purrdf_core::smallvec![
             SlotPosition::Term(&pattern.object),
             SlotPosition::Predicate(&pattern.predicate),
             SlotPosition::Term(&pattern.subject),
         ],
-        keys,
+        visit,
     );
 }
 
@@ -1183,20 +1328,18 @@ enum SlotPosition<'a> {
     Predicate(&'a NamedNodePattern),
 }
 
-/// Append the slot variables of the positions on `pending` — a work list whose top is
-/// the next position in `(s, p, o)` order — to `keys`: a real variable, a synthetic
-/// blank-node variable, or, for a quoted triple, its inner positions in the same
-/// order. Ground terms yield nothing.
-fn collect_slot_keys(
-    mut pending: purrdf_core::SmallVec<[SlotPosition<'_>; 8]>,
-    keys: &mut impl Extend<Variable>,
+/// Visit the borrowed slots on `pending`, with its top next in `(s, p, o)`
+/// order. Nested quoted triples use that same order; ground terms yield nothing.
+fn visit_slot_keys<'a>(
+    mut pending: purrdf_core::SmallVec<[SlotPosition<'a>; 8]>,
+    mut visit: impl FnMut(SlotKey<'a>),
 ) {
     while let Some(position) = pending.pop() {
         match position {
             SlotPosition::Predicate(NamedNodePattern::Variable(v))
-            | SlotPosition::Term(TermPattern::Variable(v)) => keys.extend([v.clone()]),
+            | SlotPosition::Term(TermPattern::Variable(v)) => visit(SlotKey::Variable(v)),
             SlotPosition::Term(TermPattern::BlankNode(b)) => {
-                keys.extend([blank_var(b.as_str())]);
+                visit(SlotKey::Blank(b.as_str()));
             }
             SlotPosition::Term(TermPattern::Triple(t)) => pending.extend([
                 SlotPosition::Term(&t.object),
@@ -1861,9 +2004,15 @@ impl PlanSurvey {
 /// read for the access pattern the call is *actually* invoked in (the plan has already been
 /// feasibility-ordered, so that pattern is fixed by the time this walk runs).
 ///
-/// The composition rule is stated exactly, because the survey has **no cross-node
-/// arithmetic at all**: [`PlanSurvey::peak_cells`] is a maximum over per-node peaks, and a
-/// `Join` of two basic graph patterns composes to neither node's product. So:
+/// The survey prices the selected physical plan. A pure right relation sharing
+/// columns with an ordinary join's left bag receives that bag's forecast and
+/// certain binding mask. Its output already includes driver multiplicities, so
+/// the join records that seeded output without multiplying it again. OPTIONAL
+/// surveys one driver occurrence at a time, then prices the accumulated output
+/// as the driver count times the per-occurrence match count (at least one for
+/// padding). Disjoint operands retain their factor-once plan. In all cases
+/// [`PlanSurvey::peak_cells`] is the maximum over the recorded operator peaks.
+/// For property-function calls:
 ///
 /// - A call contributes `rows_per_invocation(mode) × driving_rows` as its own peak, where
 ///   `driving_rows` is the row count predicted for its **immediate left arm** — the bag it
@@ -1898,11 +2047,85 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             call: &'a PropertyFunctionCall,
             left: &'a GraphPattern,
         },
+        BoundRight {
+            node: &'a GraphPattern,
+            left: &'a GraphPattern,
+            right: &'a GraphPattern,
+            graph: GraphMatch<I>,
+            optional: bool,
+        },
     }
 
     let mut steps: Vec<Step<'_, D::Id>> = vec![Step::Visit(pattern, active_graph)];
+    // Retain only completed drivers needed by a parent join. This avoids
+    // re-censusing every prefix of a deep ordinary join chain.
+    let mut seeds = DetHashMap::<usize, SeedEstimate>::default();
     while let Some(step) = steps.pop() {
         let (pattern, active_graph) = match step {
+            Step::BoundRight {
+                node,
+                left,
+                right,
+                graph,
+                optional,
+            } => {
+                if !PositivePlan::pure_eligible(right) {
+                    drop(seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)));
+                    steps.push(Step::Visit(right, graph));
+                    continue;
+                }
+                let driving_rows = predicted_rows(left, survey).unwrap_or(1);
+                let mut seed = seeds
+                    .remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize))
+                    .unwrap_or_else(|| {
+                        let mut bound = DetHashSet::default();
+                        crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
+                        SeedEstimate {
+                            schema: Arc::unwrap_or_clone(crate::eval::syntactic_schema(left)),
+                            bound,
+                            rows: driving_rows,
+                        }
+                    });
+                seed.rows = if optional { 1 } else { driving_rows };
+                if let Some(positive) =
+                    PositivePlan::build_seeded(dataset, active_dataset, graph, right, &seed)?
+                {
+                    positive.survey_seeded(
+                        dataset,
+                        active_dataset,
+                        graph,
+                        right,
+                        Some(&seed),
+                        survey,
+                    )?;
+                    let mut estimate = survey
+                        .estimate_of(right)
+                        .expect("the seeded root was surveyed")
+                        .clone();
+                    let schema = seed.schema.union(positive.root_schema());
+                    estimate.columns = schema.len() as u64;
+                    if optional {
+                        estimate.rows = driving_rows.saturating_mul(estimate.rows.max(1));
+                        estimate.peak_rows = estimate.peak_rows.max(estimate.rows);
+                    }
+                    let rows = estimate.rows;
+                    survey.record(node, estimate);
+                    if !optional {
+                        crate::property_fn_plan::collect_certainly_bound(right, &mut seed.bound);
+                    }
+                    seeds.insert(
+                        std::ptr::from_ref(node) as usize,
+                        SeedEstimate {
+                            schema,
+                            bound: seed.bound,
+                            rows,
+                        },
+                    );
+                } else {
+                    steps.push(Step::Visit(right, graph));
+                }
+                continue;
+            }
             Step::Call { node, call, left } => {
                 let mut bound = DetHashSet::default();
                 crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
@@ -1935,7 +2158,15 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             // The two shapes a property-function call is attached through, and therefore the
             // only place a call's driving side is in scope. The right side is pushed first so
             // the left's whole subtree is surveyed before it.
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            GraphPattern::Join { left, right } => {
+                if let GraphPattern::PropertyFunction(call) = &**right {
+                    steps.push(Step::Call { node: right, call, left });
+                } else {
+                    steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: false });
+                }
+                steps.push(Step::Visit(left, active_graph));
+            }
+            GraphPattern::Lateral { left, right } => {
                 if let GraphPattern::PropertyFunction(call) = &**right {
                     steps.push(Step::Call {
                         node: right,
@@ -1950,7 +2181,11 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             GraphPattern::Union { arms } => {
                 steps.extend(arms.iter().rev().map(|arm| Step::Visit(arm, active_graph)));
             }
-            GraphPattern::LeftJoin { left, right, .. } | GraphPattern::Minus { left, right } => {
+            GraphPattern::LeftJoin { left, right, .. } => {
+                steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: true });
+                steps.push(Step::Visit(left, active_graph));
+            }
+            GraphPattern::Minus { left, right } => {
                 steps.push(Step::Visit(right, active_graph));
                 steps.push(Step::Visit(left, active_graph));
             }
@@ -1985,7 +2220,14 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             }
             // Leaves that hold no BGP: there is no triple-pattern join order to choose and
             // no base cardinality to probe.
-            GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
+            GraphPattern::Values { variables, bindings } => {
+                survey.record(pattern, PlanEstimate {
+                    rows: bindings.len() as u64,
+                    peak_rows: bindings.len() as u64,
+                    columns: variables.len() as u64,
+                });
+            }
+            GraphPattern::Path { .. } | GraphPattern::Service { .. } => {}
         }
     }
     Ok(())
@@ -2160,11 +2402,10 @@ fn record_call_estimate(
 
 /// The row count this walk predicts for `pattern`, when it predicts one at all.
 ///
-/// A direct estimate is the answer. Failing that, a chain spine's row count is its last
-/// member's, because each member's own estimate already carries the product of everything
-/// to its left — which is what lets a chain of calls compose without this walk inventing
-/// join arithmetic the cost model does not have. The spine is followed in a loop, so a
-/// chain of any length costs no machine stack.
+/// A direct estimate is the answer. Otherwise follow cardinality-preserving
+/// wrappers and a LATERAL chain's driven side. Modifiers that can alter the bag
+/// keep this a heuristic; the live ceiling remains authoritative. The walk is
+/// iterative so a chain of any length costs no machine stack.
 fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
     let mut pattern = pattern;
     loop {
@@ -2173,19 +2414,28 @@ fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
         }
         match pattern {
             GraphPattern::Lateral { right, .. } => pattern = right,
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. } => pattern = inner,
             _ => return None,
         }
     }
 }
 
-/// Replay `order` through the same cost model [`cost_based_order`] minimised, returning the
-/// running estimate at the last stage and the largest running estimate at any stage — the
-/// BGP's predicted output size and its predicted peak.
+/// Replay the selected `order` with relation-local join domains, returning the
+/// predicted output size and peak. Order selection uses a cheap global-domain
+/// heuristic; admission calibrates each slot against the relations that actually
+/// introduce it. Unrelated interned terms must not make a disconnected product
+/// appear arbitrarily cheap.
 ///
-/// Replayed rather than returned from the search because the search's two strategies (the
-/// subset DP and the greedy walk) carry their costs differently, and a second, shared
-/// evaluation of the *chosen* order is one place where "what the planner predicted" is
-/// defined, instead of two that can disagree.
+/// The subset DP and greedy search share this one admission replay, so their
+/// selected orders are priced by the same law without adding index scans to
+/// every search transition.
 ///
 /// Saturating `f64`-to-`u64` conversion: Rust's `as` cast saturates rather than wrapping,
 /// so an estimate beyond `u64::MAX` becomes `u64::MAX` and a negative one — which the
@@ -2223,12 +2473,38 @@ fn replay_cost_estimate_from<D: DatasetView>(
     let ops = precision.ops();
     let mut bound = initial.to_vec();
     bound.resize(n_cols, false);
+    // A join variable ranges over the relation that introduced it, rather than
+    // every term in unrelated dataset regions. The constants-only relation size
+    // is a cheap upper bound on that domain. Keeping a domain per slot also
+    // preserves disconnected factors through later connected stages.
+    let mut domains = vec![t; n_cols];
     let mut running = driving_rows as f64;
     let mut peak = if compiled.is_empty() { running } else { 0.0f64 };
     for &i in order {
-        let joins = join_positions(&compiled[i], &bound);
-        running = step_size(ops, running, base[i], joins, t);
+        let mut divisor = 1.0_f64;
+        let current_domain = base[i].min(t).max(1.0);
+        for position in [&compiled[i].s, &compiled[i].p, &compiled[i].o] {
+            let mut previous_domain = 0.0_f64;
+            for_each_slot(position, &mut |column| {
+                if bound[column] {
+                    previous_domain = previous_domain.max(domains[column]);
+                }
+            });
+            if previous_domain > 0.0 {
+                divisor = ops.mul(divisor, previous_domain.max(current_domain));
+            }
+        }
+        running = ops.div(ops.mul(running, base[i]), divisor);
         peak = peak.max(running);
+        for position in [&compiled[i].s, &compiled[i].p, &compiled[i].o] {
+            for_each_slot(position, &mut |column| {
+                domains[column] = if bound[column] {
+                    domains[column].min(current_domain)
+                } else {
+                    current_domain
+                };
+            });
+        }
         mark_bound(&compiled[i], &mut bound);
     }
     (running as u64, peak as u64)
@@ -2252,30 +2528,46 @@ fn project_out_blanks<I: ViewTermId>(
     working: &VarSchema,
     rows: Vec<Solution<I>>,
 ) -> SolutionSeq<I> {
-    // The working columns that survive, in order.
-    let keep: purrdf_core::SmallVec<[usize; 8]> = working
-        .vars()
-        .iter()
-        .enumerate()
-        .filter_map(|(i, v)| (!is_blank_var(v)).then_some(i))
-        .collect();
+    BgpProjection::new(working).apply(rows)
+}
 
-    // Fast path: no blank columns — reuse rows as-is.
-    if keep.len() == working.len() {
-        return SolutionSeq {
+/// One BGP's real columns, retained when many occurrences share its layout.
+struct BgpProjection {
+    schema: Arc<VarSchema>,
+    keep: purrdf_core::SmallVec<[usize; 8]>,
+    has_blanks: bool,
+}
+
+impl BgpProjection {
+    /// Record real columns in working order for every occurrence of this layout.
+    fn new(working: &VarSchema) -> Self {
+        let keep: purrdf_core::SmallVec<[usize; 8]> = working
+            .vars()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| (!is_blank_var(v)).then_some(i))
+            .collect();
+        Self {
             schema: Arc::new(real_var_schema(working)),
-            rows,
-        };
+            has_blanks: keep.len() != working.len(),
+            keep,
+        }
     }
 
-    let schema = Arc::new(real_var_schema(working));
-    let projected = rows
-        .into_iter()
-        .map(|row| keep.iter().map(|&i| row[i]).collect())
-        .collect();
-    SolutionSeq {
-        schema,
-        rows: projected,
+    /// Rows cover the full working layout. Reuse them when no blank slot is hidden,
+    /// otherwise select exactly the retained columns without changing the bag.
+    fn apply<I: ViewTermId>(&self, rows: Vec<Solution<I>>) -> SolutionSeq<I> {
+        let rows = if self.has_blanks {
+            rows.into_iter()
+                .map(|row| self.keep.iter().map(|&i| row[i]).collect())
+                .collect()
+        } else {
+            rows
+        };
+        SolutionSeq {
+            schema: Arc::clone(&self.schema),
+            rows,
+        }
     }
 }
 
@@ -3810,6 +4102,63 @@ mod term_walk_tests {
 
     // ── The tests ──────────────────────────────────────────────────────────────────
 
+    #[test]
+    fn disconnected_and_folded_path_products_keep_their_relation_domains() {
+        use super::{PlanSurvey, survey_pattern_plans};
+        use crate::dataset_spec::ActiveDataset;
+        use crate::property_fn::PropertyFunctionRegistry;
+
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let q = builder.intern_iri(&format!("{EX}q"));
+        for index in 0..100 {
+            let [s, t, v, o] = ["s", "t", "v", "o"]
+                .map(|local| builder.intern_iri(&format!("{EX}{local}{index}")));
+            builder.push_quad(s, p, t, None);
+            builder.push_quad(s, q, v, None);
+            builder.push_quad(t, q, o, None);
+        }
+        for index in 0..10_000 {
+            builder.intern_iri(&format!("{EX}unrelated{index}"));
+        }
+        let dataset = builder.freeze().expect("relation-domain dataset");
+        for body in [
+            "?a ex:p ?b . ?a ex:q ?c . ?d ex:p ?e . ?d ex:q ?f",
+            "?a ex:p/ex:q ?b . ?c ex:p/ex:q ?d",
+        ] {
+            let text = format!("PREFIX ex: <{EX}> SELECT * WHERE {{ {body} }}");
+            let purrdf_sparql_algebra::Query::Select { pattern, .. } =
+                purrdf_sparql_algebra::SparqlParser::new()
+                    .parse_query(&text)
+                    .expect("query")
+            else {
+                panic!("SELECT")
+            };
+            let tree = crate::plan::Tree::build(&pattern);
+            let mut survey = PlanSurvey::for_shape(tree.shape());
+            survey_pattern_plans(
+                dataset.as_ref(),
+                &ActiveDataset::store_default(),
+                GraphMatch::Default,
+                &pattern,
+                &PropertyFunctionRegistry::default(),
+                &mut survey,
+            )
+            .expect("relation-domain forecast");
+            let estimates = survey.estimates.iter().flatten().collect::<Vec<_>>();
+            assert_eq!(
+                estimates.len(),
+                1,
+                "the parser lowers the paths into one BGP"
+            );
+            assert_eq!(estimates[0].rows, 10_000, "{body}");
+            assert_eq!(estimates[0].peak_rows, 10_000, "{body}");
+            let mut context = crate::eval::EvalCtx::new(dataset.as_ref());
+            let actual = crate::eval::eval(&pattern, &mut context).expect("product bag");
+            assert_eq!(actual.len() as u64, estimates[0].rows, "{body}");
+        }
+    }
+
     /// The bound-slot test, the slot visit, the shape hash and — through the
     /// structural order it decides — the constrained test answer as their recursive
     /// references do, for every generated position.
@@ -4204,6 +4553,20 @@ mod survey_tests {
                         survey,
                     )
                 } else {
+                    if matches!(pattern, GraphPattern::Join { .. })
+                        && reference_seeded_right(
+                            dataset,
+                            active_dataset,
+                            active_graph,
+                            pattern,
+                            left,
+                            right,
+                            false,
+                            survey,
+                        )?
+                    {
+                        return Ok(());
+                    }
                     reference_survey(
                         dataset,
                         active_dataset,
@@ -4236,6 +4599,20 @@ mod survey_tests {
                     relations,
                     survey,
                 )?;
+                if matches!(pattern, GraphPattern::LeftJoin { .. })
+                    && reference_seeded_right(
+                        dataset,
+                        active_dataset,
+                        active_graph,
+                        pattern,
+                        left,
+                        right,
+                        true,
+                        survey,
+                    )?
+                {
+                    return Ok(());
+                }
                 reference_survey(
                     dataset,
                     active_dataset,
@@ -4281,10 +4658,63 @@ mod survey_tests {
             GraphPattern::PropertyFunction(call) => {
                 record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)
             }
-            GraphPattern::Path { .. }
-            | GraphPattern::Values { .. }
-            | GraphPattern::Service { .. } => Ok(()),
+            GraphPattern::Values {
+                variables,
+                bindings,
+            } => {
+                survey.record(
+                    pattern,
+                    PlanEstimate {
+                        rows: bindings.len() as u64,
+                        peak_rows: bindings.len() as u64,
+                        columns: variables.len() as u64,
+                    },
+                );
+                Ok(())
+            }
+            GraphPattern::Path { .. } | GraphPattern::Service { .. } => Ok(()),
         }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the recursive reference keeps the two operand scopes explicit"
+    )]
+    fn reference_seeded_right<D: DatasetView>(
+        dataset: &D,
+        active_dataset: &ActiveDataset<D::Id>,
+        graph: GraphMatch<D::Id>,
+        node: &GraphPattern,
+        left: &GraphPattern,
+        right: &GraphPattern,
+        optional: bool,
+        survey: &mut PlanSurvey,
+    ) -> Result<bool, EvalError> {
+        let driving_rows = reference_predicted_rows(left, survey).unwrap_or(1);
+        let mut bound = DetHashSet::default();
+        crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
+        let seed = super::SeedEstimate {
+            schema: Arc::unwrap_or_clone(crate::eval::syntactic_schema(left)),
+            bound,
+            rows: if optional { 1 } else { driving_rows },
+        };
+        let Some(plan) =
+            super::PositivePlan::build_seeded(dataset, active_dataset, graph, right, &seed)?
+        else {
+            return Ok(false);
+        };
+        plan.survey_seeded(dataset, active_dataset, graph, right, Some(&seed), survey)?;
+        let mut estimate = survey
+            .estimate_of(right)
+            .expect("the driven relation was surveyed")
+            .clone();
+        estimate.columns = crate::eval::syntactic_schema(node).len() as u64;
+        if optional {
+            estimate.rows = driving_rows.saturating_mul(estimate.rows.max(1));
+            estimate.peak_rows = estimate.peak_rows.max(estimate.rows);
+        }
+        survey.record(node, estimate);
+        Ok(true)
     }
 
     /// [`super::predicted_rows`] as a recursion down a `LATERAL` chain's right spine.
@@ -4294,6 +4724,14 @@ mod survey_tests {
         }
         match pattern {
             GraphPattern::Lateral { right, .. } => reference_predicted_rows(right, survey),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. } => reference_predicted_rows(inner, survey),
             _ => None,
         }
     }
@@ -4773,8 +5211,8 @@ mod survey_tests {
             }
             assert_eq!(
                 survey(&spine).estimates.iter().flatten().count(),
-                DEPTH + 1,
-                "a BGP per level"
+                2 * DEPTH + 1,
+                "a BGP per level and every binding-driven join"
             );
             drop(spine);
         })

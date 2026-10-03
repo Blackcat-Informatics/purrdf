@@ -8,6 +8,7 @@
 // uses every helper; an unused-here helper is used there.
 #![allow(dead_code, unreachable_pub)]
 
+pub mod boundary_joins;
 pub mod segmented;
 
 use std::collections::BTreeMap;

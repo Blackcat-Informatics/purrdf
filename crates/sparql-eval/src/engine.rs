@@ -4433,9 +4433,9 @@ pub(crate) enum Sequencing {
 }
 
 impl Sequencing {
-    /// Select once at ingress, preserving resident parallel capability when a
-    /// backend-generic typed API is chosen. No per-term branch is added.
-    fn for_view<D: DatasetView>() -> Self {
+    /// Select the read type's sequencing policy for typed ingress and raw fork
+    /// sites, preserving resident parallel capability without a per-term branch.
+    pub(crate) fn for_view<D: DatasetView>() -> Self {
         if std::any::TypeId::of::<D::ReadError>()
             == std::any::TypeId::of::<std::convert::Infallible>()
         {
