@@ -33,7 +33,7 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 100
     concurrency:
       group: purrdf-gitee-sync
       cancel-in-progress: false
@@ -69,4 +69,18 @@ jobs:
           chmod 700 "$askpass"
           export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=''
-          python3 scripts/sync-git-refs.py https://gitee.com/blackcat-informatics/purrdf.git
+          # The empty mirror needs a full-history upload; keep reads at 45s.
+          python3 - <<'PY'
+          import importlib.util
+
+          spec = importlib.util.spec_from_file_location("git_sync", "scripts/sync-git-refs.py")
+          git_sync = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(git_sync)
+          original_git = git_sync.git
+
+          def bootstrap_git(arguments, deadline):
+              return original_git(arguments, 1800 if arguments[0] == "push" else deadline)
+
+          git_sync.git = bootstrap_git
+          git_sync.sync("https://gitee.com/blackcat-informatics/purrdf.git")
+          PY
