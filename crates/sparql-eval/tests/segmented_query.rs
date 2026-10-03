@@ -11,17 +11,69 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use purrdf_core::{
-    DatasetView, GraphMatch, SegmentedBytes, SegmentedError, SegmentedProvider,
+    DatasetView, GraphMatch, SegmentedBytes, SegmentedError, SegmentedEvidence, SegmentedProvider,
     SegmentedReadLimits, SegmentedSession, SegmentedSnapshot, SparqlRequest, SparqlResult,
     TermValue,
 };
 use purrdf_sparql_eval::{
-    CancellationFlag, FallibleSparqlError, NativeSparqlEngine, NodeCharges, QueryOptions,
+    CancellationFlag, FallibleSparqlError, FallibleSparqlResult, GovernedEvidence, GovernorState,
+    NativeSparqlEngine, NodeCharges, PreparedQuery, QueryGovernors, QueryOptions,
     ResourceDimension,
 };
 
 #[global_allocator]
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+#[derive(Clone, Copy)]
+enum GovernedEntry<'a> {
+    Text(&'a str),
+    Prepared,
+    Operation(&'a Arc<GovernorState>),
+}
+
+impl GovernedEntry<'_> {
+    /// Run identical request inputs through the text, per-call prepared, or shared-state boundary.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the fixture preserves the paired receipts returned by each public entry"
+    )]
+    fn run<'d>(
+        self,
+        engine: &'d NativeSparqlEngine,
+        source: &'d SegmentedSession,
+        prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
+        options: QueryOptions<'d>,
+        governors: &QueryGovernors,
+    ) -> FallibleSparqlResult<SegmentedError, GovernedEvidence<SegmentedEvidence>> {
+        match self {
+            Self::Text(query) => engine.query_governed_fallible_view(
+                source,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions,
+                },
+                options,
+                governors,
+            ),
+            Self::Prepared => engine.query_prepared_governed_fallible_view(
+                source,
+                prepared,
+                substitutions,
+                options,
+                governors,
+            ),
+            Self::Operation(state) => engine.query_prepared_governed_fallible_in_operation(
+                source,
+                prepared,
+                substitutions,
+                options,
+                state,
+            ),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct RefusingProvider {
@@ -47,6 +99,7 @@ impl SegmentedProvider for RefusingProvider {
     }
 }
 
+/// Dense storage blocks must price only the selected subject range and retain provider refusals.
 #[test]
 fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() {
     let (image, resident) = fixture_with_layout(8192, 128);
@@ -118,45 +171,147 @@ fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() 
     ));
 }
 
+/// A long host-owned cause stays exact while error publication fits the charged reporting ledger.
 #[test]
 fn long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation() {
     let (image, _) = fixture();
     // Host-owned static label is prepared outside the execution allocation window.
     let operation: &'static str = Box::leak("漢字操作 ".repeat(20_000).into_boxed_str());
-    let provider = Arc::new(RefusingProvider {
-        bytes: image.provider(),
-        refuse: AtomicBool::new(false),
-        operation,
-    });
     let engine = NativeSparqlEngine::new();
-    engine.prepare_query(QUERY, None).unwrap();
-    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-    let source = SegmentedSession::open(
-        provider.clone(),
-        image.receipt(),
-        SegmentedReadLimits::new(CEILING, 2, 2048, 20_000_000, 8),
-    )
-    .unwrap();
-    provider.refuse.store(true, Ordering::Relaxed);
-    let outcome = engine.query_governed_fallible_view(
-        &source,
-        SparqlRequest {
-            query: QUERY,
-            base_iri: None,
-            substitutions: &[],
-        },
-        QueryOptions::EMPTY,
-        &purrdf_sparql_eval::QueryGovernors::METERED,
-    );
-    let ledger = source.evidence().peak_bytes();
-    let measured = window.close();
-    assert!(matches!(outcome, Err(FallibleSparqlError::Operational {
-        error: SegmentedError::Provider { operation: found, host_code: Some(5) }, ..
-    }) if found == operation));
-    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= ledger);
-    assert!(ledger <= CEILING);
+    let prepared = engine.prepare_query(QUERY, None).unwrap();
+    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+    for entry in [
+        GovernedEntry::Text(QUERY),
+        GovernedEntry::Prepared,
+        GovernedEntry::Operation(&state),
+    ] {
+        let provider = Arc::new(RefusingProvider {
+            bytes: image.provider(),
+            refuse: AtomicBool::new(false),
+            operation,
+        });
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let source = SegmentedSession::open(
+            provider.clone(),
+            image.receipt(),
+            SegmentedReadLimits::new(CEILING, 2, 2048, 20_000_000, 8),
+        )
+        .unwrap();
+        provider.refuse.store(true, Ordering::Relaxed);
+        let outcome = entry.run(
+            &engine,
+            &source,
+            &prepared,
+            &[],
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        );
+        let ledger = source.evidence().peak_bytes();
+        let measured = window.close();
+        let Err(FallibleSparqlError::Operational {
+            error:
+                SegmentedError::Provider {
+                    operation: found,
+                    host_code: Some(5),
+                },
+            evidence,
+        }) = outcome
+        else {
+            panic!("provider refusal must retain its typed cause")
+        };
+        assert_eq!(found, operation);
+        assert_eq!(
+            evidence.view.live_bytes(),
+            source.evidence().live_bytes() + 8192
+        );
+        assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= ledger);
+        assert!(ledger <= CEILING);
+    }
 }
 
+/// Cold complete and exhausted runs share receipts and release the exact scoped workspace charge.
+#[test]
+fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
+    let (image, _) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(QUERY, None).unwrap();
+    let scoped_source = open(&image, CEILING);
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+        .unwrap();
+    let ((), scoped_evidence) = engine
+        .execute_fallible(&mut execution, &scoped_source, QueryOptions::EMPTY, |_| ())
+        .unwrap();
+    let released_charge = scoped_evidence.live_bytes() - scoped_source.evidence().live_bytes();
+    assert!(
+        released_charge > 8192,
+        "the execution owner is held at publication"
+    );
+    for governors in [
+        QueryGovernors::METERED,
+        QueryGovernors::METERED.with_max_answers(0),
+    ] {
+        let state = Arc::new(GovernorState::new(&governors));
+        let mut expected: Option<(_, GovernedEvidence<SegmentedEvidence>)> = None;
+        for entry in [
+            GovernedEntry::Text(QUERY),
+            GovernedEntry::Prepared,
+            GovernedEntry::Operation(&state),
+        ] {
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let source = open(&image, CEILING);
+            let outcome = entry.run(
+                &engine,
+                &source,
+                &prepared,
+                &[],
+                QueryOptions::EMPTY,
+                &governors,
+            );
+            let measured = window.close();
+            let (rows, evidence) = match outcome {
+                Ok(answer) => {
+                    let SparqlResult::Solutions { rows, .. } = answer.result else {
+                        panic!("SELECT returns solutions")
+                    };
+                    assert_eq!(rows.len(), 1);
+                    (rows, answer.evidence)
+                }
+                Err(FallibleSparqlError::BudgetExhausted {
+                    partial, evidence, ..
+                }) => {
+                    let SparqlResult::Solutions { rows, .. } = partial.result().unwrap().result()
+                    else {
+                        panic!("SELECT truncation carries solutions")
+                    };
+                    assert_eq!(rows.len(), 0);
+                    (rows.clone(), evidence)
+                }
+                error => {
+                    panic!("healthy bounded query must complete or exhaust answers: {error:?}")
+                }
+            };
+            assert!(
+                u64::try_from(measured.peak_working_bytes).unwrap() <= evidence.view.peak_bytes()
+            );
+            assert!(evidence.view.peak_bytes() <= CEILING);
+            assert_eq!(
+                evidence.view.live_bytes(),
+                source.evidence().live_bytes() + released_charge
+            );
+            assert!(source.read_error().is_none());
+            if let Some((expected_rows, expected_evidence)) = &expected {
+                assert_eq!(&rows, expected_rows);
+                assert_eq!(evidence.view, expected_evidence.view);
+                assert_eq!(evidence.governors, expected_evidence.governors);
+            } else {
+                expected = Some((rows, evidence));
+            }
+        }
+    }
+}
+
+/// Sparse cache eviction preserves the resident join answer while measured allocations fit the ledger.
 #[test]
 fn selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger() {
     let (image, resident) = fixture();
@@ -201,6 +356,7 @@ fn selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger() {
     assert!(source.read_error().is_none());
 }
 
+/// Storage pressure and an unpriced sort must refuse before either probes rows or emits answers.
 #[test]
 fn tiny_capacity_and_unpriced_order_refuse_before_any_row_probe_or_output() {
     let (image, _) = fixture();
@@ -240,6 +396,7 @@ fn tiny_capacity_and_unpriced_order_refuse_before_any_row_probe_or_output() {
     assert_eq!(source.evidence().request_count(), before);
 }
 
+/// Retained-result consumption keeps its workspace live, and ordinary owned egress still succeeds.
 #[test]
 fn scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption() {
     let (image, _) = fixture();
@@ -269,6 +426,7 @@ fn scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption(
     assert!(matches!(answer.result, SparqlResult::Solutions { rows, .. } if rows.len() == 1));
 }
 
+/// Tight reporting headroom refuses before owner allocation without disguising an unpriced sort.
 #[test]
 fn governed_refusal_prices_its_reporting_owner_before_allocating() {
     let (image, _) = fixture();
@@ -276,51 +434,70 @@ fn governed_refusal_prices_its_reporting_owner_before_allocating() {
     let opening_bytes = initial.evidence().live_bytes();
     drop(initial);
     let engine = NativeSparqlEngine::new();
-    engine.prepare_query(QUERY, None).unwrap();
-    let ordered = format!("{QUERY} ORDER BY ?label");
-    engine.prepare_query(&ordered, None).unwrap();
-    for (headroom, query) in [(512, QUERY), (16_384, ordered.as_str())] {
-        let ceiling = opening_bytes + headroom;
-        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-        let source = open(&image, ceiling);
-        let before = source.evidence().request_count();
-        let outcome = engine.query_governed_fallible_view(
-            &source,
-            SparqlRequest {
-                query,
-                base_iri: None,
-                substitutions: &[],
-            },
-            QueryOptions::EMPTY,
-            &purrdf_sparql_eval::QueryGovernors::METERED,
-        );
-        let ledger = source.evidence().peak_bytes();
-        let measured = window.close();
-        assert!(outcome.is_err());
-        assert_eq!(source.evidence().request_count(), before);
-        assert!(
-            u64::try_from(measured.peak_working_bytes).unwrap() <= ledger,
-            "refusal allocated {} beyond charged {ledger}",
-            measured.peak_working_bytes
-        );
-        assert!(ledger <= ceiling);
-        if headroom == 512 {
-            assert!(matches!(
-                outcome,
-                Err(FallibleSparqlError::Operational {
-                    error: SegmentedError::Residency { .. },
-                    ..
-                })
-            ));
-        } else {
-            assert!(
-                matches!(outcome, Err(FallibleSparqlError::Query { diagnostic, .. })
-                if diagnostic.code == "native-sparql-workspace-unpriced")
+    let ordinary = engine.prepare_query(QUERY, None).unwrap();
+    let ordered_text = format!("{QUERY} ORDER BY ?label");
+    let ordered = engine.prepare_query(&ordered_text, None).unwrap();
+    for (headroom, query, prepared) in [
+        (512, QUERY, &ordinary),
+        (16_384, ordered_text.as_str(), &ordered),
+    ] {
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        for entry in [
+            GovernedEntry::Text(query),
+            GovernedEntry::Prepared,
+            GovernedEntry::Operation(&state),
+        ] {
+            let ceiling = opening_bytes + headroom;
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let source = open(&image, ceiling);
+            let before = source.evidence().request_count();
+            let outcome = entry.run(
+                &engine,
+                &source,
+                prepared,
+                &[],
+                QueryOptions::EMPTY,
+                &QueryGovernors::METERED,
             );
+            let ledger = source.evidence().peak_bytes();
+            let measured = window.close();
+            assert!(outcome.is_err());
+            assert_eq!(source.evidence().request_count(), before);
+            assert!(
+                u64::try_from(measured.peak_working_bytes).unwrap() <= ledger,
+                "refusal allocated {} beyond charged {ledger}",
+                measured.peak_working_bytes
+            );
+            assert!(ledger <= ceiling);
+            if headroom == 512 {
+                assert!(matches!(
+                    outcome,
+                    Err(FallibleSparqlError::Operational {
+                        error: SegmentedError::Residency { .. },
+                        ..
+                    })
+                ));
+                assert!(source.read_error().is_some());
+            } else {
+                let Err(FallibleSparqlError::Query {
+                    diagnostic,
+                    evidence,
+                }) = outcome
+                else {
+                    panic!("unpriced order must retain a query refusal")
+                };
+                assert_eq!(diagnostic.code, "native-sparql-workspace-unpriced");
+                assert_eq!(
+                    evidence.view.live_bytes(),
+                    source.evidence().live_bytes() + 8192
+                );
+                assert!(source.read_error().is_none());
+            }
         }
     }
 }
 
+/// Reject an unpriced construction context before copying its mint prefix or changing the destination.
 #[test]
 fn unpriced_construct_refuses_before_allocating_a_destination_mint_prefix() {
     let (image, _) = fixture();
@@ -332,9 +509,7 @@ fn unpriced_construct_refuses_before_allocating_a_destination_mint_prefix() {
             None,
         )
         .unwrap();
-    let state = Arc::new(purrdf_sparql_eval::GovernorState::new(
-        &purrdf_sparql_eval::QueryGovernors::METERED,
-    ));
+    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let mut destination = purrdf_core::RdfDatasetBuilder::new();
     let blank = destination.intern_blank("existing", purrdf_core::BlankScope::DEFAULT);
     let predicate = destination.intern_iri("http://example.org/p");
@@ -366,11 +541,15 @@ fn unpriced_construct_refuses_before_allocating_a_destination_mint_prefix() {
     assert!(source.read_error().is_none());
 }
 
+/// Large caller-owned substitutions and prefixes must be refused without copying payloads or probing.
 #[test]
 fn unpriced_request_inputs_refuse_before_copying_parameter_metadata() {
     let (image, _) = fixture();
     let source = open(&image, CEILING);
     let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(QUERY, None).unwrap();
+    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+    let cached = engine.cached_plan_count();
     let long_prefix = "x".repeat(100_000);
     let substitutions: Vec<_> = (0..20_000)
         .map(|i| {
@@ -387,35 +566,46 @@ fn unpriced_request_inputs_refuse_before_copying_parameter_metadata() {
             QueryOptions::EMPTY.with_bnode_mint_prefix(Some(&long_prefix)),
         ),
     ] {
-        let request = SparqlRequest {
-            query: QUERY,
-            base_iri: None,
-            substitutions: values,
-        };
-        let before = source.evidence().request_count();
-        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-        let ordinary = engine.query_fallible_view(&source, request, options);
-        let governed = engine.query_governed_fallible_view(
-            &source,
-            request,
-            options,
-            &purrdf_sparql_eval::QueryGovernors::METERED,
-        );
-        let allocations = window.close();
-        assert!(
-            matches!(ordinary, Err(FallibleSparqlError::Query { diagnostic, .. }) if diagnostic.code == "native-sparql-workspace-unpriced")
-        );
-        assert!(
-            matches!(governed, Err(FallibleSparqlError::Query { diagnostic, .. }) if diagnostic.code == "native-sparql-workspace-unpriced")
-        );
-        assert!(
-            allocations.peak_working_bytes <= 8192,
-            "known unpriced inputs copied caller payload: {}",
-            allocations.peak_working_bytes
-        );
-        assert_eq!(source.evidence().request_count(), before);
-        assert_eq!(engine.cached_plan_count(), 0);
-        assert!(source.read_error().is_none());
+        for entry in [
+            GovernedEntry::Text(QUERY),
+            GovernedEntry::Prepared,
+            GovernedEntry::Operation(&state),
+        ] {
+            let before = source.evidence().request_count();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let ordinary = engine.query_fallible_view(
+                &source,
+                SparqlRequest {
+                    query: QUERY,
+                    base_iri: None,
+                    substitutions: values,
+                },
+                options,
+            );
+            let governed = entry.run(
+                &engine,
+                &source,
+                &prepared,
+                values,
+                options,
+                &QueryGovernors::METERED,
+            );
+            let allocations = window.close();
+            assert!(
+                matches!(ordinary, Err(FallibleSparqlError::Query { diagnostic, .. }) if diagnostic.code == "native-sparql-workspace-unpriced")
+            );
+            assert!(
+                matches!(governed, Err(FallibleSparqlError::Query { diagnostic, .. }) if diagnostic.code == "native-sparql-workspace-unpriced")
+            );
+            assert!(
+                allocations.peak_working_bytes <= 8192,
+                "known unpriced inputs copied caller payload: {}",
+                allocations.peak_working_bytes
+            );
+            assert_eq!(source.evidence().request_count(), before);
+            assert_eq!(engine.cached_plan_count(), cached);
+            assert!(source.read_error().is_none());
+        }
     }
     assert!(
         engine

@@ -9,29 +9,29 @@ use std::sync::{Arc, Mutex};
 
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder,
-    RdfStoreCapabilities, SparqlRequest, StopCause, TermId, TermValue, TrippedGovernor,
-    ViewOperationStatus, WorkspaceReservation,
+    RdfStoreCapabilities, SparqlRequest, SparqlResult, StopCause, TermId, TermValue,
+    TrippedGovernor, ViewOperationStatus, WorkspaceReservation,
 };
 use purrdf_sparql_eval::{
-    CancellationFlag, FallibleScopedResult, FallibleSparqlError, GovernedEvidence, GovernorState,
-    NativeSparqlEngine, QueryExplanation, QueryGovernors, QueryOptions, ShaclPrebinding,
-    StopSignal,
+    CancellationFlag, FallibleScopedResult, FallibleSparqlError, FallibleSparqlResult,
+    GovernedEvidence, GovernorState, NativeSparqlEngine, PreparedQuery, QueryExplanation,
+    QueryGovernors, QueryOptions, ShaclPrebinding, StopSignal,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefusedRead {
-    FinalRead,
+    FinalRead(RefusalSite),
     Workspace,
     Lookup,
 }
 impl std::fmt::Display for RefusedRead {
-    /// Gives each typed refusal a distinct diagnostic label for precedence checks.
+    /// Preserves the read site and distinguishes direct admission causes in diagnostics.
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        out.write_str(match self {
-            Self::FinalRead => "source refused the final read",
-            Self::Workspace => "source refused execution workspace",
-            Self::Lookup => "source refused admission lookup",
-        })
+        match self {
+            Self::FinalRead(site) => write!(out, "source refused at {site:?}"),
+            Self::Workspace => out.write_str("source refused execution workspace"),
+            Self::Lookup => out.write_str("source refused admission lookup"),
+        }
     }
 }
 impl std::error::Error for RefusedRead {}
@@ -40,6 +40,7 @@ impl std::error::Error for RefusedRead {}
 enum RefusalSite {
     Never,
     Iterator,
+    AfterRow,
     Term,
     Reporting,
     Execution,
@@ -49,11 +50,14 @@ enum RefusalSite {
     ReportingSticky,
     Lookup,
     Checkpoint,
+    FinalCheckpoint,
     BoundedHealthy,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Receipt {
     failed: bool,
+    yielded: usize,
+    checkpoints: usize,
     reservations: usize,
     execution_attempts: usize,
     reporting_guards: usize,
@@ -64,6 +68,8 @@ struct Receipt {
 struct Source {
     resident: Arc<RdfDataset>,
     failed: AtomicBool,
+    yielded: AtomicUsize,
+    checkpoints: AtomicUsize,
     site: RefusalSite,
     reservations: AtomicUsize,
     execution_attempts: AtomicUsize,
@@ -78,6 +84,8 @@ impl Source {
         Self {
             resident: support::local_dataset([("s", "p", "o")]),
             failed: AtomicBool::new(false),
+            yielded: AtomicUsize::new(0),
+            checkpoints: AtomicUsize::new(0),
             site,
             reservations: AtomicUsize::new(0),
             execution_attempts: AtomicUsize::new(0),
@@ -194,21 +202,28 @@ impl DatasetView for Source {
             execution,
         })
     }
-    /// Exposes the latched root separately from a direct admission error.
+    /// Exposes the latched read site without advancing the publication checkpoint.
     fn read_error(&self) -> Option<RefusedRead> {
         self.failed
             .load(Ordering::Relaxed)
-            .then_some(RefusedRead::FinalRead)
+            .then_some(RefusedRead::FinalRead(self.site))
     }
-    /// Can hide the sole row only after latching a failure that forbids empty success.
+    /// Injects failure before the sole row or at stream end after yielding it.
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.resident.as_ref().quads().filter(|_| {
+        let mut rows = self.resident.as_ref().quads();
+        std::iter::from_fn(move || {
             self.reads.fetch_add(1, Ordering::Relaxed);
-            if self.site == RefusalSite::Iterator {
-                self.refuse();
-                false
-            } else {
-                true
+            let row = rows.next();
+            match (self.site, row) {
+                (RefusalSite::Iterator, _) | (RefusalSite::AfterRow, None) => {
+                    self.refuse();
+                    None
+                }
+                (_, Some(row)) => {
+                    self.yielded.fetch_add(1, Ordering::Relaxed);
+                    Some(row)
+                }
+                (_, None) => None,
             }
         })
     }
@@ -217,7 +232,7 @@ impl DatasetView for Source {
         self.reads.fetch_add(1, Ordering::Relaxed);
         if self.site == RefusalSite::Term {
             self.refuse();
-            return Err(RefusedRead::FinalRead);
+            return Err(RefusedRead::FinalRead(self.site));
         }
         Ok(
             <RdfDataset as DatasetView>::resolve(self.resident.as_ref(), id)
@@ -268,14 +283,19 @@ impl DatasetView for Source {
 impl FallibleDatasetView for Source {
     type Error = RefusedRead;
     type Evidence = Receipt;
-    /// Captures live owners and injects checkpoint failure while execution is admitted.
+    /// Captures live owners and rows, with faults at admitted execution or the second sample.
     fn operation_status(&self) -> ViewOperationStatus<RefusedRead, Receipt> {
-        if self.site == RefusalSite::Checkpoint && self.execution_guards.load(Ordering::Relaxed) > 0
+        let prior = self.checkpoints.fetch_add(1, Ordering::Relaxed);
+        if (self.site == RefusalSite::Checkpoint
+            && self.execution_guards.load(Ordering::Relaxed) > 0)
+            || (self.site == RefusalSite::FinalCheckpoint && prior == 1)
         {
             self.refuse();
         }
         let evidence = Receipt {
             failed: self.failed.load(Ordering::Relaxed),
+            yielded: self.yielded.load(Ordering::Relaxed),
+            checkpoints: prior + 1,
             reservations: self.reservations.load(Ordering::Relaxed),
             execution_attempts: self.execution_attempts.load(Ordering::Relaxed),
             reporting_guards: self.reporting_guards.load(Ordering::Relaxed),
@@ -290,6 +310,7 @@ impl FallibleDatasetView for Source {
     }
 }
 const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
+/// Requests default-dataset evaluation without a base or caller substitutions.
 fn request(query: &str) -> SparqlRequest<'_> {
     SparqlRequest {
         query,
@@ -325,6 +346,7 @@ fn assert_source_refusal<T: std::fmt::Debug, V: std::fmt::Debug + ViewReceipt>(
     assert_eq!(error.operational_error(), Some(&expected));
     assert!(error.diagnostic().is_none());
     assert!(error.partial_answers().is_none());
+    assert!(error.tripped().is_none());
     source.assert_receipt(error.evidence().view_receipt());
     error
 }
@@ -336,15 +358,23 @@ enum QueryRoute {
     Owned,
     Prepared,
     Governed,
+    PreparedGoverned,
     Shared,
     GovernedSource,
+    PreparedGovernedSource,
     SharedSource,
 }
-const LOCAL_ROUTES: [QueryRoute; 4] = [
+const LOCAL_ROUTES: [QueryRoute; 5] = [
     QueryRoute::Owned,
     QueryRoute::Prepared,
     QueryRoute::Governed,
+    QueryRoute::PreparedGoverned,
     QueryRoute::Shared,
+];
+const SOURCE_ROUTES: [QueryRoute; 3] = [
+    QueryRoute::GovernedSource,
+    QueryRoute::PreparedGovernedSource,
+    QueryRoute::SharedSource,
 ];
 struct RefusingService(AtomicUsize);
 impl purrdf_sparql_eval::remote::ServiceResolver for RefusingService {
@@ -373,73 +403,69 @@ fn assert_query_refusal(
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let remote = RefusingService(AtomicUsize::new(0));
     match route {
-        QueryRoute::Owned => {
-            assert_source_refusal(
-                engine.query_fallible_view(source, request(query), QueryOptions::EMPTY),
-                source,
-                expected,
-            );
+        QueryRoute::Owned | QueryRoute::Prepared => {
+            let result = if matches!(route, QueryRoute::Owned) {
+                engine.query_fallible_view(source, request(query), QueryOptions::EMPTY)
+            } else {
+                engine.query_prepared_fallible_view(source, &prepared, &[], QueryOptions::EMPTY)
+            };
+            assert_source_refusal(result, source, expected);
         }
-        QueryRoute::Prepared => {
-            assert_source_refusal(
-                engine.query_prepared_fallible_view(source, &prepared, &[], QueryOptions::EMPTY),
-                source,
-                expected,
-            );
-        }
-        QueryRoute::Governed => {
-            assert_source_refusal(
-                engine.query_governed_fallible_view(
+        _ => {
+            let result = match route {
+                QueryRoute::Governed => engine.query_governed_fallible_view(
                     source,
                     request(query),
                     QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 ),
-                source,
-                expected,
-            );
-        }
-        QueryRoute::Shared => {
-            let error = assert_source_refusal(
-                engine.query_prepared_governed_fallible_in_operation(
+                QueryRoute::PreparedGoverned => engine.query_prepared_governed_fallible_view(
+                    source,
+                    &prepared,
+                    &[],
+                    QueryOptions::EMPTY,
+                    &QueryGovernors::METERED,
+                ),
+                QueryRoute::Shared => engine.query_prepared_governed_fallible_in_operation(
                     source,
                     &prepared,
                     &[],
                     QueryOptions::EMPTY,
                     &state,
                 ),
-                source,
-                expected,
-            );
-            assert_eq!(error.evidence().governors, state.evidence());
-        }
-        QueryRoute::GovernedSource => {
-            assert_source_refusal(
-                engine.query_governed_fallible_with_source_view(
+                QueryRoute::GovernedSource => engine.query_governed_fallible_with_source_view(
                     source,
                     request(query),
                     &remote,
                     QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 ),
-                source,
-                expected,
-            );
-        }
-        QueryRoute::SharedSource => {
-            let error = assert_source_refusal(
-                engine.query_prepared_governed_fallible_with_source_in_operation(
-                    source,
-                    &prepared,
-                    &[],
-                    &remote,
-                    QueryOptions::EMPTY,
-                    &state,
-                ),
-                source,
-                expected,
-            );
-            assert_eq!(error.evidence().governors, state.evidence());
+                QueryRoute::PreparedGovernedSource => engine
+                    .query_prepared_governed_fallible_with_source_view(
+                        source,
+                        &prepared,
+                        &[],
+                        &remote,
+                        QueryOptions::EMPTY,
+                        &QueryGovernors::METERED,
+                    ),
+                QueryRoute::SharedSource => engine
+                    .query_prepared_governed_fallible_with_source_in_operation(
+                        source,
+                        &prepared,
+                        &[],
+                        &remote,
+                        QueryOptions::EMPTY,
+                        &state,
+                    ),
+                QueryRoute::Owned | QueryRoute::Prepared => unreachable!("governed route"),
+            };
+            let error = assert_source_refusal(result, source, expected);
+            if matches!(route, QueryRoute::Shared | QueryRoute::SharedSource)
+                || source.site == RefusalSite::Reporting
+            {
+                assert_eq!(error.evidence().governors, state.evidence());
+            }
         }
     }
     assert_eq!(remote.0.load(Ordering::Relaxed), 0);
@@ -454,7 +480,7 @@ fn typed_owned_and_governed_queries_never_publish_iterator_or_materialization_fa
                 &Source::at(site),
                 route,
                 QUERY,
-                RefusedRead::FinalRead,
+                RefusedRead::FinalRead(site),
             );
         }
     }
@@ -467,7 +493,7 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
     assert_source_refusal(
         engine.query_fallible_view(&source, request("not SPARQL"), QueryOptions::EMPTY),
         &source,
-        RefusedRead::FinalRead,
+        RefusedRead::FinalRead(source.site),
     );
     let empty = engine
         .prepare_query("SELECT * WHERE {}", None)
@@ -475,7 +501,7 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
     assert_source_refusal(
         engine.query_prepared_fallible_view(&source, &empty, &[], QueryOptions::EMPTY),
         &source,
-        RefusedRead::FinalRead,
+        RefusedRead::FinalRead(source.site),
     );
     assert_source_refusal(
         engine.query_governed_fallible_view(
@@ -485,7 +511,18 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
             &QueryGovernors::METERED,
         ),
         &source,
-        RefusedRead::FinalRead,
+        RefusedRead::FinalRead(source.site),
+    );
+    assert_source_refusal(
+        engine.query_prepared_governed_fallible_view(
+            &source,
+            &empty,
+            &[],
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        ),
+        &source,
+        RefusedRead::FinalRead(source.site),
     );
 }
 /// Visitor reads remain checked, and a retained execution can retry on a healthy source.
@@ -503,7 +540,7 @@ fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
                 7
             }),
             &source,
-            RefusedRead::FinalRead,
+            RefusedRead::FinalRead(source.site),
         );
     }
     let source = Source::at(RefusalSite::Never);
@@ -513,7 +550,7 @@ fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
             7
         }),
         &source,
-        RefusedRead::FinalRead,
+        RefusedRead::FinalRead(source.site),
     );
     let source = Source::at(RefusalSite::Never);
     let (value, receipt) = engine
@@ -525,7 +562,7 @@ fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
 /// Reporting refusal stays operational and precedes parsing, execution, and reads.
 fn refused_reporting_admission_remains_typed_even_before_sticky_failure() {
     let engine = NativeSparqlEngine::new();
-    for route in LOCAL_ROUTES {
+    for route in LOCAL_ROUTES.into_iter().chain(SOURCE_ROUTES) {
         let source = Source::at(RefusalSite::Reporting);
         assert_query_refusal(&engine, &source, route, QUERY, RefusedRead::Workspace);
         assert!(source.read_error().is_none());
@@ -588,7 +625,7 @@ fn direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence
             }
         }
     }
-    for route in [QueryRoute::GovernedSource, QueryRoute::SharedSource] {
+    for route in SOURCE_ROUTES {
         assert_query_refusal(
             &engine,
             &Source::at(RefusalSite::Execution),
@@ -602,10 +639,19 @@ fn direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence
 fn sticky_operational_root_outranks_the_direct_admission_error() {
     let engine = NativeSparqlEngine::new();
     for site in [RefusalSite::ReportingSticky, RefusalSite::ExecutionSticky] {
-        for route in LOCAL_ROUTES {
+        for route in LOCAL_ROUTES.into_iter().chain(SOURCE_ROUTES) {
             let source = Source::at(site);
-            assert_query_refusal(&engine, &source, route, QUERY, RefusedRead::FinalRead);
-            assert_eq!(source.read_error(), Some(RefusedRead::FinalRead));
+            assert_query_refusal(
+                &engine,
+                &source,
+                route,
+                QUERY,
+                RefusedRead::FinalRead(source.site),
+            );
+            assert_eq!(
+                source.read_error(),
+                Some(RefusedRead::FinalRead(source.site))
+            );
         }
     }
 }
@@ -626,7 +672,7 @@ fn refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry() {
             QUERY
         };
         let expected = match site {
-            RefusalSite::ExecutionSticky => RefusedRead::FinalRead,
+            RefusalSite::ExecutionSticky => RefusedRead::FinalRead(site),
             RefusalSite::Lookup => RefusedRead::Lookup,
             _ => RefusedRead::Workspace,
         };
@@ -680,9 +726,7 @@ fn assert_complete_query<V: ViewReceipt>(
     source: &Source,
     answer: purrdf_sparql_eval::CompleteSparqlResult<V>,
 ) {
-    assert!(
-        matches!(answer.result, purrdf_core::SparqlResult::Solutions { rows, .. } if rows.len() == 1)
-    );
+    assert!(matches!(answer.result, SparqlResult::Solutions { rows, .. } if rows.len() == 1));
     assert_held_receipt(source, answer.evidence.view_receipt());
 }
 /// Successful query routes retain workspace through publication for bounded and unbounded views.
@@ -717,6 +761,18 @@ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
                         )
                         .expect("healthy governed query"),
                 ),
+                QueryRoute::PreparedGoverned => assert_complete_query(
+                    &source,
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .expect("healthy per-call prepared query"),
+                ),
                 QueryRoute::Shared => {
                     let answer = engine
                         .query_prepared_governed_fallible_in_operation(
@@ -730,10 +786,20 @@ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
                     assert_eq!(answer.evidence.governors, state.evidence());
                     assert_complete_query(&source, answer);
                 }
-                QueryRoute::GovernedSource | QueryRoute::SharedSource => {
+                QueryRoute::GovernedSource
+                | QueryRoute::PreparedGovernedSource
+                | QueryRoute::SharedSource => {
                     unreachable!("local route set")
                 }
             }
+            // Ungoverned requests sample again after parameter admission; the
+            // governed prepared ingress samples only on entry and publication.
+            let checkpoints = if matches!(route, QueryRoute::Owned | QueryRoute::Prepared) {
+                3
+            } else {
+                2
+            };
+            assert_eq!(source.checkpoints.load(Ordering::Relaxed), checkpoints);
         }
     }
 }
@@ -742,7 +808,13 @@ fn final_checkpoint_failure_discards_success_and_keeps_workspace_held() {
     let engine = NativeSparqlEngine::new();
     for route in LOCAL_ROUTES {
         let source = Source::at(RefusalSite::Checkpoint);
-        assert_query_refusal(&engine, &source, route, QUERY, RefusedRead::FinalRead);
+        assert_query_refusal(
+            &engine,
+            &source,
+            route,
+            QUERY,
+            RefusedRead::FinalRead(source.site),
+        );
         let receipt = *source.last_checkpoint.lock().expect("checkpoint receipt");
         assert!(receipt.failed);
         assert_eq!(receipt.execution_guards, 1);
@@ -760,7 +832,7 @@ fn final_checkpoint_failure_discards_success_and_keeps_workspace_held() {
             7
         }),
         &source,
-        RefusedRead::FinalRead,
+        RefusedRead::FinalRead(source.site),
     );
     assert!(
         visited.load(Ordering::Relaxed),
@@ -815,7 +887,7 @@ fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
             if matches!(site, RefusalSite::Reporting | RefusalSite::Execution) {
                 RefusedRead::Workspace
             } else {
-                RefusedRead::FinalRead
+                RefusedRead::FinalRead(source.site)
             },
         );
         assert_eq!(error.evidence().governors, state.evidence());
@@ -903,7 +975,9 @@ fn explain_admission_failures_remain_typed_without_an_explanation() {
     ] {
         let expected = match site {
             RefusalSite::Lookup => RefusedRead::Lookup,
-            RefusalSite::ReportingSticky | RefusalSite::ExecutionSticky => RefusedRead::FinalRead,
+            RefusalSite::ReportingSticky | RefusalSite::ExecutionSticky => {
+                RefusedRead::FinalRead(site)
+            }
             _ => RefusedRead::Workspace,
         };
         let query = if site == RefusalSite::Lookup {
@@ -916,7 +990,10 @@ fn explain_admission_failures_remain_typed_without_an_explanation() {
             let error =
                 assert_source_refusal(explain(&engine, &source, route, query), &source, expected);
             let receipt = error.evidence();
-            assert_eq!(receipt.failed, expected == RefusedRead::FinalRead);
+            assert_eq!(
+                receipt.failed,
+                matches!(expected, RefusedRead::FinalRead(_))
+            );
             assert_eq!(receipt.execution_guards, 0);
             let attempts = match site {
                 RefusalSite::Reporting | RefusalSite::ReportingSticky => 0,
@@ -939,7 +1016,7 @@ fn explain_preflight_failure_outranks_malformed_query() {
         let error = assert_source_refusal(
             explain(&engine, &source, route, "not SPARQL"),
             &source,
-            RefusedRead::FinalRead,
+            RefusedRead::FinalRead(source.site),
         );
         assert_eq!(error.evidence().reservations, 0);
         assert_eq!(error.evidence().reads, 0);
@@ -963,7 +1040,7 @@ fn explain_measuring_and_final_checkpoint_failures_publish_no_ledger() {
             let error = assert_source_refusal(
                 explain(&engine, &source, route, query),
                 &source,
-                RefusedRead::FinalRead,
+                RefusedRead::FinalRead(source.site),
             );
             assert_eq!(error.evidence().reporting_guards, 1);
             assert_eq!(error.evidence().execution_guards, 1);
@@ -1036,7 +1113,7 @@ fn healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence
             None,
         ),
         &source,
-        RefusedRead::FinalRead,
+        RefusedRead::FinalRead(source.site),
     );
     assert_eq!(error.evidence().execution_guards, 1);
 }
@@ -1122,7 +1199,7 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
             Arc::new(stop),
         ),
         &source,
-        RefusedRead::FinalRead,
+        RefusedRead::FinalRead(source.site),
     );
     assert_eq!(error.evidence().execution_guards, 1);
     let source = Arc::new(Source::at(RefusalSite::Never));
@@ -1135,9 +1212,149 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
             Arc::new(FailureAndStop(Arc::clone(&source))),
         ),
         source.as_ref(),
-        RefusedRead::FinalRead,
+        RefusedRead::FinalRead(source.site),
     );
     assert_eq!(error.evidence().execution_guards, 1);
+}
+/// Select governor ownership while preserving the same plan, source, and publication boundary.
+#[allow(
+    clippy::result_large_err,
+    reason = "the test drives both public entries through their unchanged typed reporting boundary"
+)]
+fn prepared_governed(
+    engine: &NativeSparqlEngine,
+    source: &Source,
+    prepared: &PreparedQuery,
+    governors: &QueryGovernors,
+    shared: bool,
+) -> FallibleSparqlResult<RefusedRead, GovernedEvidence<Receipt>> {
+    if shared {
+        let state = Arc::new(GovernorState::new(governors));
+        engine.query_prepared_governed_fallible_in_operation(
+            source,
+            prepared,
+            &[],
+            QueryOptions::EMPTY,
+            &state,
+        )
+    } else {
+        engine.query_prepared_governed_fallible_view(
+            source,
+            prepared,
+            &[],
+            QueryOptions::EMPTY,
+            governors,
+        )
+    }
+}
+
+/// A row observed before a lazy stream refusal must never escape as a certified partial answer.
+fn prepared_governed_queries_discard_rows_produced_before_an_iterator_failure() {
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(QUERY, None).expect("prepare fixture");
+    for shared in [false, true] {
+        let source = Source::at(RefusalSite::AfterRow);
+        let refusal = assert_source_refusal(
+            prepared_governed(
+                &engine,
+                &source,
+                &prepared,
+                &QueryGovernors::METERED,
+                shared,
+            ),
+            &source,
+            RefusedRead::FinalRead(RefusalSite::AfterRow),
+        );
+        assert_eq!(source.yielded.load(Ordering::Relaxed), 1);
+        assert_eq!(source.checkpoints.load(Ordering::Relaxed), 2);
+        assert!(refusal.evidence().view.failed);
+        assert_eq!(refusal.evidence().view.yielded, 1);
+        assert_eq!(refusal.evidence().view.checkpoints, 2);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReadyOutcome {
+    Complete,
+    Query,
+    Budget,
+}
+
+/// Final-checkpoint refusal replaces completion, diagnostics, and exhaustion without losing meters.
+fn the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome() {
+    let engine = NativeSparqlEngine::new();
+    for (query, governors, expected) in [
+        (QUERY, QueryGovernors::METERED, ReadyOutcome::Complete),
+        (
+            "SELECT * WHERE { SERVICE <http://example.org/service> { ?s ?p ?o } }",
+            QueryGovernors::METERED,
+            ReadyOutcome::Query,
+        ),
+        (
+            "SELECT ?s WHERE { VALUES ?s { <http://example.org/a> <http://example.org/b> } }",
+            QueryGovernors::METERED.with_max_answers(1),
+            ReadyOutcome::Budget,
+        ),
+    ] {
+        let prepared = engine.prepare_query(query, None).expect("prepare fixture");
+        for shared in [false, true] {
+            let healthy = Source::at(RefusalSite::Never);
+            let healthy_outcome =
+                prepared_governed(&engine, &healthy, &prepared, &governors, shared);
+            let healthy_governors = match (expected, healthy_outcome) {
+                (ReadyOutcome::Complete, Ok(complete)) => {
+                    assert!(matches!(
+                        complete.result,
+                        SparqlResult::Solutions { rows, .. } if rows.len() == 1
+                    ));
+                    assert!(!complete.evidence.view.failed);
+                    complete.evidence.governors
+                }
+                (
+                    ReadyOutcome::Query,
+                    Err(FallibleSparqlError::Query {
+                        diagnostic,
+                        evidence,
+                    }),
+                ) => {
+                    assert_eq!(diagnostic.code, "native-sparql-service-unconfigured");
+                    assert!(!evidence.view.failed);
+                    evidence.governors
+                }
+                (
+                    ReadyOutcome::Budget,
+                    Err(FallibleSparqlError::BudgetExhausted {
+                        tripped,
+                        partial,
+                        evidence,
+                    }),
+                ) => {
+                    assert_eq!(evidence.governors.tripped, Some(tripped));
+                    assert!(matches!(
+                        partial.result().expect("certified prefix").result(),
+                        SparqlResult::Solutions { rows, .. } if rows.len() == 1
+                    ));
+                    assert!(!evidence.view.failed);
+                    evidence.governors
+                }
+                (_, other) => {
+                    panic!("healthy source produced the wrong evaluator outcome: {other:?}")
+                }
+            };
+            assert_eq!(healthy.checkpoints.load(Ordering::Relaxed), 2);
+
+            let source = Source::at(RefusalSite::FinalCheckpoint);
+            let refusal = assert_source_refusal(
+                prepared_governed(&engine, &source, &prepared, &governors, shared),
+                &source,
+                RefusedRead::FinalRead(RefusalSite::FinalCheckpoint),
+            );
+            assert_eq!(source.checkpoints.load(Ordering::Relaxed), 2);
+            assert!(refusal.evidence().view.failed);
+            assert_eq!(refusal.evidence().view.checkpoints, 2);
+            assert_eq!(refusal.evidence().governors, healthy_governors);
+        }
+    }
 }
 purrdf_testkit::harness_main!(
     typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures,
@@ -1157,4 +1374,6 @@ purrdf_testkit::harness_main!(
     healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence,
     explain_refuses_unpriced_supplied_inputs_before_parsing_or_reading,
     explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence,
+    prepared_governed_queries_discard_rows_produced_before_an_iterator_failure,
+    the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome,
 );
