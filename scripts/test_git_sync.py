@@ -10,6 +10,7 @@ import importlib.util
 import io
 import os
 from pathlib import Path
+import signal
 import subprocess
 import tempfile
 import textwrap
@@ -163,11 +164,95 @@ class GitSyncTests(unittest.TestCase):
         self.assertNotIn("refs/tags/light", self.identities(self.remote))
 
     def test_timeout_kills_git_and_hook_children_and_fails(self):
-        self.hook("pre-receive", "echo attempt >> attempts\nsleep 20\nexit 1")
-        started = time.monotonic()
-        with self.assertRaisesRegex(git_sync.SyncError, "three attempts"):
-            self.sync(timeout=0.1)
-        self.assertLess(time.monotonic() - started, 3)
+        self.hook("pre-receive", "echo attempt >> attempts\nsleep 20 &\n"
+                  "child=$!\nprintf '%s %s\\n' \"$$\" \"$child\" >> hook-children\n"
+                  "wait \"$child\"\nexit 1")
+        children = self.remote / "hook-children"
+        original_git = git_sync.git
+        original_popen = subprocess.Popen
+        pushes = []
+        timeout_elapsed = []
+
+        def recorded_children():
+            return children.read_text().splitlines() if children.exists() else []
+
+        def kill_and_reap(process, communicate):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            communicate(timeout=2)
+
+        def start_ready_push(arguments, **options):
+            previous = len(recorded_children())
+            process = original_popen(arguments, **options)
+            if arguments[:2] != ["git", "push"]:
+                return process
+            original_communicate = process.communicate
+            pushes.append((process, original_communicate))
+            ready = None
+
+            def communicate(input=None, timeout=None):
+                nonlocal ready
+                if ready is None:
+                    # The host's real pre-push hooks must finish before this
+                    # fixture times a blocked pre-receive hook. Drain startup
+                    # output so pipe capacity cannot prevent hook readiness.
+                    deadline = time.monotonic() + 10
+                    while len(recorded_children()) == previous:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            kill_and_reap(process, original_communicate)
+                            self.fail("pre-receive fixture did not start within ten seconds")
+                        try:
+                            original_communicate(timeout=min(0.05, remaining))
+                        except subprocess.TimeoutExpired:
+                            continue
+                        self.fail("Git push exited before the blocking hook was ready")
+                    self.assertEqual(len(recorded_children()), previous + 1)
+                    ready = time.monotonic()
+                result = original_communicate(input=input, timeout=timeout)
+                if timeout is None:
+                    timeout_elapsed.append(time.monotonic() - ready)
+                return result
+
+            process.communicate = communicate
+            return process
+
+        def timed_push(arguments, timeout):
+            # Source inspection and destination preflight are not the blocked
+            # process subtree this case exercises; retain their normal budget.
+            return original_git(arguments, timeout if arguments[0] == "push" else 45)
+
+        def cleanup_pushes():
+            for process, communicate in pushes:
+                kill_and_reap(process, communicate)
+
+        self.addCleanup(cleanup_pushes)
+        with mock.patch.object(git_sync, "git", side_effect=timed_push), \
+                mock.patch.object(subprocess, "Popen", side_effect=start_ready_push):
+            with self.assertRaisesRegex(git_sync.SyncError, "three attempts"):
+                self.sync(timeout=0.1)
+        self.assertEqual(len(pushes), 3)
+        self.assertEqual(len(timeout_elapsed), 3)
+        self.assertLess(sum(timeout_elapsed), 3)
+        self.assertEqual((self.remote / "attempts").read_text().splitlines(),
+                         ["attempt"] * 3)
+        for process, _ in pushes:
+            self.assertEqual(process.returncode, -signal.SIGKILL)
+        hook_children = [int(pid) for line in recorded_children() for pid in line.split()]
+        self.assertEqual(len(hook_children), 6)
+        deadline = time.monotonic() + 2
+        alive = set(hook_children)
+        while alive and time.monotonic() < deadline:
+            for pid in tuple(alive):
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    alive.remove(pid)
+            if alive:
+                time.sleep(0.01)
+        self.assertFalse(alive, "every pre-receive hook and sleeping child must be dead")
         self.assertIn("timed out", self.diagnostics.getvalue())
         self.assertIn("pack write completion observed", self.diagnostics.getvalue())
         self.assertEqual(self.identities(self.remote), {})
