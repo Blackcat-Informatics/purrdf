@@ -868,8 +868,8 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# only a fallback.
 	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
 	@# Shared target paths can be published by another Cargo flag variant after a
-	@# build returns. Capture Cargo's registered link output from a new private
-	@# target directory and bindgen that exact file; never discover it in the shared target.
+	@# build returns. Capture Cargo's registered link output inside its private
+	@# directory or held managed lease, then bindgen those exact captured bytes.
 	@capture=$$(mktemp -d); \
 		RUSTFLAGS="$${RUSTFLAGS} -D warnings -C target-feature=+simd128 --remap-path-prefix=$(CURDIR)=/purrdf --remap-path-prefix=$${CARGO_HOME:-$$HOME/.cargo}=/cargo" \
 		python3 scripts/build-private-wasm.py "$$capture/purrdf_wasm.wasm" purrdf_wasm \
