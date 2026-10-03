@@ -1685,12 +1685,7 @@ impl NativeSparqlEngine {
         // reports a (zeroed, honest) governor receipt beside its root cause.
         let _reporting = reserve_governed_reporting(dataset, governors)?;
         let state = Arc::new(GovernorState::new(governors));
-        if let ViewOperationStatus::Failed { error, evidence } = dataset.operation_status() {
-            return Err(FallibleSparqlError::Operational {
-                error,
-                evidence: GovernedEvidence::new(evidence, state.evidence()),
-            });
-        }
+        prepared_fallible::preflight_governed_fallible_view(dataset, &state)?;
         if let Err(diagnostic) =
             bounded_workspace::check_inputs(dataset, !request.substitutions.is_empty(), options)
         {
@@ -1708,15 +1703,9 @@ impl NativeSparqlEngine {
                 return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
             }
         };
-        let evaluation = self.query_governed_prepared_in_state(
-            dataset,
-            &prepared,
-            &admitted,
-            options,
-            &state,
-            Sequencing::for_view::<D>(),
-        );
-        finish_governed_fallible_query(dataset, &state, evaluation)
+        self.query_prepared_governed_fallible_admitted(
+            dataset, &prepared, &admitted, options, &state,
+        )
     }
 
     /// [`Self::query_governed_fallible_view`] with a federation source injected.
