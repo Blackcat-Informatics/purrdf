@@ -186,11 +186,11 @@ class GitSyncTests(unittest.TestCase):
         self.assertEqual(self.identities(self.remote), {})
 
     def test_server_echoed_secret_diagnostics_are_not_printed(self):
-        secret = "synthetic-secret-only"
-        self.hook("pre-receive", f"echo '{secret}' >&2\nexit 1")
+        diagnostic_marker = "synthetic-remote-diagnostic-marker"
+        self.hook("pre-receive", f"echo '{diagnostic_marker}' >&2\nexit 1")
         with self.assertRaises(git_sync.SyncError):
             self.sync()
-        self.assertNotIn(secret, self.diagnostics.getvalue())
+        self.assertNotIn(diagnostic_marker, self.diagnostics.getvalue())
 
     def test_cli_rejects_credential_url_without_exposing_it(self):
         script = Path(__file__).with_name("sync-git-refs.py").resolve()
