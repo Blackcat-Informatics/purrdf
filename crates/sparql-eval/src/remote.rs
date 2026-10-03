@@ -6,11 +6,15 @@
 //!
 //! `SERVICE [SILENT] <endpoint> { pattern }` evaluates `pattern` at a remote
 //! endpoint and joins the result into the surrounding query. The evaluator stays
-//! transport-agnostic: it forwards the inner pattern (serialized to a `SELECT *`
-//! query via [`purrdf_sparql_algebra::pattern_to_select_query`]) to an injected
-//! [`ServiceResolver`] and interns the returned bindings into a
-//! [`SolutionSeq`]. The parser wraps `SERVICE` in `Join(left, Service)`, so
-//! `eval_service` returns *only* the remote bag — the existing hash join performs
+//! transport-agnostic: it forwards the inner pattern as a complete standalone
+//! `SELECT` query via [`purrdf_sparql_algebra::try_pattern_to_select_query`] to an
+//! injected [`ServiceResolver`] and interns the returned bindings into a
+//! [`SolutionSeq`]. The carrier projects visible variables while hiding internal
+//! witnesses. A body with no visible variables uses a hygienic constant unit
+//! column; ingestion removes that transport column and preserves every row in
+//! the original zero-column bag. The parser wraps `SERVICE` in
+//! `Join(left, Service)`, so `eval_service` returns *only* the remote bag — the
+//! existing hash join performs
 //! the federation join.
 //!
 //! # Seam, not a baked client
@@ -254,7 +258,9 @@ pub struct ServiceRequest<'a> {
     /// The service IRI, exactly as written in the query. A resolver keys its per-service
     /// context off this.
     pub endpoint: &'a str,
-    /// The complete forwarded SPARQL `SELECT * WHERE { … }` text.
+    /// The complete standalone SPARQL `SELECT` carrier text. Its projection hides
+    /// internal witnesses; a body with no visible variables uses a hygienic unit
+    /// transport column that the evaluator removes during ingestion, preserving rows.
     pub query_text: &'a str,
     /// Whether the clause was written `SERVICE SILENT`.
     ///
@@ -342,8 +348,10 @@ impl<'a> ServiceRequest<'a> {
 /// A source that resolves a forwarded SPARQL `SELECT` query at a `SERVICE`
 /// endpoint. Object-safe so [`EvalCtx`] can hold a `&dyn ServiceResolver`.
 pub trait ServiceResolver {
-    /// Forward [`ServiceRequest::query_text`] (a complete `SELECT * WHERE { … }`) to
-    /// [`ServiceRequest::endpoint`] and return its bindings.
+    /// Forward [`ServiceRequest::query_text`] (a complete standalone `SELECT`
+    /// carrier) to [`ServiceRequest::endpoint`] and return its result columns and
+    /// rows. For a body with no visible variables, the evaluator removes the
+    /// carrier's hygienic unit transport column while preserving every row.
     ///
     /// [`ServiceRequest::stop`] is the executing query's [`StopSignal`], or `None` when
     /// the caller set no

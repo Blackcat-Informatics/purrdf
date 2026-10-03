@@ -420,11 +420,12 @@ pub fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPatter
     });
 }
 
-/// Whether any leaf under the spine rooted at `pattern` satisfies `test` — the
-/// leaves visited left to right and the walk stopped at the first that does, over a
-/// work list held inline until a spine is taller than it, so a pattern with nothing to
-/// rename allocates nothing (this walk runs on every admission, prepared re-runs
-/// included).
+/// Whether any leaf under the spine rooted at `pattern` satisfies `test`.
+///
+/// Leaves are visited left to right, stopping at the first match. The work list
+/// holds up to eight pending nodes inline; a deeper spine can spill to heap scratch
+/// even when no labels need renaming. This walk runs on every admission, including
+/// prepared re-runs.
 pub fn visit_spine_leaves<'a>(
     pattern: &'a GraphPattern,
     test: &mut impl FnMut(&'a GraphPattern) -> bool,

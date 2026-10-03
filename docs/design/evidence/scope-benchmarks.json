@@ -31,6 +31,15 @@
       "confidence": 0.95,
       "resamples": 10000,
       "statistics": "median and MAD with seeded bootstrap interval"
+    },
+    "post_capture_documentation": {
+      "change": "Rust documentation comments only; executable bodies are unchanged. Timings refer to the original recorded captures. No additional performance measurement is claimed.",
+      "files": {
+        "crates/sparql-algebra/src/scope.rs": {
+          "captured_sha256": "e22db9620a973dc873877e14aa5c757b3771adcaf3f128143df3b994828c6246",
+          "documented_sha256": "c4fd672e1e28197995d340cfd669a6e2dc4d3110ff5c64bc8841d1ff32220f6b"
+        }
+      }
     }
   },
   "profile": {

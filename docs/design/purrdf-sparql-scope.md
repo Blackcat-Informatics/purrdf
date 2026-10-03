@@ -269,7 +269,10 @@ extraction and comparison; it is not uniformly faster than preparation.
 At depth 100,000, the role-check median interval is 0.869–1.053 ms and the reuse
 interval is 3.738–3.809 ms. The complete samples, intervals, outliers, compiler,
 hardware and source hashes are retained in
-[scope-benchmarks.json](evidence/scope-benchmarks.json).
+[scope-benchmarks.json](evidence/scope-benchmarks.json). Its capture hashes
+remain the measured source identities; separate metadata records the later
+documentation-only correction to `scope.rs` about deep work-list heap scratch.
+No executable body changed and no replacement timing is claimed.
 [scope-investigation.json](evidence/scope-investigation.json) records all supported
 and unavailable outcomes, layouts and native allocation windows. The allocation
 probe runs in the optimized development profile with debug assertions and
@@ -353,8 +356,11 @@ The blank-free control also moved, so these observations do not isolate a
 kernel's causal speedup. The co-reference run has two high severe outliers;
 its median interval is 19.14–22.67 ms. Full samples, intervals, source hashes,
 compiler and workload parameters are in
-[scope-runtime-benchmarks.json](evidence/scope-runtime-benchmarks.json).
-These are native execution measurements, separate from the scope-prototype
+[scope-runtime-benchmarks.json](evidence/scope-runtime-benchmarks.json). The
+original capture hashes and samples are preserved. Separate metadata identifies
+the later documentation-only corrections in `eval.rs` and `remote.rs` to the
+prefix-vacancy and standalone SELECT carrier contracts; executable bodies are
+unchanged. These are native execution measurements, separate from the scope-prototype
 timings and its measured wasm layouts.
 
 Opaque raw pattern labels use the allocation-free

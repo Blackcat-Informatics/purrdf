@@ -68,6 +68,19 @@
         "Cargo.lock": "90611854529927c5f20e418673217ba07368ea981ceae2104b7bda54af572486",
         "rust-toolchain.toml": "fb4564a4be0c39a9f5114a0bd965c737884fa9623ebd99800f27d3711ae2e800"
       }
+    },
+    "post_capture_documentation": {
+      "change": "Rust documentation comments only; executable bodies are unchanged. Timings refer to the original recorded captures. No additional performance measurement is claimed.",
+      "files": {
+        "crates/sparql-eval/src/eval.rs": {
+          "captured_sha256": "f096ccae8851104a48df146132023854a4901f2a874ed3d283e859bf79e5a681",
+          "documented_sha256": "a2320fbf17fb1fa7ca822de8a86d49050464eed0976b8b65549df53b313676c8"
+        },
+        "crates/sparql-eval/src/remote.rs": {
+          "captured_sha256": "16d4e48616d65ce94194566b35afab22463d4bf9824afe1d0a062a0e1b027a3f",
+          "documented_sha256": "2e72a02d4773d71fed5d3acb2d6b5bb2db97d4c6c6e0dbc490f10e42951f4320"
+        }
+      }
     }
   },
   "profile": {

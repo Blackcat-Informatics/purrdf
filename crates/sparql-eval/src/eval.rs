@@ -389,19 +389,16 @@ pub(crate) fn schema_fingerprint(schema: &VarSchema) -> u64 {
         })
 }
 
-/// Spell one minted blank-node label: `stem` followed by the decimal counter value
-/// `n`, with `prefix` spliced in front when the evaluation has a deterministic
-/// [`EvalCtx::bnode_mint_prefix`] installed.
+/// Spell one blank-node candidate as `{prefix}{stem}{n}`, omitting `prefix` when
+/// [`EvalCtx::bnode_mint_prefix`] is `None`.
 ///
-/// The single formatting rule every mint site in this crate uses — CONSTRUCT
-/// template blanks (`stem = "c"`, [`crate::template::mint_blank`]), `BNODE()`
-/// (`stem = "bnode"`, [`crate::expr`]), and the PurRDF list constructors
-/// (`stem = "lc"`, [`crate::list_fn::materialize_list`]) all call this rather than
-/// re-deriving the `Some(prefix) => format!(...), None => format!(...)` match, so a
-/// fourth mint site added later cannot omit the prefix branch and reopen the
-/// cross-focus label collision [`EvalCtx::with_bnode_mint_prefix`] exists to
-/// prevent. With `prefix: None` the result is exactly `{stem}{n}`, byte-identical
-/// to every pre-prefix caller.
+/// The shared mint seam uses this formatting rule for CONSTRUCT template blanks
+/// (`stem = "c"`, [`crate::template::fresh_blank`]), `BNODE()` (`stem = "bnode"`,
+/// [`crate::expr`]), PurRDF list constructors (`stem = "lc"`,
+/// [`crate::list_fn::materialize_list`]), and SERVICE response blank identities
+/// (`stem = "service"`, [`crate::remote`]). Formatting does not establish freshness:
+/// [`EvalCtx::try_mint_blank_label`] checks the complete default-scope identity
+/// and advances the counter past occupied candidates before returning a label.
 pub(crate) fn minted_label(prefix: Option<&str>, stem: &str, n: u64) -> String {
     match prefix {
         Some(prefix) => format!("{prefix}{stem}{n}"),
@@ -450,18 +447,17 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// which named graphs `GRAPH` may address. Set from a query's `FROM` clause (the
     /// query path) or an UPDATE op's `USING` / `WITH` (the update path).
     pub(crate) active_dataset: ActiveDataset<D::Id>,
-    /// A monotonic counter for minting fresh blank nodes (`BNODE()` and CONSTRUCT
-    /// template blanks).
+    /// A shared monotonic candidate counter for `BNODE()`, CONSTRUCT template
+    /// blanks, PurRDF list constructors and SERVICE response blank identities.
+    /// Occupied candidates consume counter values without producing fresh blanks.
     pub bnode_counter: u64,
-    /// An optional deterministic prefix for every blank-node label this evaluation
-    /// mints (CONSTRUCT template blanks, `BNODE()`, and the PurRDF list
-    /// constructors): a label the mint would spell `c{n}` becomes `{prefix}c{n}`.
-    /// `None` (the default) leaves minted labels byte-identical to an unprefixed
-    /// evaluation. The prefix is caller-supplied data — never derived from time,
-    /// RNG, or iteration order — so a prefixed evaluation is exactly as
-    /// deterministic as an unprefixed one. The SHACL rules engine supplies a
-    /// per-focus-node prefix so distinct focus nodes mint distinct blanks at mint
-    /// time (see [`Self::with_bnode_mint_prefix`]).
+    /// An optional caller-supplied deterministic prefix for every blank-node label
+    /// this evaluation mints. Candidates are `{prefix}{stem}{n}` for the fixed
+    /// stems `c`, `bnode`, `lc` and `service`; `None` omits the prefix.
+    /// Vacancy checks use the complete default-scope identity, so changing a
+    /// prefix can change which counter values are skipped. Prefix selection uses
+    /// no time, RNG or iteration-order input. The SHACL rules engine supplies its
+    /// encoded per-focus-node identity tags (see [`Self::with_bnode_mint_prefix`]).
     pub bnode_mint_prefix: Option<Arc<str>>,
     /// The row ordinal of the solution currently being extended, set by
     /// [`crate::expr::eval_extend`] right before it evaluates that row's
@@ -1125,20 +1121,21 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
-    /// Supply a deterministic blank-mint prefix (see [`Self::bnode_mint_prefix`]):
-    /// every blank-node label this evaluation mints is spelled `{prefix}{label}`,
-    /// where `{label}` is exactly the label an unprefixed evaluation would mint.
-    /// The prefix must be caller-supplied, deterministic data — the SHACL rules
-    /// engine passes a per-focus-node identity tag so distinct focus nodes mint
-    /// distinct blanks.
+    /// Supply a deterministic blank-mint prefix (see [`Self::bnode_mint_prefix`]).
+    /// Every candidate is spelled `{prefix}{stem}{n}`. The shared mint seam checks
+    /// the complete default-scope identity against the dataset and identities
+    /// reserved by this evaluation, advancing the counter past occupied candidates.
+    /// Prefixed and unprefixed evaluations can therefore select different counter
+    /// values. The prefix must be caller-supplied, deterministic data; the SHACL
+    /// rules engine passes its encoded per-focus-node identity tags.
     ///
     /// # Prefix validity contract
     ///
     /// `prefix` must satisfy
     /// [`purrdf_core::blank_label::is_valid_blank_node_label_prefix`]: every
     /// label this evaluation mints is `{prefix}{stem}{n}` for one of the fixed
-    /// mint stems (`c`, `bnode`, `lc`) followed by a decimal counter, and that
-    /// helper is exactly the check that every such concatenation stays a legal
+    /// mint stems (`c`, `bnode`, `lc`, `service`) followed by a decimal counter.
+    /// That helper checks that every such concatenation stays a legal
     /// `BLANK_NODE_LABEL`. Per the fail-fast doctrine this is enforced HERE, at
     /// the setter, rather than left to surface later as a silently rewritten
     /// label at serialization egress — an out-of-alphabet prefix would

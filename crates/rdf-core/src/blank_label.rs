@@ -433,7 +433,7 @@ pub use purrdf_lex::terminals::is_valid_blank_node_label;
 /// Whether `prefix` is legal as a mint-time PREFIX for [`is_valid_blank_node_label`]:
 /// a string a caller can safely splice in front of every label an evaluator mints,
 /// so `{prefix}{stem}{n}` (`stem` one of this workspace's fixed mint stems --
-/// `c`, `bnode`, `lc` -- and `n` a decimal counter) is always a legal
+/// `c`, `bnode`, `lc`, `service` -- and `n` a decimal counter) is always a legal
 /// `BLANK_NODE_LABEL`.
 ///
 /// # Why this differs from [`is_valid_blank_node_label`]
@@ -441,10 +441,9 @@ pub use purrdf_lex::terminals::is_valid_blank_node_label;
 /// A PREFIX never occupies the FINAL position of the label it seeds -- the mint
 /// stem's first letter and the counter's digits always follow it -- so the
 /// `BLANK_NODE_LABEL` grammar's "the last character is never `.`" rule does not
-/// apply to a prefix's own last character; it applies to the *mint stem's* last
-/// character instead, which is always a decimal digit and therefore always
-/// legal. Every OTHER position in the prefix is exactly as constrained as it
-/// would be inside a full label: the first character must be a legal
+/// apply to a prefix's own last character; it applies to the completed label's
+/// final counter digit, which is always legal. Every OTHER prefix position follows
+/// the same constraints as in a full label: the first character must be a legal
 /// `BLANK_NODE_LABEL` lead (`PN_CHARS_U` or a digit) and every character after
 /// it must be `PN_CHARS` or `.`.
 ///
