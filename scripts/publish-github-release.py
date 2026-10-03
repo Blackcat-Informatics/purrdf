@@ -326,10 +326,18 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     for path in paths:
         with path.open("rb") as source:
             expected[path.name] = hashlib.file_digest(source, "sha256").hexdigest()
+    # Reassert the complete reviewed identity on every draft transition. An
+    # omitted tag_name can clear GitHub's selected tag even during publication.
+    reviewed = {
+        "tag_name": tag,
+        "name": title,
+        "body": notes.decode("utf-8"),
+        "prerelease": False,
+    }
     if release is None:
         github.create_draft(tag, title, notes_path)
     else:
-        github.edit(release["id"], name=title, body=notes.decode(), prerelease=False)
+        github.edit(release["id"], **reviewed, draft=True)
     release = github.release(tag)
     identity(release, tag, title, notes, draft=True)
     github.upload(tag, paths)
@@ -338,7 +346,7 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     verify_assets(github, release, version, expected)
     if github.tag_sha(tag) != sha:
         raise ReleaseError("release tag moved before publication")
-    github.edit(release["id"], draft=False)
+    github.edit(release["id"], **reviewed, draft=False)
     release = github.release(tag)
     identity(release, tag, title, notes, draft=False)
     verify_assets(github, release, version, expected)

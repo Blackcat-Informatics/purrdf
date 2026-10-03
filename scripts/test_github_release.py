@@ -108,6 +108,7 @@ class PublishedOnlyTransport(FakeGitHub):
         self.responses = {}
         self.catalog = None
         self.refetch = None
+        self.edits = []
 
     def __call__(self, arguments, **options):
         if arguments[:3] == ["gh", "release", "create"]:
@@ -128,7 +129,11 @@ class PublishedOnlyTransport(FakeGitHub):
                 value = {"object": {"type": "commit", "sha": self.sha}}
             elif path.startswith("releases/tags/"):
                 self.event("read")
-                if self.record is None or self.record["draft"]:
+                if (
+                    self.record is None
+                    or self.record["draft"]
+                    or self.record["tag_name"] != path.removeprefix("releases/tags/")
+                ):
                     return http_response(404, "{}", 1)
                 value = self.record
             elif path.startswith("releases?"):
@@ -137,7 +142,13 @@ class PublishedOnlyTransport(FakeGitHub):
                     value = self.catalog(copy.deepcopy(value))
             elif path == f"releases/{self.record['id']}":
                 if "--method" in arguments:
-                    self.edit(self.record["id"], **json.loads(options["input"]))
+                    fields = json.loads(options["input"])
+                    self.edits.append(copy.deepcopy(fields))
+                    # Draft updates without tag_name clear the selected tag,
+                    # including the final update that publishes the draft.
+                    if self.record["draft"] and "tag_name" not in fields:
+                        self.record["tag_name"] = "untagged-transport-fixture"
+                    self.edit(self.record["id"], **fields)
                     value = self.record
                 else:
                     value = copy.deepcopy(self.record)
@@ -368,6 +379,18 @@ class PublicationTests(unittest.TestCase):
         self.assertLess(
             transport.events.index("download"), transport.events.index("publish")
         )
+        self.assertEqual(
+            transport.edits,
+            [
+                {
+                    "tag_name": f"rust-v{VERSION}",
+                    "name": f"PurRDF {VERSION}",
+                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
+                    "prerelease": False,
+                    "draft": False,
+                }
+            ],
+        )
 
     def test_real_transport_reuses_draft_and_published_rerun_stays_read_only(self):
         transport = PublishedOnlyTransport()
@@ -380,6 +403,25 @@ class PublicationTests(unittest.TestCase):
         self.transport_publish(transport)
         self.assertNotIn("create", transport.events)
         self.assertIn("edit", transport.events)
+        self.assertEqual(
+            transport.edits,
+            [
+                {
+                    "tag_name": f"rust-v{VERSION}",
+                    "draft": True,
+                    "name": f"PurRDF {VERSION}",
+                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
+                    "prerelease": False,
+                },
+                {
+                    "tag_name": f"rust-v{VERSION}",
+                    "name": f"PurRDF {VERSION}",
+                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
+                    "prerelease": False,
+                    "draft": False,
+                },
+            ],
+        )
         transport.events.clear()
         transport.paths.clear()
         for path in self.inputs:
@@ -395,6 +437,25 @@ class PublicationTests(unittest.TestCase):
             transport.paths,
             [f"git/ref/tags/rust-v{VERSION}", f"releases/tags/rust-v{VERSION}"],
         )
+
+    def test_transport_draft_patch_requires_an_explicit_selected_tag(self):
+        transport = PublishedOnlyTransport()
+        transport.create_draft(
+            f"rust-v{VERSION}",
+            f"PurRDF {VERSION}",
+            self.root / "docs/releases/3.0.1.md",
+        )
+        github = publisher.GitHub("owner/repo")
+        with patch.object(publisher.subprocess, "run", side_effect=transport):
+            github.edit(12, name="repaired notes")
+            self.assertEqual(transport.record["tag_name"], "untagged-transport-fixture")
+            self.assertIsNone(github.release(f"rust-v{VERSION}"))
+            github.edit(12, tag_name=f"rust-v{VERSION}", draft=True)
+            self.assertEqual(github.release(f"rust-v{VERSION}")["id"], 12)
+            github.edit(12, tag_name=f"rust-v{VERSION}", draft=False)
+            self.assertEqual(
+                github.release(f"rust-v{VERSION}")["tag_name"], f"rust-v{VERSION}"
+            )
 
     def test_catalog_and_refetch_refusals_never_mutate_drafts(self):
         for failure in (
