@@ -833,6 +833,112 @@ fn post_freeze_retention_refusal_counts_completed_work_without_publishing() {
     assert_eq!(mutable.work_stats().freezes, 2);
 }
 
+/// `count` graphs declared on a mutable layer over `base`, none owning a row.
+fn declaration_only(base: &Arc<RdfDataset>, count: usize) -> MutableDataset {
+    let mut mutable = MutableDataset::new(Arc::clone(base));
+    for n in 0..count {
+        assert_eq!(
+            mutable.declare_named_graph(iri(&format!("declared/{n}"))),
+            Ok(true)
+        );
+    }
+    mutable
+}
+
+#[test]
+fn declaration_only_graphs_are_charged_before_the_snapshot_freezes_them() {
+    const DECLARED: usize = 64;
+    let base = complete_source();
+    // What a snapshot of these declarations actually retains, measured by
+    // publishing it under the default limits.
+    let admitted = declaration_only(&base, DECLARED)
+        .snapshot_view()
+        .expect("default limits admit 64 declarations")
+        .stats();
+    let over = |limits: ViewLimits| {
+        let mutable = declaration_only(&base, DECLARED);
+        let refused = mutable
+            .snapshot_view_with_limits(limits)
+            .expect_err("the declarations exceed the limit");
+        assert_eq!(refused.code, "view-retention-limit");
+        assert_eq!(
+            mutable.work_stats().freezes,
+            0,
+            "refused before the freeze interns the declarations: {refused:?}"
+        );
+    };
+    let exact = |limits: ViewLimits| {
+        let mutable = declaration_only(&base, DECLARED);
+        let view = mutable
+            .snapshot_view_with_limits(limits)
+            .expect("a limit the snapshot meets exactly admits it");
+        assert_eq!(
+            view.named_graphs().count(),
+            base.named_graphs().count() + DECLARED
+        );
+        assert_eq!(mutable.work_stats().freezes, 1);
+    };
+    for (limit, admit) in [
+        (
+            ViewLimits {
+                max_terms: admitted.retained_terms - 1,
+                ..ViewLimits::default()
+            },
+            ViewLimits {
+                max_terms: admitted.retained_terms,
+                ..ViewLimits::default()
+            },
+        ),
+        (
+            ViewLimits {
+                max_payload_bytes: admitted.retained_payload_bytes - 1,
+                ..ViewLimits::default()
+            },
+            ViewLimits {
+                max_payload_bytes: admitted.retained_payload_bytes,
+                ..ViewLimits::default()
+            },
+        ),
+        (
+            ViewLimits {
+                max_auxiliary_bytes: admitted.auxiliary_bytes - 1,
+                ..ViewLimits::default()
+            },
+            ViewLimits {
+                max_auxiliary_bytes: admitted.auxiliary_bytes,
+                ..ViewLimits::default()
+            },
+        ),
+    ] {
+        over(limit);
+        exact(admit);
+    }
+}
+
+#[test]
+fn a_declared_graph_that_owns_rows_is_charged_once() {
+    // The graph name is both a delta term (its rows name it) and a declaration; the
+    // frozen delta holds it once, so a limit the snapshot meets exactly admits it.
+    let base = RdfDatasetBuilder::new().freeze().unwrap();
+    let build = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        assert_eq!(mutable.declare_named_graph(iri("g")), Ok(true));
+        mutable
+            .insert(QuadValues::quad(iri("s"), iri("p"), iri("o"), iri("g")))
+            .unwrap();
+        mutable
+    };
+    let admitted = build().snapshot_view().unwrap().stats();
+    let limits = ViewLimits {
+        max_terms: admitted.retained_terms,
+        max_payload_bytes: admitted.retained_payload_bytes,
+        max_auxiliary_bytes: admitted.auxiliary_bytes,
+        ..ViewLimits::default()
+    };
+    let view = build().snapshot_view_with_limits(limits).unwrap();
+    assert_eq!(view.named_graphs().count(), 1);
+}
+
 #[test]
 fn suppression_counts_every_native_table_occurrence_and_reclassification_deduplicates() {
     let mut b = RdfDatasetBuilder::new();

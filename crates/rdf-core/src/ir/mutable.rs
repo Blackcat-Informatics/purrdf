@@ -857,6 +857,7 @@ impl MutableDataset {
             .suppressed
             .len()
             .saturating_mul(4 * size_of::<super::QuadIds>());
+        self.charge_declarations(&mut stats);
         limits.check(&stats)?;
         let mut builder = self.base.rebuild_builder();
         self.append_delta(&mut builder);
@@ -895,6 +896,45 @@ impl MutableDataset {
             ..Default::default()
         });
         Ok(view)
+    }
+
+    /// Charge the graphs declared through [`Self::declare_named_graph`] to a
+    /// snapshot's pre-freeze admission, which `append_delta` interns into the frozen
+    /// delta whether or not they own a row. Every declaration owns one entry of the
+    /// delta's graph-declaration table. A declared name the delta interner does not
+    /// already hold — so `self.delta.values` did not count it — is also one more
+    /// delta term: its text in the arena, its term record, and the per-term charge
+    /// [`DeltaDatasetView`] construction makes. Each charge is one the frozen delta
+    /// is certain to carry, so this check never refuses a snapshot the post-freeze
+    /// check would admit; it refuses a declaration-heavy one before the freeze
+    /// allocates it.
+    fn charge_declarations(&self, stats: &mut super::view_accounting::ViewStats) {
+        let mut terms = 0_usize;
+        let mut payload = self
+            .declared_graphs
+            .len()
+            .saturating_mul(size_of::<TermId>());
+        for graph in &self.declared_graphs {
+            if self.delta.find(graph).is_some() {
+                continue;
+            }
+            let text = match graph {
+                TermValue::Iri(iri) => iri.len(),
+                TermValue::Blank { label, .. } => label.len(),
+                TermValue::Literal { .. } | TermValue::Triple { .. } => {
+                    unreachable!("a declared named graph is an IRI or blank node")
+                }
+            };
+            terms = terms.saturating_add(1);
+            payload = payload
+                .saturating_add(text)
+                .saturating_add(size_of::<super::term::InternedTerm>());
+        }
+        stats.retained_terms = stats.retained_terms.saturating_add(terms);
+        stats.retained_payload_bytes = stats.retained_payload_bytes.saturating_add(payload);
+        stats.auxiliary_bytes = stats
+            .auxiliary_bytes
+            .saturating_add(terms.saturating_mul(DeltaDatasetView::AUXILIARY_BYTES_PER_DELTA_TERM));
     }
 
     /// One RDF 1.2 delta classifier shared by compaction and snapshot publication.
