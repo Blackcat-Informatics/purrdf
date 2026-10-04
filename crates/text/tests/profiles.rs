@@ -15,6 +15,14 @@ use std::sync::Arc;
 #[path = "support/sparql.rs"]
 mod sparql;
 
+#[path = "support/accent_cases.rs"]
+mod accent_cases;
+
+#[test]
+fn every_accent_subset_is_independent_and_identified() {
+    accent_cases::every_accent_subset_is_independent_and_identified();
+}
+
 fn analyzer(bound: usize, accent: AccentFold, stemming: Stemming) -> Analyzer {
     Analyzer::with_profile(
         AnalyzerProfile::new(bound)

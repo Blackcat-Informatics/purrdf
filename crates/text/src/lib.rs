@@ -95,7 +95,8 @@ pub use index::{
     TextIndexConfig,
 };
 pub use profile::{
-    AccentFold, AnalyzerProfile, InputMode, MAX_TOKEN_SCALARS, Segmentation, Stemming,
+    AccentFold, AccentScripts, AnalyzerProfile, InputMode, MAX_TOKEN_SCALARS, Segmentation,
+    Stemming,
 };
 pub use relation::{
     SearchObservations, TermOccurrenceRelation, TextSearchRelation, verify_binding,

@@ -174,8 +174,11 @@
 //! artifact byte strings), or `"dictionary"` (with weighted `entries`). Optional
 //! `projection="han"` selects independent Han-character statistics; lexical is
 //! the default projection. `max_token_scalars`, `accent`, `stemming`, `input_mode`,
-//! `code_length`, `edit_distance` and the three `substring_*` limits select native profile
-//! parameters. A fifth `domains` element is `None` or a list of domain-tag IRIs. A vector producer carries the same
+//! `code_length`, `edit_distance` and the three `substring_*` limits configure
+//! that same immutable law. `accent` accepts its declared preset or a list drawn
+//! independently from `latin`, `greek`, `cyrillic`, `arabic` and `hebrew`; an empty
+//! list preserves every accent. A fifth `domains` element is `None` or a list of
+//! domain-tag IRIs. A vector producer carries the same
 //! `domains` position, read by the same rules below. It is the second promise a producer
 //! makes about its own rows, beside its duplicate policy, and like that one it
 //! is host-supplied configuration read at registration rather than anything the
@@ -407,8 +410,9 @@ use crate::retrieval::{
     UnservedReason,
 };
 use crate::text::{
-    AccentFold, Analyzer, AnalyzerProfile, GraphSelector, HanCharacterIndex, InputMode,
-    Segmentation, Stemming, SubstringLimits, TextIndex, TextIndexConfig, TextSearchRelation,
+    AccentFold, AccentScripts, Analyzer, AnalyzerProfile, GraphSelector, HanCharacterIndex,
+    InputMode, Segmentation, Stemming, SubstringLimits, TextIndex, TextIndexConfig,
+    TextSearchRelation,
 };
 use crate::{RdfDataset, TermValue, parse_dataset};
 use purrdf_core::DistanceMetric;
@@ -1343,6 +1347,43 @@ fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<Retriev
     Ok(RetrievalRequest::bounded(terms, TopK::new(top_k)))
 }
 
+fn read_accent_fold(subject: &str, value: &Bound<'_, PyAny>) -> PyResult<AccentFold> {
+    use crate::text::unicode::AccentScript;
+    if value.is_instance_of::<PyString>() {
+        return match spec_string(subject, "accent", value)?.as_str() {
+            "preserve" => Ok(AccentFold::Preserve),
+            "latin-greek-cyrillic" => Ok(AccentFold::LatinGreekCyrillic),
+            "latin-greek-cyrillic-arabic-hebrew" => Ok(AccentFold::LatinGreekCyrillicArabicHebrew),
+            _ => Err(PyValueError::new_err(format!(
+                "{subject}: unsupported accent preset"
+            ))),
+        };
+    }
+    let names = value.cast::<PyList>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{subject}: accent must be a declared preset or a list of script names"
+        ))
+    })?;
+    let mut scripts = AccentScripts::default();
+    for name in names {
+        let name = spec_string(subject, "accent script", &name)?;
+        let script = match name.as_str() {
+            "latin" => AccentScript::Latin,
+            "greek" => AccentScript::Greek,
+            "cyrillic" => AccentScript::Cyrillic,
+            "hebrew" => AccentScript::Hebrew,
+            "arabic" => AccentScript::Arabic,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "{subject}: unsupported accent script {name:?}"
+                )));
+            }
+        };
+        scripts = scripts.with(script);
+    }
+    Ok(AccentFold::Selected(scripts))
+}
+
 /// Read a fully explicit dictionary selection and optional declared analysis parameters.
 fn read_text_analyzer(subject: &str, value: &Bound<'_, PyAny>) -> PyResult<(Analyzer, bool)> {
     let options = value
@@ -1390,18 +1431,12 @@ fn read_text_analyzer(subject: &str, value: &Bound<'_, PyAny>) -> PyResult<(Anal
     let mut profile =
         AnalyzerProfile::new(number("max_token_scalars", standard.max_token_scalars())?)
             .map_err(invalid)?;
-    profile = profile.with_accent_fold(
-        match string("accent", Some("latin-greek-cyrillic"))?.as_str() {
-            "preserve" => AccentFold::Preserve,
-            "latin-greek-cyrillic" => AccentFold::LatinGreekCyrillic,
-            "latin-greek-cyrillic-arabic-hebrew" => AccentFold::LatinGreekCyrillicArabicHebrew,
-            _ => {
-                return Err(PyValueError::new_err(format!(
-                    "{subject}: unsupported accent law"
-                )));
-            }
-        },
-    );
+    let accent = options
+        .get_item("accent")?
+        .map_or(Ok(standard.accent_fold()), |value| {
+            read_accent_fold(subject, &value)
+        })?;
+    profile = profile.with_accent_fold(accent);
     profile = profile.with_stemming(match string("stemming", Some("none"))?.as_str() {
         "none" => Stemming::None,
         "english" => Stemming::English,

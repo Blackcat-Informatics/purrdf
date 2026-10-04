@@ -293,7 +293,23 @@ fn han_prepend_graphemes_agree_on_this_target() {
     character_cases::prepend_scalars_do_not_hide_han_bases();
 }
 
+#[path = "support/emoji_predicate_cases.rs"]
+mod emoji_predicate_cases;
+
+fn emoji_recognition_agrees_on_this_target() {
+    emoji_predicate_cases::every_emoji_spelling_and_protected_scalar_matches_the_input_data();
+}
+
+#[path = "support/accent_cases.rs"]
+mod accent_cases;
+
+fn every_accent_subset_agrees_on_this_target() {
+    accent_cases::every_accent_subset_is_independent_and_identified();
+}
+
 purrdf_testkit::harness_main!(
+    every_accent_subset_agrees_on_this_target,
+    emoji_recognition_agrees_on_this_target,
     han_prepend_graphemes_agree_on_this_target,
     adversarial_analysis_agrees_on_this_target,
     baseline_artifact_resolution,

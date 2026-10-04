@@ -97,3 +97,7 @@ harness = false
 [[bench]]
 name = "surface"
 harness = false
+
+[[bench]]
+name = "emoji"
+harness = false

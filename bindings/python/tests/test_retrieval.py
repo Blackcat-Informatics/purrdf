@@ -4621,3 +4621,101 @@ def test_han_grapheme_bases_and_attached_marks(
         top_k=10,
     )
     assert len(answer["rows"]) == expected
+
+
+_ACCENT_SAMPLES = [
+    ("latin", "é", "e"),
+    ("greek", "ά", "α"),
+    ("cyrillic", "й", "и"),
+    ("arabic", "بَ", "ب"),
+    ("hebrew", "בּ", "ב"),
+]
+
+
+def _accent_answer(accent: Any) -> dict[str, Any]:
+    corpus = "\n".join(
+        f'<{EX}{name}> <{NOTE}> "{marked}" .' for name, marked, _ in _ACCENT_SAMPLES
+    )
+    return retrieval.search(
+        corpus,
+        [_lexical(" ".join(plain for _, _, plain in _ACCENT_SAMPLES), NOTE)],
+        text_producers={
+            NOTE_PRODUCER: (
+                NOTE_STRATUM,
+                NOTE,
+                "any",
+                {"lexicon": "empty", "accent": accent},
+            )
+        },
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )
+
+
+@pytest.mark.parametrize("subset", range(32))
+def test_each_accent_script_subset_is_independent_and_canonical(subset: int) -> None:
+    names = [
+        name for at, (name, _, _) in enumerate(_ACCENT_SAMPLES) if subset & (1 << at)
+    ]
+    answer = _accent_answer(names)
+    assert {row["entity"] for row in answer["rows"]} == {
+        f"<{EX}{name}>" for name in names
+    }
+    equivalent = _accent_answer(list(reversed(names)) + names)
+    assert answer["evidence_id"] == equivalent["evidence_id"]
+    assert answer["rows"] == equivalent["rows"]
+
+
+@pytest.mark.parametrize(
+    ("preset", "names"),
+    [
+        ("preserve", []),
+        ("latin-greek-cyrillic", ["cyrillic", "latin", "greek"]),
+        (
+            "latin-greek-cyrillic-arabic-hebrew",
+            ["hebrew", "arabic", "cyrillic", "greek", "latin"],
+        ),
+    ],
+)
+def test_accent_preset_aliases_share_the_explicit_set_identity(
+    preset: str, names: list[str]
+) -> None:
+    assert _accent_answer(preset)["evidence_id"] == _accent_answer(names)["evidence_id"]
+
+
+@pytest.mark.parametrize(
+    "accent",
+    [["thai"], ["Latin"], ["arabic", 1], 31, True, {"arabic": True}, ("arabic",), None],
+)
+def test_accent_script_sets_refuse_unknown_names_and_untyped_flags(accent: Any) -> None:
+    with pytest.raises((TypeError, ValueError), match="accent"):
+        _accent_answer(accent)
+
+
+def test_selected_arabic_accents_also_normalize_caller_dictionary_keys() -> None:
+    for names, expected in [(["arabic"], 1), (["hebrew"], 0)]:
+        answer = retrieval.search(
+            f'<{EX}compound> <{NOTE}> "أ中文" .',
+            [_lexical("ا中文", NOTE)],
+            text_producers={
+                NOTE_PRODUCER: (
+                    NOTE_STRATUM,
+                    NOTE,
+                    "any",
+                    {
+                        "lexicon": "dictionary",
+                        "entries": [("أ中文", 1)],
+                        "accent": names,
+                    },
+                )
+            },
+            weights={NOTE_STRATUM: retrieval.SCALE},
+            statistics=STATISTICS,
+            k=60,
+            decay=TRUNCATED,
+            top_k=10,
+        )
+        assert len(answer["rows"]) == expected

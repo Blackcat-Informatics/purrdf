@@ -623,6 +623,7 @@ trait Alignment {
     type Metadata: Copy;
     fn source(&mut self, source: Range<usize>) -> Self::Metadata;
     fn merge(&mut self, left: &mut Self::Metadata, right: Self::Metadata);
+    fn reserve_output(&mut self, additional: usize);
     fn emit(&mut self, offset: usize, metadata: Self::Metadata);
 }
 
@@ -631,6 +632,7 @@ impl Alignment for Unaligned {
     type Metadata = ();
     fn source(&mut self, _: Range<usize>) {}
     fn merge(&mut self, (): &mut (), (): ()) {}
+    fn reserve_output(&mut self, _: usize) {}
     fn emit(&mut self, _: usize, (): ()) {}
 }
 
@@ -676,18 +678,11 @@ fn normalize_into<A: Alignment>(
             );
             return Ok(());
         }
-        let accent_safe = accent == AccentFold::Preserve
+        let scripts = accent.scripts();
+        let accent_safe = scripts.is_empty()
             || !decoded.text.chars().any(|c| {
-                use unicode::AccentScript::{Arabic, Cyrillic, Greek, Hebrew, Latin};
                 unicode::is_nonspacing_mark(c)
-                    || !c.is_ascii()
-                        && [Latin, Greek, Cyrillic]
-                            .into_iter()
-                            .any(|script| script.contains(c))
-                    || accent == AccentFold::LatinGreekCyrillicArabicHebrew
-                        && [Arabic, Hebrew]
-                            .into_iter()
-                            .any(|script| script.contains(c))
+                    || !c.is_ascii() && scripts.iter().any(|script| script.contains(c))
             });
         if accent_safe {
             let mut compare = unicode::Compare::new(&decoded.text);
@@ -700,6 +695,9 @@ fn normalize_into<A: Alignment>(
     }
     scratch.scalars.clear();
     scratch.cleaned.clear();
+    if no_cleanup {
+        scratch.cleaned.reserve(decoded.text.len());
+    }
     let mut ordinal = 0;
     let mut cleanup = CleanupCursor::new(&decoded.text);
     for (at, cluster) in unicode::grapheme_bounds(&decoded.text) {
@@ -720,6 +718,7 @@ fn normalize_into<A: Alignment>(
             scratch.cleaned.push(c);
         }
     }
+    scratch.output.reserve(scratch.cleaned.len());
     // Re-segment after cleanup: deleted controls can reveal new emoji joins or
     // permit canonical composition across their former positions.
     scratch.pending.clear();
@@ -756,6 +755,8 @@ fn emit_scalars<A: Alignment>(
     scalars: impl IntoIterator<Item = TaggedScalar<A::Metadata>>,
     alignment: &mut A,
 ) {
+    let scalars = scalars.into_iter();
+    alignment.reserve_output(scalars.size_hint().0);
     for scalar in scalars {
         alignment.emit(output.len(), scalar.metadata);
         output.push(scalar.value);
@@ -791,6 +792,12 @@ impl Alignment for SourceStore {
         self.records.push(at..self.sources.len());
         *left = id;
     }
+    fn reserve_output(&mut self, additional: usize) {
+        // Emoji can emit one-scalar blocks. Amortized growth keeps repeated
+        // protected blocks linear instead of reallocating both arrays per atom.
+        self.scalar_offsets.reserve(additional);
+        self.scalar_sources.reserve(additional);
+    }
     fn emit(&mut self, offset: usize, metadata: usize) {
         self.scalar_offsets.push(offset);
         self.scalar_sources.push(metadata);
@@ -821,13 +828,8 @@ fn normalize_run<M: Copy>(
     decompose_tagged::<true, _>(scalars, scratch);
     fold_tagged(scalars, scratch);
     decompose_tagged::<true, _>(scalars, scratch);
-    if accent != AccentFold::Preserve {
-        use unicode::AccentScript::{Arabic, Cyrillic, Greek, Hebrew, Latin};
-        let scripts = if accent == AccentFold::LatinGreekCyrillic {
-            &[Latin, Greek, Cyrillic][..]
-        } else {
-            &[Latin, Greek, Cyrillic, Arabic, Hebrew][..]
-        };
+    let scripts = accent.scripts();
+    if !scripts.is_empty() {
         let mut base = None;
         scalars.retain(|scalar| {
             let c = scalar.value;
@@ -835,7 +837,7 @@ fn normalize_run<M: Copy>(
                 !base.is_some_and(|script: unicode::AccentScript| script.admits_mark(c))
             } else {
                 if !unicode::is_combining_mark(c) && !unicode::is_word_internal_control(c) {
-                    base = scripts.iter().copied().find(|script| script.contains(c));
+                    base = scripts.iter().find(|script| script.contains(c));
                 }
                 true
             }

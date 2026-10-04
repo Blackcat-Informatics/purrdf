@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Immutable, fully identified analysis choices.
-use crate::{TextError, segment::Dictionary};
+use crate::{TextError, segment::Dictionary, unicode::AccentScript};
 use purrdf_hash::{Domain, blake3, frame::frame_le};
 use std::sync::Arc;
 const ORDERED_LAW: Domain =
@@ -16,6 +16,46 @@ const SUBSTRING_LAW: Domain =
 const PROFILE_DOMAIN: Domain = Domain::new(b"purrdf-text-analysis-profile-v2\0");
 /// Largest admitted nominal token bound.
 pub const MAX_TOKEN_SCALARS: usize = 1024;
+/// Any subset of the five supported accent-fold scripts.
+///
+/// Construction accepts typed script members, never numeric flags. Repetition
+/// and input order do not change the set; the empty set preserves every mark.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct AccentScripts(u8);
+impl AccentScripts {
+    const MEMBERS: [AccentScript; 5] = [
+        AccentScript::Latin,
+        AccentScript::Greek,
+        AccentScript::Cyrillic,
+        AccentScript::Arabic,
+        AccentScript::Hebrew,
+    ];
+
+    /// Collect script members into an order-independent set.
+    pub fn from_scripts(scripts: impl IntoIterator<Item = AccentScript>) -> Self {
+        scripts.into_iter().fold(Self::default(), Self::with)
+    }
+    /// Select another typed script; selecting an existing member changes nothing.
+    #[must_use]
+    pub const fn with(mut self, script: AccentScript) -> Self {
+        self.0 |= 1 << script as u8;
+        self
+    }
+    /// Whether this set selects a script.
+    pub const fn contains(self, script: AccentScript) -> bool {
+        self.0 & (1 << script as u8) != 0
+    }
+    /// Whether accent marks are preserved in every script.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+    /// Members in stable Latin, Greek, Cyrillic, Arabic, Hebrew order.
+    pub fn iter(self) -> impl Iterator<Item = AccentScript> {
+        Self::MEMBERS
+            .into_iter()
+            .filter(move |&script| self.contains(script))
+    }
+}
 /// Script-scoped removal of nonspacing accent marks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AccentFold {
@@ -26,6 +66,37 @@ pub enum AccentFold {
     LatinGreekCyrillic,
     /// Also fold marks attached to Arabic and Hebrew letters.
     LatinGreekCyrillicArabicHebrew,
+    /// Independently select any subset; an empty set preserves every mark.
+    Selected(AccentScripts),
+}
+impl AccentFold {
+    /// The semantic script set, independent of its preset or explicit spelling.
+    pub const fn scripts(self) -> AccentScripts {
+        match self {
+            Self::Preserve => AccentScripts(0),
+            Self::LatinGreekCyrillic => AccentScripts(7),
+            Self::LatinGreekCyrillicArabicHebrew => AccentScripts(31),
+            Self::Selected(scripts) => scripts,
+        }
+    }
+    const fn canonical(self) -> Self {
+        match self.scripts().0 {
+            0 => Self::Preserve,
+            7 => Self::LatinGreekCyrillic,
+            31 => Self::LatinGreekCyrillicArabicHebrew,
+            _ => self,
+        }
+    }
+    const fn fingerprint_code(self) -> u8 {
+        // Preserve the existing preset preimages exactly. Other sets occupy a
+        // disjoint byte range; aliases, repetitions and order never enter it.
+        match self.scripts().0 {
+            0 => 0,
+            7 => 1,
+            31 => 2,
+            mask => 32 | mask,
+        }
+    }
 }
 /// Explicit stemming language.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -114,7 +185,7 @@ impl AnalyzerProfile {
     /// Select accent folding.
     #[must_use]
     pub const fn with_accent_fold(mut self, accent: AccentFold) -> Self {
-        self.accent = accent;
+        self.accent = accent.canonical();
         self
     }
     /// Select stemming.
@@ -206,7 +277,7 @@ impl AnalyzerProfile {
         frame_le(&mut bytes, &crate::unicode::TEXT_DATA_DIGEST);
         bytes.extend_from_slice(&(self.max_token_scalars as u64).to_le_bytes());
         bytes.extend_from_slice(&[
-            self.accent as u8,
+            self.accent.fingerprint_code(),
             self.stemming as u8,
             self.input_mode as u8,
         ]);

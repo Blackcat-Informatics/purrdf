@@ -2658,7 +2658,7 @@ class _TextAnalyzerSpec(TypedDict, total=False):
     max_token_scalars: int
     accent: TypingLiteral[
         "preserve", "latin-greek-cyrillic", "latin-greek-cyrillic-arabic-hebrew"
-    ]
+    ] | list[TypingLiteral["latin", "greek", "cyrillic", "hebrew", "arabic"]]
     stemming: TypingLiteral["none", "english"]
     input_mode: TypingLiteral["plain", "html-text", "html-attribute"]
     code_length: int

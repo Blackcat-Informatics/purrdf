@@ -40,7 +40,21 @@ pub fn is_emoji_grapheme(text: &str) -> bool {
     if text.is_ascii() {
         return false;
     }
-    emoji_status(text).is_some()
+    // EP/RI already protect every finite atom except keycaps, their standardized
+    // variation spellings and skin-tone components. Only a keycap/variation
+    // prefix or a singleton skin-tone component needs finite recognition;
+    // keeping that lookup first retains their direct successful return.
+    // The complete official inventory and variation sequences independently
+    // verify this candidate class on native and WebAssembly targets.
+    let mut scalars = text.chars();
+    let candidate = match scalars.next() {
+        Some('#' | '*' | '0'..='9') => {
+            matches!(scalars.next(), Some('\u{20e3}' | '\u{fe0e}' | '\u{fe0f}'))
+        }
+        Some('\u{1f3fb}'..='\u{1f3ff}') => scalars.next().is_none(),
+        _ => false,
+    };
+    (candidate && emoji_status(text).is_some())
         || text.chars().any(|c| {
             is_extended_pictographic(c)
                 || property(c) & tables::GB_MASK == tables::GB_REGIONAL_INDICATOR
