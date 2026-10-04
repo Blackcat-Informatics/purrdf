@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+# Why not Rust: asserts the exception attributes the installed CPython extension raises to Python callers
 """Typed presentations on SPARQL parse failures.
 
 A refused query or update raises the same ``ValueError``, with the same message and

@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// Why not Rust: asserts the properties the built wasm package's thrown and rejected JavaScript errors expose to Node callers
 
 // Typed presentations on SPARQL parse failures, through the built package. A refused
 // query or update throws (or rejects with) the same `Error`, with the same `message` and

@@ -9,8 +9,6 @@ import {
   type AsyncEntailmentQueryOutcome,
   type AsyncEvidence,
   type AsyncJobError,
-  type DiagnosticParameterValue,
-  type DiagnosticPresentation,
   type AsyncLoadResolver,
   type AsyncQueryOutcome,
   type AsyncServiceResolver,
@@ -470,18 +468,8 @@ engine.selectAsync(matched, "SELECT ?s WHERE { ?s ?p ?o }", { format: "json" });
 asyncResult.catch((error: AsyncJobError) => {
   const evidence: AsyncEvidence = error.evidence.async;
   const failureCode: string = error.code;
-  const presentation: DiagnosticPresentation | undefined = error.presentation;
-  const messageId: string | undefined = presentation?.messageId;
-  const at: DiagnosticParameterValue | undefined = presentation?.parameters["at"];
-  if (at?.kind === "unsigned") {
-    const exact: string = at.value;
-    void exact;
-  }
-  const cause: DiagnosticPresentation | undefined = presentation?.detail;
   void evidence;
   void failureCode;
-  void messageId;
-  void cause;
 });
 
 const result: QueryResult = engine.query(matched, "ASK { ?s ?p ?o }");
