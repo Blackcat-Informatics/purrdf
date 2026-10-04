@@ -29,6 +29,9 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          # Full history and every branch: the non-Rust ratchet compares against the
+          # merge-base with the pull request's base branch, which a depth-1 clone lacks.
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
@@ -172,6 +175,25 @@ jobs:
 
       - name: Check the helper census can still find a copy
         run: cargo run -q --locked -p helper-census -- --self-test
+
+      # A pull request is compared with the merge-base of its merge commit and its base
+      # branch; a push to main with the commit main held before the push.
+      - name: Check no legacy Python/JS grew and every new file says why it is not Rust
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) base="origin/$BASE_REF" ;;
+            push) base="$BEFORE" ;;
+            *) base="origin/main" ;;
+          esac
+          case "$base" in
+            "" | 0000000000000000000000000000000000000000) base="HEAD^" ;;
+          esac
+          cargo run -q --locked -p helper-census -- --non-rust-ratchet \
+            --merge-base-with "$base" --target rev:HEAD
 
       - name: Check the shared-helpers gate can still fail
         run: python3 scripts/check-shared-helpers.py --self-test
