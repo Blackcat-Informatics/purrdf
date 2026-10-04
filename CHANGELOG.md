@@ -27,6 +27,48 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `purrdf_core` crate root re-export the same types, so existing paths and
   matches keep compiling.
 
+### Fixed
+
+- **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
+  with a non-ASCII character where the timezone suffix would be, such as
+  `"2001-01-01€12345"`, is rejected as an invalid lexical form instead of
+  panicking. SPARQL casts, typed-literal ordering, D-entailment and SHACL
+  validation over such literals no longer abort.
+- **SHACL Core:** `sh:datatype` now rejects ill-formed literals of every XSD
+  datatype PurRDF models, not only the numeric and boolean types. This covers
+  `xsd:dateTime`, `xsd:date`, `xsd:time`, `xsd:dateTimeStamp` (which also
+  requires a timezone), the `xsd:g*` types, the duration types, `xsd:hexBinary`
+  and `xsd:base64Binary`. For example, `"notadate"^^xsd:date` no longer
+  conforms. Well-formed values that exceed PurRDF's numeric range, such as
+  years beyond 64 bits, still conform. Custom datatypes are not checked.
+- **XSD lexical forms:** durations follow the XSD grammar. Designators must
+  appear in order, each at most once, and `T` must be followed by a time
+  component, so `P1YT` and `P1D1Y` are rejected. A `base64Binary` value's
+  final character before padding may not encode extra bits, so `AQJ=` is
+  rejected. Years, duration fields and fractional seconds that are well-formed
+  but too large to represent now report an out-of-range error instead of an
+  invalid lexical form. Fractional seconds with trailing zeros beyond 18
+  digits now parse.
+- **SHACL `subClassOfInShapesGraph`:** the shapes graph's `rdfs:subClassOf`
+  chains through blank nodes now count toward SHACL type. With
+  `ex:A rdfs:subClassOf _:b . _:b rdfs:subClassOf ex:B` in the shapes graph,
+  an `ex:A` instance is a member of `ex:B`. Before, such an instance was
+  missed by `sh:targetClass ex:B` and wrongly violated `sh:class ex:B`.
+  Chains of several blank nodes, and cycles among them, work too. A blank node
+  that is not on a path between two IRI classes adds no membership. Results
+  with the option off are unchanged. The superclasses reached through blank
+  nodes are computed once per blank node, so many classes that share one long
+  blank chain stay linear in the size of the shapes graph.
+- **SHACL-SPARQL custom components:** a constraint component or a SPARQL
+  validator now has the SHACL type that any other node has. Its `rdf:type`
+  values may be blank nodes, and its `rdfs:subClassOf` chain may run through
+  blank nodes. Before, a component typed through `_:x rdfs:subClassOf
+  sh:ConstraintComponent` was silently not registered, so its constraints
+  never ran. A validator whose class reached `sh:SPARQLAskValidator` through a
+  blank node was refused as a `validator-class` syntax violation. Cycles
+  among blank nodes terminate, and a blank node on no path to the SHACL class
+  registers nothing.
+
 ## [3.0.1] - 2026-10-02
 
 ### Fixed
