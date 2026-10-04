@@ -118,17 +118,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   literals, `xsd:string` and the types derived from it, such as `xsd:token`,
   still cast by lexical form, every numeric and boolean cast the table allows
   is unchanged, and casting any literal or IRI to `xsd:string` still works.
-- **SPARQL date, time and binary casts:** the casts XPath allows between these
-  types now work, by value; before, they were unbound. `xsd:date`, `xsd:time`
-  and the five Gregorian types cast from `xsd:dateTime`, and `xsd:dateTime`
-  and the Gregorian types from `xsd:date`, keeping the timezone:
-  `xsd:date("2002-10-10T17:00:00+05:00"^^xsd:dateTime)` is
-  `"2002-10-10+05:00"^^xsd:date`, and a date becomes midnight of that day as a
-  `xsd:dateTime`. `xsd:duration` and its two subtypes cast among themselves,
-  and `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their
-  bytes (`xsd:hexBinary("abcd"^^xsd:base64Binary)` is `"69B71D"`, not
-  `"ABCD"`). Pairs XPath forbids, such as `xsd:time` from `xsd:date` or
-  `xsd:gYear("2020"^^xsd:hexBinary)`, are errors.
+- **SPARQL duration and binary casts:** the casts XPath allows between these
+  types now work, by value; before, they were unbound or re-read the source's
+  spelling. `xsd:duration` and its two subtypes cast among themselves
+  (`xsd:dayTimeDuration("P1Y2M3DT4H"^^xsd:duration)` is `"P3DT4H"`), and
+  `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes
+  (`xsd:hexBinary("abcd"^^xsd:base64Binary)` is `"69B71D"`, not `"ABCD"`). A
+  calendar, duration or binary value casts to no other non-string type, so
+  `xsd:hexBinary("2020"^^xsd:gYear)` is an error.
 - **SPARQL keywords:** `true` and `false` match case-insensitively like every
   other SPARQL keyword except `a`, so `SELECT (TRUE AS ?t) (False AS ?f) {}`
   parses (the W3C `case-insensitive-booleans` test). They work this way in
