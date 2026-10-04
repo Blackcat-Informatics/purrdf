@@ -17,7 +17,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   missed by `sh:targetClass ex:B` and wrongly violated `sh:class ex:B`.
   Chains of several blank nodes, and cycles among them, work too. A blank node
   that is not on a path between two IRI classes adds no membership. Results
-  with the option off are unchanged.
+  with the option off are unchanged. The superclasses reached through blank
+  nodes are computed once per blank node, so many classes that share one long
+  blank chain stay linear in the size of the shapes graph.
 - **SHACL-SPARQL custom components:** a constraint component or a SPARQL
   validator now has the SHACL type that any other node has. Its `rdf:type`
   values may be blank nodes, and its `rdfs:subClassOf` chain may run through
