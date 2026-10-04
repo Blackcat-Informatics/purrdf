@@ -29,6 +29,102 @@ impl Decimal {
         Self { mantissa, scale }
     }
 
+    /// The decimal whose value is exactly the integer `value` (scale 0). Every
+    /// `i128` is representable, so the conversion never rounds and never fails —
+    /// the `xs:integer` to `xs:decimal` cast of XPath F&O 3.1 §19.1.2.3.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::Decimal;
+    ///
+    /// let max = Decimal::from_integer(i128::MAX);
+    /// assert_eq!(max.canonical_lexical(), i128::MAX.to_string());
+    /// ```
+    #[must_use]
+    pub const fn from_integer(value: i128) -> Self {
+        Self {
+            mantissa: value,
+            scale: 0,
+        }
+    }
+
+    /// The decimal numerically closest to the binary64 `value` among those this
+    /// type represents (at most 18 fractional digits), ties going to the one
+    /// closer to zero — the `xs:float`/`xs:double` to `xs:decimal` cast of XPath
+    /// F&O 3.1 §19.1.2.3. A float source widens to `f64` exactly first.
+    ///
+    /// Returns `None` for `NaN` and the infinities (which have no decimal value,
+    /// `err:FOCA0002`) and for a magnitude of `2^127` or more (too large to be
+    /// accommodated, `err:FOCA0001`). The conversion reads the binary value
+    /// itself, never a decimal rendering of it: `0.1_f32` is
+    /// `0.100000001490116119384765625`, so the result is `0.100000001490116119`.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::Decimal;
+    ///
+    /// let tenth = Decimal::from_f64_closest(f64::from(0.1_f32)).unwrap();
+    /// assert_eq!(tenth.canonical_lexical(), "0.100000001490116119");
+    /// assert!(Decimal::from_f64_closest(f64::NAN).is_none());
+    /// ```
+    #[must_use]
+    pub fn from_f64_closest(value: f64) -> Option<Self> {
+        if !value.is_finite() {
+            return None;
+        }
+        let bits = value.to_bits();
+        let negative = bits >> 63 == 1;
+        let biased = i32::try_from((bits >> 52) & 0x7ff).ok()?;
+        let fraction = bits & ((1_u64 << 52) - 1);
+        // `|value| = significand × 2^exponent`, exactly.
+        let (significand, exponent) = if biased == 0 {
+            (fraction, -1074)
+        } else {
+            (fraction | (1_u64 << 52), biased - 1075)
+        };
+        if significand == 0 {
+            return Some(Self::from_integer(0));
+        }
+        let magnitude: u128 = if exponent >= 0 {
+            // An integer: exact at scale 0 while it stays below 2^127.
+            let width = 64 - significand.leading_zeros();
+            if width + exponent.unsigned_abs() > 127 {
+                return None;
+            }
+            u128::from(significand) << exponent.unsigned_abs()
+        } else {
+            // `significand × 10^18 / 2^shift`, rounded to the nearest integer with
+            // ties toward zero. The product is below 2^53 × 10^18 < 2^113, so
+            // it neither overflows nor survives a shift of 114 or more except
+            // as a remainder short of one half.
+            let shift = exponent.unsigned_abs();
+            let product = u128::from(significand) * 10_u128.pow(u32::from(MAX_DECIMAL_SCALE));
+            let rounded = if shift >= 114 {
+                0
+            } else {
+                let quotient = product >> shift;
+                let remainder = product & ((1_u128 << shift) - 1);
+                quotient + u128::from(remainder > 1_u128 << (shift - 1))
+            };
+            let mut decimal = Self {
+                mantissa: i128::try_from(rounded).ok()?,
+                scale: MAX_DECIMAL_SCALE,
+            };
+            while decimal.scale > 0 && decimal.mantissa % 10 == 0 {
+                decimal.mantissa /= 10;
+                decimal.scale -= 1;
+            }
+            if negative {
+                decimal.mantissa = -decimal.mantissa;
+            }
+            return Some(decimal);
+        };
+        let mantissa = i128::try_from(magnitude).ok()?;
+        Some(Self::from_integer(if negative {
+            -mantissa
+        } else {
+            mantissa
+        }))
+    }
+
     /// The mantissa (signed significant digits).
     #[must_use]
     pub fn mantissa(&self) -> i128 {
@@ -320,18 +416,25 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
 
     let digits = format!("{int_str}{frac_str}");
     let digits_trimmed = digits.trim_start_matches('0');
-    let magnitude = if digits_trimmed.is_empty() {
-        0i128
-    } else {
-        digits_trimmed
-            .parse::<i128>()
-            .map_err(|_| XsdError::OutOfRange {
-                datatype: dt,
-                lexical: s.to_string(),
-                reason: "integer magnitude exceeds i128",
-            })?
+    let out_of_range = || XsdError::OutOfRange {
+        datatype: dt,
+        lexical: s.to_string(),
+        reason: "integer magnitude exceeds i128",
     };
-    let mantissa = if neg { -magnitude } else { magnitude };
+    // The magnitude is read unsigned so that `i128::MIN`, whose magnitude is one past
+    // `i128::MAX`, is a mantissa like any other (it is the value `xsd:decimal` of the
+    // integer `i128::MIN` holds, and its canonical lexical must read back).
+    let magnitude = if digits_trimmed.is_empty() {
+        0u128
+    } else {
+        digits_trimmed.parse::<u128>().map_err(|_| out_of_range())?
+    };
+    let mantissa = if neg {
+        0i128.checked_sub_unsigned(magnitude)
+    } else {
+        i128::try_from(magnitude).ok()
+    }
+    .ok_or_else(out_of_range)?;
     // `frac_str.len() <= MAX_DECIMAL_SCALE <= u8::MAX`, so the cast cannot truncate.
     Ok(Decimal::from_parts(mantissa, frac_str.len() as u8))
 }
@@ -1152,14 +1255,17 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 }
 
 /// Exact decimal long division, producing up to `MAX_DECIMAL_SCALE` (18) fractional
-/// digits by truncation toward zero.
+/// digits by truncation toward zero — the precision rule for `op:numeric-divide` on
+/// decimals, which XPath F&O 3.1 §4.2 (the arithmetic rules §4.2.4
+/// `op:numeric-divide` follows) leaves implementation-defined.
 ///
-/// Algorithm: scale the dividend mantissa up by `10^target_scale` to capture enough
-/// fractional precision, then integer-divide by the divisor mantissa. The result
-/// mantissa is `(dividend_m × 10^shift) / divisor_m` at scale `target_scale`.
-///
-/// The shift factor is chosen as `MAX_DECIMAL_SCALE + divisor.scale()` minus the
-/// dividend scale so that the final result lands at exactly scale `MAX_DECIMAL_SCALE`.
+/// The quotient is `trunc(dividend × 10^S / divisor)` at the finest scale
+/// `S ≤ 18` whose mantissa fits the `i128` the value space holds: the exact quotient
+/// whenever it is representable (`10^21 / 2` is `5 × 10^20`, although its scale-18
+/// mantissa would not fit), otherwise the quotient truncated toward zero at that
+/// scale. The intermediate `dividend_m × 10^shift` is formed in 256 bits
+/// ([`crate::wide::mul_div`]), so it never overflows; only a quotient whose integer
+/// part exceeds `i128` is refused, with [`XsdError::OutOfRange`] (`err:FOAR0002`).
 fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdError> {
     decimal_div_raw(dividend, divisor).map(XsdValue::Decimal)
 }
@@ -1188,51 +1294,54 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
             datatype: XsdDatatype::Decimal,
         });
     }
-    // We want: result = dividend / divisor at scale MAX_DECIMAL_SCALE.
-    // dividend = dm × 10^(-ds), divisor = vm × 10^(-vs).
-    // result mantissa at scale S = dm × 10^(S + vs - ds) / vm
-    // where S = MAX_DECIMAL_SCALE.
+    // dividend = dm × 10^-ds and divisor = vm × 10^-vs, so the quotient's mantissa at
+    // scale S is trunc(dm × 10^(S + vs - ds) / vm). The result is that mantissa at the
+    // finest scale S ≤ MAX_DECIMAL_SCALE whose mantissa fits the i128 the value space
+    // holds: the exact quotient whenever it is representable, else the quotient
+    // truncated toward zero at that scale (XPath F&O 3.1 §4.2, which §4.2.4 follows,
+    // leaves the precision of a decimal quotient implementation-defined; this crate
+    // truncates, as documented on `decimal_div`). Only a quotient whose integer part
+    // alone exceeds i128 is an overflow (`err:FOAR0002`).
     let dm = dividend.mantissa();
     let vm = divisor.mantissa();
-    // Combined scale shift: (MAX_DECIMAL_SCALE + vs) - ds.
-    // vs and ds are both ≤ 18, and MAX_DECIMAL_SCALE = 18, so the net exponent
-    // is in [-18, 36]. We must keep the dividend mantissa from overflowing i128.
-    let target_scale = MAX_DECIMAL_SCALE;
     let vs = i32::from(divisor.scale());
     let ds = i32::from(dividend.scale());
-    let shift_exp: i32 = i32::from(target_scale) + vs - ds;
-    // Scale dm up by 10^shift_exp. `shift_exp` is NEVER negative: both `vs` and
-    // `ds` are bounded by the crate-wide `scale <= MAX_DECIMAL_SCALE` (= 18)
-    // invariant (documented on `Decimal::cmp_exact` above, `debug_assert!`ed
-    // there, enforced at parse time by `parse_decimal`, and re-clamped by
-    // `decimal_mul_raw`), so `shift_exp = MAX_DECIMAL_SCALE + vs - ds >= 18 + 0
-    // - 18 = 0` for every reachable input. A scale-down arm here would be dead
-    // code; `unreachable!()` (not `debug_assert!`, which compiles out under
-    // `[profile.release]` and would ship a silent truncation) keeps that proof
-    // load-bearing in every build profile rather than merely in debug builds.
-    let Ok(shift) = u32::try_from(shift_exp) else {
-        unreachable!("decimal scale invariant (scale <= 18) keeps shift_exp non-negative")
+    let negative = (dm < 0) != (vm < 0);
+    let fits = |magnitude: u128| {
+        if negative {
+            0_i128.checked_sub_unsigned(magnitude)
+        } else {
+            i128::try_from(magnitude).ok()
+        }
     };
-    // Max shift is 18 + 18 - 0 = 36. 10^36 ≈ 10^36, and i128::MAX ≈ 1.70×10^38,
-    // so we can represent 10^36. dm itself can be up to i128::MAX / 10 (from
-    // multiplication), but in the typical case |dm| ≤ 10^18. If the scale-up
-    // overflows, return OutOfRange.
-    let factor = 10i128.pow(shift);
-    let scaled_dm: i128 = dm.checked_mul(factor).ok_or_else(|| XsdError::OutOfRange {
+    let (numerator, denominator) = (dm.unsigned_abs(), vm.unsigned_abs());
+    for scale in (0..=MAX_DECIMAL_SCALE).rev() {
+        let shift = i32::from(scale) + vs - ds;
+        let magnitude = if shift >= 0 {
+            // shift ≤ 18 + 18 = 36, and 10^36 < 2^128.
+            crate::wide::mul_div(numerator, 10_u128.pow(shift.unsigned_abs()), denominator)
+        } else {
+            // ⌊⌊n / 10^k⌋ / d⌋ = ⌊n / (10^k · d)⌋ for positive integers; k ≤ 18.
+            Some(numerator / 10_u128.pow(shift.unsigned_abs()) / denominator)
+        };
+        if let Some(mantissa) = magnitude.and_then(fits) {
+            return Ok(Decimal::from_parts(mantissa, scale));
+        }
+    }
+    Err(XsdError::OutOfRange {
         datatype: XsdDatatype::Decimal,
         lexical: String::new(),
-        reason: "decimal division intermediate overflow",
-    })?;
-    Ok(Decimal::from_parts(scaled_dm / vm, target_scale))
+        reason: "decimal quotient exceeds the i128 mantissa at every scale",
+    })
 }
 
 /// `op:numeric-divide` for an integer `SUM` fold's running total (`dividend`)
 /// once it has grown past `i128` (see [`crate::bigint::BigInt`]'s module docs
 /// for why that can happen), divided by the folded row `count`. This is
-/// `AVG`'s finish for exactly that case — mirrors `decimal_div_raw`'s
-/// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape exactly (same target
-/// scale, same truncate-toward-zero), just computed over an
-/// arbitrary-precision dividend instead of an `i128` one.
+/// `AVG`'s finish for exactly that case — `decimal_div_raw`'s
+/// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape (same target scale, same
+/// truncate-toward-zero) computed over an arbitrary-precision dividend instead
+/// of an `i128` one, without `decimal_div_raw`'s descent to a coarser scale.
 ///
 /// `None` when the resulting MANTISSA does not fit `i128` — `xsd:decimal`'s
 /// [`Decimal`] representation is deliberately `i128`-mantissa-bounded (this
@@ -1339,10 +1448,10 @@ pub fn numeric_unary_minus(a: &XsdValue) -> Result<XsdValue, XsdError> {
                 reason: "integer unary minus overflow (i128::MIN has no positive counterpart)",
             }),
         XsdValue::Decimal(d) => {
-            // Decimal negation: negate the mantissa. No overflow: i128::MIN has no
-            // positive counterpart, but parse_decimal rejects values that would place
-            // the mantissa at i128::MIN (it parses the magnitude separately as unsigned).
-            // Defensive check retained for safety.
+            // Decimal negation negates the mantissa. A mantissa of i128::MIN (a
+            // decimal parse_decimal accepts) has no positive counterpart at its scale or
+            // any other — 2^127 / 10^s is never a multiple of a coarser decimal unit —
+            // so its negation is out of range (`err:FOAR0002`), not rounded.
             d.mantissa()
                 .checked_neg()
                 .map(|m| XsdValue::Decimal(Decimal::from_parts(m, d.scale())))
@@ -2904,5 +3013,273 @@ mod tests {
         // The same bits through promotion into double arithmetic.
         let sum = numeric_add(&XsdValue::Decimal(decimal), &double_val(0.0)).unwrap();
         assert_eq!(as_double(&sum).to_bits(), expected.to_bits());
+    }
+    /// The closest 18-fractional-digit decimal to `value`, ties toward zero, read
+    /// off the exact decimal expansion `{:.1100}` prints (every binary64 has at
+    /// most 1074 fractional digits).
+    fn closest_decimal_reference(value: f64) -> Option<String> {
+        let exact = format!("{:.1100}", value.abs());
+        let (int, frac) = exact.split_once('.').expect("a fractional part");
+        if value.abs() >= 2f64.powi(53) {
+            // An integer, exact at scale 0.
+            let mantissa = i128::try_from(int.parse::<u128>().ok()?).ok()?;
+            let signed = if value.is_sign_negative() {
+                -mantissa
+            } else {
+                mantissa
+            };
+            return Some(signed.to_string());
+        }
+        let (kept, rest) = frac.split_at(18);
+        let above_half = match rest.as_bytes()[0] {
+            b'6'..=b'9' => true,
+            b'5' => rest.bytes().skip(1).any(|b| b != b'0'),
+            _ => false,
+        };
+        let mut digits: u128 = format!("{int}{kept}").parse().ok()?;
+        digits += u128::from(above_half);
+        let mantissa = i128::try_from(digits).ok()?;
+        let decimal = Decimal::from_parts(
+            if value.is_sign_negative() {
+                -mantissa
+            } else {
+                mantissa
+            },
+            MAX_DECIMAL_SCALE,
+        );
+        Some(decimal.canonical_lexical())
+    }
+
+    /// The decimal quotient the division rule defines, from the exact rational
+    /// `dividend / divisor` with integer arithmetic only
+    /// ([`purrdf_testkit::exact`]): truncated toward zero at the finest scale `S ≤ 18`
+    /// whose mantissa fits an `i128`, as `(mantissa, S)`; `None` when none does.
+    fn decimal_quotient_oracle(dividend: Decimal, divisor: Decimal) -> Option<(i128, u8)> {
+        use purrdf_testkit::exact::{Natural, Rational};
+        let negative = (dividend.mantissa < 0) != (divisor.mantissa < 0);
+        (0..=MAX_DECIMAL_SCALE).rev().find_map(|scale| {
+            // dividend / divisor × 10^S = dm · 10^(vs + S) / (vm · 10^ds).
+            let numerator = Natural::from_u128(dividend.mantissa.unsigned_abs())
+                .mul_pow10(u32::from(divisor.scale) + u32::from(scale));
+            let denominator = Natural::from_u128(divisor.mantissa.unsigned_abs())
+                .mul_pow10(u32::from(dividend.scale));
+            Rational::new(negative, numerator, denominator)
+                .truncate_toward_zero()
+                .map(|mantissa| (mantissa, scale))
+        })
+    }
+
+    /// Hold `numeric_div` on two decimals to the oracle: the same value, or the
+    /// typed overflow when no representable quotient exists.
+    fn assert_decimal_quotient(dividend: Decimal, divisor: Decimal) {
+        let got = numeric_div(&XsdValue::Decimal(dividend), &XsdValue::Decimal(divisor));
+        match decimal_quotient_oracle(dividend, divisor) {
+            Some((mantissa, scale)) => {
+                let Ok(XsdValue::Decimal(quotient)) = got else {
+                    panic!("{dividend:?} / {divisor:?}: {got:?}, expected {mantissa}e-{scale}");
+                };
+                assert_eq!(
+                    quotient.cmp_exact(&Decimal::from_parts(mantissa, scale)),
+                    Ordering::Equal,
+                    "{dividend:?} / {divisor:?} = {quotient:?}, expected {mantissa}e-{scale}"
+                );
+            }
+            None => assert!(
+                matches!(got, Err(XsdError::OutOfRange { .. })),
+                "{dividend:?} / {divisor:?} overflows, got {got:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn decimal_division_matches_the_exact_oracle() {
+        let mut state = 0xD1F1_DE5A_u64;
+        let mut next = || purrdf_testkit::rng::splitmix64_next(&mut state);
+        let int = |next: &mut dyn FnMut() -> u64| {
+            let width = 1 + (next() % 127) as u32;
+            let raw = (u128::from(next()) << 64) | u128::from(next());
+            let magnitude = (raw >> (128 - width)) as i128;
+            if next() & 1 == 1 {
+                -magnitude
+            } else {
+                magnitude
+            }
+        };
+        let scale = |next: &mut dyn FnMut() -> u64| (next() % 19) as u8;
+        let mut cases = 0_usize;
+        let extremes = [
+            i128::MIN,
+            i128::MIN + 1,
+            i128::MAX,
+            i128::MAX - 1,
+            -1,
+            1,
+            2,
+            3,
+            7,
+            10,
+            -10,
+            1_000_000_000_000_000_000_000,
+            100_000_000_000_000_000_000,
+        ];
+        // Every extreme over every extreme, at a spread of scales — the overflow
+        // boundary (MAX / 0.1, MIN / -1) and the exact large quotients (10^21 / 2,
+        // MIN / 2) among them.
+        for &dm in &extremes {
+            for &vm in &extremes {
+                for (ds, vs) in [(0, 0), (0, 1), (1, 0), (0, 18), (18, 0), (18, 18), (5, 9)] {
+                    assert_decimal_quotient(
+                        Decimal::from_parts(dm, ds),
+                        Decimal::from_parts(vm, vs),
+                    );
+                    cases += 1;
+                }
+            }
+        }
+        for _ in 0..30_000 {
+            let (dm, vm) = (int(&mut next), int(&mut next));
+            if vm == 0 {
+                continue;
+            }
+            let (ds, vs) = (scale(&mut next), scale(&mut next));
+            assert_decimal_quotient(Decimal::from_parts(dm, ds), Decimal::from_parts(vm, vs));
+            cases += 1;
+        }
+        // Exact quotients: dividend = quotient × divisor, whenever that product fits.
+        for _ in 0..20_000 {
+            let (q, vm) = (int(&mut next) >> 40, int(&mut next) >> 40);
+            let Some(dm) = q.checked_mul(vm).filter(|_| vm != 0) else {
+                continue;
+            };
+            let (ds, vs) = (scale(&mut next), scale(&mut next));
+            assert_decimal_quotient(Decimal::from_parts(dm, ds), Decimal::from_parts(vm, vs));
+            cases += 1;
+        }
+        // Near the overflow boundary: large dividends over small divisors.
+        for _ in 0..10_000 {
+            let dm =
+                (i128::MAX - (int(&mut next) >> 64).abs()) * if next() & 1 == 1 { -1 } else { 1 };
+            let vm = int(&mut next) >> 100;
+            if vm == 0 {
+                continue;
+            }
+            let (ds, vs) = (scale(&mut next), scale(&mut next));
+            assert_decimal_quotient(Decimal::from_parts(dm, ds), Decimal::from_parts(vm, vs));
+            cases += 1;
+        }
+        assert!(cases > 50_000, "{cases}");
+    }
+
+    #[test]
+    fn decimal_negation_and_abs_of_the_smallest_mantissa_are_typed_overflows() {
+        let min = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 0));
+        assert!(matches!(
+            numeric_unary_minus(&min),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            numeric_abs(&min),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        let scaled = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 18));
+        assert!(matches!(
+            numeric_abs(&scaled),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        // One above it negates and takes its absolute value.
+        let next = XsdValue::Decimal(Decimal::from_parts(i128::MIN + 1, 0));
+        let Ok(XsdValue::Decimal(abs)) = numeric_abs(&next) else {
+            panic!("abs of i128::MIN + 1");
+        };
+        assert_eq!(abs.mantissa(), i128::MAX);
+        let Ok(XsdValue::Decimal(negated)) = numeric_unary_minus(&next) else {
+            panic!("negation of i128::MIN + 1");
+        };
+        assert_eq!(negated.mantissa(), i128::MAX);
+    }
+
+    #[test]
+    fn decimal_mantissa_spans_the_whole_i128_range() {
+        let min = i128::MIN.to_string();
+        let parsed = parse_decimal(&min).expect("i128::MIN is a decimal");
+        assert_eq!(parsed.mantissa(), i128::MIN);
+        assert_eq!(parsed.canonical_lexical(), min);
+        assert_eq!(
+            Decimal::from_integer(i128::MIN).canonical_lexical(),
+            min,
+            "the canonical lexical of the cast reads back"
+        );
+        let scaled = parse_decimal("-170141183460469231731.687303715884105728").expect("scaled");
+        assert_eq!((scaled.mantissa(), scaled.scale()), (i128::MIN, 18));
+        assert_eq!(
+            parse_decimal(&i128::MAX.to_string())
+                .expect("max")
+                .mantissa(),
+            i128::MAX
+        );
+        // One past either end is still out of range.
+        for beyond in [
+            "-170141183460469231731687303715884105729",
+            "170141183460469231731687303715884105728",
+            "-170141183460469231731.687303715884105729",
+        ] {
+            assert!(
+                matches!(parse_decimal(beyond), Err(XsdError::OutOfRange { .. })),
+                "{beyond}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_f64_closest_matches_the_exact_expansion() {
+        for (value, expected) in [
+            (0.1_f64, Some("0.100000000000000006")),
+            (f64::from(0.1_f32), Some("0.100000001490116119")),
+            (3.0 * 2f64.powi(-19), Some("0.000005722045898437")),
+            (-3.0 * 2f64.powi(-19), Some("-0.000005722045898437")),
+            (5.0 * 2f64.powi(-19), Some("0.000009536743164062")),
+            (1e30, Some("1000000000000000019884624838656")),
+            (-0.0, Some("0")),
+            (2f64.powi(-1074), Some("0")),
+            (2f64.powi(127), None),
+            (-(2f64.powi(127)), None),
+            (f64::NAN, None),
+            (f64::INFINITY, None),
+        ] {
+            assert_eq!(
+                Decimal::from_f64_closest(value)
+                    .map(|d| d.canonical_lexical())
+                    .as_deref(),
+                expected,
+                "{value:e}"
+            );
+        }
+        let below = f64::from_bits(2f64.powi(127).to_bits() - 1);
+        assert_eq!(
+            Decimal::from_f64_closest(below).map(|d| d.mantissa()),
+            i128::try_from(below as u128).ok()
+        );
+        let mut state = 0xdec1_3a1f_u64;
+        let mut next = || purrdf_testkit::rng::splitmix64_next(&mut state);
+        for index in 0..20_000_u32 {
+            let bits = next();
+            // Anywhere in the finite range, or a magnitude in [2^-70, 2^70).
+            let value = if index % 2 == 0 {
+                f64::from_bits(bits & 0xffef_ffff_ffff_ffff)
+            } else {
+                let exponent = (bits >> 52) % 140;
+                f64::from_bits((bits & 0x800f_ffff_ffff_ffff) | ((953 + exponent) << 52))
+            };
+            let reference = if value.abs() < 2f64.powi(127) {
+                closest_decimal_reference(value)
+            } else {
+                None
+            };
+            assert_eq!(
+                Decimal::from_f64_closest(value).map(|d| d.canonical_lexical()),
+                reference,
+                "{value:e}"
+            );
+        }
     }
 }

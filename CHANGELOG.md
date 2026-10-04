@@ -8,6 +8,42 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Added
+
+- **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
+  exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
+  binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
+  2^127 or more.
+- **core:** `loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED`, a runtime loss code. The
+  loss registry and `generated/transcode-loss-matrix.json` list it for every
+  syntax pair whose source can write an empty named graph and whose target
+  cannot. `pair_loss_ledger` never emits it as a contract entry.
+- **rdf:** `NativeRdfFormat::carries_empty_named_graphs` and
+  `empty_named_graphs_dropped(dataset, format, selection)`. The function lists
+  the declared empty named graphs that a whole-dataset serialization to a format
+  drops.
+- **Host loss reports:** each host now reports the number of declared empty
+  named graphs a whole-dataset serialization drops. Every existing field, key
+  and prototype is unchanged.
+  - Python: `SerializeLoss.empty_named_graphs_dropped` (also shown in its repr).
+  - wasm: `SerializeLoss.emptyNamedGraphsDropped`, with the TypeScript
+    declaration updated.
+  - C: the new function `purrdf_serialize_empty_named_graphs_dropped`. The C ABI
+    moves to 0.9.0 because a library exporting a new symbol must not report the
+    shipped 0.8.0.
+- **core:** `MutableDataset::declare_named_graph` and
+  `MutableDataset::declared_named_graphs`. A graph declared this way follows the
+  same withdrawal rules as an input declaration: `DROP` or `CLEAR` of the graph,
+  `DROP NAMED`/`DROP ALL`, or removing its last row withdraws it. A declaration
+  no operation touches survives. `declared_named_graphs` omits withdrawn base
+  declarations. `visit_blank_identities` visits a declared blank graph name, so
+  fresh blanks never reuse it, and `snapshot_view_with_limits` charges
+  declarations before it freezes the delta.
+- **events:** `RdfEventSink::named_graph`, a method with a default
+  implementation that ignores the event. The frozen-dataset replay emits it for
+  each named graph, and `DatasetSink` keeps the declarations it receives.
+- **rdf:** `flat_dataset_from_quads_declaring`.
+
 ### Fixed
 
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
@@ -97,6 +133,52 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and `"*"` matches only a non-empty tag, as SPARQL requires.
   `FILTER langMatches(lang(?v), "*")` no longer keeps untagged literals, and
   its negation now keeps them (the W3C `q-langMatches-3` and `-4` results).
+- **SPARQL numeric casts:** an XSD constructor cast from a numeric or boolean
+  literal converts its value instead of reparsing its lexical form, following
+  the XPath casting rules SPARQL 1.1 §17.5 adopts. `xsd:double("0.1"^^xsd:float)`
+  is now `1.0000000149011612E-1`, the float's value, and
+  `xsd:integer("16777217"^^xsd:float)` is now `16777216`. A double cast to
+  `xsd:float` rounds the double's value to the nearest float, ties to even.
+  This deliberately differs from F&O 3.1 §19.1.2.1, whose text truncates the
+  mantissa. Rounding is more accurate (within half an ulp, unbiased), matches
+  XSD 1.1 `floatingPointRound` as the string, decimal and integer casts already
+  do, and agrees with common engines. The F&O rule also flushes the float
+  subnormal band to zero, which is a defect in its text. A double exactly halfway
+  between the largest float and 2^128 now gives `INF`:
+  `xsd:float("3.4028235677973366e38"^^xsd:double)` was `3.4028235E38`.
+  `xsd:float("1e-40"^^xsd:double)` gives the nearest subnormal, `1.0E-40`.
+  A float or double cast to `xsd:decimal` gives the decimal closest to its
+  binary value, with ties rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
+  `0.100000001490116119` instead of `0.1`. Casts from strings still parse the
+  string.
+- **XSD decimal division:** dividing decimals or integers no longer fails
+  when an intermediate value overflows but the result fits. Previously any
+  dividend of about 10^21 or more was refused:
+  `"1000000000000000000000"^^xsd:decimal / 2` is now `500000000000000000000`
+  instead of an error, and the smallest and largest 128-bit decimals can be
+  halved. The result is exact when it fits in 18 fractional digits and a
+  128-bit mantissa. Otherwise it is truncated toward zero at the finest scale
+  that fits, so `1 / 3` is still `0.333333333333333333`. Division is refused
+  only when the integer part of the result is too large, as with
+  `i128::MAX / 0.1`. Dividing two `xsd:dayTimeDuration`s follows the same
+  rule, so one day divided by one attosecond is now `86400000000000000000000`
+  instead of an error. Negating the smallest decimal, or taking its absolute
+  value, is still refused: the result is 2^127, which does not fit.
+- **XSD decimals:** the decimal lexical form of the smallest 128-bit integer,
+  `-170141183460469231731687303715884105728` (also with up to 18 fractional
+  digits), now parses. It was refused as out of range although its value is
+  representable, so `xsd:decimal` of that integer produced a literal that did
+  not read back.
+- **SPARQL numeric-to-string casts:** `xsd:string` of a float or double uses
+  plain notation only for magnitudes from 0.000001 up to, but not including,
+  1000000, and scientific notation with a digit after the point otherwise:
+  `xsd:string("1e7"^^xsd:double)` is `1.0E7` instead of `10000000`, and
+  `1e-7` gives `1.0E-7` instead of `1E-7`. Digits are the shortest that read
+  back as the same value, at the source's own precision.
+  `xsd:string("0.1"^^xsd:double)` is now `0.1` instead of
+  `0.100000000000000006`, and `xsd:string("0.1"^^xsd:float)` is `0.1` instead
+  of `0.100000001490116119`. `STR` still returns a literal's lexical form
+  unchanged.
 - **rdf:** Serializing a named graph the dataset does not contain
   (`SerializeGraph::Named` with an absent name) now emits no rows. Previously it
   emitted the default graph's triples in place of the requested graph.
@@ -134,38 +216,6 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   registered profile. The transcode matrix gains the HexTuples pairs:
   quad-capable, no triple terms, so star-capable sources record
   `rdf12-star-unrepresentable`.
-
-### Added
-
-- **core:** `loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED`, a runtime loss code. The
-  loss registry and `generated/transcode-loss-matrix.json` list it for every
-  syntax pair whose source can write an empty named graph and whose target
-  cannot. `pair_loss_ledger` never emits it as a contract entry.
-- **rdf:** `NativeRdfFormat::carries_empty_named_graphs` and
-  `empty_named_graphs_dropped(dataset, format, selection)`. The function lists
-  the declared empty named graphs that a whole-dataset serialization to a format
-  drops.
-- **Host loss reports:** each host now reports the number of declared empty
-  named graphs a whole-dataset serialization drops. Every existing field, key
-  and prototype is unchanged.
-  - Python: `SerializeLoss.empty_named_graphs_dropped` (also shown in its repr).
-  - wasm: `SerializeLoss.emptyNamedGraphsDropped`, with the TypeScript
-    declaration updated.
-  - C: the new function `purrdf_serialize_empty_named_graphs_dropped`. The C ABI
-    moves to 0.9.0 because a library exporting a new symbol must not report the
-    shipped 0.8.0.
-- **core:** `MutableDataset::declare_named_graph` and
-  `MutableDataset::declared_named_graphs`. A graph declared this way follows the
-  same withdrawal rules as an input declaration: `DROP` or `CLEAR` of the graph,
-  `DROP NAMED`/`DROP ALL`, or removing its last row withdraws it. A declaration
-  no operation touches survives. `declared_named_graphs` omits withdrawn base
-  declarations. `visit_blank_identities` visits a declared blank graph name, so
-  fresh blanks never reuse it, and `snapshot_view_with_limits` charges
-  declarations before it freezes the delta.
-- **events:** `RdfEventSink::named_graph`, a method with a default
-  implementation that ignores the event. The frozen-dataset replay emits it for
-  each named graph, and `DatasetSink` keeps the declarations it receives.
-- **rdf:** `flat_dataset_from_quads_declaring`.
 
 ## [3.0.1] - 2026-10-02
 
