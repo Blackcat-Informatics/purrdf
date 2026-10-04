@@ -238,12 +238,15 @@ impl Walker {
     ) -> Result<Option<Term>, EvalError> {
         match function {
             Function::Contains | Function::StrStarts | Function::StrEnds => {
-                let (Some((h, _)), Some((n, _))) = (
+                let (Some((h, h_lang, h_dir)), Some((n, n_lang, n_dir))) = (
                     self.string_arg(args.first(), row, schema, ctx)?,
                     self.string_arg(args.get(1), row, schema, ctx)?,
                 ) else {
                     return Ok(None);
                 };
+                if !helpers::args_compatible(h_lang.as_deref(), h_dir, n_lang.as_deref(), n_dir) {
+                    return Ok(None);
+                }
                 let holds = match function {
                     Function::Contains => h.contains(n.as_str()),
                     Function::StrStarts => h.starts_with(n.as_str()),
@@ -254,17 +257,23 @@ impl Walker {
             Function::Regex => {
                 let text = self.string_arg(args.first(), row, schema, ctx)?;
                 let pattern = self.string_arg(args.get(1), row, schema, ctx)?;
-                let flags = self.string_arg(args.get(2), row, schema, ctx)?;
-                let (Some((text, _)), Some((pattern, _))) = (text, pattern) else {
+                let flags = match args.get(2) {
+                    None => Some(String::new()),
+                    Some(flags) => self
+                        .string_arg(Some(flags), row, schema, ctx)?
+                        .and_then(|(f, lang, _)| lang.is_none().then_some(f)),
+                };
+                let (Some((text, ..)), Some((pattern, None, _)), Some(flags)) =
+                    (text, pattern, flags)
+                else {
                     return Ok(None);
                 };
-                let flags = flags.map_or_default(|(f, _)| f);
                 return Ok(helpers::cached_regex(ctx, &pattern, &flags).map(|re| {
                     helpers::intern_boolean(ctx, re.as_regex().is_match(&text)).unwrap()
                 }));
             }
             Function::LangMatches => {
-                let (Some((tag, _)), Some((range, _))) = (
+                let (Some((tag, None, _)), Some((range, None, _))) = (
                     self.string_arg(args.first(), row, schema, ctx)?,
                     self.string_arg(args.get(1), row, schema, ctx)?,
                 ) else {
@@ -324,7 +333,7 @@ impl Walker {
         row: &[Option<Term>],
         schema: &VarSchema,
         ctx: &mut Ctx<'_>,
-    ) -> Result<Option<(String, Option<String>)>, EvalError> {
+    ) -> Result<Option<helpers::StringArg>, EvalError> {
         let Some(expr) = expr else {
             return Ok(None);
         };
@@ -336,6 +345,7 @@ impl Walker {
                 Ok(Some((
                     lit.value().to_owned(),
                     lit.language().map(purrdf_iri::langtag::identity_fold),
+                    None,
                 )))
             }
             Expression::FunctionCall(Function::Str, inner) if inner.len() == 1 => {
@@ -346,7 +356,7 @@ impl Walker {
                         .term(other, row, schema, ctx)?
                         .and_then(|term| helpers::str_lexical_term(ctx, term).unwrap()),
                 };
-                Ok(lexical.map(|s| (s, None)))
+                Ok(lexical.map(|s| (s, None, None)))
             }
             Expression::FunctionCall(Function::Lang, inner) if inner.len() == 1 => {
                 let lexical = match &inner[0] {
@@ -358,7 +368,7 @@ impl Walker {
                         .term(other, row, schema, ctx)?
                         .and_then(|term| helpers::lang_lexical_term(ctx, term).unwrap()),
                 };
-                Ok(lexical.map(|s| (s, None)))
+                Ok(lexical.map(|s| (s, None, None)))
             }
             _ => {
                 let Some(term) = self.term(expr, row, schema, ctx)? else {
@@ -425,6 +435,18 @@ fn palette() -> Vec<TermValue> {
         },
         literal("-7", "integer"),
         literal("abc", "string"),
+        TermValue::Literal {
+            lexical_form: "chat".to_owned(),
+            datatype: purrdf_iri::vocab::rdf::DIR_LANG_STRING.to_owned(),
+            language: Some("fr".to_owned()),
+            direction: Some(purrdf_core::RdfTextDirection::Rtl),
+        },
+        TermValue::Literal {
+            lexical_form: "ha".to_owned(),
+            datatype: purrdf_iri::vocab::rdf::DIR_LANG_STRING.to_owned(),
+            language: Some("fr".to_owned()),
+            direction: Some(purrdf_core::RdfTextDirection::Ltr),
+        },
     ]
 }
 
@@ -650,7 +672,7 @@ fn call(function: Function, args: Vec<Expression>) -> Expression {
 }
 
 fn leaf(choices: &mut Choices) -> Expression {
-    match choices.next(12) {
+    match choices.next(15) {
         0 => var("a"),
         1 => var("b"),
         2 => var("c"),
@@ -665,6 +687,13 @@ fn leaf(choices: &mut Choices) -> Expression {
         )),
         9 => Expression::Bound(Variable::new("b")),
         10 => Expression::Literal(Literal::new_simple("^A")),
+        11 => Expression::Literal(Literal::new_lang(
+            "ha",
+            "fr",
+            Some(purrdf_core::RdfTextDirection::Rtl),
+        )),
+        12 => Expression::Literal(Literal::new_lang("ha", "FR", None)),
+        13 => Expression::Literal(Literal::new_simple("i")),
         _ => Expression::Literal(Literal::new_typed(
             "2.5",
             NamedNode::new_unchecked(format!("{XSD}decimal")),
@@ -692,7 +721,7 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
     }
     *budget -= 1;
     let sub = |choices: &mut Choices, budget: &mut usize| generate(choices, budget);
-    match choices.next(34) {
+    match choices.next(43) {
         0..=3 => leaf(choices),
         4 => {
             let (a, b) = (sub(choices, budget), sub(choices, budget));
@@ -773,8 +802,12 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
                 sub(choices, budget)
             };
             let mut args = vec![text, pattern];
-            if choices.next(2) == 0 {
-                args.push(Expression::Literal(Literal::new_simple("i")));
+            match choices.next(3) {
+                0 => args.push(Expression::Literal(Literal::new_simple("i"))),
+                // Flags that are computed: unbound, an error, a non-string or a
+                // tagged string in some rows.
+                1 => args.push(sub(choices, budget)),
+                _ => {}
             }
             call(Function::Regex, args)
         }
@@ -790,7 +823,12 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
             Function::LangMatches,
             vec![
                 call(Function::Lang, vec![sub(choices, budget)]),
-                Expression::Literal(Literal::new_simple("*")),
+                // `*`, and the empty range that matches nothing.
+                Expression::Literal(Literal::new_simple(if choices.next(3) == 0 {
+                    ""
+                } else {
+                    "*"
+                })),
             ],
         ),
         24 => call(
@@ -814,6 +852,80 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
             vec![sub(choices, budget)],
         ),
         32 => Expression::Exists(Child::new(exists_pattern(choices))),
+        33 => call(
+            match choices.next(3) {
+                0 => Function::StrStarts,
+                1 => Function::StrEnds,
+                _ => Function::Contains,
+            },
+            vec![sub(choices, budget), sub(choices, budget)],
+        ),
+        34 => {
+            let mut args = vec![sub(choices, budget), sub(choices, budget)];
+            if choices.next(2) == 0 {
+                args.push(sub(choices, budget));
+            }
+            call(Function::SubStr, args)
+        }
+        35 => call(
+            if choices.next(2) == 0 {
+                Function::StrBefore
+            } else {
+                Function::StrAfter
+            },
+            vec![sub(choices, budget), sub(choices, budget)],
+        ),
+        36 => {
+            // A pattern, replacement and flags that are constants (linked once) or
+            // computed: tagged, unbound, an error or not a string in some rows.
+            let constant_or_computed = |choices: &mut Choices, budget: &mut usize, text: &str| {
+                if choices.next(2) == 0 {
+                    Expression::Literal(Literal::new_simple(text))
+                } else {
+                    sub(choices, budget)
+                }
+            };
+            let text = sub(choices, budget);
+            let pattern = constant_or_computed(choices, budget, "a");
+            let replacement = constant_or_computed(choices, budget, "x");
+            let mut args = vec![text, pattern, replacement];
+            if choices.next(2) == 0 {
+                args.push(constant_or_computed(choices, budget, "i"));
+            }
+            call(Function::Replace, args)
+        }
+        37 => call(
+            if choices.next(2) == 0 {
+                Function::UCase
+            } else {
+                Function::LCase
+            },
+            vec![sub(choices, budget)],
+        ),
+        38 => call(
+            Function::LangMatches,
+            vec![sub(choices, budget), sub(choices, budget)],
+        ),
+        39 => call(
+            match choices.next(3) {
+                0 => Function::Md5,
+                1 => Function::Sha256,
+                _ => Function::Sha3_256,
+            },
+            vec![sub(choices, budget)],
+        ),
+        40 => {
+            let lexical = sub(choices, budget);
+            let mut args = vec![lexical, sub(choices, budget)];
+            let function = if choices.next(2) == 0 {
+                Function::StrLang
+            } else {
+                args.push(sub(choices, budget));
+                Function::StrLangDir
+            };
+            call(function, args)
+        }
+        41 => call(Function::Iri, vec![sub(choices, budget)]),
         _ => call(Function::IsLiteral, vec![sub(choices, budget)]),
     }
 }
