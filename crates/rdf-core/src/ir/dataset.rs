@@ -1807,6 +1807,21 @@ impl RdfDataset {
             .map(|i| &self.locations[i].1)
     }
 
+    /// A fresh builder configured as `datasets` agree (the rule
+    /// [`union`](Self::union) builds under), for any rebuild that merges several
+    /// sources; a plain builder when they agree on no scheme.
+    pub(crate) fn agreed_builder(datasets: &[&Self]) -> super::builder::RdfDatasetBuilder {
+        match Self::agreed_content_addressing(datasets) {
+            Some((scheme, derivation_predicate)) => {
+                super::builder::RdfDatasetBuilder::with_content_addressing(
+                    scheme,
+                    derivation_predicate,
+                )
+            }
+            None => super::builder::RdfDatasetBuilder::new(),
+        }
+    }
+
     /// Decide whether [`union`](Self::union) can carry content addressing forward
     /// onto the merged output, and with which config.
     ///
@@ -1826,21 +1841,6 @@ impl RdfDataset {
     /// single-distinct-value rule, evaluated only over the inputs that carry the
     /// WINNING scheme (a predicate configured under a different, losing scheme
     /// is not this merge's predicate to carry).
-    /// A fresh builder configured as `datasets` agree (the rule
-    /// [`union`](Self::union) builds under), for any rebuild that merges several
-    /// sources; a plain builder when they agree on no scheme.
-    pub(crate) fn agreed_builder(datasets: &[&Self]) -> super::builder::RdfDatasetBuilder {
-        match Self::agreed_content_addressing(datasets) {
-            Some((scheme, derivation_predicate)) => {
-                super::builder::RdfDatasetBuilder::with_content_addressing(
-                    scheme,
-                    derivation_predicate,
-                )
-            }
-            None => super::builder::RdfDatasetBuilder::new(),
-        }
-    }
-
     fn agreed_content_addressing(datasets: &[&Self]) -> Option<(ContentIdScheme, Option<String>)> {
         let mut schemes: Vec<&ContentIdScheme> = Vec::new();
         for ds in datasets {
