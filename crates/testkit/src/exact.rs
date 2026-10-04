@@ -13,8 +13,11 @@
 //! * [`Rational::to_f64`] / [`Rational::to_f32`]: to nearest, ties to even, at the
 //!   format's precision, subnormals included, overflowing to an infinity and keeping
 //!   the sign of a zero (IEEE 754 `roundTiesToEven`, XSD 1.1 `floatingPointRound`);
-//! * [`Rational::to_scale_ties_toward_zero`]: to the nearest multiple of `10^-scale`,
-//!   ties toward zero (XPath F&O 3.1 §19.1.2.3's float-to-decimal cast).
+//! * [`Rational::round_to_scale_ties_toward_zero`]: to the nearest multiple of
+//!   `10^-scale`, ties toward zero (XPath F&O 3.1 §19.1.2.3's float-to-decimal cast);
+//! * [`Rational::truncate_toward_zero`]: to the integer obtained by discarding the
+//!   fractional part, or `None` outside `i128` (XPath F&O 3.1 §19.1.2.4's cast to
+//!   `xs:integer`).
 //!
 //! The arithmetic is schoolbook and slow by design: it has to be obviously right, not
 //! fast, and it shares no code with any implementation it checks.
