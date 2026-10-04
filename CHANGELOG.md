@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Added
+
+- **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
+  exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
+  binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
+  2^127 or more.
+
 ### Fixed
 
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
@@ -97,6 +104,52 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and `"*"` matches only a non-empty tag, as SPARQL requires.
   `FILTER langMatches(lang(?v), "*")` no longer keeps untagged literals, and
   its negation now keeps them (the W3C `q-langMatches-3` and `-4` results).
+- **SPARQL numeric casts:** an XSD constructor cast from a numeric or boolean
+  literal converts its value instead of reparsing its lexical form, following
+  the XPath casting rules SPARQL 1.1 §17.5 adopts. `xsd:double("0.1"^^xsd:float)`
+  is now `1.0000000149011612E-1`, the float's value, and
+  `xsd:integer("16777217"^^xsd:float)` is now `16777216`. A double cast to
+  `xsd:float` rounds the double's value to the nearest float, ties to even.
+  This deliberately differs from F&O 3.1 §19.1.2.1, whose text truncates the
+  mantissa. Rounding is more accurate (within half an ulp, unbiased), matches
+  XSD 1.1 `floatingPointRound` as the string, decimal and integer casts already
+  do, and agrees with common engines. The F&O rule also flushes the float
+  subnormal band to zero, which is a defect in its text. A double exactly halfway
+  between the largest float and 2^128 now gives `INF`:
+  `xsd:float("3.4028235677973366e38"^^xsd:double)` was `3.4028235E38`.
+  `xsd:float("1e-40"^^xsd:double)` gives the nearest subnormal, `1.0E-40`.
+  A float or double cast to `xsd:decimal` gives the decimal closest to its
+  binary value, with ties rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
+  `0.100000001490116119` instead of `0.1`. Casts from strings still parse the
+  string.
+- **XSD decimal division:** dividing decimals or integers no longer fails
+  when an intermediate value overflows but the result fits. Previously any
+  dividend of about 10^21 or more was refused:
+  `"1000000000000000000000"^^xsd:decimal / 2` is now `500000000000000000000`
+  instead of an error, and the smallest and largest 128-bit decimals can be
+  halved. The result is exact when it fits in 18 fractional digits and a
+  128-bit mantissa. Otherwise it is truncated toward zero at the finest scale
+  that fits, so `1 / 3` is still `0.333333333333333333`. Division is refused
+  only when the integer part of the result is too large, as with
+  `i128::MAX / 0.1`. Dividing two `xsd:dayTimeDuration`s follows the same
+  rule, so one day divided by one attosecond is now `86400000000000000000000`
+  instead of an error. Negating the smallest decimal, or taking its absolute
+  value, is still refused: the result is 2^127, which does not fit.
+- **XSD decimals:** the decimal lexical form of the smallest 128-bit integer,
+  `-170141183460469231731687303715884105728` (also with up to 18 fractional
+  digits), now parses. It was refused as out of range although its value is
+  representable, so `xsd:decimal` of that integer produced a literal that did
+  not read back.
+- **SPARQL numeric-to-string casts:** `xsd:string` of a float or double uses
+  plain notation only for magnitudes from 0.000001 up to, but not including,
+  1000000, and scientific notation with a digit after the point otherwise:
+  `xsd:string("1e7"^^xsd:double)` is `1.0E7` instead of `10000000`, and
+  `1e-7` gives `1.0E-7` instead of `1E-7`. Digits are the shortest that read
+  back as the same value, at the source's own precision.
+  `xsd:string("0.1"^^xsd:double)` is now `0.1` instead of
+  `0.100000000000000006`, and `xsd:string("0.1"^^xsd:float)` is `0.1` instead
+  of `0.100000001490116119`. `STR` still returns a literal's lexical form
+  unchanged.
 - **SPARQL NaN comparisons:** a NaN compared with a number now gives a
   boolean instead of an error, as XPath `op:numeric-equal`,
   `op:numeric-less-than` and `op:numeric-greater-than` define. `=`, `<`, `>`,
