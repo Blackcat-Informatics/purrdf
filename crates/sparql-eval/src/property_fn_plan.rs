@@ -2676,11 +2676,11 @@ const fn is_type_test(function: &Function) -> bool {
 /// on every sample, and one classified otherwise must yield a value on at least one —
 /// so the classification is neither wider nor narrower than the evaluator.
 ///
-/// What is NOT strict, and why:
+/// What is NOT strict, and why (`REGEX`'s and `REPLACE`'s flags and `SUBSTR`'s
+/// length are optional, but a supplied one that is unbound is an error, so all three
+/// are strict in every position):
 ///
 /// * a type test (`isIRI` and its kin) answers `false` for an unbound argument;
-/// * `REGEX`'s and `REPLACE`'s flags and `SUBSTR`'s length are optional, and an unbound
-///   one is read as absent;
 /// * `cdt:List` and `cdt:Map` keep an unbound argument as a `null` element, and
 ///   `cdt:put` an unbound value as a `null` entry;
 /// * a custom function is resolved at run time against what the host registered — a
@@ -2700,9 +2700,6 @@ pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> 
         | Function::IsNumeric
         | Function::IsTriple
         | Function::Custom(_) => false,
-        Function::Regex => position < 2,
-        Function::Replace => position < 3,
-        Function::SubStr => position < 2,
         Function::Cdt(call) => match call.fn_kind {
             CdtFn::ListConstructor | CdtFn::MapConstructor => false,
             CdtFn::Put => position < 2,
@@ -2729,6 +2726,9 @@ pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> 
             | PurrdfFn::ListConcat => true,
         },
         Function::Str
+        | Function::Regex
+        | Function::Replace
+        | Function::SubStr
         | Function::Lang
         | Function::LangMatches
         | Function::Datatype

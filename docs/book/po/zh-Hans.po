@@ -7940,18 +7940,15 @@ msgstr ""
 
 #: src/sparql/querying.md:829
 msgid ""
-"The accepted arguments are a simple literal, an explicitly `xsd:string`\\-"
-"typed literal, an `rdf:langString`, and an RDF 1.2 `rdf:dirLangString`. A "
-"tagged literal is hashed on its **text only**: `SHA3-256(\"abc\"@en)` and "
-"`SHA3-256(\"abc\")` are the same digest, because the tag is not part of the "
-"lexical form."
+"The accepted arguments are a simple literal and an explicitly `xsd:string`\\-"
+"typed literal, as SPARQL 1.1 §17.4.6 requires of every hash built-in: "
+"`SHA3-256(\"abc\")` and `SHA3-256(\"abc\"^^xsd:string)` are the same digest."
 msgstr ""
-"可接受的参数是简单字面量、显式标注为 `xsd:string` 类型的字面量、"
-"`rdf:langString`，以及 RDF 1.2 `rdf:dirLangString`。带标签的字面量**仅按其文"
-"本**求哈希：`SHA3-256(\"abc\"@en)` 与 `SHA3-256(\"abc\")` 的摘要相同，因为标"
-"签不属于词法形式。"
+"可接受的参数是简单字面量和显式标注为 `xsd:string` 类型的字面量，这正是 SPARQL "
+"1.1 §17.4.6 对每个哈希内置函数的要求：`SHA3-256(\"abc\")` 与 "
+"`SHA3-256(\"abc\"^^xsd:string)` 的摘要相同。"
 
-#: src/sparql/querying.md:835
+#: src/sparql/querying.md:834
 msgid ""
 "Anything else is an expression error, which is SPARQL's ordinary \"this row "
 "produces no value\" outcome rather than a query failure:"
@@ -7959,13 +7956,18 @@ msgstr ""
 "其他任何参数都是表达式错误，这是 SPARQL 普通的「该行不产生值」结果，而不是查"
 "询失败："
 
-#: src/sparql/querying.md:838
+#: src/sparql/querying.md:837
 msgid "an **unbound** variable (`SHA3-256(?missing)`),"
 msgstr "**未绑定**的变量（`SHA3-256(?missing)`），"
 
-#: src/sparql/querying.md:839
+#: src/sparql/querying.md:838
 msgid "an IRI or a blank node,"
 msgstr "IRI 或空节点，"
+
+#: src/sparql/querying.md:839
+msgid ""
+"a language-tagged or RDF 1.2 directional string (`SHA3-256(\"abc\"@en)`),"
+msgstr "带语言标签的字符串或 RDF 1.2 带方向的字符串（`SHA3-256(\"abc\"@en)`），"
 
 #: src/sparql/querying.md:840
 msgid "a non-string literal (`SHA3-256(7)`)."

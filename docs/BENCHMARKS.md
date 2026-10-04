@@ -206,7 +206,7 @@ here.
 | Bench | What it measures |
 | --- | --- |
 | `crates/rdf-core/benches/ir_layout.rs` | AoS / SoA / predicate-adjacency IR layout trade-offs (latency, allocations, peak RSS). |
-| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR. |
+| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration (`mut_snapshot_graphs`): removals spread over many graphs, a `DROP` of a one-quad graph beside a large annotated base, and repeated snapshots after a `DROP` of a large graph. |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
@@ -364,6 +364,7 @@ The `validate` benchmark contains these deterministic SHACL workloads:
 | `shacl_rules_transitive_closure` | SHACL-AF rules closing an `ex:link` chain of 8, 16, or 32 nodes transitively into `ex:reaches` through `entail_dataset`; every measured iteration asserts the `n(n − 1)/2` inferred quads. |
 | `shacl_focus_realtime` | One prepared 1,000,000-node snapshot (4,000,079 quads and 3,000,088 terms), a compatibility focus filter over one node, and id-native prepared requests containing 1, 8, 64, 512, or 4,096 focus nodes. Dataset and shapes preparation stays outside each request's timed loop. |
 | `shacl_change_path_contrast` | One 1,000,000-node snapshot carrying both a conforming and a disjoint violating focus population, one binding, and id-native requests of 1, 8, 64, 512, or 4,096 focus nodes from each. Conformance is the only thing that differs between the two rows at a given size, so the deferred-materialization trade — a conforming request costs a constant, a violating one pays per violation — is visible as two columns. The violating side asserts one result per focus node, so a cheap row cannot be a row that stopped producing results. |
+| `shacl_shapes_subclass_blank_chain` | `subClassOfInShapesGraph` on, over a shapes graph whose 256, 1,024, or 4,096 IRI classes all sit under one shared chain of as many blank nodes ending at the target class: `shared_chain`, the chain alone, and `cycle`, the chain closed back onto its first blank node. One data node typed with an entry class and missing the required property; every iteration asserts its one result. Measures the shapes-graph subclass supplement validation builds, whose blank-node frontiers are computed once per blank component rather than once per IRI class. |
 
 Run the complete suite, one group, one large bulk case, or the largest bounded
 request with:

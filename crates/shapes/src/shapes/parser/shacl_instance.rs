@@ -9,7 +9,7 @@
 //! n in an RDF graph G is a SHACL instance of a SHACL class C in G if one of the
 //! SHACL types of n in G is C."
 //!
-//! Three readers of the shapes graph ask it, and they must agree:
+//! The readers of the shapes graph that ask it must agree:
 //!
 //! * shape discovery — "s is a SHACL instance of sh:NodeShape or
 //!   sh:PropertyShape" is the first clause of SHACL 1.2 Core's definition of a
@@ -19,7 +19,10 @@
 //!   rdfs:Class in SG then the set of SHACL instances of s in a data graph DG is a
 //!   target from DG for s in SG";
 //! * `sh:closed sh:ByTypes`, whose `collectProperties` moves past a node that is a
-//!   SHACL instance of `rdfs:Class` or of `sh:NodeShape`.
+//!   SHACL instance of `rdfs:Class` or of `sh:NodeShape`;
+//! * the constraint-component registry (`crate::components`), which reads a SHACL
+//!   instance of `sh:ConstraintComponent` as a component and a validator's SHACL
+//!   types as its query form.
 //!
 //! # `sh:ShapeClass`
 //!
@@ -110,6 +113,15 @@ impl<'s> ShaclInstances<'s> {
     /// SHACL instance of `sh:ShapeClass` always is.
     pub(crate) fn has_implicit_class_target(&mut self, node: TermId) -> bool {
         (self.is_node_shape(node) || self.is_property_shape(node)) && self.is_class(node)
+    }
+
+    /// Whether `ty` is the class `class_iri` or a SHACL subclass of it — through
+    /// `rdfs:subClassOf` nodes of any kind; `false` when the shapes graph does not
+    /// intern `class_iri`.
+    pub(crate) fn reaches_iri(&mut self, ty: TermId, class_iri: &str) -> bool {
+        self.data
+            .term_id_by_iri(class_iri)
+            .is_some_and(|class| self.reaches(ty, class))
     }
 
     /// Whether `ty` is `class` or a SHACL subclass of it.

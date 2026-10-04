@@ -102,8 +102,8 @@ enum Val<I: Copy> {
     Term(Option<SolutionTerm<I>>),
     /// An effective boolean value, or an error.
     Ebv(Option<bool>),
-    /// A string argument (lexical form and lower-cased tag), or absent.
-    Str(Option<(String, Option<String>)>),
+    /// A string argument (lexical form, lower-cased tag and base direction), or absent.
+    Str(Option<helpers::StringArg>),
     /// The program's string constant at this index, read in place rather than copied.
     StrConst(u32),
     /// A triple term a constructor built for the constructor it is the object of, not
@@ -554,7 +554,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                         term.map(|t| helpers::str_lexical_term(ctx, t))
                             .transpose()?
                             .flatten()
-                            .map(|s| (s, None)),
+                            .map(|s| (s, None, None)),
                     ));
                 }
                 Op::ToLangLexical => {
@@ -563,14 +563,22 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                         term.map(|t| helpers::lang_lexical_term(ctx, t))
                             .transpose()?
                             .flatten()
-                            .map(|s| (s, None)),
+                            .map(|s| (s, None, None)),
                     ));
                 }
                 Op::StrPred(pred) => {
                     let needle = pop_str(stack, &program.strs)?;
                     let haystack = pop_str(stack, &program.strs)?;
                     let value = match (haystack, needle) {
-                        (Some(h), Some(n)) => {
+                        // §17.4.1.1: an incompatible pair is an error, not `false`.
+                        (Some(h), Some(n))
+                            if helpers::args_compatible(
+                                h.1.as_deref(),
+                                h.2,
+                                n.1.as_deref(),
+                                n.2,
+                            ) =>
+                        {
                             let (h, n) = (h.0.as_str(), n.0.as_str());
                             let holds = match pred {
                                 StrPred::Contains => h.contains(n),
@@ -583,13 +591,22 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     };
                     stack.push(Val::Term(value));
                 }
-                Op::Regex(slot) => {
-                    let flags = pop_str(stack, &program.strs)?;
-                    let pattern = pop_str(stack, &program.strs)?;
+                Op::Regex { slot, flags } => {
+                    // Omitted flags are no flags. Supplied flags are a simple literal
+                    // (§17.4.3.14); unbound, an error, any other term or a tagged
+                    // string is an error, never "no flags". The stack holds the
+                    // operands text, pattern, flags, so they pop in reverse.
+                    let flags = if flags {
+                        pop_str(stack, &program.strs)?.filter(|f| f.1.is_none())
+                    } else {
+                        Some(std::borrow::Cow::Borrowed(&NO_FLAGS))
+                    };
+                    // The pattern is a simple literal too; the text may be any string.
+                    let pattern = pop_str(stack, &program.strs)?.filter(|p| p.1.is_none());
                     let text = pop_str(stack, &program.strs)?;
-                    let value = match (text, pattern) {
-                        (Some(text), Some(pattern)) => {
-                            let flags = flags.as_ref().map_or("", |f| f.0.as_str());
+                    let value = match (text, pattern, flags) {
+                        (Some(text), Some(pattern), Some(flags)) => {
+                            let flags = flags.0.as_str();
                             let compiled = match &regexes[slot as usize] {
                                 RegexSlot::Linked(compiled) => compiled.clone(),
                                 RegexSlot::PerRow => helpers::cached_regex(ctx, &pattern.0, flags),
@@ -605,11 +622,11 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 Op::LangMatches => {
                     let range = pop_str(stack, &program.strs)?;
                     let tag = pop_str(stack, &program.strs)?;
+                    // Both are simple literals (§17.4.3.13); a tagged one is an error.
                     let value = match (tag, range) {
-                        (Some(tag), Some(range)) => Some(helpers::intern_boolean(
-                            ctx,
-                            helpers::lang_matches(&tag.0, &range.0),
-                        )?),
+                        (Some(tag), Some(range)) if tag.1.is_none() && range.1.is_none() => Some(
+                            helpers::intern_boolean(ctx, helpers::lang_matches(&tag.0, &range.0))?,
+                        ),
                         _ => None,
                     };
                     stack.push(Val::Term(value));
@@ -748,16 +765,19 @@ fn pop_ebv<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<bool>, EvalError> 
     }
 }
 
-/// A string argument as an instruction reads it: its lexical form and lower-cased tag,
-/// owned when the program computed it and borrowed when it is one of the program's
+/// A string argument as an instruction reads it: its lexical form, lower-cased tag and
+/// base direction, owned when the program computed it and borrowed when it is one of the program's
 /// constants.
-type StrArg<'p> = std::borrow::Cow<'p, (String, Option<String>)>;
+type StrArg<'p> = std::borrow::Cow<'p, helpers::StringArg>;
+
+/// The flags an omitted `REGEX` flags argument reads as.
+static NO_FLAGS: helpers::StringArg = (String::new(), None, None);
 
 /// Pop a string argument: one the program computed, or one of its constants `strs`,
 /// borrowed where it stands.
 fn pop_str<'p, I: Copy>(
     stack: &mut ValStack<I>,
-    strs: &'p [(String, Option<String>)],
+    strs: &'p [helpers::StringArg],
 ) -> Result<Option<StrArg<'p>>, EvalError> {
     match stack.pop() {
         Some(Val::Str(value)) => Ok(value.map(std::borrow::Cow::Owned)),
