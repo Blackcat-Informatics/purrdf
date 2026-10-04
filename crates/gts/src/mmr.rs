@@ -1027,6 +1027,293 @@ mod tests {
         }
     }
 
+    fn varied_ids(count: usize) -> Vec<Vec<u8>> {
+        (0..count)
+            .map(|index| {
+                let mut frame_id = id(index as u8);
+                frame_id[..8].copy_from_slice(&(index as u64).to_le_bytes());
+                frame_id
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_incremental_prefix_and_restored_continuation_matches_the_tree() {
+        let frame_ids = varied_ids(1101);
+        let mut frontier = MmrPeaks::default();
+        let mut restored = MmrPeaks::default();
+        for count in 0..=1100 {
+            assert_eq!(restored, frontier, "restored continuation at {count}");
+            assert_eq!(frontier.count(), count as u64);
+            assert_eq!(
+                frontier.root(),
+                root_via_tree(&frame_ids[..count]),
+                "independent tree at {count}"
+            );
+            assert_eq!(
+                frontier.root(),
+                root(&frame_ids[..count]),
+                "batch at {count}"
+            );
+            restored = MmrPeaks::from_parts(frontier.count(), frontier.peaks().to_vec())
+                .expect("every produced frontier restores");
+            assert_eq!(restored, frontier, "parts round trip at {count}");
+            frontier.push(&frame_ids[count]).expect("append fits");
+            restored
+                .push(&frame_ids[count])
+                .expect("restored append fits");
+        }
+        assert_eq!(restored, frontier);
+        assert_eq!(restored.root(), root_via_tree(&frame_ids));
+        assert_eq!(restored.root(), root(&frame_ids));
+    }
+
+    #[test]
+    fn incremental_roots_preserve_the_batch_contract_for_arbitrary_id_bytes() {
+        let frame_ids = [Vec::new(), vec![1], vec![2; 31], vec![3; 33], vec![4; 256]];
+        let mut frontier = MmrPeaks::default();
+        for (index, frame_id) in frame_ids.iter().enumerate() {
+            frontier
+                .push(frame_id)
+                .expect("arbitrary id bytes are accepted");
+            assert_eq!(frontier.root(), root_via_tree(&frame_ids[..=index]));
+            assert_eq!(frontier.root(), root(&frame_ids[..=index]));
+        }
+    }
+
+    #[test]
+    fn restoration_refuses_count_order_height_and_every_bad_hash_length() {
+        let frame_ids = varied_ids(13);
+        let peaks = peak_list(&build_nodes(&frame_ids));
+        let valid = MmrPeaks::from_parts(13, peaks.clone()).expect("valid neighbour");
+        assert_eq!(valid.root(), root_via_tree(&frame_ids));
+        for count in [0, 12, 14, 16] {
+            assert!(
+                MmrPeaks::from_parts(count, peaks.clone()).is_err(),
+                "count {count}"
+            );
+        }
+        let mut reordered = peaks.clone();
+        reordered.swap(0, 2);
+        assert_eq!(
+            MmrPeaks::from_parts(13, reordered),
+            Err(MmrStateError::PeakHeight {
+                peak: 0,
+                expected: 3,
+                actual: 0
+            })
+        );
+        let mut missing = peaks.clone();
+        missing.pop();
+        assert_eq!(
+            MmrPeaks::from_parts(13, missing),
+            Err(MmrStateError::PeakCount {
+                count: 13,
+                expected: 3,
+                actual: 2
+            })
+        );
+        let mut extra = peaks.clone();
+        extra.push(peaks[2].clone());
+        assert_eq!(
+            MmrPeaks::from_parts(13, extra),
+            Err(MmrStateError::PeakCount {
+                count: 13,
+                expected: 3,
+                actual: 4
+            })
+        );
+        for index in 0..peaks.len() {
+            for height in [peaks[index].height + 1, 64, usize::MAX] {
+                let mut malformed = peaks.clone();
+                malformed[index].height = height;
+                assert_eq!(
+                    MmrPeaks::from_parts(13, malformed),
+                    Err(MmrStateError::PeakHeight {
+                        peak: index,
+                        expected: peaks[index].height,
+                        actual: height
+                    })
+                );
+            }
+            for length in [0, 1, 31, 33, 64] {
+                let mut malformed = peaks.clone();
+                malformed[index].hash.resize(length, 0);
+                assert_eq!(
+                    MmrPeaks::from_parts(13, malformed),
+                    Err(MmrStateError::PeakHashLength {
+                        peak: index,
+                        actual: length
+                    })
+                );
+            }
+        }
+        let mut duplicate = peaks.clone();
+        duplicate[1].height = duplicate[0].height;
+        assert!(MmrPeaks::from_parts(13, duplicate).is_err());
+        let mut changed_hash = peaks;
+        changed_hash[0].hash[0] ^= 1;
+        let unauthenticated = MmrPeaks::from_parts(13, changed_hash)
+            .expect("shape validation does not authenticate historical hashes");
+        assert_ne!(unauthenticated.root(), valid.root());
+    }
+
+    /// Shape-valid synthetic hashes suffice to exercise counts without storing leaves.
+    fn synthetic_peaks(count: u64) -> Vec<MmrPeak> {
+        (0..64)
+            .rev()
+            .filter(|height| count & (1u64 << height) != 0)
+            .map(|height| MmrPeak {
+                height,
+                hash: id(height as u8),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn restored_frontiers_carry_across_address_width_and_u64_boundaries() {
+        for count in [
+            0,
+            1,
+            2,
+            (1u64 << 32) - 1,
+            1u64 << 32,
+            (1u64 << 32) + 1,
+            (1u64 << 63) - 1,
+            1u64 << 63,
+            (1u64 << 63) + 1,
+            u64::MAX - 1,
+        ] {
+            let peaks = synthetic_peaks(count);
+            let mut frontier =
+                MmrPeaks::from_parts(count, peaks.clone()).expect("wide state restores");
+            assert_eq!(frontier.count(), count);
+            assert_eq!(frontier.peaks(), peaks);
+            assert_eq!(frontier.root().len(), 32);
+            frontier.push(&id(42)).expect("wide continuation fits");
+            assert_eq!(frontier.count(), count + 1);
+            assert_eq!(
+                frontier
+                    .peaks()
+                    .iter()
+                    .map(|peak| peak.height)
+                    .collect::<Vec<_>>(),
+                synthetic_peaks(count + 1)
+                    .iter()
+                    .map(|peak| peak.height)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                MmrPeaks::from_parts(frontier.count(), frontier.peaks().to_vec()),
+                Ok(frontier)
+            );
+        }
+    }
+
+    #[test]
+    fn maximum_count_refuses_append_without_changing_any_state() {
+        let mut frontier = MmrPeaks::from_parts(u64::MAX, synthetic_peaks(u64::MAX))
+            .expect("all 64 peaks restore without a leaf list");
+        let before = frontier.clone();
+        let frame_id = id(42);
+        for bytes in [&[][..], frame_id.as_slice()] {
+            assert_eq!(frontier.push(bytes), Err(MmrStateError::CountOverflow));
+            assert_eq!(frontier, before);
+            assert_eq!(frontier.root(), before.root());
+        }
+    }
+
+    #[test]
+    fn wide_counts_commit_to_literal_canonical_cbor_preimages() {
+        assert_eq!(
+            MmrPeaks::default().root(),
+            blake3_256(b"\x83\x6fgts-mmr-root-v1\x00\x80").to_vec()
+        );
+        let cases: &[(u64, usize, &[u8])] = &[
+            (1u64 << 32, 32,
+             b"\x83\x6fgts-mmr-root-v1\x1b\x00\x00\x00\x01\x00\x00\x00\x00\x81\x82\x18\x20\x58\x20"),
+            (1u64 << 63, 63,
+             b"\x83\x6fgts-mmr-root-v1\x1b\x80\x00\x00\x00\x00\x00\x00\x00\x81\x82\x18\x3f\x58\x20"),
+        ];
+        for &(count, height, prefix) in cases {
+            let hash = id(7);
+            let frontier = MmrPeaks::from_parts(
+                count,
+                vec![MmrPeak {
+                    height,
+                    hash: hash.clone(),
+                }],
+            )
+            .expect("single wide peak restores");
+            let mut preimage = prefix.to_vec();
+            preimage.extend_from_slice(&hash);
+            assert_eq!(
+                frontier.root(),
+                blake3_256(&preimage).to_vec(),
+                "count {count}"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_leaf_indices_and_parent_heights_preserve_literal_preimages() {
+        let cases: &[(u64, &[u8])] = &[
+            (
+                1u64 << 32,
+                b"\x83\x6fgts-mmr-leaf-v1\x1b\x00\x00\x00\x01\x00\x00\x00\x00\x58\x20",
+            ),
+            (
+                u64::MAX - 1,
+                b"\x83\x6fgts-mmr-leaf-v1\x1b\xff\xff\xff\xff\xff\xff\xff\xfe\x58\x20",
+            ),
+        ];
+        for &(count, prefix) in cases {
+            let frame_id = id(42);
+            let mut frontier =
+                MmrPeaks::from_parts(count, synthetic_peaks(count)).expect("wide state");
+            frontier.push(&frame_id).expect("one more frame fits");
+            let mut preimage = prefix.to_vec();
+            preimage.extend_from_slice(&frame_id);
+            let appended = frontier.peaks().last().expect("new height-zero peak");
+            assert_eq!(appended.height, 0);
+            assert_eq!(
+                appended.hash,
+                blake3_256(&preimage).to_vec(),
+                "index {count}"
+            );
+        }
+        let left = id(3);
+        let right = id(4);
+        let mut preimage = b"\x84\x71gts-mmr-parent-v1\x18\x3f\x58\x20".to_vec();
+        preimage.extend_from_slice(&left);
+        preimage.extend_from_slice(b"\x58\x20");
+        preimage.extend_from_slice(&right);
+        assert_eq!(
+            parent_hash(63, &left, &right),
+            blake3_256(&preimage).to_vec()
+        );
+    }
+
+    #[test]
+    fn existing_proofs_verify_against_incremental_roots_at_merge_boundaries() {
+        let frame_ids = varied_ids(1100);
+        for count in [
+            1, 2, 3, 7, 8, 9, 31, 32, 33, 255, 256, 257, 1023, 1024, 1100,
+        ] {
+            let mut frontier = MmrPeaks::default();
+            for frame_id in &frame_ids[..count] {
+                frontier.push(frame_id).expect("append fits");
+            }
+            for index in [0, count / 2, count - 1] {
+                let mut proof = prove(&frame_ids[..count], index).expect("covered leaf");
+                assert_eq!(proof.root, frontier.root());
+                proof.root = frontier.root();
+                verify_proof(&proof).expect("existing proof verifies against incremental root");
+            }
+            assert_eq!(prove(&frame_ids[..count], count), None);
+        }
+    }
+
     #[test]
     fn json_escape_matches_reference() {
         let cases: [&str; 14] = [
