@@ -129,28 +129,36 @@ def test_a_subtraction_beside_a_sha3_call_is_still_a_subtraction() -> None:
     assert row["n"].value == "60"
 
 
-def test_a_language_tagged_argument_hashes_its_lexical_form() -> None:
-    """A tagged literal hashes the TEXT, not the tag — the same digest as plain `"abc"`.
+def test_only_a_simple_literal_argument_is_hashed() -> None:
+    """The hash built-ins take a simple literal or `xsd:string`, as SPARQL's signature says.
 
-    The hash built-ins read their argument by reference rather than copying it, and
-    this pins that the borrow accepts exactly the literal shapes the copy did: a
-    language-tagged literal is hashed on its lexical form, and a non-string literal
-    is an expression error (an unbound projection), not a digest of its text.
+    A plain `"abc"` and `"abc"^^xsd:string` give the same SHA3-256 digest. A
+    language-tagged or directional literal, and a non-string literal, are
+    expression errors (an unbound projection), not a digest of their text.
     """
+    xsd = "http://www.w3.org/2001/XMLSchema#"
     store = purrdf.Store()
     store.load(
         (
-            f'<{EX}s> <{EX}message> "abc"@en .\n'
-            f'<{EX}s> <{EX}count> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .\n'
+            f'<{EX}s> <{EX}plain> "abc" .\n'
+            f'<{EX}s> <{EX}typed> "abc"^^<{xsd}string> .\n'
+            f'<{EX}s> <{EX}tagged> "abc"@en .\n'
+            f'<{EX}s> <{EX}directional> "abc"@en--rtl .\n'
+            f'<{EX}s> <{EX}count> "7"^^<{xsd}integer> .\n'
         ).encode(),
         format=purrdf.RdfFormat.N_TRIPLES,
     )
     rows = list(
         store.query(
-            f"PREFIX ex: <{EX}> SELECT (SHA3-256(?m) AS ?h) (SHA3-256(?c) AS ?bad) "
-            "WHERE { ?s ex:message ?m . ?s ex:count ?c }"
+            f"PREFIX ex: <{EX}> SELECT (SHA3-256(?p) AS ?plain) (SHA3-256(?t) AS ?typed) "
+            "(SHA3-256(?l) AS ?tagged) (SHA3-256(?d) AS ?directional) (SHA3-256(?c) AS ?bad) "
+            "WHERE { ?s ex:plain ?p ; ex:typed ?t ; ex:tagged ?l ; ex:directional ?d ; ex:count ?c }"
         )
     )
     assert len(rows) == 1
-    assert rows[0]["h"].value == dict((n, d) for n, _, d in _VECTORS)["SHA3-256"]
+    expected = dict((n, d) for n, _, d in _VECTORS)["SHA3-256"]
+    assert rows[0]["plain"].value == expected
+    assert rows[0]["typed"].value == expected
+    assert rows[0]["tagged"] is None, "a language-tagged argument is an error, not a digest"
+    assert rows[0]["directional"] is None, "a directional argument is an error, not a digest"
     assert rows[0]["bad"] is None, "a non-string argument is an error, not a digest"
