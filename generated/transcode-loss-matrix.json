@@ -329,6 +329,13 @@
     "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
+    "code": "rdf12-star-unrepresentable",
+    "from": "gts",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying triples and their annotations are dropped."
+  },
+  {
     "code": "rdf12-star-jsonld-rejected",
     "from": "gts",
     "to": "jsonld",
@@ -429,6 +436,132 @@
   {
     "code": "named-graph-dropped",
     "from": "gts",
+    "to": "turtle",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "hextuples",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "hextuples",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "datalog",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "hextuples",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "gufo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "n3-projection",
+    "from": "hextuples",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "n3",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "nemo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "hextuples",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "ntriples",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "hextuples",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "hextuples",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "owl-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "hextuples",
     "to": "turtle",
     "intentional": true,
     "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
@@ -1064,6 +1197,13 @@
     "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
+    "code": "empty-named-graph-dropped",
+    "from": "jsonld",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "A named graph the source declares without any row has no spelling in the target syntax, which names a graph only on a row or has no named-graph construct; each such graph is DROPPED and recorded by name at run time."
+  },
+  {
     "code": "n3-projection",
     "from": "jsonld",
     "to": "n3",
@@ -1230,6 +1370,20 @@
     "to": "gufo",
     "intentional": true,
     "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "empty-named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "A named graph the source declares without any row has no spelling in the target syntax, which names a graph only on a row or has no named-graph construct; each such graph is DROPPED and recorded by name at run time."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "jsonld-star",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying triples and their annotations are dropped."
   },
   {
     "code": "rdf12-star-jsonld-rejected",
@@ -1596,6 +1750,13 @@
     "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
+    "code": "rdf12-star-unrepresentable",
+    "from": "nquads",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying triples and their annotations are dropped."
+  },
+  {
     "code": "rdf12-star-jsonld-rejected",
     "from": "nquads",
     "to": "jsonld",
@@ -1715,6 +1876,13 @@
     "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
   },
   {
+    "code": "rdf12-star-unrepresentable",
+    "from": "ntriples",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying triples and their annotations are dropped."
+  },
+  {
     "code": "rdf12-star-jsonld-rejected",
     "from": "ntriples",
     "to": "jsonld",
@@ -1783,6 +1951,13 @@
     "to": "gufo",
     "intentional": true,
     "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "owl-rdf12",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying triples and their annotations are dropped."
   },
   {
     "code": "rdf12-star-jsonld-rejected",
@@ -3003,6 +3178,20 @@
     "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
+    "code": "empty-named-graph-dropped",
+    "from": "trig",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "A named graph the source declares without any row has no spelling in the target syntax, which names a graph only on a row or has no named-graph construct; each such graph is DROPPED and recorded by name at run time."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "trig",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying triples and their annotations are dropped."
+  },
+  {
     "code": "rdf12-star-jsonld-rejected",
     "from": "trig",
     "to": "jsonld",
@@ -3155,6 +3344,13 @@
     "to": "gufo",
     "intentional": true,
     "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "turtle",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying triples and their annotations are dropped."
   },
   {
     "code": "rdf12-star-jsonld-rejected",
@@ -3393,6 +3589,20 @@
     "to": "gufo",
     "intentional": true,
     "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
+  },
+  {
+    "code": "empty-named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "A named graph the source declares without any row has no spelling in the target syntax, which names a graph only on a row or has no named-graph construct; each such graph is DROPPED and recorded by name at run time."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "yaml-ld-star",
+    "to": "hextuples",
+    "intentional": true,
+    "note": "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying triples and their annotations are dropped."
   },
   {
     "code": "rdf12-star-jsonld-rejected",

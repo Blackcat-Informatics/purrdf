@@ -119,19 +119,17 @@ fn targets_without_an_empty_graph_spelling_report_each_dropped_graph() {
             ledger.contains("<http://example.org/empty>") && ledger.contains("_:"),
             "{target}: each entry names its graph; got:\n{ledger}"
         );
-        // A registered codec pair renders the loss as intentional: the drop is what
-        // the target's grammar requires, not a defect.
-        if target != "hextuples" {
-            let registered = format!(
-                "{LOSS_CODE},\n      \"from\": \"trig\",\n      \"to\": \"{target}\",\n      \
-                 \"intentional\": true"
-            );
-            assert_eq!(
-                ledger.matches(&registered).count(),
-                2,
-                "{target}: got:\n{ledger}"
-            );
-        }
+        // Every target names itself and the registered pair renders the loss as
+        // intentional: the drop is what the target's grammar requires, not a defect.
+        let registered = format!(
+            "{LOSS_CODE},\n      \"from\": \"trig\",\n      \"to\": \"{target}\",\n      \
+             \"intentional\": true"
+        );
+        assert_eq!(
+            ledger.matches(&registered).count(),
+            2,
+            "{target}: got:\n{ledger}"
+        );
     }
 }
 

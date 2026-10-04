@@ -36,6 +36,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   HexTuples, and every single-graph syntax. Before, this loss produced an empty
   ledger. Conversions of datasets without such graphs, and conversions to TriG,
   TriX, JSON-LD, YAML-LD or a pack, record no entry.
+- **python:** `Store.load` and `MutableDataset.load` keep the named graphs a
+  document declares with no row. Before, the load dropped them silently. A
+  later `dump` writes them where the format allows (TriG, TriX, JSON-LD,
+  YAML-LD). A store that loaded no such graph dumps exactly as before.
+- **capi:** `purrdf_parse` keeps declared empty named graphs. Its event replay
+  used to drop them.
+- **rdf:** HexTuples now has the loss codec name `hextuples`. Its ledger entries
+  name the target instead of `unknown` and are classified against its
+  registered profile. The transcode matrix gains the HexTuples pairs:
+  quad-capable, no triple terms, so star-capable sources record
+  `rdf12-star-unrepresentable`.
 
 ### Added
 
@@ -47,6 +58,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `empty_named_graphs_dropped(dataset, format, selection)`. The function lists
   the declared empty named graphs that a whole-dataset serialization to a format
   drops.
+- **Host loss reports:** each host now reports the number of declared empty
+  named graphs a whole-dataset serialization drops. Every existing field, key
+  and prototype is unchanged.
+  - Python: `SerializeLoss.empty_named_graphs_dropped` (also shown in its repr).
+  - wasm: `SerializeLoss.emptyNamedGraphsDropped`, with the TypeScript
+    declaration updated.
+  - C: the new function `purrdf_serialize_empty_named_graphs_dropped`. The C ABI
+    moves to 0.9.0 because a library exporting a new symbol must not report the
+    shipped 0.8.0.
+- **core:** `MutableDataset::declare_named_graph` and
+  `MutableDataset::declared_named_graphs`.
+- **events:** `RdfEventSink::named_graph`, a method with a default
+  implementation that ignores the event. The frozen-dataset replay emits it for
+  each named graph, and `DatasetSink` keeps the declarations it receives.
+- **rdf:** `flat_dataset_from_quads_declaring`.
 
 ## [3.0.1] - 2026-10-02
 

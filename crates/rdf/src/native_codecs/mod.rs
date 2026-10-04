@@ -640,12 +640,12 @@ mod tests {
                 None => unnamed.push(format),
             }
         }
-        // Exactly TriX and HexTuples carry no loss codec name, so no format silently
-        // escapes the consistency check.
+        // Exactly TriX carries no loss codec name, so no format silently escapes the
+        // consistency check.
         assert_eq!(
             unnamed,
-            vec![NativeRdfFormat::TriX, NativeRdfFormat::HexTuples],
-            "only TriX / HexTuples may lack a loss codec name"
+            vec![NativeRdfFormat::TriX],
+            "only TriX may lack a loss codec name"
         );
     }
 

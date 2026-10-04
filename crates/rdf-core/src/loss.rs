@@ -767,6 +767,7 @@ const SYNTAX_CODECS: &[&str] = &[
     "rdfxml",
     "gts",
     "owl-rdf12",
+    "hextuples",
 ];
 
 /// Projection codecs: lossy targets that select a semantic subset of the
@@ -799,7 +800,7 @@ pub fn canonical_codec_name(name: &str) -> &'static str {
 /// Panics on unknown codec name.
 pub fn supports_quads(name: &str) -> bool {
     match canonical_codec_name(name) {
-        "nquads" | "trig" | "jsonld" | "jsonld-star" | "yaml-ld-star" | "gts" => true,
+        "nquads" | "trig" | "jsonld" | "jsonld-star" | "yaml-ld-star" | "gts" | "hextuples" => true,
         "turtle" | "ntriples" | "rdfxml" | "owl-rdf12" => false,
         // Projection codecs do not carry named graphs.
         "owl-dl" | "owl-el" | "datalog" | "n3" | "nemo" | "gufo" | "canonical-rdf12" => false,
@@ -814,7 +815,7 @@ pub fn supports_stars(name: &str) -> bool {
     match canonical_codec_name(name) {
         "turtle" | "ntriples" | "nquads" | "trig" | "jsonld-star" | "yaml-ld-star" | "gts"
         | "owl-rdf12" => true,
-        "jsonld" | "rdfxml" => false,
+        "jsonld" | "rdfxml" | "hextuples" => false,
         // Projection codecs do not carry star syntax.
         "owl-dl" | "owl-el" | "datalog" | "n3" | "nemo" | "gufo" | "canonical-rdf12" => false,
         _ => unreachable!(),
@@ -977,6 +978,11 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
                 "rdfxml" => entry(
                     "rdf12-star-unrepresentable",
                     "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying \
+                     triples and their annotations are dropped.",
+                ),
+                "hextuples" => entry(
+                    "rdf12-star-unrepresentable",
+                    "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying \
                      triples and their annotations are dropped.",
                 ),
                 "jsonld" => entry(
@@ -2863,6 +2869,21 @@ mod tests {
                 .any(|e| e.code == "rdf12-star-unrepresentable")
         );
 
+        // HexTuples is a registered syntax codec: quad-capable, star-incapable.
+        let nquads_to_hextuples = pair_loss_ledger("nquads", "hextuples");
+        assert!(
+            nquads_to_hextuples
+                .entries()
+                .iter()
+                .any(|e| e.code == "rdf12-star-unrepresentable")
+        );
+        assert!(
+            !nquads_to_hextuples
+                .entries()
+                .iter()
+                .any(|e| e.code == "named-graph-dropped")
+        );
+
         let turtle_to_jsonld = pair_loss_ledger("turtle", "jsonld");
         assert!(
             turtle_to_jsonld
@@ -3096,6 +3117,8 @@ mod tests {
     fn empty_named_graph_code_is_registered_but_never_contracted() {
         for (from, to, expected) in [
             ("trig", "nquads", true),
+            ("trig", "hextuples", true),
+            ("hextuples", "trig", false),
             ("trig", "turtle", true),
             ("jsonld-star", "gts", true),
             ("yaml-ld-star", "ntriples", true),
