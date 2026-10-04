@@ -650,9 +650,14 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     if is_cdt_pair(ctx, ta, tb)? {
         return cdt_compare(ctx, relation, ta, tb);
     }
-    // sameTerm short-circuit: identical terms are equal regardless of value space.
+    // sameTerm short-circuit: identical terms are equal regardless of value space —
+    // except NaN, the one value that is not equal to itself under the numeric
+    // operators. `<=`/`>=` map to `logical-or(op:numeric-less-than,
+    // op:numeric-equal)` (and the `greater-than` twin), every one of which is false
+    // for a NaN operand (XPath F&O §4.3), so `NaN <= NaN` is false, not `true`.
     if ta == tb {
-        return Ok(Some(intern_boolean(ctx, keep(Ordering::Equal))?));
+        let kept = keep(Ordering::Equal) && !xsd_of_term(ctx, ta)?.as_ref().is_some_and(is_xsd_nan);
+        return Ok(Some(intern_boolean(ctx, kept)?));
     }
     // Value-space comparison over borrowed term views (no owned TermValue
     // clones). Distinct non-value terms (IRIs/blanks) or incomparable value
@@ -662,6 +667,14 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     let ax = xsd_of_term(ctx, ta)?;
     let bx = xsd_of_term(ctx, tb)?;
     let ord = match (ax, bx) {
+        // A numeric pair with a NaN operand is unordered, and every numeric
+        // comparison operator answers `false` for it (op:numeric-less-than and
+        // op:numeric-greater-than are false when either operand is NaN, and so is
+        // the op:numeric-equal half of `<=`/`>=`) — a definite answer, not the
+        // type error `value_cmp`'s `None` would otherwise read as.
+        (Some(ax), Some(bx)) if is_numeric_nan_pair(&ax, &bx) => {
+            return Ok(Some(intern_boolean(ctx, false)?));
+        }
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
         _ => None,
     };
@@ -831,6 +844,15 @@ fn is_xsd_nan(x: &XsdValue) -> bool {
     matches!(x, XsdValue::Double(d) if d.is_nan()) || matches!(x, XsdValue::Float(f) if f.is_nan())
 }
 
+/// Whether `ax`/`bx` is a numeric pair with at least one NaN operand: the pair every
+/// numeric comparison operator answers `false` for (XPath F&O §4.3,
+/// `op:numeric-equal`, `op:numeric-less-than`, `op:numeric-greater-than`), which the
+/// SPARQL operator mapping (§17.3) applies to `=`, `<`, `>`, `<=`, `>=` and — through
+/// `fn:not(op:numeric-equal)` — makes `!=` `true`.
+fn is_numeric_nan_pair(ax: &XsdValue, bx: &XsdValue) -> bool {
+    ax.is_numeric() && bx.is_numeric() && (is_xsd_nan(ax) || is_xsd_nan(bx))
+}
+
 /// `=` / `sameValue` equality between two already-typed XSD values (SPARQL 1.2
 /// §17.4.2.2 `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1"):
 /// [`value_cmp`]'s value-space comparison, EXCEPT for one carve-out `sameValue`
@@ -849,9 +871,18 @@ fn is_xsd_nan(x: &XsdValue) -> bool {
 /// the same RDF term before this function is ever reached (`sameValue` step 1)
 /// — this function is what the CROSS-type pair needs, since two literals with
 /// different datatype IRIs are never the same RDF term regardless of value.
+///
+/// A NaN against any OTHER number is the second rule `value_cmp` cannot answer:
+/// the pair is unordered, but `op:numeric-equal` is defined on it and is `false`
+/// (so `!=`, its `fn:not`, is `true`) — a definite answer, not a type error.
 pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
     if is_xsd_nan(ax) && is_xsd_nan(bx) {
         return Some(true);
+    }
+    // NaN against any other number is a definite `false` (`op:numeric-equal`), never
+    // the type error an unordered `value_cmp` would read as; `!=` is its negation.
+    if is_numeric_nan_pair(ax, bx) {
+        return Some(false);
     }
     value_equal(ax, bx)
 }
@@ -4349,6 +4380,9 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
             return Ok(Some(string_term(ctx, &s)?));
         }
     }
+    if !cast_source_admitted(source, target) {
+        return Ok(None);
+    }
     let lexical = match source {
         TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
         _ => return Ok(None),
@@ -4362,6 +4396,85 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         return Ok(None);
     };
     Ok(Some(xsd_to_term(ctx, &value)?))
+}
+
+/// Whether the casting table (SPARQL §17.5, over XPath F&O §19.1 "Casting from
+/// primitive types to primitive types") admits a cast of `source` to a target other
+/// than `xsd:string` — the source-datatype gate that runs BEFORE any lexical
+/// re-parse, so a literal's lexical form is never reinterpreted under a datatype the
+/// table gives no row for.
+///
+/// * A simple literal (`xsd:string`) is the table's `str` row — `M` for every
+///   target, decided by the lexical form.
+/// * A numeric or `xsd:boolean` source casts only to a numeric or `xsd:boolean`
+///   target (`Y`/`M`); to `xsd:dateTime` and every other non-numeric target the
+///   table says `N` (`xsd:gYear(2020)` is an error, not `"2020"^^xsd:gYear`).
+/// * Any other XSD datatype PurRDF models (`xsd:dateTime`, `xsd:date`, the
+///   durations, the Gregorian and binary types) casts to no numeric or boolean
+///   target (`N`); its casts to the other XSD targets are left to the lexical path.
+/// * An XSD 1.1 built-in datatype outside the modelled set is classed by the
+///   primitive XPath derives it from: the types derived from `xsd:string`
+///   (`xsd:token`, `xsd:NCName`, …) take the `str` row like a simple literal, and
+///   the rest (`xsd:dateTimeStamp`, `xsd:anyURI`, the list types, …) cast to no
+///   numeric or boolean target, exactly like a modelled non-numeric source.
+/// * Every other literal — a language-tagged string, or a datatype that is not an
+///   XSD built-in — has no row in the table, so the cast is an error rather than a
+///   re-parse of its lexical form (`xsd:double("1.5"^^ex:custom)` is unbound).
+///
+/// `xsd:string` targets are always admitted (the table's `str` column is `Y` for
+/// every row, and the caller copies the lexical form of a source it has no XPath
+/// string form for). An IRI source is admitted here and refused by the caller's
+/// literal match for every other target (the table's `IRI` row).
+fn cast_source_admitted(source: &TermValue, target: XsdDatatype) -> bool {
+    let TermValue::Literal {
+        datatype, language, ..
+    } = source
+    else {
+        return true;
+    };
+    if target == XsdDatatype::String || datatype == XSD_STRING {
+        return true;
+    }
+    if language.is_some() {
+        return false;
+    }
+    let numeric_target = target.is_numeric() || target == XsdDatatype::Boolean;
+    if let Some(from) = XsdDatatype::from_iri(datatype) {
+        return (from.is_numeric() || from == XsdDatatype::Boolean) == numeric_target;
+    }
+    match datatype
+        .strip_prefix(purrdf_xsd::datatype::XSD_NS)
+        .map(xsd_builtin_cast_row)
+    {
+        Some(Some(CastRow::Str)) => true,
+        Some(Some(CastRow::NonNumeric)) => !numeric_target,
+        Some(None) | None => false,
+    }
+}
+
+/// The casting-table row an XSD 1.1 built-in datatype PurRDF does not model as an
+/// [`XsdDatatype`] falls under, by the primitive XPath derives it from.
+#[derive(Clone, Copy)]
+enum CastRow {
+    /// Derived from `xsd:string`: the `str` row.
+    Str,
+    /// Derived from a non-numeric, non-string primitive (or a list type): casts to
+    /// no numeric or boolean target.
+    NonNumeric,
+}
+
+/// [`CastRow`] for the XSD namespace local name `local`, or `None` when `local`
+/// names no XSD 1.1 built-in datatype outside the modelled [`XsdDatatype`] set
+/// (XML Schema 1.1 Part 2 §3.3–§3.4).
+fn xsd_builtin_cast_row(local: &str) -> Option<CastRow> {
+    match local {
+        "normalizedString" | "token" | "language" | "Name" | "NCName" | "NMTOKEN" | "ID"
+        | "IDREF" | "ENTITY" => Some(CastRow::Str),
+        "dateTimeStamp" | "anyURI" | "QName" | "NOTATION" | "NMTOKENS" | "IDREFS" | "ENTITIES" => {
+            Some(CastRow::NonNumeric)
+        }
+        _ => None,
+    }
 }
 
 /// Cast a numeric-or-boolean [`XsdValue`] to a numeric-or-`xsd:boolean` `target`
@@ -5851,13 +5964,20 @@ mod tests {
             Child::new(typed_lit("NaN", XDOUBLE)),
         );
         assert_eq!(ebv(&ds, &eq_same_type), Some(true));
-        // A NaN is still UNORDERED under `<`: the carve-out is `sameValue`'s
-        // alone and must not leak into the ordering operators.
+        // A NaN is still UNORDERED under `<`/`<=`: the carve-out is `sameValue`'s
+        // alone and must not leak into the ordering operators, which answer
+        // `false` for a NaN operand (`op:numeric-less-than`, and the
+        // `op:numeric-equal` half of `<=`), never `true` and never an error.
         let lt = Expression::Less(
             Child::new(typed_lit("NaN", XDOUBLE)),
             Child::new(typed_lit("NaN", XFLOAT)),
         );
-        assert_eq!(ebv(&ds, &lt), None);
+        assert_eq!(ebv(&ds, &lt), Some(false));
+        let le = Expression::LessOrEqual(
+            Child::new(typed_lit("NaN", XDOUBLE)),
+            Child::new(typed_lit("NaN", XFLOAT)),
+        );
+        assert_eq!(ebv(&ds, &le), Some(false));
     }
 
     #[test]

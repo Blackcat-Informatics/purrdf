@@ -987,6 +987,81 @@ fn the_vm_matches_the_tree_walk_over_generated_expressions() {
     }
 }
 
+fn typed(lexical: &str, datatype: &str) -> Expression {
+    Expression::Literal(Literal::new_typed(
+        lexical,
+        NamedNode::new_unchecked(format!("{XSD}{datatype}")),
+    ))
+}
+
+/// **A NaN comparison answers the same, and the specified, boolean on both
+/// evaluators**: `=`, `<`, `>`, `<=`, `>=` are `false` and `!=` is `true` for a NaN
+/// against any number (XPath F&O `op:numeric-equal`/`-less-than`/`-greater-than`);
+/// a NaN does not order against itself, while `sameValue` keeps `NaN = NaN` true.
+/// Over the palette's rows too, which put a NaN cell beside every other kind.
+#[test]
+fn the_vm_matches_the_tree_walk_over_nan_comparisons() {
+    let nan_double = || typed("NaN", "double");
+    let nan_float = || typed("NaN", "float");
+    let operands: Vec<fn() -> Expression> = vec![
+        || typed("NaN", "double"),
+        || typed("NaN", "float"),
+        || int(1),
+        || typed("2.5", "decimal"),
+        || typed("INF", "double"),
+        || var("a"),
+        || var("b"),
+    ];
+    type Build = fn(Expression, Expression) -> Expression;
+    let relations: [(&str, Build); 6] = [
+        ("=", |a, b| Expression::Equal(Child::new(a), Child::new(b))),
+        ("!=", |a, b| {
+            Expression::Not(Child::new(Expression::Equal(Child::new(a), Child::new(b))))
+        }),
+        ("<", |a, b| Expression::Less(Child::new(a), Child::new(b))),
+        (">", |a, b| {
+            Expression::Greater(Child::new(a), Child::new(b))
+        }),
+        ("<=", |a, b| {
+            Expression::LessOrEqual(Child::new(a), Child::new(b))
+        }),
+        (">=", |a, b| {
+            Expression::GreaterOrEqual(Child::new(a), Child::new(b))
+        }),
+    ];
+    for left in &operands {
+        for right in &operands {
+            for (name, build) in &relations {
+                let expr = build(left(), right());
+                assert_same(&expr, &format!("NaN comparison {name}"));
+            }
+        }
+    }
+    let answer = |expr: &Expression| match evaluate(expr) {
+        Some(TermValue::Literal { lexical_form, .. }) => Some(lexical_form == "true"),
+        Some(other) => panic!("a comparison bound {other:?}"),
+        None => None,
+    };
+    for nan in [nan_double(), nan_float()] {
+        for number in [int(1), typed("2.5", "decimal"), typed("INF", "double")] {
+            for (name, build) in &relations {
+                let expected = *name == "!=";
+                for expr in [
+                    build(nan.clone(), number.clone()),
+                    build(number.clone(), nan.clone()),
+                ] {
+                    assert_eq!(answer(&expr), Some(expected), "{name}: {expr:?}");
+                }
+            }
+        }
+    }
+    for (name, build) in &relations {
+        let same = build(nan_double(), nan_double());
+        let expected = matches!(*name, "=");
+        assert_eq!(answer(&same), Some(expected), "NaN {name} NaN");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // depth
 // ---------------------------------------------------------------------------
