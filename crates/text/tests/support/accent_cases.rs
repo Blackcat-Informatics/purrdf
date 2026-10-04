@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Every supported accent set, shared by the native and WASM runners.
+//! Native conformance for every supported accent set.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -128,17 +128,17 @@ pub(crate) fn every_accent_subset_is_independent_and_identified() {
     }
     assert_eq!(profile_ids.len(), 32);
     assert_eq!(analyzer_ids.len(), 32);
-    presets_keep_their_existing_identity();
+    presets_and_equivalent_sets_share_frozen_identity();
 }
 
-fn presets_keep_their_existing_identity() {
-    // Frozen preimages from the original three-preset profile format. These
-    // BLAKE3 answers were independently calculated before adding script sets.
+fn presets_and_equivalent_sets_share_frozen_identity() {
+    // The corrected per-control emoji laws version every profile identity.
+    // Presets and their equivalent explicit sets retain identical preimages.
     for (preset, members, expected) in [
         (
             AccentFold::Preserve,
             &[][..],
-            "f70268c28cf081386dc5b13e1bd53b112eab2d4f736cf0d5249537fdba752fb0",
+            "d9407844341168a946cee0df01c5af1ed78807ae62bcf2c8fa71bf5dfa431e36",
         ),
         (
             AccentFold::LatinGreekCyrillic,
@@ -147,7 +147,7 @@ fn presets_keep_their_existing_identity() {
                 AccentScript::Greek,
                 AccentScript::Cyrillic,
             ][..],
-            "aec4363550e18e2d31b353f69f189da465f219b53bf29f3f5444657b04067048",
+            "544dd94f12fa4c17ddb5340b055651f987267f8e9fc49e71fa04fbf4088675a4",
         ),
         (
             AccentFold::LatinGreekCyrillicArabicHebrew,
@@ -158,7 +158,7 @@ fn presets_keep_their_existing_identity() {
                 AccentScript::Arabic,
                 AccentScript::Hebrew,
             ][..],
-            "13b1fab9ed2689ea0c2ececb7307521d04c6ecec85c090a9433b226c17c72507",
+            "f46f475cef91b032516df2882a4b62d00426c3f254b42fcfed8251483f7c61fe",
         ),
     ] {
         let preset_profile = AnalyzerProfile::empty_lexicon().with_accent_fold(preset);

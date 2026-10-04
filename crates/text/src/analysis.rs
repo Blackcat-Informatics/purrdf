@@ -330,17 +330,22 @@ impl Analyzer {
         }
         for (position, range) in scratch.ranges.iter().cloned().enumerate() {
             let word = &normalized[range];
-            let protected = unicode::is_emoji_grapheme(word);
-            let changed = !protected
-                && (self.profile.stemming() == Stemming::English
-                    || word.chars().any(unicode::is_word_internal_control));
+            let emoji = unicode::is_emoji_grapheme(word);
+            let changed = self.profile.stemming() == Stemming::English && !emoji
+                || !word.is_ascii()
+                    && unicode::emoji_scalars(word).any(|(_, c, protected)| {
+                        !protected && unicode::is_word_internal_control(c)
+                    });
             let text = if changed {
                 scratch.word.clear();
                 scratch.word.extend(
-                    word.chars()
-                        .filter(|&c| !unicode::is_word_internal_control(c)),
+                    unicode::emoji_scalars(word)
+                        .filter(|&(_, c, protected)| {
+                            protected || !unicode::is_word_internal_control(c)
+                        })
+                        .map(|(_, c, _)| c),
                 );
-                if self.profile.stemming() == Stemming::English {
+                if self.profile.stemming() == Stemming::English && !emoji {
                     crate::stem::english_in_place(&mut scratch.word);
                 }
                 self.bounded(&scratch.word)
@@ -422,12 +427,16 @@ impl Analyzer {
         }
         for range in lexical_ranges {
             let original = &normalized.text[range.clone()];
-            let protected = unicode::is_emoji_grapheme(original);
-            let mut text = original
-                .chars()
-                .filter(|&c| protected || !unicode::is_word_internal_control(c))
-                .collect::<String>();
-            let coarse = if self.profile.stemming() == Stemming::English && !protected {
+            let emoji = unicode::is_emoji_grapheme(original);
+            let mut text = if original.is_ascii() {
+                original.to_owned()
+            } else {
+                unicode::emoji_scalars(original)
+                    .filter(|&(_, c, protected)| protected || !unicode::is_word_internal_control(c))
+                    .map(|(_, c, _)| c)
+                    .collect::<String>()
+            };
+            let coarse = if self.profile.stemming() == Stemming::English && !emoji {
                 let before = text.clone();
                 crate::stem::english_in_place(&mut text);
                 text != before
@@ -440,7 +449,7 @@ impl Analyzer {
                 projection.sources.clear();
                 let mut bytes = 0;
                 let mut end = range.start;
-                for (at, c) in original.char_indices() {
+                for (at, c, protected) in unicode::emoji_scalars(original) {
                     if !protected && unicode::is_word_internal_control(c) {
                         continue;
                     }
@@ -660,10 +669,8 @@ fn normalize_into<A: Alignment>(
             .any(|(at, c)| !cleanup.survives(at, c, false))
     } else {
         !unicode::grapheme_bounds(&decoded.text).any(|(at, cluster)| {
-            let protected = unicode::is_emoji_grapheme(cluster);
-            cluster
-                .char_indices()
-                .any(|(relative, c)| !cleanup.survives(at + relative, c, protected))
+            unicode::emoji_scalars(cluster)
+                .any(|(relative, c, protected)| !cleanup.survives(at + relative, c, protected))
         })
     };
     if decoded.sources.is_empty() && no_cleanup {
@@ -701,8 +708,7 @@ fn normalize_into<A: Alignment>(
     let mut ordinal = 0;
     let mut cleanup = CleanupCursor::new(&decoded.text);
     for (at, cluster) in unicode::grapheme_bounds(&decoded.text) {
-        let protected = unicode::is_emoji_grapheme(cluster);
-        for (relative, c) in cluster.char_indices() {
+        for (relative, c, protected) in unicode::emoji_scalars(cluster) {
             let offset = at + relative;
             let source = decoded
                 .sources

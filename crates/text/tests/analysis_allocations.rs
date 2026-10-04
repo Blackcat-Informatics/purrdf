@@ -32,3 +32,45 @@ fn repeated_emoji_metadata_grows_linearly() {
         previous = current;
     }
 }
+
+#[test]
+fn incomplete_tag_runs_and_lexical_cleanup_use_linear_storage() {
+    for pattern in ["☕\u{200c} ", "👩\u{e0020} "] {
+        let mut previous: Option<Measurement> = None;
+        for count in [256, 512, 1_024, 2_048, 4_096] {
+            let input = pattern.repeat(count);
+            let window = CurrentThreadWindow::open();
+            let analysis = Analyzer::empty_lexicon().projections(&input).unwrap();
+            let current = window.close();
+            assert_eq!(analysis.lexical.len(), count);
+            assert_eq!(analysis.surface.len(), count);
+            assert_eq!(analysis.spans.len(), count);
+            assert!(
+                analysis
+                    .lexical
+                    .iter()
+                    .all(|projection| projection.text.chars().count() == 1)
+            );
+            if let Some(previous) = previous {
+                assert!(
+                    current.requested_bytes <= previous.requested_bytes * 3,
+                    "{pattern:?}, count {count}: {previous:?} -> {current:?}"
+                );
+            }
+            previous = Some(current);
+        }
+    }
+    // A single unfinished tag suffix must not allocate one protection record
+    // per tag, or repeatedly copy the remaining suffix at each scalar.
+    for count in [1_024, 16_384, 262_144] {
+        let input = "👩".to_owned() + &"\u{e0020}".repeat(count);
+        let window = CurrentThreadWindow::open();
+        let analysis = Analyzer::empty_lexicon().projections(&input).unwrap();
+        let measurement = window.close();
+        assert_eq!(analysis.normalized.text, "👩");
+        assert!(
+            measurement.requested_bytes < 16_384,
+            "{count}: {measurement:?}"
+        );
+    }
+}

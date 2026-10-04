@@ -47,8 +47,12 @@ mixed technical entries, supplementary Han and legitimate dictionary punctuation
 
 ## Ordered analysis
 
-Decode explicit HTML references once, protect emoji graphemes, and apply the
-named cleanup law. Recompute grapheme boundaries after deletion, then normalize
+Decode explicit HTML references once and apply the named cleanup law. Emoji
+boundaries retain their declared atomic admission. Within an admitted emoji
+grapheme, individual controls receive protection only inside complete emoji
+elements or their structural joins. Dangling joiners, unfinished
+tag suffixes and unrelated attached controls receive no emoji protection.
+Recompute grapheme boundaries after deletion, then normalize
 non-emoji runs with `NFD → full case fold → NFKD → full case fold → NFKD`, remove
 eligible accent marks, and finally compose NFC. This permits composition across
 removed controls while preserving actual source contributors. Segmentation retains orthographic controls;
@@ -62,8 +66,9 @@ Latin, Greek, Cyrillic, Arabic and Hebrew; Arabic and Hebrew are opt-in members.
 `AccentScripts::from_scripts([unicode::AccentScript::Arabic])` selects Arabic
 alone through `AccentFold::Selected`, and `AccentScripts::default()` selects no
 scripts. Order and repeated members have no effect. Explicit sets equivalent to
-the three presets share their profile and analyzer identities; the preset
-fingerprints and default behavior remain unchanged.
+the three presets share their profile and analyzer identities. The version 3
+ordered and lexical control laws remint every profile identity, including presets,
+while preserving equivalent explicit selections.
 
 Python analyzer dictionaries accept `"accent": ["arabic"]`,
 `"accent": ["hebrew"]`, or subsets such as `"accent": ["latin", "cyrillic"]`.

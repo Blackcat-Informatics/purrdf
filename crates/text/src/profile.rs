@@ -6,8 +6,8 @@ use crate::{TextError, segment::Dictionary, unicode::AccentScript};
 use purrdf_hash::{Domain, blake3, frame::frame_le};
 use std::sync::Arc;
 const ORDERED_LAW: Domain =
-    Domain::new(b"references-once-emoji-protect-caseless-scoped-accents-v2");
-const LEXICAL_LAW: Domain = Domain::new(b"lexical-transparent-controls-letter-dot-colon-v2");
+    Domain::new(b"references-once-emoji-protect-caseless-scoped-accents-v3");
+const LEXICAL_LAW: Domain = Domain::new(b"lexical-transparent-controls-letter-dot-colon-v3");
 const BOUNDING_LAW: Domain = Domain::new(b"stem-then-whole-egc-prefix-first-oversized-intact-v1");
 const BASELINE_LAW: Domain = Domain::new(b"five-full-baselines-minimum-collision-cost-v1");
 const SUBSTRING_LAW: Domain =

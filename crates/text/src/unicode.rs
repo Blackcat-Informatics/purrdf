@@ -37,6 +37,7 @@ use crate::unicode_tables as tables;
 pub use purrdf_lex::unicode::{Compare, Sink, nfc, nfd, nfkc, nfkd};
 
 mod grapheme;
+pub(crate) use grapheme::emoji_scalars;
 pub use grapheme::{
     EmojiStatus, GraphemeBounds, emoji_status, grapheme_bounds, is_conjunct_consonant,
     is_emoji_grapheme,

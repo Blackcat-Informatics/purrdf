@@ -998,16 +998,17 @@ fn two_independently_built_indexes_rank_identically() {
 /// fingerprint, the source fingerprint, the analyzer fingerprint and the term-sequence
 /// fingerprint. Each is recorded by callers, so a moved value is a changed identity.
 /// The explicit empty-lexicon profile now binds scoped accents, projection bounds,
-/// control and emoji laws, and auxiliary retrieval parameters. Its analyzer and
-/// index identities therefore differ from the former implicit unit analyzer;
-/// the unchanged RDF source and term-sequence identities remain frozen.
+/// control and emoji laws, and auxiliary retrieval parameters. Versioned
+/// control protection changes the analyzer and index identities even when the
+/// source contains no malformed controls. The RDF source and term-sequence
+/// identities remain frozen.
 #[test]
 fn the_published_text_identities_are_frozen() {
     let hex = |digest: [u8; 32]| purrdf_hash::hex::Lower(&digest).to_string();
     let index = golden_index();
     assert_eq!(
         hex(index.fingerprint()),
-        "e7c3f0c0a5d200448f816f0e1d70b0abc4c993f46046a7004d516c2ca328863e",
+        "05dd33b590fa769238926e237aadb69554c1522817da053ec497bc03bec44735",
         "the index fingerprint"
     );
     assert_eq!(
@@ -1017,7 +1018,7 @@ fn the_published_text_identities_are_frozen() {
     );
     assert_eq!(
         hex(index.analyzer_fingerprint()),
-        "6b97e57edd41a2fc8c8fb6192d41295a81a48e9501471c55724df366d9e8eb02",
+        "1343b98756544fc04c2ae30f0512917d025a92dd52328207e01ed332c42c65d9",
         "the analyzer fingerprint"
     );
     let terms = [

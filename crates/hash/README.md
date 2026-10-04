@@ -501,7 +501,7 @@ source on every run.
 | `b"gts-mmr-parent-v1"` | `PARENT_DOMAIN` | `crates/gts/src/mmr.rs` |
 | `b"gts-mmr-root-v1"` | `ROOT_DOMAIN` | `crates/gts/src/mmr.rs` |
 | `b"gts-segment-heads-v1"` | `SEGMENT_HEADS_DOMAIN` | `crates/gts/src/replication.rs` |
-| `b"lexical-transparent-controls-letter-dot-colon-v2"` | `LEXICAL_LAW` | `crates/text/src/profile.rs` |
+| `b"lexical-transparent-controls-letter-dot-colon-v3"` | `LEXICAL_LAW` | `crates/text/src/profile.rs` |
 | `b"merkle-root\x1f"` | `MERKLE_ROOT_DOMAIN` | `crates/slice/src/cache.rs` |
 | `b"path-snapshot-edge-set-v1"` | `PATH_SNAPSHOT_DOMAIN_V1` | `crates/sparql-eval/src/path_relation.rs` |
 | `b"path-witness-identifier-v1"` | `PATH_ID_DOMAIN_V1` | `crates/sparql-eval/src/path_relation.rs` |
@@ -565,7 +565,7 @@ source on every run.
 | `b"purrdf:evidence:v1"` | `EVIDENCE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"purrdf:fusion-profile:v1"` | `FUSION_PROFILE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"purrdf:plan:v1"` | `PLAN_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
-| `b"references-once-emoji-protect-caseless-scoped-accents-v2"` | `ORDERED_LAW` | `crates/text/src/profile.rs` |
+| `b"references-once-emoji-protect-caseless-scoped-accents-v3"` | `ORDERED_LAW` | `crates/text/src/profile.rs` |
 | `b"section"` | `SECTION_KIND` | `crates/markdown/src/identity.rs` |
 | `b"stem-then-whole-egc-prefix-first-oversized-intact-v1"` | `BOUNDING_LAW` | `crates/text/src/profile.rs` |
 | `b"structure"` | `STRUCTURE_KIND` | `crates/markdown/src/identity.rs` |
