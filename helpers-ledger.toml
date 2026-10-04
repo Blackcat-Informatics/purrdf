@@ -1545,6 +1545,16 @@ reason = "The native codec's serialization model may not depend on the GTS crate
 
 [[distinct]]
 members = [
+    "purrdf_core::loss::supports_quads",
+    "purrdf_core::loss::supports_stars",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_core::loss::supports_quads"
+reason = "Two independent capability predicates over the same codec registry: one answers whether a syntax can carry named graphs, the other whether it can carry RDF-1.2 quoted triples. The match arms share a shape, not a guarantee, and the sets differ per codec (JSON-LD carries graphs but no stars; Turtle the reverse)."
+
+[[distinct]]
+members = [
     "purrdf_shapes::constraints::ValueNode::to_term",
     "purrdf_shapes::engine::FocusNode::to_term",
 ]
