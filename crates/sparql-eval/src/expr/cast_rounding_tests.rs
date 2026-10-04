@@ -494,3 +494,140 @@ fn numeric_string_renderings_read_back_as_the_same_bits() {
     }
     assert!(checked > 2 * DRAWS, "{checked}");
 }
+
+/// Every integer-family target with its inclusive range as XSD 1.1 Part 2 §3.4 states
+/// it — written out here rather than read from the implementation under test.
+/// `xsd:integer` itself is unbounded; this engine's integers are `i128`.
+const INTEGER_TARGETS: [(XsdDatatype, i128, i128); 13] = [
+    (XsdDatatype::Integer, i128::MIN, i128::MAX),
+    (XsdDatatype::Long, -(1 << 63), (1 << 63) - 1),
+    (XsdDatatype::Int, -(1 << 31), (1 << 31) - 1),
+    (XsdDatatype::Short, -(1 << 15), (1 << 15) - 1),
+    (XsdDatatype::Byte, -(1 << 7), (1 << 7) - 1),
+    (XsdDatatype::UnsignedLong, 0, (1 << 64) - 1),
+    (XsdDatatype::UnsignedInt, 0, (1 << 32) - 1),
+    (XsdDatatype::UnsignedShort, 0, (1 << 16) - 1),
+    (XsdDatatype::UnsignedByte, 0, (1 << 8) - 1),
+    (XsdDatatype::NonNegativeInteger, 0, i128::MAX),
+    (XsdDatatype::PositiveInteger, 1, i128::MAX),
+    (XsdDatatype::NonPositiveInteger, i128::MIN, 0),
+    (XsdDatatype::NegativeInteger, i128::MIN, -1),
+];
+
+/// Hold one source's cast to every integer-family target to the oracle: the exact
+/// value truncated toward zero (`None` for `NaN` and the infinities, which have no
+/// integer value), an error outside `i128` or the target's range, and otherwise that
+/// integer typed as the target.
+fn assert_integer_casts(source: &XsdValue, exact: Option<&Rational>) -> usize {
+    let truncated = exact.and_then(Rational::truncate_toward_zero);
+    for (target, min, max) in INTEGER_TARGETS {
+        let expected = truncated
+            .filter(|value| (min..=max).contains(value))
+            .map(|value| (value, target));
+        let cast = match cast_numeric_value(source, target) {
+            Some(XsdValue::Integer { value, datatype }) => Some((value, datatype)),
+            None => None,
+            Some(other) => panic!("{source:?} cast to {target:?} is {other:?}"),
+        };
+        assert_eq!(cast, expected, "{source:?} cast to {target:?}");
+    }
+    INTEGER_TARGETS.len()
+}
+
+#[test]
+fn float_double_and_decimal_casts_to_integer_types_truncate_toward_zero() {
+    let mut draws = Draws(0x7E0C_A7E5);
+    let limit = 2_f64.powi(127);
+    let mut doubles = vec![
+        0.0,
+        -0.0,
+        limit,
+        limit.next_down(),
+        limit.next_up(),
+        -limit,
+        (-limit).next_up(),
+        (-limit).next_down(),
+        f64::MAX,
+        f64::MIN,
+        f64::from_bits(1),
+    ];
+    // Just inside and just outside ±1.
+    for one in [1.0_f64, -1.0] {
+        doubles.extend([one, one.next_up(), one.next_down(), one * 0.5, one * 1.5]);
+    }
+    // One unit and a fraction either side of each target's bounds, where a double
+    // can hold them; the 2^63 and 2^64 bounds by their neighbouring doubles.
+    let mut decimals: Vec<(i128, u32)> = Vec::new();
+    for (_, min, max) in INTEGER_TARGETS {
+        for bound in [min, max] {
+            for delta in [-1_i128, 0, 1] {
+                let Some(value) = bound.checked_add(delta) else {
+                    continue;
+                };
+                #[allow(clippy::cast_precision_loss, reason = "the nearest double is the case")]
+                let double = value as f64;
+                doubles.extend([double, double.next_up(), double.next_down()]);
+                decimals.push((value, 0));
+                // ±0.5 around the bound, at scale 1, while the mantissa fits.
+                if let Some(tenfold) = value.checked_mul(10) {
+                    for half in [-5, 5] {
+                        if let Some(mantissa) = tenfold.checked_add(half) {
+                            decimals.push((mantissa, 1));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Magnitudes from 2^-4 to 2^130, where truncation and every range bound live.
+    doubles.extend((0..DRAWS / 2).map(|_| {
+        let exponent = 1023 - 4 + draws.below(135);
+        let sign = draws.next() & (1 << 63);
+        f64::from_bits(sign | (exponent << 52) | (draws.next() & ((1 << 52) - 1)))
+    }));
+    doubles.extend((0..DRAWS / 4).map(|_| draws.double()));
+    // Decimals at every scale: the whole part is extracted exactly.
+    decimals.extend((0..DRAWS / 2).map(|_| (draws.int(), draws.below(19) as u32)));
+    decimals.extend([
+        (i128::MAX, 0),
+        (i128::MIN + 1, 0),
+        (i128::MAX, 18),
+        (-1, 18),
+    ]);
+
+    let mut checked = 0_usize;
+    for &value in &doubles {
+        checked += assert_integer_casts(&XsdValue::Double(value), Some(&Rational::from_f64(value)));
+    }
+    let floats: Vec<f32> = (0..DRAWS / 4)
+        .map(|_| draws.float())
+        .chain([
+            0.0,
+            -0.0,
+            0.999_999_94,
+            -0.999_999_94,
+            1.0,
+            -1.0,
+            f32::MAX,
+            f32::MIN,
+        ])
+        .collect();
+    for &value in &floats {
+        checked += assert_integer_casts(&XsdValue::Float(value), Some(&Rational::from_f32(value)));
+    }
+    for &(mantissa, scale) in &decimals {
+        let source = XsdValue::Decimal(decimal(mantissa, scale));
+        checked += assert_integer_casts(&source, Some(&Rational::from_decimal(mantissa, scale)));
+    }
+    // No integer value: an error for every target.
+    for special in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        checked += assert_integer_casts(&XsdValue::Double(special), None);
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the special values narrow exactly"
+        )]
+        let narrow = special as f32;
+        checked += assert_integer_casts(&XsdValue::Float(narrow), None);
+    }
+    assert!(checked > 13 * DRAWS, "{checked}");
+}

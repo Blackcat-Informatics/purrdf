@@ -122,6 +122,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   binary value, with ties rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
   `0.100000001490116119` instead of `0.1`. Casts from strings still parse the
   string.
+- **XSD decimals:** the decimal lexical form of the smallest 128-bit integer,
+  `-170141183460469231731687303715884105728` (also with up to 18 fractional
+  digits), now parses. It was refused as out of range although its value is
+  representable, so `xsd:decimal` of that integer produced a literal that did
+  not read back.
 - **SPARQL numeric-to-string casts:** `xsd:string` of a float or double uses
   plain notation only for magnitudes from 0.000001 up to, but not including,
   1000000, and scientific notation with a digit after the point otherwise:

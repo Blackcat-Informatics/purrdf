@@ -566,6 +566,19 @@ impl Rational {
         }
     }
 
+    /// The value with its fractional part discarded (rounded toward zero), as an
+    /// `i128`, or `None` when that integer does not fit one.
+    #[must_use]
+    pub fn truncate_toward_zero(&self) -> Option<i128> {
+        let (whole, _) = self.numerator.div_rem(&self.denominator);
+        let magnitude = whole.to_u128()?;
+        if self.negative {
+            0_i128.checked_sub_unsigned(magnitude)
+        } else {
+            i128::try_from(magnitude).ok()
+        }
+    }
+
     /// The nearest multiple of `10^-scale`, ties toward zero, keeping this value's
     /// sign.
     #[must_use]
@@ -629,6 +642,28 @@ mod tests {
                 .round_to_scale_ties_toward_zero(18)
                 .value_eq(&Rational::from_decimal(5_722_045_898_438, 18))
         );
+    }
+
+    #[test]
+    fn truncation_discards_the_fraction_toward_zero() {
+        let cases = [
+            ("2.9", Some(2)),
+            ("-2.9", Some(-2)),
+            ("-0.5", Some(0)),
+            ("0.999", Some(0)),
+            ("-170141183460469231731687303715884105728", Some(i128::MIN)),
+            (
+                "-170141183460469231731687303715884105728.9",
+                Some(i128::MIN),
+            ),
+            ("-170141183460469231731687303715884105729", None),
+            ("170141183460469231731687303715884105727.5", Some(i128::MAX)),
+            ("170141183460469231731687303715884105728", None),
+        ];
+        for (numeral, expected) in cases {
+            let value = Rational::parse(numeral).expect("a numeral");
+            assert_eq!(value.truncate_toward_zero(), expected, "{numeral}");
+        }
     }
 
     #[test]

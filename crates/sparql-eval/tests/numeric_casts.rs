@@ -239,6 +239,17 @@ fn integer_and_decimal_sources_cast_to_decimal_exactly() {
         typed("12345678901234567.123456789012345678", "decimal"),
     );
     check(r#"xsd:decimal("+007"^^xsd:integer)"#, typed("7", "decimal"));
+    // The smallest i128 is a decimal mantissa too: its literal is well-typed (so
+    // arithmetic reads it), and the integer cast to decimal gives that literal.
+    let min = i128::MIN.to_string();
+    check(
+        &format!(r#"xsd:decimal("{min}"^^xsd:integer)"#),
+        typed(&min, "decimal"),
+    );
+    check(
+        &format!(r#"("{min}"^^xsd:decimal + 0)"#),
+        typed(&min, "decimal"),
+    );
     check(
         r#"xsd:integer("12345678901234567.9"^^xsd:decimal)"#,
         typed("12345678901234567", "integer"),

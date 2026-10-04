@@ -416,18 +416,25 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
 
     let digits = format!("{int_str}{frac_str}");
     let digits_trimmed = digits.trim_start_matches('0');
-    let magnitude = if digits_trimmed.is_empty() {
-        0i128
-    } else {
-        digits_trimmed
-            .parse::<i128>()
-            .map_err(|_| XsdError::OutOfRange {
-                datatype: dt,
-                lexical: s.to_string(),
-                reason: "integer magnitude exceeds i128",
-            })?
+    let out_of_range = || XsdError::OutOfRange {
+        datatype: dt,
+        lexical: s.to_string(),
+        reason: "integer magnitude exceeds i128",
     };
-    let mantissa = if neg { -magnitude } else { magnitude };
+    // The magnitude is read unsigned so that `i128::MIN`, whose magnitude is one past
+    // `i128::MAX`, is a mantissa like any other (it is the value `xsd:decimal` of the
+    // integer `i128::MIN` holds, and its canonical lexical must read back).
+    let magnitude = if digits_trimmed.is_empty() {
+        0u128
+    } else {
+        digits_trimmed.parse::<u128>().map_err(|_| out_of_range())?
+    };
+    let mantissa = if neg {
+        0i128.checked_sub_unsigned(magnitude)
+    } else {
+        i128::try_from(magnitude).ok()
+    }
+    .ok_or_else(out_of_range)?;
     // `frac_str.len() <= MAX_DECIMAL_SCALE <= u8::MAX`, so the cast cannot truncate.
     Ok(Decimal::from_parts(mantissa, frac_str.len() as u8))
 }
@@ -3035,6 +3042,38 @@ mod tests {
             MAX_DECIMAL_SCALE,
         );
         Some(decimal.canonical_lexical())
+    }
+
+    #[test]
+    fn decimal_mantissa_spans_the_whole_i128_range() {
+        let min = i128::MIN.to_string();
+        let parsed = parse_decimal(&min).expect("i128::MIN is a decimal");
+        assert_eq!(parsed.mantissa(), i128::MIN);
+        assert_eq!(parsed.canonical_lexical(), min);
+        assert_eq!(
+            Decimal::from_integer(i128::MIN).canonical_lexical(),
+            min,
+            "the canonical lexical of the cast reads back"
+        );
+        let scaled = parse_decimal("-170141183460469231731.687303715884105728").expect("scaled");
+        assert_eq!((scaled.mantissa(), scaled.scale()), (i128::MIN, 18));
+        assert_eq!(
+            parse_decimal(&i128::MAX.to_string())
+                .expect("max")
+                .mantissa(),
+            i128::MAX
+        );
+        // One past either end is still out of range.
+        for beyond in [
+            "-170141183460469231731687303715884105729",
+            "170141183460469231731687303715884105728",
+            "-170141183460469231731.687303715884105729",
+        ] {
+            assert!(
+                matches!(parse_decimal(beyond), Err(XsdError::OutOfRange { .. })),
+                "{beyond}"
+            );
+        }
     }
 
     #[test]
