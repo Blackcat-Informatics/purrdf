@@ -18,6 +18,62 @@ set -euo pipefail
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -n "$staged" ] || exit 0
 
+# Repository tooling and tests are Rust. Two rules hold for Python and JS/TS:
+#
+# 1. Every NEW .py, .mjs, .js, .cjs, .ts or .mts file anywhere in the tree (scripts,
+#    binding tests, the wasm suite, ...; the frozen vendor corpora under vectors/
+#    excepted) must say why it cannot be Rust: a `# Why not Rust: <reason>` (Python) or
+#    `// Why not Rust: <reason>` (JS/TS) line within its first 40 lines, with a reason
+#    of at least 30 characters.
+# 2. The legacy Python and JS/TS tooling and tests may shrink but never grow: the staged
+#    scripts/ Python and JS/TS, the wasm test suite (crates/rdf-wasm/js/tests/) and the
+#    JS/TS under any crate's tests/ may not add more lines than they remove (git's `*`
+#    matches `/`, so subdirectories count). A new file that carries its rule-1
+#    explanation is not counted; growth of an existing file is. The shipped wasm
+#    package surface (index.mjs, index.d.ts, src/) is not ratcheted.
+#
+# New checks, generators, gates and tests belong in Rust (helper-census, an xtask, a test).
+if git rev-parse --verify --quiet HEAD >/dev/null; then
+    explained=()
+    unexplained=()
+    while IFS= read -r -d '' path; do
+        case "$path" in vectors/*) continue ;; esac
+        if git show ":$path" | head -n 40 |
+            grep -qiE '^[[:space:]]*(#|//)[[:space:]]*why not rust:[[:space:]]*[^[:space:]].{29,}'; then
+            explained+=("$path")
+        else
+            unexplained+=("$path")
+        fi
+    done < <(git diff --cached --name-only --diff-filter=A -z -- \
+        '*.py' '*.mjs' '*.js' '*.cjs' '*.ts' '*.mts')
+    if [ "${#unexplained[@]}" -gt 0 ]; then
+        echo "pre-commit: new Python/JS/TS file(s) without an explanation of why they cannot be Rust:" >&2
+        printf '  %s\n' "${unexplained[@]}" >&2
+        echo "  Write the logic in Rust, or add near the top of each file:" >&2
+        echo "    # Why not Rust: <the concrete reason>      (Python)" >&2
+        echo "    // Why not Rust: <the concrete reason>     (JS/TS)" >&2
+        exit 1
+    fi
+    ratcheted=(
+        'scripts/*.py' 'scripts/*.mjs' 'scripts/*.js' 'scripts/*.cjs' 'scripts/*.ts'
+        'crates/rdf-wasm/js/tests/*'
+        'crates/*/tests/*.mjs' 'crates/*/tests/*.js' 'crates/*/tests/*.ts'
+    )
+    growth=$(git diff --cached --numstat -M HEAD -- "${ratcheted[@]}" |
+        awk -v skip="$(printf '%s\n' "${explained[@]}")" '
+            BEGIN { n = split(skip, s, "\n"); for (i = 1; i <= n; i++) if (s[i] != "") ok[s[i]] = 1 }
+            $1 != "-" && !($3 in ok) { net += $1 - $2 }
+            END { print net + 0 }')
+    if [ "$growth" -gt 0 ]; then
+        echo "pre-commit: this commit grows the existing Python/JS tooling and tests by $growth net line(s)" >&2
+        echo "  (scripts/, the wasm test suite, or JS/TS under a crate's tests/)." >&2
+        echo "  Tooling and tests are written in Rust; these legacy files may only shrink." >&2
+        echo "  Put the new logic in Rust (helper-census, an xtask, or a Rust test) instead," >&2
+        echo "  or offset the growth by porting or removing at least as many lines." >&2
+        exit 1
+    fi
+fi
+
 snapshot=$(mktemp -d)
 logs=$(mktemp -d)
 trap 'rm -rf "$snapshot" "$logs"' EXIT

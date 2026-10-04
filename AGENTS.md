@@ -211,6 +211,20 @@ makes it removable).
   with `scripts/check-no-features.py`. PurRDF is a carrier; optionality changes
   semantics per consumer, which is forbidden. Do not add any other feature,
   optional dependency, or feature-gated behavior.
+* **Tooling and tests are Rust.** Checks, generators, gates and tests are written
+  in Rust (`helper-census`, an xtask, a Rust test). Python and JavaScript remain
+  only where a language surface itself must be exercised, and the pre-commit hook
+  (`make hooks`) enforces two rules:
+  1. A new `.py`, `.mjs`, `.js`, `.cjs`, `.ts` or `.mts` file anywhere outside
+     `vectors/` carries a `# Why not Rust: <reason>` (Python) or
+     `// Why not Rust: <reason>` (JS/TS) line in its first 40 lines, stating
+     concretely why the job cannot be done in Rust.
+  2. The legacy Python and JS/TS tooling and tests only shrink. The staged
+     `scripts/` Python and JS/TS, the wasm test suite (`crates/rdf-wasm/js/tests/`)
+     and the JS/TS under any crate's `tests/` may not add more lines than they
+     remove. A new file with its rule-1 explanation is exempt; growth of an
+     existing file is not. The shipped wasm package surface (`index.mjs`,
+     `index.d.ts`, `src/`) is not ratcheted.
 * **Kernel ring-fence.** `purrdf-core` must never depend on PyO3.
   `purrdf-hash` (the `root` of `layers.toml`) has **zero runtime
   dependencies**. The ring-fenced crates — the rows of `layers.toml` that carry
