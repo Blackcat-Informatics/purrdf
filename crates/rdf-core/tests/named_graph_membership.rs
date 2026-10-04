@@ -20,8 +20,10 @@ use std::sync::Arc;
 
 use purrdf_core::term_fixture::{graph_slots as fixture, iri};
 use purrdf_core::{
-    CompositeDatasetView, CompositeSource, DatasetMut, DatasetView, GraphPlacement,
-    InMemoryPageProvider, MutableDataset, PagedDataset, PagedQueryLimits, QuadValues, ViewLimits,
+    CompositeDatasetView, CompositeSource, DatasetMut, DatasetView, GlobalTermId, GraphPlacement,
+    InMemoryPageProvider, MutableDataset, PackView, PagedDataset, PagedQueryLimits, QuadIds,
+    QuadValues, SegmentedBuildLimits, SegmentedBuilder, SegmentedImage, SegmentedReadLimits,
+    SegmentedSession, ViewLimits,
 };
 
 /// Check the law over every id a quad or graph enumeration hands out, and that
@@ -166,4 +168,89 @@ fn paged_membership_agrees() {
     assert_agrees(&paged, "paged", &expected, &absent);
     let view = paged.query_view(PagedQueryLimits::new(u64::MAX, u64::MAX));
     assert_agrees(&view, "paged/query-view", &expected, &absent);
+}
+
+#[test]
+fn pack_membership_agrees() {
+    let bytes = purrdf_core::term_fixture::pack_bytes(&fixture(""));
+    let view = PackView::from_bytes(&bytes).expect("the pack opens");
+    assert_agrees(&view, "pack", &["g"], &["phantom", "s", "o"]);
+}
+
+/// A segmented image holding `s p phantom` in the default graph and `s p o{i}` in
+/// named graph `g{i}` for each of `graphs` graphs, its graph records packed into
+/// many small blocks.
+fn segmented(graphs: usize) -> SegmentedImage {
+    let limits = SegmentedBuildLimits::new(65_536, 4_000_000, 65_536, 512, 16)
+        .expect("valid segmented limits");
+    let mut builder = SegmentedBuilder::new(limits);
+    let mut push = |s: &str, o: &str, g: Option<&str>| {
+        let mut terms = vec![iri(s), iri("p"), iri(o)];
+        terms.extend(g.map(iri));
+        let mut ids: Vec<GlobalTermId> = Vec::new();
+        builder
+            .intern_batch(&terms, |_, id| ids.push(id))
+            .expect("terms intern");
+        builder
+            .push_quad(QuadIds {
+                s: ids[0],
+                p: ids[1],
+                o: ids[2],
+                g: ids.get(3).copied(),
+            })
+            .expect("quad pushes");
+    };
+    push("s", "phantom", None);
+    for i in 0..graphs {
+        push("s", &format!("o{i}"), Some(&format!("g{i}")));
+    }
+    builder.seal().expect("the image seals")
+}
+
+fn open(image: &SegmentedImage) -> SegmentedSession {
+    SegmentedSession::open(
+        Arc::new(image.provider()),
+        image.receipt(),
+        SegmentedReadLimits::new(64_000_000, 2, 1_000_000, u64::MAX, 8),
+    )
+    .expect("the session opens")
+}
+
+#[test]
+fn segmented_membership_agrees() {
+    let image = segmented(3);
+    assert_agrees(
+        &open(&image),
+        "segmented",
+        &["g0", "g2"],
+        &["phantom", "o1"],
+    );
+}
+
+/// Membership is a search of the image's ascending graph records, not an enumeration:
+/// over 8000 graphs packed into over a hundred blocks, a probe reads a small fraction of
+/// what enumerating the graphs reads, for a graph that exists and for a term that names
+/// none alike.
+#[test]
+fn segmented_membership_searches_rather_than_enumerates() {
+    let image = segmented(8000);
+    let enumeration = {
+        let session = open(&image);
+        assert_eq!(session.named_graphs().count(), 8000);
+        session.evidence().with_requests(<[_]>::len)
+    };
+    for (local, expected) in [("g7999", true), ("phantom", false), ("g4000", true)] {
+        let session = open(&image);
+        let id = session
+            .term_id_by_value(&iri(local))
+            .unwrap()
+            .expect("the name is a term");
+        let before = session.evidence().with_requests(<[_]>::len);
+        assert_eq!(session.has_named_graph(id), expected, "<{local}>");
+        let reads = session.evidence().with_requests(<[_]>::len) - before;
+        assert!(
+            reads * 4 < enumeration,
+            "<{local}>: membership made {reads} reads; enumerating every graph makes {enumeration}"
+        );
+    }
 }

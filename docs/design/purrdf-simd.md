@@ -919,6 +919,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/retrieval/benches/fusion_frontier_alloc.rs` | retrieval.fusion-frontier, retrieval.rrf |
 | `crates/retrieval/benches/on_demand_read.rs` | retrieval.fusion-frontier, retrieval.rrf, distance.exact.dot, distance.exact.sqeuclid |
 | `crates/shapes/benches/canonical_sort.rs` | shapes.finish-report |
+| `crates/shapes/benches/graph_membership.rs` | eval.bgp-join-probe, core.dataset-scan-filter |
 | `crates/shapes/benches/instance_projection.rs` | shapes.instance-projection |
 | `crates/shapes/benches/pattern_lookup.rs` | shapes.path-eval, shapes.frontier-dedup |
 | `crates/shapes/benches/pattern_validate.rs` | core.xsd-regex-scan |
