@@ -3,20 +3,39 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # The quick subset of `make check`, run on what the commit actually records.
+# `.githooks/pre-merge-commit` hands over to this file, so a merge commit git
+# creates on its own is checked exactly like one made with `git commit`.
 #
-# Every gate here reads a snapshot of the index, not the working tree: a commit
-# assembled by partial staging is checked as it will exist, so a hunk left
-# behind in the tree can neither hide a failure nor fake a pass. The gates are
-# the ones that finish in a second or two; the census, the hash-domain registry,
-# clippy, the build and the tests stay in `make check` and CI.
+# Every gate here reads the index, not the working tree: a commit assembled by
+# partial staging is checked as it will exist, so a hunk left behind in the tree
+# can neither hide a failure nor fake a pass. The gates are the ones that finish
+# in a second or two; the census, the hash-domain registry, clippy, the build and
+# the tests stay in `make check` and CI.
 #
 # Install once per clone with `make hooks`. Bypassing the hook does not bypass
-# the gates: `make check` and CI run every one of them again.
+# these gates: each one below also runs in `make check` and in CI. They are not
+# byte-identical runs: the hook checks the staged index, `make check` the
+# working tree, and CI the pull request's merge commit.
 
 set -euo pipefail
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -n "$staged" ] || exit 0
+
+# Repository tooling and tests are Rust: the non-Rust ratchet in helper-census
+# (crates/helper-census/src/non_rust.rs; AGENTS.md states the rules) compares the
+# staged index with the merge-base of HEAD (and any MERGE_HEAD) and the
+# integration branch, PURRDF_RATCHET_BASE or origin/main. `make check` runs it on
+# the working tree and CI on the pull request. It runs before GIT_DIR and
+# GIT_WORK_TREE are pointed at the snapshot below, so it reads the real index.
+# `cargo run` builds the tool from the working tree the first time (or after it
+# changes) and reuses the built binary afterwards.
+if ! cargo run -q --locked -p helper-census -- \
+    --root "$(git rev-parse --show-toplevel)" --non-rust-ratchet \
+    --merge-base-with "${PURRDF_RATCHET_BASE:-origin/main}" --target index; then
+    echo "pre-commit: the non-Rust ratchet refused the staged index (see above)." >&2
+    exit 1
+fi
 
 snapshot=$(mktemp -d)
 logs=$(mktemp -d)
