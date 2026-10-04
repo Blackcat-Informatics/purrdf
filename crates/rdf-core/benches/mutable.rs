@@ -24,8 +24,8 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetMut, FastHasher, FastSet, GraphMatchValue, MutableDataset, QuadValues, RdfDataset,
-    RdfDatasetBuilder, TermValue,
+    DatasetMut, DatasetView, FastHasher, FastSet, GraphMatchValue, MutableDataset, QuadValues,
+    RdfDataset, RdfDatasetBuilder, TermValue,
 };
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
@@ -234,6 +234,138 @@ fn bench_freeze(c: &mut Bench) {
     group.finish();
 }
 
+/// Named graphs in the snapshot-enumeration base.
+const GRAPHS: u32 = 200;
+/// Declared empty graphs in the snapshot-enumeration base.
+const EMPTY_GRAPHS: u32 = 50;
+
+/// `BASE_QUADS` quads spread over `GRAPHS` named graphs (`(s{n}, p, o{n}, g{n % GRAPHS})`),
+/// plus `EMPTY_GRAPHS` declared empty graphs.
+fn build_graph_base() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    for n in 0..BASE_QUADS {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let o = b.intern_iri(&format!("http://example.org/o{n}"));
+        let g = b.intern_iri(&format!("http://example.org/g{}", n % GRAPHS));
+        b.push_quad(s, p, o, Some(g));
+    }
+    for n in 0..EMPTY_GRAPHS {
+        let g = b.intern_iri(&format!("http://example.org/empty{n}"));
+        b.declare_named_graph(g);
+    }
+    b.freeze().expect("graph base freezes")
+}
+
+/// Snapshot publication and `GRAPH ?g` enumeration after removals spread over many
+/// named graphs: the first `REMOVES` base quads, which empties `REMOVES / (BASE_QUADS
+/// / GRAPHS)` graphs whole and leaves the rest partly populated, plus the withdrawal of
+/// half the declared empty graphs. The mutation keeps each touched graph's live row
+/// count, so publication shares the set of emptied graphs instead of probing the
+/// base; this lane and the two below measure that it stays so. Report-only.
+fn bench_snapshot_graphs(c: &mut Bench) {
+    let base = build_graph_base();
+    let mut cow = MutableDataset::new(Arc::clone(&base));
+    for n in 0..REMOVES {
+        cow.remove(&QuadValues::quad(
+            iri(&format!("s{n}")),
+            iri("p"),
+            iri(&format!("o{n}")),
+            iri(&format!("g{}", n % GRAPHS)),
+        ));
+    }
+    for n in 0..EMPTY_GRAPHS / 2 {
+        cow.withdraw_graph_declaration(&iri(&format!("empty{n}")));
+    }
+
+    let annotated = annotated_after_small_drop();
+    let dropped = after_large_drop();
+
+    let mut group = c.benchmark_group("mut_snapshot_graphs");
+    for (name, mutation) in [
+        ("snapshot_and_enumerate", &cow),
+        ("annotated_base_small_drop", &annotated),
+        ("large_drop_repeated", &dropped),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let view = mutation
+                    .snapshot_view()
+                    .expect("mutated bench fixture publishes");
+                std::hint::black_box(view.named_graphs().count())
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Statements in the annotated base: each a reified, annotated triple in `other`.
+const STATEMENTS: u32 = 100_000;
+/// Quads in the large graph a DROP removes.
+const LARGE_GRAPH: u32 = 100_000;
+
+/// Lane (i): a base of `STATEMENTS` reified and annotated statements in the graph
+/// `other`, plus a one-quad graph `small`, after `DROP GRAPH small` (its quad
+/// removed and its declaration withdrawn). A snapshot's graph enumeration must cost
+/// nothing proportional to the untouched statement tables.
+fn annotated_after_small_drop() -> MutableDataset {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    let note = b.intern_iri("http://example.org/note");
+    let other = b.intern_iri("http://example.org/other");
+    let small = b.intern_iri("http://example.org/small");
+    for n in 0..STATEMENTS {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let o = b.intern_iri(&format!("http://example.org/o{n}"));
+        let r = b.intern_iri(&format!("http://example.org/r{n}"));
+        b.push_quad(s, p, o, Some(other));
+        let triple = b.intern_triple(s, p, o);
+        b.push_reifier_in_graph(r, triple, Some(other));
+        b.push_annotation_in_graph(r, note, o, Some(other));
+    }
+    let s = b.intern_iri("http://example.org/s0");
+    let o = b.intern_iri("http://example.org/o0");
+    b.push_quad(s, p, o, Some(small));
+    let mut cow = MutableDataset::new(b.freeze().expect("annotated base freezes"));
+    cow.remove(&QuadValues::quad(
+        iri("s0"),
+        iri("p"),
+        iri("o0"),
+        iri("small"),
+    ));
+    cow.withdraw_graph_declaration(&iri("small"));
+    cow
+}
+
+/// Lane (ii): a base whose graph `big` holds `LARGE_GRAPH` quads, after `DROP GRAPH
+/// big` removed every one of them. Repeated snapshots must not re-walk the dropped
+/// run.
+fn after_large_drop() -> MutableDataset {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    let big = b.intern_iri("http://example.org/big");
+    let other = b.intern_iri("http://example.org/other");
+    for n in 0..LARGE_GRAPH {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let o = b.intern_iri(&format!("http://example.org/o{n}"));
+        b.push_quad(s, p, o, Some(big));
+    }
+    let s = b.intern_iri("http://example.org/s0");
+    let o = b.intern_iri("http://example.org/o0");
+    b.push_quad(s, p, o, Some(other));
+    let mut cow = MutableDataset::new(b.freeze().expect("large base freezes"));
+    for n in 0..LARGE_GRAPH {
+        cow.remove(&QuadValues::quad(
+            iri(&format!("s{n}")),
+            iri("p"),
+            iri(&format!("o{n}")),
+            iri("big"),
+        ));
+    }
+    cow.withdraw_graph_declaration(&iri("big"));
+    cow
+}
+
 /// Print the relative head-to-head context once: how many quads each store holds, so
 /// the timed numbers are read against the same effective set. No winner asserted.
 fn bench_context(_c: &mut Bench) {
@@ -268,6 +400,7 @@ bench_group!(
     bench_build,
     bench_mutate,
     bench_query,
-    bench_freeze
+    bench_freeze,
+    bench_snapshot_graphs
 );
 bench_main!(benches);
