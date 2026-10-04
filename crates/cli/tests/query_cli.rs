@@ -3071,3 +3071,46 @@ fn the_cli_reads_the_sha3_hyphen_as_part_of_the_name() {
         "STRLEN(SHA3-256(?m)) - 4 must be 64 - 4; got:\n{body}"
     );
 }
+
+/// **The grouping constraint holds for every variable the caller does not pre-bind**
+/// (SPARQL 1.1 §11.4): in an aggregate query, a SELECT expression may read, outside
+/// an aggregate, only group keys. A variable the WHERE clause never binds, or binds
+/// only inside `MINUS`, is no key, so the CLI refuses both as parse errors; the same
+/// queries over the group key answer.
+#[test]
+fn an_aggregate_projection_reading_a_non_key_variable_is_refused() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+    let query = |text: &str| run(&["query", "--data", &ttl, "--results-format", "json", text]);
+    for refused in [
+        "SELECT (STR(?z) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s",
+        "SELECT (STR(?z) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o \
+         MINUS { ?s <http://example.org/age> ?z } } GROUP BY ?s",
+    ] {
+        let out = query(refused);
+        assert!(!out.status.success(), "{refused} must be refused");
+        assert!(
+            stderr(&out).contains("native-sparql-query-parse") && stderr(&out).contains("?z"),
+            "{refused}: the refusal names the parse code and the variable; stderr:\n{}",
+            stderr(&out)
+        );
+    }
+    for accepted in [
+        "SELECT (STR(?s) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s",
+        "SELECT (STR(?s) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o \
+         MINUS { ?s <http://example.org/age> ?z } } GROUP BY ?s",
+    ] {
+        let out = query(accepted);
+        assert!(
+            out.status.success(),
+            "{accepted} must answer; stderr:\n{}",
+            stderr(&out)
+        );
+        let body = stdout(&out);
+        assert!(
+            body.contains("http://example.org/alice"),
+            "{accepted}: {body}"
+        );
+    }
+}

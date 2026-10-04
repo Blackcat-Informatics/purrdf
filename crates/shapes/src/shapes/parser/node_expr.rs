@@ -502,7 +502,11 @@ impl Parser<'_> {
             // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
             // DESCRIBE parse but cannot bind ?this and would panic at eval — reject
             // at the boundary.
-            match SparqlParser::new().parse_query(&select) {
+            // The query runs with `$this` and the shape context pre-bound.
+            match SparqlParser::new()
+                .with_prebound_variables(crate::sparql::THIS_AND_SHAPE_CONTEXT)
+                .parse_query(&select)
+            {
                 Ok(query @ Query::Select { .. }) => {
                     // The query runs with $this pre-bound to each focus node;
                     // the pre-binding restrictions of SHACL 1.2 SPARQL
@@ -1725,9 +1729,12 @@ impl Parser<'_> {
                         "sh:sparqlExpr",
                     )
                 };
-                let parsed = SparqlParser::new().parse_query(&query).map_err(|e| {
-                    format!("{key} node expression on {node} has an unparsable query: {e}")
-                })?;
+                let parsed = SparqlParser::new()
+                    .with_prebound_variables(crate::sparql::node_expression_prebound_names(&query))
+                    .parse_query(&query)
+                    .map_err(|e| {
+                        format!("{key} node expression on {node} has an unparsable query: {e}")
+                    })?;
                 if !matches!(parsed, Query::Select { .. }) {
                     return Err(format!(
                         "{key} node expression on {node} must be a SELECT query"

@@ -659,7 +659,9 @@ impl PlanCache {
         // owned form the map stores.
         let key: Arc<[u8]> = Arc::from(scratch.as_slice());
         self.key_scratch = scratch;
-        let mut parser = SparqlParser::new();
+        // The declared parameters are bound before every run, so the grouping
+        // constraint treats them as constants of the evaluation.
+        let mut parser = SparqlParser::new().with_prebound_variables(parameters.iter());
         if let Some(base) = base_iri {
             parser = parser.with_base_iri(base);
         }

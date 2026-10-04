@@ -2230,8 +2230,13 @@ impl Parser<'_, '_> {
             if is_aggregating {
                 let as_targets: std::collections::HashSet<&Variable, FixedState> =
                     select_exprs.iter().map(|(v, _)| v).collect();
-                let group_vars: std::collections::HashSet<&Variable, FixedState> =
+                // A variable the caller binds before evaluation
+                // (`SparqlParser::with_prebound_variables`) holds one value for the
+                // whole evaluation, so every group reads the same value: it is as good
+                // as a key. No other variable is exempt.
+                let mut group_vars: std::collections::HashSet<&Variable, FixedState> =
                     modifiers.group_by.iter().collect();
+                group_vars.extend(self.prebound.iter());
                 for var in &projected {
                     if !as_targets.contains(var) && !group_vars.contains(var) {
                         return Err(ParseError::syntax(
@@ -2244,29 +2249,18 @@ impl Parser<'_, '_> {
                         ));
                     }
                 }
-                // The same constraint inside a `(expr AS ?v)`: outside an aggregate, an
-                // expression may read only group keys, aggregate results and the
-                // targets of earlier SELECT expressions. Grouping BY an expression
-                // does not make the variables in it keys, so `SELECT ((?a + ?b) AS ?s)
-                // … GROUP BY (?a + ?b)` is refused (vendored W3C `aggregates/agg08`,
-                // `agg11`). An `EXISTS` body is not read: a variable that occurs only
-                // there is local to it. Only a variable the WHERE clause can bind is
-                // judged: one it never binds is unbound in every group, or is supplied
-                // from outside the query text before evaluation — a SHACL-SPARQL
-                // pre-bound `$this`, or a request substitution — and is a constant
-                // there, never a per-row value the grouping would have to collapse.
-                let bindable: std::collections::HashSet<Variable, FixedState> =
-                    if select_exprs.is_empty() {
-                        std::collections::HashSet::with_hasher(FixedState::new())
-                    } else {
-                        visible_variables(&where_pat).into_iter().collect()
-                    };
-                let mut readable: std::collections::HashSet<&Variable, FixedState> = group_vars;
+                // The same constraint inside a `(expr AS ?v)` (SPARQL 1.1 §11.4): outside
+                // an aggregate, an expression may read only group keys, aggregate
+                // results and the targets of earlier SELECT expressions. Grouping BY an
+                // expression does not make the variables in it keys, so `SELECT ((?a +
+                // ?b) AS ?s) … GROUP BY (?a + ?b)` is refused (vendored W3C
+                // `aggregates/agg08`, `agg11`), and so is a variable the WHERE clause
+                // never binds, or binds only inside `MINUS`. An `EXISTS` body is not
+                // read: a variable that occurs only there is local to it.
+                let mut readable = group_vars;
                 readable.extend(aggregates.iter().map(|(v, _)| v));
                 for (target, expr) in &select_exprs {
-                    if let Some(var) = first_projection_read(expr, |v| {
-                        readable.contains(v) || !bindable.contains(v)
-                    }) {
+                    if let Some(var) = first_projection_read(expr, |v| readable.contains(v)) {
                         return Err(ParseError::syntax(
                             format!(
                                 "SELECT expression for ?{} reads ?{}, which is neither a \

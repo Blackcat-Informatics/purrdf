@@ -287,6 +287,9 @@ pub struct SparqlParser {
     /// ([`SparqlParser::parse_query_with`]/[`SparqlParser::parse_update_with`])
     /// keeps the hard-fail doctrine without silently dropping the base.
     base: core::result::Result<BaseScope, ParseError>,
+    /// The variables the caller binds before evaluation, by name: see
+    /// [`SparqlParser::with_prebound_variables`].
+    prebound: Vec<Variable>,
 }
 
 purrdf_hash::default_from_new!(SparqlParser);
@@ -300,6 +303,7 @@ impl SparqlParser {
     pub fn new() -> Self {
         Self {
             base: Ok(BaseScope::empty()),
+            prebound: Vec::new(),
         }
     }
 
@@ -331,6 +335,44 @@ impl SparqlParser {
         self.base = BaseIri::parse(&base_iri)
             .map(|base| BaseScope::rooted(base, BaseOrigin::Caller))
             .map_err(|e| iri_error(&base_iri, &e));
+        self
+    }
+
+    /// Declare the variables (named without their `?`/`$` sigil) the caller binds
+    /// before the query is evaluated — SHACL-SPARQL's pre-bound `$this`,
+    /// `$shapesGraph` and `$currentShape`, or a prepared execution's parameters.
+    ///
+    /// The grouping constraint (SPARQL 1.1 §11.4) holds for every other variable:
+    /// in an aggregate query, a projected variable or a variable read by a `SELECT`
+    /// expression outside an aggregate must be a `GROUP BY` key. A pre-bound
+    /// variable holds one value for the whole evaluation, so every group sees the
+    /// same value and reading it is well defined. Declaring a name exempts it from
+    /// that check and changes nothing else about the parse.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_sparql_algebra::SparqlParser;
+    ///
+    /// let query = "SELECT (STR($this) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o }";
+    /// // `$this` is no group key, so a plain parse refuses the projection …
+    /// assert!(SparqlParser::new().parse_query(query).is_err());
+    /// // … and a caller that binds `$this` before evaluation declares it.
+    /// assert!(
+    ///     SparqlParser::new()
+    ///         .with_prebound_variables(["this"])
+    ///         .parse_query(query)
+    ///         .is_ok()
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_prebound_variables<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.prebound
+            .extend(names.into_iter().map(|name| Variable::new(name.as_ref())));
         self
     }
 
@@ -499,6 +541,7 @@ impl SparqlParser {
             triple_frames: Vec::new(),
             path_levels: Vec::new(),
             options,
+            prebound: self.prebound.clone(),
         })
     }
 }
@@ -672,6 +715,9 @@ struct Parser<'a, 'o> {
     /// The open levels of the property path being read, reused likewise.
     path_levels: Vec<PathLevel>,
     options: &'o ParserOptions,
+    /// The variables the caller binds before evaluation
+    /// ([`SparqlParser::with_prebound_variables`]): exempt from the grouping check.
+    prebound: Vec<Variable>,
 }
 
 impl<'a> Parser<'a, '_> {
@@ -783,6 +829,7 @@ impl<'a> Parser<'a, '_> {
             triple_frames: Vec::new(),
             path_levels: Vec::new(),
             options: self.options,
+            prebound: self.prebound.clone(),
         }
     }
 
@@ -6392,9 +6439,32 @@ mod tests {
             "SELECT (SUM(?o) / COUNT(?o) AS ?avg) WHERE { ?s ?p ?o }",
             "SELECT ?s (EXISTS { ?s ?q ?z } AS ?e) WHERE { ?s ?p ?o } GROUP BY ?s",
             "SELECT (STR(?o) AS ?t) WHERE { ?s ?p ?o }",
-            // A variable the WHERE clause never binds is a constant to the grouping:
-            // a SHACL-SPARQL pre-bound `$this` or a request substitution.
-            "SELECT (IF(sameTerm(SAMPLE(?x), $this), ?k, 0) AS ?v) WHERE { ?x ?p ?k } GROUP BY ?k",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+        // §11.4 holds for a variable the WHERE clause never binds, or binds only inside
+        // MINUS, too — unless the caller declares it pre-bound.
+        let unbound = "SELECT (STR(?z) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s";
+        let minus_only = "SELECT (STR(?z) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o \
+                          MINUS { ?s ?q ?z } } GROUP BY ?s";
+        let prebound_this =
+            "SELECT (IF(sameTerm(SAMPLE(?x), $this), ?k, 0) AS ?v) WHERE { ?x ?p ?k } GROUP BY ?k";
+        let bare_this = "SELECT $this (COUNT(*) AS ?c) WHERE { ?s ?p ?o }";
+        for refused in [unbound, minus_only, prebound_this, bare_this] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        let declared = SparqlParser::new().with_prebound_variables(["this", "z"]);
+        for accepted in [unbound, minus_only, prebound_this, bare_this] {
+            assert!(declared.parse_query(accepted).is_ok(), "{accepted}");
+        }
+        // Declaring one name exempts that name alone.
+        let only_this = SparqlParser::new().with_prebound_variables(["this"]);
+        assert!(only_this.parse_query(unbound).is_err());
+        assert!(only_this.parse_query(prebound_this).is_ok());
+        // The neighbours: the same shapes over a group key parse unchanged.
+        for accepted in [
+            "SELECT (STR(?s) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (STR(?s) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o MINUS { ?s ?q ?z } } GROUP BY ?s",
         ] {
             assert!(try_parse(accepted).is_ok(), "{accepted}");
         }

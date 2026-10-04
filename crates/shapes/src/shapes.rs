@@ -2554,7 +2554,11 @@ impl<'s> Parser<'s> {
                 self.prefix_header(&[id, &t_node, &target_type.id])?,
                 target_type.select
             );
-            match purrdf_sparql_algebra::SparqlParser::new().parse_query(&select) {
+            // The instance's parameters are pre-bound when the query runs.
+            match purrdf_sparql_algebra::SparqlParser::new()
+                .with_prebound_variables(substitutions.iter().map(|(name, _)| name.as_str()))
+                .parse_query(&select)
+            {
                 Ok(purrdf_sparql_algebra::Query::Select { .. }) => {}
                 Ok(_) => {
                     return Err(format!(

@@ -1013,7 +1013,21 @@ fn parse_validator(
         .map_err(crate::shapes::prefixes::split_syntax_rule)?;
     let query_text = format!("{header}{raw_query}");
 
-    let query = match purrdf_sparql_algebra::SparqlParser::new().parse_query(&query_text) {
+    let mut prebound: Vec<&str> = vec!["this"];
+    if matches!(kind, ValidatorKind::Ask) {
+        prebound.push("value");
+    }
+    prebound.extend(param_names.iter().map(String::as_str));
+    // The validator runs with these bound, and with the shape context, so the
+    // grouping check reads them as the constants they are.
+    let query = match purrdf_sparql_algebra::SparqlParser::new()
+        .with_prebound_variables(
+            prebound
+                .iter()
+                .chain(crate::sparql::THIS_AND_SHAPE_CONTEXT[1..].iter()),
+        )
+        .parse_query(&query_text)
+    {
         Ok(q) => q,
         Err(e) => {
             return Err((
@@ -1044,11 +1058,6 @@ fn parse_validator(
         ));
     }
 
-    let mut prebound: Vec<&str> = vec!["this"];
-    if matches!(kind, ValidatorKind::Ask) {
-        prebound.push("value");
-    }
-    prebound.extend(param_names.iter().map(String::as_str));
     let prebinding_result = match kind {
         ValidatorKind::Ask => crate::prebinding::check_ask(&query, &prebound),
         ValidatorKind::Select => crate::prebinding::check_select(&query, &prebound),
