@@ -3044,7 +3044,7 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
 /// `subClassOfInShapesGraph` ([`ValidationOptions::subclass_of_in_shapes_graph`]):
 /// `data` with SHACL type also following the shapes graph's `rdfs:subClassOf` triples,
 /// or `None` when the option is off or the shapes graph (its whole import closure) has
-/// no such triple between two IRIs.
+/// no `rdfs:subClassOf` path between two IRIs ([`shapes_graph_subclass_pairs`]).
 ///
 /// The shapes graph's triples join the edge set SHACL type is derived from and nothing
 /// else ([`ShaclData::with_class_supplement`]): the data graph's rows are unchanged, and
@@ -3063,23 +3063,73 @@ fn with_shapes_graph_subclasses(
     let Some(subclass_of) = graph.term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF) else {
         return Ok(None);
     };
-    let mut supplement: Vec<(String, String)> = graph
-        .quads_for_pattern(None, Some(subclass_of), None, ::purrdf_rdf::GraphMatch::Any)
-        .filter_map(
-            |quad| match (graph.term_value(quad.s), graph.term_value(quad.o)) {
-                (::purrdf_rdf::TermValue::Iri(child), ::purrdf_rdf::TermValue::Iri(parent)) => {
-                    Some((child, parent))
-                }
-                _ => None,
-            },
-        )
-        .collect();
+    let supplement = shapes_graph_subclass_pairs(graph, subclass_of);
     if supplement.is_empty() {
         return Ok(None);
     }
-    supplement.sort_unstable();
-    supplement.dedup();
     data.with_class_supplement(&supplement).map(Some)
+}
+
+/// The `(subclass, superclass)` IRI pairs SHACL type follows from `graph`'s
+/// `rdfs:subClassOf` triples, in every graph of it.
+///
+/// SHACL type follows the transitive closure of `rdfs:subClassOf` whatever the kind
+/// of its intermediate nodes, but the supplement names classes by IRI (a blank node
+/// of the shapes graph is not a node of the data graph). So each IRI class is paired
+/// with every IRI class reached from it through blank (or other non-IRI)
+/// intermediates only: an IRI-to-IRI triple is its own pair, `ex:A rdfs:subClassOf
+/// _:b . _:b rdfs:subClassOf ex:B` contributes `(ex:A, ex:B)`, and the walk stops at
+/// each IRI it reaches, because the class-membership view already closes over chains
+/// of IRI pairs. A blank node on no IRI-to-IRI path contributes nothing, and a cycle
+/// of blank nodes terminates through the visited set. Sorted and deduplicated.
+fn shapes_graph_subclass_pairs(graph: &RdfDataset, subclass_of: TermId) -> Vec<(String, String)> {
+    let mut edges: Vec<(TermId, TermId)> = graph
+        .quads_for_pattern(None, Some(subclass_of), None, ::purrdf_rdf::GraphMatch::Any)
+        .map(|quad| (quad.s, quad.o))
+        .collect();
+    edges.sort_unstable();
+    edges.dedup();
+    let parents_of = |class: TermId| {
+        let start = edges.partition_point(|&(child, _)| child < class);
+        edges[start..]
+            .iter()
+            .take_while(move |&&(child, _)| child == class)
+            .map(|&(_, parent)| parent)
+    };
+    let iri = |id: TermId| match graph.term_value(id) {
+        ::purrdf_rdf::TermValue::Iri(iri) => Some(iri),
+        _ => None,
+    };
+    let mut pairs = Vec::new();
+    let mut visited: FastSet<TermId> = FastSet::default();
+    let mut stack: Vec<TermId> = Vec::new();
+    let mut previous = None;
+    for &(child, _) in &edges {
+        if previous == Some(child) {
+            continue;
+        }
+        previous = Some(child);
+        let Some(child_iri) = iri(child) else {
+            continue;
+        };
+        visited.clear();
+        stack.clear();
+        stack.push(child);
+        while let Some(class) = stack.pop() {
+            for parent in parents_of(class) {
+                if !visited.insert(parent) {
+                    continue;
+                }
+                match iri(parent) {
+                    Some(parent_iri) => pairs.push((child_iri.clone(), parent_iri)),
+                    None => stack.push(parent),
+                }
+            }
+        }
+    }
+    pairs.sort_unstable();
+    pairs.dedup();
+    pairs
 }
 
 /// [`validate_with_focus_filter`] over data the entailment regime has already been

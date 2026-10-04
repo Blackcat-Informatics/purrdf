@@ -6,6 +6,19 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+### Fixed
+
+- **SHACL `subClassOfInShapesGraph`:** the shapes graph's `rdfs:subClassOf`
+  chains through blank nodes now count toward SHACL type. With
+  `ex:A rdfs:subClassOf _:b . _:b rdfs:subClassOf ex:B` in the shapes graph,
+  an `ex:A` instance is a member of `ex:B`. Before, such an instance was
+  missed by `sh:targetClass ex:B` and wrongly violated `sh:class ex:B`.
+  Chains of several blank nodes, and cycles among them, work too. A blank node
+  that is not on a path between two IRI classes adds no membership. Results
+  with the option off are unchanged.
+
 ## [3.0.1] - 2026-10-02
 
 ### Fixed
