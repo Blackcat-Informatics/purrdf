@@ -11,6 +11,7 @@
 //! blank-scope policy of its `load`, and its own mutation surface).
 
 use super::env::extension_env;
+use super::presentation;
 use std::sync::Arc;
 
 use purrdf_core::ir::MutableDataset;
@@ -138,7 +139,7 @@ impl PyQuadStore {
                         aggregates.as_ref(),
                     )?),
                 )
-                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
+                .map_err(|e| presentation::value_error(format!("query evaluation error: {e}"), &e))
         })?;
         materialize_results(py, result)
     }
@@ -260,7 +261,7 @@ impl PyQuadStore {
                     )?),
                     governors,
                 )
-                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
+                .map_err(|e| presentation::value_error(format!("query evaluation error: {e}"), &e))
         })?;
         materialize_outcome(py, outcome)
     }
@@ -429,19 +430,23 @@ impl PyQuadStore {
                 &relations,
                 governors,
             )
-            .map_err(|error| match error {
+            .map_err(|failure| match &failure {
                 // Rendered by the shared boundary, so a passed evaluation limit names this
                 // method's keyword rather than a Rust type a Python caller cannot reach.
                 crate::ReasoningError::Entailment(error) => PyValueError::new_err(format!(
                     "entailment query failed: {}",
                     purrdf_validate::render_entail_error_in(
                         entailment,
-                        &error,
+                        error,
                         purrdf_validate::RegimeHost::Python,
                         purrdf_validate::RegimeService::Query,
                     )
                 )),
-                other => PyValueError::new_err(format!("entailment query failed: {other}")),
+                crate::ReasoningError::Query(diagnostic) => presentation::value_error(
+                    format!("entailment query failed: {failure}"),
+                    diagnostic,
+                ),
+                _ => PyValueError::new_err(format!("entailment query failed: {failure}")),
             })
         })?;
         materialize_entailment_outcome(py, outcome)
@@ -514,7 +519,9 @@ impl PyQuadStore {
                         aggregates.as_ref(),
                     )?),
                 )
-                .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
+                .map_err(|e| {
+                    presentation::value_error(format!("update evaluation error: {e}"), &e)
+                })?;
             Ok::<_, PyErr>(dataset)
         })?;
         // The UPDATE produced a fresh frozen base; adopt it as the new COW base.
@@ -619,7 +626,9 @@ impl PyQuadStore {
                     )?),
                     governors,
                 )
-                .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
+                .map_err(|e| {
+                    presentation::value_error(format!("update evaluation error: {e}"), &e)
+                })?;
             Ok((outcome, dataset))
         })?;
         // The engine publishes into its own `Arc` only on the applied path, so adopting

@@ -712,6 +712,34 @@ closures on the Rust side — the full-text index, the GeoSPARQL relations, the
 embedding kNN relation — do not cross this boundary; only these three
 data-shaped registrations do.
 
+## Typed SPARQL parse failures
+
+A query or update the parser refuses raises the same `ValueError`, with the same
+message and `args`, that it always has. The exception also carries the parser's
+typed condition. You can read the failure without parsing its message:
+
+```python
+try:
+    store.query("ASK {")
+except ValueError as refusal:
+    refusal.message_id    # 'sparql-parse-syntax'
+    refusal.presentation  # {'message_id': 'sparql-parse-syntax',
+                          #  'parameters': {'at': {'kind': 'unsigned', 'value': 5},
+                          #                 'reason': {'kind': 'text', 'value': '…'}},
+                          #  'detail': None}
+```
+
+`message_id` is one of `sparql-parse-lex`, `sparql-parse-syntax`,
+`sparql-parse-unsupported`, `sparql-parse-iri` or `sparql-parse-cdt-arity`.
+In each parameter, `value` is an exact `int` for the `unsigned` and `signed`
+kinds, a `bool` for `boolean`, and a `str` for `text` and `character`. When an
+IRI refusal came from the IRI checker, `detail` holds that condition in the same
+shape. For example, `iri-bad-percent-encoding` comes with its byte `offset`, and
+`iri-relative-no-base` with the `reference`. `query`, `query_governed`,
+`query_entailment_governed`, `prepare`, `update` and `update_governed` attach
+both attributes. A failure on those calls that has no typed presentation
+carries `None` in both.
+
 ## Base IRIs
 
 A document that spells a relative IRI needs a base. Every parse entry point
