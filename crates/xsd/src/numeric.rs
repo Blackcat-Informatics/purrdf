@@ -1256,7 +1256,8 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 
 /// Exact decimal long division, producing up to `MAX_DECIMAL_SCALE` (18) fractional
 /// digits by truncation toward zero — the precision rule for `op:numeric-divide` on
-/// decimals, which XPath F&O 3.1 §4.2.3 leaves implementation-defined.
+/// decimals, which XPath F&O 3.1 §4.2 (the arithmetic rules §4.2.4
+/// `op:numeric-divide` follows) leaves implementation-defined.
 ///
 /// The quotient is `trunc(dividend × 10^S / divisor)` at the finest scale
 /// `S ≤ 18` whose mantissa fits the `i128` the value space holds: the exact quotient
@@ -1297,10 +1298,10 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
     // scale S is trunc(dm × 10^(S + vs - ds) / vm). The result is that mantissa at the
     // finest scale S ≤ MAX_DECIMAL_SCALE whose mantissa fits the i128 the value space
     // holds: the exact quotient whenever it is representable, else the quotient
-    // truncated toward zero at that scale (XPath F&O 3.1 §4.2.3 leaves the precision of
-    // a decimal quotient implementation-defined; this crate truncates, as documented on
-    // `decimal_div`). Only a quotient whose integer part alone exceeds i128 is an
-    // overflow (`err:FOAR0002`).
+    // truncated toward zero at that scale (XPath F&O 3.1 §4.2, which §4.2.4 follows,
+    // leaves the precision of a decimal quotient implementation-defined; this crate
+    // truncates, as documented on `decimal_div`). Only a quotient whose integer part
+    // alone exceeds i128 is an overflow (`err:FOAR0002`).
     let dm = dividend.mantissa();
     let vm = divisor.mantissa();
     let vs = i32::from(divisor.scale());
