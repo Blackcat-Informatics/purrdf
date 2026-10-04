@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# A merge that git commits by itself (no conflict, no `--no-commit`) runs this
+# hook rather than pre-commit. Hand over, so the merge result is checked by the
+# same gates as any other commit; a merge whose conflicts were resolved is
+# committed with `git commit`, which runs pre-commit directly.
+exec "$(dirname "$0")/pre-commit" "$@"

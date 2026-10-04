@@ -276,6 +276,14 @@ name = "pattern_dispatch"
 harness = false
 
 [[bench]]
+# `GRAPH <iri>` addressing by constant over 10 000 named graphs: a graph that
+# exists and a term that names none, each over a frozen dataset, a delta snapshot
+# and a two-source composite. Report-only; `make bench` lane only — excluded from
+# `make check`.
+name = "graph_constant_membership"
+harness = false
+
+[[bench]]
 # Parse and cold evaluation of nested FILTER EXISTS, OPTIONAL spines, LATERAL,
 # brackets, `!` chains, property-path groups and expression triple terms at fixed
 # depths and at the deepest level the bench thread's stack answers today, found

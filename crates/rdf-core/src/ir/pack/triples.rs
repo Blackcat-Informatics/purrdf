@@ -1185,6 +1185,12 @@ impl<'a> TriplesRef<'a> {
         self.graph_index.keys().copied()
     }
 
+    /// Whether [`named_graph_ids`](Self::named_graph_ids) yields `graph`: one lookup in
+    /// the graph-to-partition index.
+    pub(crate) fn has_named_graph(&self, graph: PackTermId) -> bool {
+        self.graph_index.contains_key(&graph)
+    }
+
     /// A cheap (`O(partitions)` × `O(1)`/`O(log n)` per partition, derived only
     /// from index SIZES — never a materialized count) upper bound on
     /// [`pattern`](Self::pattern)'s row count for the same arguments. For cost

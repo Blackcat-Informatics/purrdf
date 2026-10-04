@@ -340,6 +340,12 @@ impl DatasetView for PackView<'_> {
             next.map(PackId::from_unified)
         })
     }
+
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): one lookup in the
+    /// triples buffer's graph-to-partition index.
+    fn has_named_graph(&self, graph: PackId) -> bool {
+        self.triples().has_named_graph(graph.as_unified())
+    }
 }
 
 /// `PackView<'static>` implements [`DatasetView`] and is `Send + Sync` — the two
