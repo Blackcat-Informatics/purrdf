@@ -101,11 +101,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   boolean instead of an error, as XPath `op:numeric-equal`,
   `op:numeric-less-than` and `op:numeric-greater-than` define. `=`, `<`, `>`,
   `<=` and `>=` give `false`, and `!=` gives `true`, so
-  `FILTER("NaN"^^xsd:double != ?x)` keeps every numeric row. NaN does not
-  order against itself either: `"NaN"^^xsd:double <= "NaN"^^xsd:double` is now
-  `false`, not `true`. `NaN = NaN` stays `true` under `sameValue`, `IN` follows
-  `=`, and a NaN against a non-number is still an error. `ORDER BY`, `MIN` and
-  `MAX` are unchanged.
+  `FILTER("NaN"^^xsd:double != ?x)` keeps every numeric row. NaN equals
+  nothing and orders against nothing, itself included (SPARQL 1.2 §17.4.2.2):
+  `"NaN"^^xsd:double = "NaN"^^xsd:double`, `"NaN"^^xsd:float =
+  "NaN"^^xsd:double` and `<=` between two NaNs are `false`, `NaN IN (1, NaN)`
+  is `false`, and `FILTER(?o = ?o)` drops a row whose `?o` is NaN.
+  `sameTerm(NaN, NaN)` is still `true`, and a NaN against a non-number is
+  still an error. `ORDER BY`, `MIN` and `MAX` are unchanged.
 - **SPARQL casts:** a cast to a numeric, boolean or date/time type is now an
   error when the source literal's datatype has no row in the casting table.
   `xsd:double("1.5"^^ex:custom)` and `xsd:integer("1"@en)` are unbound instead
@@ -116,6 +118,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   literals, `xsd:string` and the types derived from it, such as `xsd:token`,
   still cast by lexical form, every numeric and boolean cast the table allows
   is unchanged, and casting any literal or IRI to `xsd:string` still works.
+- **SPARQL date, time and binary casts:** the casts XPath allows between these
+  types now work, by value; before, they were unbound. `xsd:date`, `xsd:time`
+  and the five Gregorian types cast from `xsd:dateTime`, and `xsd:dateTime`
+  and the Gregorian types from `xsd:date`, keeping the timezone:
+  `xsd:date("2002-10-10T17:00:00+05:00"^^xsd:dateTime)` is
+  `"2002-10-10+05:00"^^xsd:date`, and a date becomes midnight of that day as a
+  `xsd:dateTime`. `xsd:duration` and its two subtypes cast among themselves,
+  and `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their
+  bytes (`xsd:hexBinary("abcd"^^xsd:base64Binary)` is `"69B71D"`, not
+  `"ABCD"`). Pairs XPath forbids, such as `xsd:time` from `xsd:date` or
+  `xsd:gYear("2020"^^xsd:hexBinary)`, are errors.
 - **SPARQL keywords:** `true` and `false` match case-insensitively like every
   other SPARQL keyword except `a`, so `SELECT (TRUE AS ?t) (False AS ?f) {}`
   parses (the W3C `case-insensitive-booleans` test). They work this way in
@@ -123,22 +136,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   canonical `"true"`/`"false"`.
 - **SPARQL grammar:** the parser now refuses several forms the grammar does
   not allow. `GROUP BY` and `ORDER BY` need at least one condition.
-  `HAVING` and `FILTER` need a bracketed expression or a function call, so
-  `HAVING ?x`, `FILTER ?x` and `FILTER true` are refused. Two triples need a
-  `.` between them in a pattern or template, and a `.` may appear only between
+  `HAVING` and `FILTER` need a bracketed expression or a function call, and a
+  function call needs its argument list, so `HAVING ?x`, `FILTER ?x`,
+  `FILTER true`, `FILTER :f`, `HAVING <f>`, `GROUP BY :f` and `ORDER BY :f`
+  are refused while `FILTER :f(?o)` still parses. Two triples need a `.`
+  between them in a pattern or template, and a `.` may appear only between
   triples or once after a non-triples element, so `{ . }`, `{ ?s ?p ?o . . }`
   and `{ :a :b :c :d :e :f }` are refused (the W3C `syn-bad-02`, `-03`, `-05`,
-  `-06`, `-07`, `-14` and `filter-missing-parens` tests). In an aggregate
-  query, a `SELECT` expression may read only group keys, aggregate results and
-  earlier `SELECT` targets outside an aggregate. Grouping by an expression does
-  not make its variables keys, so `SELECT ((?a + ?b) AS ?s) … GROUP BY
-  (?a + ?b)` is refused (the W3C `agg08` and `agg11` tests). A variable the
-  `WHERE` clause never binds, such as a SHACL-SPARQL pre-bound `$this`, is
-  still accepted. One case was
+  `-06`, `-07`, `-14` and `filter-missing-parens` tests). One case was
   refused wrongly before: a non-empty collection may now stand alone as a
   triple, as in `{ ( ?x ) }`, as the grammar allows for blank-node property
   lists (the W3C `syntax-lists-03`, `-04`, `-05` and `syntax-forms-02` tests).
   `()` on its own is still refused.
+- **SPARQL grouping constraint:** in an aggregate query, a `SELECT`
+  expression may read, outside an aggregate, only group keys, aggregate
+  results and earlier `SELECT` targets (SPARQL 1.1 §11.4). Grouping by an
+  expression does not make its variables keys, so `SELECT ((?a + ?b) AS ?s) …
+  GROUP BY (?a + ?b)` is refused (the W3C `agg08` and `agg11` tests), and so is
+  a variable the `WHERE` clause never binds or binds only inside `MINUS`. The
+  one exemption is a variable the caller binds before evaluation:
+  `SparqlParser::with_prebound_variables` declares them, a prepared execution
+  declares its parameters, and SHACL-SPARQL declares `$this`, the shape
+  context and the parameters of a component or target type.
 
 ## [3.0.1] - 2026-10-02
 
