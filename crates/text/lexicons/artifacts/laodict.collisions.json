@@ -1,0 +1,632 @@
+[
+  {
+    "canonical": "ກະທໍາ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກະທໍາ",
+        "cost": 1
+      },
+      {
+        "word": "ກະທຳ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກະສິກໍາ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກະສິກໍາ",
+        "cost": 1
+      },
+      {
+        "word": "ກະສິກຳ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກະເສດຕະກໍາ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກະເສດຕະກໍາ",
+        "cost": 1
+      },
+      {
+        "word": "ກະເສດຕະກຳ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກົດຫມາຍ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກົດຫມາຍ",
+        "cost": 1
+      },
+      {
+        "word": "ກົດໝາຍ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາກັບ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາກັບ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳກັບ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາຈັດ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາຈັດ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳຈັດ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍານົດ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍານົດ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳນົດ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາບີ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາບີ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳບີ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາປັ່ນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາປັ່ນ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳປັ່ນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາປັ້ນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາປັ້ນ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳປັ້ນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາປາລາ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາປາລາ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳປາລາ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາປູເຈຍ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາປູເຈຍ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳປູເຈຍ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາພ້າ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາພ້າ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳພ້າ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາມະ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາມະ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳມະ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາມະກອນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາມະກອນ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳມະກອນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາມະການ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາມະການ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳມະການ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາມະຍີ່",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາມະຍີ່",
+        "cost": 1
+      },
+      {
+        "word": "ກຳມະຍີ່",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາມະສິດ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາມະສິດ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳມະສິດ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາມາຊີບ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາມາຊີບ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳມາຊີບ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາມາທິການ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາມາທິການ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳມາທິການ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາລັງ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາລັງ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳລັງ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາຫນັດ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາໜັດ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳໜັດ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາເນີດ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາເນີດ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳເນີດ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາເວນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາເວນ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳເວນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາແພງ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາແພງ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳແພງ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາແຫນ້ນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາແໜ້ນ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳແໜ້ນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ກໍາໄລ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ກໍາໄລ",
+        "cost": 1
+      },
+      {
+        "word": "ກຳໄລ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ຈົດຫມາຍ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ຈົດຫມາຍ",
+        "cost": 1
+      },
+      {
+        "word": "ຈົດໝາຍ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ທາງເຫນືອ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ທາງເໜືອ",
+        "cost": 1
+      },
+      {
+        "word": "ທາງເຫນືອ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ນໍ້າຫມອກ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ນໍ້າໝອກ",
+        "cost": 1
+      },
+      {
+        "word": "ນໍ້າຫມອກ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ປັບໄຫມ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ປັບໄໝ",
+        "cost": 1
+      },
+      {
+        "word": "ປັບໄຫມ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ວັດທະນະທໍາ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ວັດທະນະທໍາ",
+        "cost": 1
+      },
+      {
+        "word": "ວັດທະນະທຳ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ສະຫມອງ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ສະຫມອງ",
+        "cost": 1
+      },
+      {
+        "word": "ສະໝອງ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ສະຫມຽນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ສະໝຽນ",
+        "cost": 1
+      },
+      {
+        "word": "ສະຫມຽນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ສາດສະຫນາ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ສາດສະຫນາ",
+        "cost": 1
+      },
+      {
+        "word": "ສາດສະໜາ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ຫນັງສື",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ຫນັງສື",
+        "cost": 1
+      },
+      {
+        "word": "ໜັງສື",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ຫນາແຫນ້ນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ຫນາແໜ້ນ",
+        "cost": 1
+      },
+      {
+        "word": "ໜາແໜ້ນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ຫນ້າທີ່",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ຫນ້າທີ່",
+        "cost": 1
+      },
+      {
+        "word": "ໜ້າທີ່",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ຫມອກ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ໝອກ",
+        "cost": 1
+      },
+      {
+        "word": "ຫມອກ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ຫມາຈອກ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ໝາຈອກ",
+        "cost": 1
+      },
+      {
+        "word": "ຫມາຈອກ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ເຫມືອນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ເໝືອນ",
+        "cost": 1
+      },
+      {
+        "word": "ເຫມືອນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ແຫນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ແໜ",
+        "cost": 1
+      },
+      {
+        "word": "ແຫນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ໂຫນ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ໂໜ",
+        "cost": 1
+      },
+      {
+        "word": "ໂຫນ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ໃຫມ່",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ໃໝ່",
+        "cost": 1
+      },
+      {
+        "word": "ໃຫມ່",
+        "cost": 1
+      }
+    ]
+  }
+]

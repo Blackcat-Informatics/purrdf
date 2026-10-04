@@ -123,16 +123,22 @@ def _undeclared() -> dict[str, tuple[Any, ...]]:
     saying "anything" is never false.
     """
     return {
-        NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any"),
-        TITLE_PRODUCER: (TITLE_STRATUM, TITLE, "any"),
+        NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", {"lexicon": "empty"}),
+        TITLE_PRODUCER: (TITLE_STRATUM, TITLE, "any", {"lexicon": "empty"}),
     }
 
 
 def _declared() -> dict[str, tuple[Any, ...]]:
     """The same two producers, each declaring the one block it draws from."""
     return {
-        NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", [NOTE_DOMAIN]),
-        TITLE_PRODUCER: (TITLE_STRATUM, TITLE, "any", [TITLE_DOMAIN]),
+        NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", {"lexicon": "empty"}, [NOTE_DOMAIN]),
+        TITLE_PRODUCER: (
+            TITLE_STRATUM,
+            TITLE,
+            "any",
+            {"lexicon": "empty"},
+            [TITLE_DOMAIN],
+        ),
     }
 
 
@@ -258,8 +264,7 @@ def test_the_read_counters_move_between_a_cheap_run_and_a_corpus_cost_run() -> N
         cheap_rows = _counter(cheap, stratum, "rows_materialised")
         costly_rows = _counter(costly, stratum, "rows_materialised")
         assert cheap_rows > 0 and costly_rows > 0, (
-            f"{stratum}: a read that returned no row is not a read this fixture "
-            "takes"
+            f"{stratum}: a read that returned no row is not a read this fixture takes"
         )
         assert cheap_rows < costly_rows, (
             f"{stratum}: the read-work figure did not move with the cost of the "

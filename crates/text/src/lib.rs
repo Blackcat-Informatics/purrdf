@@ -5,12 +5,12 @@
 //!
 //! This crate builds an in-memory inverted index over the literals of a frozen
 //! `purrdf-core` dataset and answers ranked retrieval queries against it. Text
-//! is put through one pipeline — compatibility normalization plus full Unicode
-//! case folding (`UAX #15`, `UAX #21`), then segmentation at Unicode word
-//! boundaries (`UAX #29`) — so tokenization is the standard's rather than an
-//! ad-hoc run of alphanumeric characters, and it behaves the same in every
-//! script. See [`Analyzer`] for why the fold is a fold rather than a
-//! lowercasing, and for how a script written without spaces is segmented.
+//! is put through one explicit resolved analyzer: compatibility caseless Unicode
+//! normalization, script-scoped accents, costed dictionary segmentation and
+//! optional English stemming. Atomic emoji, pre-stem surface words and
+//! punctuation-bearing substring spans retain original-source evidence.
+//! The standard law requires five caller-supplied baseline lexicon artifacts;
+//! an empty lexicon is an explicit profile. See [`Analyzer`] and [`AnalyzerProfile`].
 //!
 //! The index side and the query side run that same pipeline. They have to: a
 //! needle is matched against the dictionary by equality, so two pipelines that
@@ -67,22 +67,36 @@
 #![deny(clippy::float_arithmetic)]
 
 mod analysis;
+pub mod character;
+pub use character::{HanCharacterIndex, HanMatchEvidence};
 mod error;
 mod fixed;
 mod index;
+pub mod phonetic;
+mod profile;
 mod ranking;
 mod relation;
 mod score;
+pub mod segment;
+pub mod stem;
+mod surface;
 mod term_bytes;
 pub mod unicode;
 mod unicode_tables;
 
-pub use analysis::{Analyzer, Token, UnicodeVersion, UnicodeVersions, unicode_versions};
+pub use analysis::{
+    AlignedText, Analysis, Analyzer, AnalyzerScratch, Projection, Token, UnicodeVersion,
+    UnicodeVersions, unicode_versions,
+};
 pub use error::TextError;
 pub use fixed::{Fixed, SCALE_DIGITS};
 pub use index::{
     Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,
     TextIndexConfig,
+};
+pub use profile::{
+    AccentFold, AccentScripts, AnalyzerProfile, InputMode, MAX_TOKEN_SCALARS, Segmentation,
+    Stemming,
 };
 pub use relation::{
     SearchObservations, TermOccurrenceRelation, TextSearchRelation, verify_binding,
@@ -90,11 +104,16 @@ pub use relation::{
 pub use score::{
     B, Constraint, K1, PartitionFilter, Scored, TermContribution, explain, rank_partition, select,
 };
+pub use surface::{
+    MatchProjection, PhoneticMatch, SourceMatchEvidence, SubstringLimits, SubstringMatch,
+    SubstringRefusal, SubstringRefusalReason, SubstringReport, SubstringWork, SurfaceIndex,
+    SurfaceTerm,
+};
 pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
 
-/// Exact-token analyzer identity; Unicode versions are bound by the index's
-/// analyzer fingerprint. This identity promises no substring matching.
-pub const ANALYZER_PROFILE_ID: &str = "purrdf-compatibility-caseless-uax29-v2";
+/// Profiled analyzer identity. Its fingerprint binds every stage, bound,
+/// dictionary and Unicode version across lexical and surface retrieval.
+pub const ANALYZER_PROFILE_ID: &str = "purrdf-profiled-text-v4";
 
 pub use ranking::{
     DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, INDEX_CORPUS_PROFILE_ID,

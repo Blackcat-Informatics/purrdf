@@ -1,6 +1,22 @@
 {
   "components": [
     {
+      "id": "snowball-english-corpus",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt"
+      ],
+      "paths": [
+        "crates/text/tests/stemming_vectors/voc.txt",
+        "crates/text/tests/stemming_vectors/output.txt"
+      ],
+      "provenance": [
+        "crates/text/tests/stemming_vectors/PROVENANCE.md"
+      ],
+      "scope": "Complete unmodified English conformance DATA only; the independent prose-derived stemming implementation retains the first-party grant",
+      "source": "https://github.com/snowballstem/snowball-data/tree/a0ec0d0a2839ec885878868de20fcb63209d92b0/english"
+    },
+    {
       "id": "unicode",
       "license": "Unicode-3.0",
       "notices": [
@@ -29,7 +45,8 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "1d26e9e689bc2b0f31cc60dfa9b6dcbe2572a0a3279b089e9863765bdc635fef",
+    "NOTICE.txt": "098bcaefef0c33bc8733d3da9f5b48b255415ee5fa5e2718b1188d0ede48b6cb",
+    "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt": "359c9dc0eadeec2a4376cefd12cab1cb7cdedc3b064fac3075c04e916de05a19",
     "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
   },
   "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",

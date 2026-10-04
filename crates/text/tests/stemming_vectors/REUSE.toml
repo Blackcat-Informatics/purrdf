@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+version = 1
+
+[[annotations]]
+path = ["voc.txt", "output.txt"]
+SPDX-FileCopyrightText = ["2001 Dr Martin Porter", "2004,2005 Richard Boulton"]
+SPDX-License-Identifier = "BSD-3-Clause"

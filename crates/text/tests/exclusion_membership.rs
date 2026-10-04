@@ -113,8 +113,12 @@ fn index() -> Arc<TextIndex> {
     Arc::new(
         TextIndex::from_dataset(
             &dataset,
-            &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-                .expect("the fixture configuration is well formed"),
+            &TextIndexConfig::new(
+                vec![TermValue::iri(NOTE)],
+                GraphSelector::Any,
+                Analyzer::empty_lexicon(),
+            )
+            .expect("the fixture configuration is well formed"),
         )
         .expect("the fixture indexes"),
     )
@@ -124,7 +128,9 @@ fn index() -> Arc<TextIndex> {
 /// membership lookups one candidate-bound invocation performs per document the
 /// bound subject occupies.
 fn distinct_terms(needle: &str) -> u64 {
-    let mut terms = Analyzer::new().terms(needle);
+    let mut terms = Analyzer::empty_lexicon()
+        .terms(needle)
+        .expect("valid text analysis");
     terms.sort_unstable();
     terms.dedup();
     terms.len() as u64
@@ -163,7 +169,9 @@ fn invoke(
 fn streamed(index: &TextIndex, needle: &str) -> Vec<Scored> {
     select(
         index,
-        &Analyzer::new().terms(needle),
+        &Analyzer::empty_lexicon()
+            .terms(needle)
+            .expect("valid text analysis"),
         &PartitionFilter::unconstrained(),
         None,
         None,
@@ -382,7 +390,9 @@ fn the_point_score_is_the_streamed_score_exactly() {
     let mut nonzero = 0_usize;
 
     for needle in NEEDLES {
-        let terms = Analyzer::new().terms(needle);
+        let terms = Analyzer::empty_lexicon()
+            .terms(needle)
+            .expect("valid text analysis");
         let stream = streamed(&index, needle);
         for document in 0..u32::try_from(subjects.len()).expect("the fixture is small") {
             let mut point = Fixed::ZERO;
@@ -564,8 +574,12 @@ fn grown_index(filler: usize) -> Arc<TextIndex> {
     Arc::new(
         TextIndex::from_dataset(
             &dataset,
-            &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-                .expect("the fixture configuration is well formed"),
+            &TextIndexConfig::new(
+                vec![TermValue::iri(NOTE)],
+                GraphSelector::Any,
+                Analyzer::empty_lexicon(),
+            )
+            .expect("the fixture configuration is well formed"),
         )
         .expect("the fixture indexes"),
     )
@@ -642,7 +656,9 @@ fn a_possible_lookup_scores_one_document_whatever_the_corpus_holds() {
         let index = grown_index(filler);
         let candidates = select(
             &index,
-            &Analyzer::new().terms(needle),
+            &Analyzer::empty_lexicon()
+                .terms(needle)
+                .expect("valid text analysis"),
             &PartitionFilter::unconstrained(),
             None,
             None,

@@ -23,6 +23,7 @@
 
 use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 use purrdf_text::unicode;
+use purrdf_text::{Analyzer, AnalyzerScratch};
 
 /// Repeat `unit` until the text is at least `bytes` long.
 fn corpus(unit: &str, bytes: usize) -> String {
@@ -102,5 +103,27 @@ fn unicode_layer(criterion: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, unicode_layer);
+fn profiled_analysis(bench: &mut Bench) {
+    let analyzer = Analyzer::empty_lexicon();
+    let mut group = bench.benchmark_group("purrdf_text_profiled");
+    for (class, text) in classes() {
+        let mut scratch = AnalyzerScratch::default();
+        group.throughput(Throughput::Bytes(text.len() as u64));
+        group.bench_function(format!("stream/{class}"), |b| {
+            b.iter(|| {
+                analyzer
+                    .analyze_each_with_scratch(black_box(&text), &mut scratch, |token| {
+                        black_box(token.text.as_ref());
+                    })
+                    .expect("valid benchmark input");
+            });
+        });
+        group.bench_function(format!("aligned/{class}"), |b| {
+            b.iter(|| black_box(analyzer.projections(black_box(&text)).unwrap()));
+        });
+    }
+    group.finish();
+}
+
+bench_group!(benches, unicode_layer, profiled_analysis);
 bench_main!(benches);
