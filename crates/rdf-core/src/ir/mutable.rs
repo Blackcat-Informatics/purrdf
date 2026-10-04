@@ -1915,6 +1915,18 @@ mod tests {
             other => panic!("graph names here are IRIs, not {other:?}"),
         };
         let view = m.snapshot_view().expect("snapshot publishes");
+        // Constant `GRAPH <g>` addressing answers membership through
+        // `has_named_graph`; it must agree with the enumeration for every term the
+        // snapshot holds — a withdrawn graph is no graph, a repopulated one is.
+        let enumerated: std::collections::BTreeSet<_> = view.named_graphs().collect();
+        for id in view.term_ids() {
+            assert_eq!(
+                view.has_named_graph(id),
+                enumerated.contains(&id),
+                "has_named_graph({:?}) disagrees with named_graphs",
+                view.term_value(id)
+            );
+        }
         let mut from_view: Vec<String> = view
             .named_graphs()
             .map(|g| local(view.term_value(g)))

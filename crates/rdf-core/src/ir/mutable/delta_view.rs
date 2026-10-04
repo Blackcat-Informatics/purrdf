@@ -880,10 +880,12 @@ impl DatasetView for DeltaDatasetView {
     }
 
     /// Membership in [`named_graphs`](DatasetView::named_graphs): `graph` names a
-    /// graph of either layer, each asked through its own sorted graph set.
+    /// graph of either layer, each asked through its own sorted graph set, with a base
+    /// graph an operation emptied withdrawn exactly as the enumeration withdraws it. A
+    /// graph repopulated since is a delta graph, so it answers through the delta.
     fn has_named_graph(&self, graph: Self::Id) -> bool {
         self.local_id(graph, Layer::Base)
-            .is_some_and(|id| self.base.has_named_graph(id))
+            .is_some_and(|id| self.base.has_named_graph(id) && !self.is_withdrawn_graph(id))
             || self
                 .local_id(graph, Layer::Delta)
                 .is_some_and(|id| self.delta.has_named_graph(id))
