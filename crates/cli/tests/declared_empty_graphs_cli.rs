@@ -41,9 +41,13 @@ fn convert(args: &[&str]) -> (String, String) {
         "convert {args:?} must succeed; stderr:\n{}",
         stderr(&out)
     );
+    // Read bytes, not a string: a pack output is binary, and a missing or unreadable
+    // output must fail here rather than read as "" and let a ledger-only assertion
+    // pass without the conversion having written anything.
     let output_path = args[1];
     (
-        std::fs::read_to_string(output_path).unwrap_or_default(),
+        String::from_utf8_lossy(&std::fs::read(output_path).expect("read converted output"))
+            .into_owned(),
         stderr(&out),
     )
 }
@@ -56,7 +60,11 @@ fn a_pack_round_trip_keeps_iri_and_blank_named_empty_graphs() {
     let pack = path(dir, "x.pack");
     let back = path(dir, "back.trig");
 
-    let (_, ledger) = convert(&[&source, &pack, "--to", "pack"]);
+    let (packed, ledger) = convert(&[&source, &pack, "--to", "pack"]);
+    assert!(
+        !packed.is_empty(),
+        "the pack output must exist and hold the dataset"
+    );
     assert!(
         !ledger.contains("\"code\""),
         "a pack carries declared graphs, so nothing is lost; got:\n{ledger}"
@@ -109,7 +117,11 @@ fn targets_without_an_empty_graph_spelling_report_each_dropped_graph() {
         ("ntriples", "nt"),
     ] {
         let output = path(dir, &format!("out.{extension}"));
-        let (_, ledger) = convert(&[&source, &output, "--to", target]);
+        let (written, ledger) = convert(&[&source, &output, "--to", target]);
+        assert!(
+            written.contains("http://example.org/s"),
+            "{target}: the rows the target can spell are written; got:\n{written}"
+        );
         assert_eq!(
             ledger.matches(LOSS_CODE).count(),
             2,
@@ -141,7 +153,11 @@ fn trix_and_pack_sources_name_themselves_on_each_dropped_graph() {
     for (codec, extension) in [("trix", "trix"), ("pack", "pack")] {
         // Both carriers keep the declared empty graphs, so writing them records nothing.
         let carrier = path(dir, &format!("carrier.{extension}"));
-        let (_, written) = convert(&[&source, &carrier, "--to", codec]);
+        let (carried, written) = convert(&[&source, &carrier, "--to", codec]);
+        assert!(
+            !carried.is_empty(),
+            "{codec}: the carrier output must exist"
+        );
         assert_eq!(
             written.matches(LOSS_CODE).count(),
             0,
@@ -150,7 +166,11 @@ fn trix_and_pack_sources_name_themselves_on_each_dropped_graph() {
         // Converting the carrier to N-Quads drops each one, recorded as the registered,
         // intentional loss of that source codec.
         let output = path(dir, &format!("from-{codec}.nq"));
-        let (_, ledger) = convert(&[&carrier, &output, "--from", codec, "--to", "nquads"]);
+        let (quads, ledger) = convert(&[&carrier, &output, "--from", codec, "--to", "nquads"]);
+        assert!(
+            quads.contains("<http://example.org/g1>"),
+            "{codec} -> nquads: the populated graph's rows are written; got:\n{quads}"
+        );
         let registered = format!(
             "{LOSS_CODE},\n      \"from\": \"{codec}\",\n      \"to\": \"nquads\",\n      \
              \"intentional\": true"
@@ -176,7 +196,8 @@ fn targets_that_spell_empty_graphs_and_datasets_without_them_report_nothing_new(
         ("pack", "pack"),
     ] {
         let output = path(dir, &format!("declared-out.{extension}"));
-        let (_, ledger) = convert(&[&declared, &output, "--to", target]);
+        let (written, ledger) = convert(&[&declared, &output, "--to", target]);
+        assert!(!written.is_empty(), "{target}: the output must exist");
         assert!(
             !ledger.contains(LOSS_CODE),
             "{target} writes empty graphs; got:\n{ledger}"
@@ -186,7 +207,11 @@ fn targets_that_spell_empty_graphs_and_datasets_without_them_report_nothing_new(
     let undeclared = write_file(dir, "undeclared.trig", UNDECLARED_TRIG);
     for (target, extension) in [("nquads", "nq"), ("hextuples", "hext"), ("turtle", "ttl")] {
         let output = path(dir, &format!("undeclared-out.{extension}"));
-        let (_, ledger) = convert(&[&undeclared, &output, "--to", target]);
+        let (written, ledger) = convert(&[&undeclared, &output, "--to", target]);
+        assert!(
+            written.contains("http://example.org/s"),
+            "{target}: the rows are written; got:\n{written}"
+        );
         assert!(
             !ledger.contains(LOSS_CODE),
             "{target}: no declared empty graph, no entry; got:\n{ledger}"
