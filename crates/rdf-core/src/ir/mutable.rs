@@ -1150,6 +1150,68 @@ mod tests {
         );
     }
 
+    /// A derivation predicate configured on the base but never interned there still
+    /// governs what a mutation adds: `C rdf:reifies <<( x y z )>>` and
+    /// `C derivedFrom A`, inserted through the mutable dataset, freeze into a
+    /// derivation of `C` from `A`. The neighbouring case interns the predicate in the
+    /// base and gives the same answer.
+    #[test]
+    fn a_configured_but_unused_derivation_predicate_survives_freeze() {
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        for interned_in_base in [false, true] {
+            let scheme = crate::ContentIdScheme::new("blake3:").expect("valid scheme");
+            let mut b =
+                RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.into()));
+            let a = b.intern_iri(CONTENT_A);
+            let p = b.intern_iri("http://example.org/p");
+            let object = if interned_in_base {
+                b.intern_iri(DERIVED_FROM)
+            } else {
+                b.intern_iri("http://example.org/o")
+            };
+            b.push_quad(a, p, object, None);
+            let base = b.freeze().expect("base freezes");
+            assert_eq!(
+                base.derivation_predicate().is_some(),
+                interned_in_base,
+                "fixture: the predicate is interned in the base exactly when asked"
+            );
+
+            let mut m = MutableDataset::new(base);
+            let c = TermValue::Iri(CONTENT_C.into());
+            ins(
+                &mut m,
+                QuadValues {
+                    s: c.clone(),
+                    p: TermValue::Iri(RDF_REIFIES.into()),
+                    o: TermValue::Triple {
+                        s: TermBox::new(iri_val("x")),
+                        p: TermBox::new(iri_val("y")),
+                        o: TermBox::new(iri_val("z")),
+                    },
+                    g: None,
+                },
+            );
+            ins(
+                &mut m,
+                QuadValues {
+                    s: c,
+                    p: TermValue::Iri(DERIVED_FROM.into()),
+                    o: TermValue::Iri(CONTENT_A.into()),
+                    g: None,
+                },
+            );
+            let frozen = m.freeze().expect("freeze");
+            let c = frozen.term_id_by_iri(CONTENT_C).expect("C survives");
+            let a = frozen.term_id_by_iri(CONTENT_A).expect("A survives");
+            assert_eq!(
+                frozen.predecessors(c),
+                &[a],
+                "interned_in_base={interned_in_base}"
+            );
+        }
+    }
+
     /// The neighbouring case: a base with no content addressing freezes and
     /// snapshots with none, rather than gaining a fabricated scheme.
     #[test]
