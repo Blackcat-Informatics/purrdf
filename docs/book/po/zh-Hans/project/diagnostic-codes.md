@@ -135,7 +135,7 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 
 | 代码 | 含义 | 补救 |
 | --- | --- | --- |
-| `native-sparql-query-parse` | 查询文本无法按 SPARQL 1.1/1.2 语法解析（包括强制执行的 `VERSION` 声明）。 | 在所报告的位置修正查询。 |
+| `native-sparql-query-parse` | 查询文本无法按 SPARQL 1.1/1.2 语法解析（包括格式错误的 `VERSION` 声明；格式正确但无法识别的版本属于 `native-sparql-unsupported`）。 | 在所报告的位置修正查询。 |
 | `native-sparql-update-parse` | 更新请求无法解析。 | 在所报告的位置修正更新。 |
 | `native-sparql-query-explain` | 在 `--explain` 下求值失败；求值器的错误包含在消息中。 | 处理底层的求值错误。 |
 | `native-sparql-query-eval` | 查询求值失败，且没有更具体的代码对该错误分类；求值器的错误包含在消息中。 | 处理底层的求值错误。 |

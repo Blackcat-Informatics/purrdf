@@ -97,6 +97,46 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and `"*"` matches only a non-empty tag, as SPARQL requires.
   `FILTER langMatches(lang(?v), "*")` no longer keeps untagged literals, and
   its negation now keeps them (the W3C `q-langMatches-3` and `-4` results).
+- **SPARQL NaN comparisons:** a NaN compared with a number now gives a
+  boolean instead of an error, as XPath `op:numeric-equal`,
+  `op:numeric-less-than` and `op:numeric-greater-than` define. `=`, `<`, `>`,
+  `<=` and `>=` give `false`, and `!=` gives `true`, so
+  `FILTER("NaN"^^xsd:double != ?x)` keeps every numeric row. NaN does not
+  order against itself either: `"NaN"^^xsd:double <= "NaN"^^xsd:double` is now
+  `false`, not `true`. `NaN = NaN` stays `true` under `sameValue`, `IN` follows
+  `=`, and a NaN against a non-number is still an error. `ORDER BY`, `MIN` and
+  `MAX` are unchanged.
+- **SPARQL casts:** a cast to a numeric, boolean or date/time type is now an
+  error when the source literal's datatype has no row in the casting table.
+  `xsd:double("1.5"^^ex:custom)` and `xsd:integer("1"@en)` are unbound instead
+  of `1.5E0` and `1`. Casts the table marks never allowed are errors too:
+  numbers and booleans cast to no date, time, Gregorian or binary type
+  (`xsd:gYear(2020)`), and date, time, duration, Gregorian and binary values
+  cast to no number or boolean (`xsd:integer("2020"^^xsd:gYear)`). Simple
+  literals, `xsd:string` and the types derived from it, such as `xsd:token`,
+  still cast by lexical form, every numeric and boolean cast the table allows
+  is unchanged, and casting any literal or IRI to `xsd:string` still works.
+- **SPARQL keywords:** `true` and `false` match case-insensitively like every
+  other SPARQL keyword except `a`, so `SELECT (TRUE AS ?t) (False AS ?f) {}`
+  parses (the W3C `case-insensitive-booleans` test). They work this way in
+  expressions, `VALUES` and triple patterns, and are always written as the
+  canonical `"true"`/`"false"`.
+- **SPARQL grammar:** the parser now refuses several forms the grammar does
+  not allow. `GROUP BY` and `ORDER BY` need at least one condition.
+  `HAVING` and `FILTER` need a bracketed expression or a function call, so
+  `HAVING ?x`, `FILTER ?x` and `FILTER true` are refused. Two triples need a
+  `.` between them in a pattern or template, and a `.` may appear only between
+  triples or once after a non-triples element, so `{ . }`, `{ ?s ?p ?o . . }`
+  and `{ :a :b :c :d :e :f }` are refused (the W3C `syn-bad-02`, `-03`, `-05`,
+  `-06`, `-07`, `-14` and `filter-missing-parens` tests). In an aggregate
+  query, a `SELECT` expression may read only group keys, aggregate results and
+  earlier `SELECT` targets outside an aggregate. Grouping by an expression does
+  not make its variables keys, so `SELECT ((?a + ?b) AS ?s) … GROUP BY
+  (?a + ?b)` is refused (the W3C `agg08` and `agg11` tests). One case was
+  refused wrongly before: a non-empty collection may now stand alone as a
+  triple, as in `{ ( ?x ) }`, as the grammar allows for blank-node property
+  lists (the W3C `syntax-lists-03`, `-04`, `-05` and `syntax-forms-02` tests).
+  `()` on its own is still refused.
 
 ## [3.0.1] - 2026-10-02
 
