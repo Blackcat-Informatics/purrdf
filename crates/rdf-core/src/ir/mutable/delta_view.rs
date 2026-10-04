@@ -204,7 +204,9 @@ impl DeltaDatasetView {
     /// # Errors
     /// Returns native admission errors without publishing a partial dataset.
     pub fn materialize(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
-        let result = crate::ir::pack::dataset_from_view(self)?;
+        // Rebuilt under the base's configuration, as `MutableDataset::freeze` is.
+        let result =
+            crate::ir::pack::certify::dataset_from_view_into(self, self.base.rebuild_builder())?;
         self.work.add(crate::ViewWork {
             copied_terms: result.as_ref().term_count(),
             copied_rows: result.rdf_row_count(),

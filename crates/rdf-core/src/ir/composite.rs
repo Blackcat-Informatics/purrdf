@@ -1307,7 +1307,13 @@ impl CompositeDatasetView {
     /// # Errors
     /// Returns admission errors without publishing a partial dataset.
     pub fn materialize(&self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let result = crate::ir::pack::dataset_from_view(self)?;
+        // Rebuilt under the configuration the sources agree on, by `union`'s rule.
+        let mut configured = Vec::new();
+        self.configured_datasets(&mut configured);
+        let result = crate::ir::pack::certify::dataset_from_view_into(
+            self,
+            RdfDataset::agreed_builder(&configured),
+        )?;
         self.work.add(ViewWork {
             copied_terms: result.as_ref().term_count(),
             copied_rows: result.rdf_row_count(),
@@ -1317,6 +1323,18 @@ impl CompositeDatasetView {
             ..Default::default()
         });
         Ok(result)
+    }
+    /// The frozen datasets whose configuration this view's user sources were built
+    /// under: a native source itself, a delta's base, and a selection's retained
+    /// composite's own, in source order.
+    fn configured_datasets<'a>(&'a self, out: &mut Vec<&'a RdfDataset>) {
+        for source in &self.sources[..self.user_sources] {
+            match &source.carrier {
+                Carrier::Native(dataset) => out.push(dataset),
+                Carrier::Delta(view) => out.push(view.base()),
+                Carrier::Selected(selection) => selection.view.configured_datasets(out),
+            }
+        }
     }
     fn map_id(&self, source: usize, local: LocalId) -> CompositeViewId {
         if source == 0 {
