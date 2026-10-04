@@ -3555,9 +3555,13 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
             )
         }
         XSD_DATE_TIME_STAMP => {
-            match purrdf_xsd::temporal::parse_datetime(purrdf_iri::terminals::trim_ws(lex)) {
+            let lex = purrdf_iri::terminals::trim_ws(lex);
+            match purrdf_xsd::temporal::parse_datetime(lex) {
                 Ok(stamp) => stamp.timezone_minutes().is_some(),
-                Err(error) => in_lexical_space(&error),
+                // Past the representable range the parser has still checked every
+                // field, the timezone suffix included, so the suffix's presence is
+                // read from the lexical form itself.
+                Err(error) => in_lexical_space(&error) && has_timezone_suffix(lex),
             }
         }
         _ => XsdDatatype::from_iri(dt).is_none_or(|datatype| {
@@ -3565,6 +3569,16 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
                 .map_or_else(|error| in_lexical_space(&error), |_| true)
         }),
     }
+}
+
+/// Whether a temporal lexical form ends in a timezone: `Z` or `(+|-)hh:mm`. Only
+/// the form's ASCII positions are tested, so the check is total on any input.
+fn has_timezone_suffix(lex: &str) -> bool {
+    let bytes = lex.as_bytes();
+    bytes.last() == Some(&b'Z')
+        || bytes.len() >= 6
+            && matches!(bytes[bytes.len() - 6], b'+' | b'-')
+            && bytes[bytes.len() - 3] == b':'
 }
 
 /// Whether a failed XSD parse still leaves the lexical form in its datatype's
