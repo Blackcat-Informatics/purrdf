@@ -4361,9 +4361,10 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     };
     // Calendar constructors cast a parsed source value, never its spelling.
     // Parsing the declared source first also refuses ill-typed calendar literals.
-    if target.is_calendar()
-        && let Some(source_datatype) = source_datatype
-    {
+    if target.is_calendar() {
+        let Some(source_datatype) = source_datatype else {
+            return Ok(None);
+        };
         if source_datatype.is_calendar() {
             let Some(value) = parse_xsd10(&lexical, source_datatype)
                 .ok()
@@ -7793,6 +7794,15 @@ mod tests {
                 "{source:?} {lexical} → {target:?}"
             );
         }
+        let unsupported = Expression::FunctionCall(
+            Function::Custom(NamedNode::new_unchecked(D::Date.iri())),
+            vec![typed_lit(
+                "2026-10-04Z",
+                "http://example.org/custom-calendar",
+            )]
+            .into(),
+        );
+        assert_eq!(lex_and_dt(&ds, &unsupported), None);
     }
 
     #[test]
