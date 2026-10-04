@@ -29,6 +29,102 @@ impl Decimal {
         Self { mantissa, scale }
     }
 
+    /// The decimal whose value is exactly the integer `value` (scale 0). Every
+    /// `i128` is representable, so the conversion never rounds and never fails —
+    /// the `xs:integer` to `xs:decimal` cast of XPath F&O 3.1 §19.1.2.3.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::Decimal;
+    ///
+    /// let max = Decimal::from_integer(i128::MAX);
+    /// assert_eq!(max.canonical_lexical(), i128::MAX.to_string());
+    /// ```
+    #[must_use]
+    pub const fn from_integer(value: i128) -> Self {
+        Self {
+            mantissa: value,
+            scale: 0,
+        }
+    }
+
+    /// The decimal numerically closest to the binary64 `value` among those this
+    /// type represents (at most 18 fractional digits), ties going to the one
+    /// closer to zero — the `xs:float`/`xs:double` to `xs:decimal` cast of XPath
+    /// F&O 3.1 §19.1.2.3. A float source widens to `f64` exactly first.
+    ///
+    /// Returns `None` for `NaN` and the infinities (which have no decimal value,
+    /// `err:FOCA0002`) and for a magnitude of `2^127` or more (too large to be
+    /// accommodated, `err:FOCA0001`). The conversion reads the binary value
+    /// itself, never a decimal rendering of it: `0.1_f32` is
+    /// `0.100000001490116119384765625`, so the result is `0.100000001490116119`.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::Decimal;
+    ///
+    /// let tenth = Decimal::from_f64_closest(f64::from(0.1_f32)).unwrap();
+    /// assert_eq!(tenth.canonical_lexical(), "0.100000001490116119");
+    /// assert!(Decimal::from_f64_closest(f64::NAN).is_none());
+    /// ```
+    #[must_use]
+    pub fn from_f64_closest(value: f64) -> Option<Self> {
+        if !value.is_finite() {
+            return None;
+        }
+        let bits = value.to_bits();
+        let negative = bits >> 63 == 1;
+        let biased = i32::try_from((bits >> 52) & 0x7ff).ok()?;
+        let fraction = bits & ((1_u64 << 52) - 1);
+        // `|value| = significand × 2^exponent`, exactly.
+        let (significand, exponent) = if biased == 0 {
+            (fraction, -1074)
+        } else {
+            (fraction | (1_u64 << 52), biased - 1075)
+        };
+        if significand == 0 {
+            return Some(Self::from_integer(0));
+        }
+        let magnitude: u128 = if exponent >= 0 {
+            // An integer: exact at scale 0 while it stays below 2^127.
+            let width = 64 - significand.leading_zeros();
+            if width + exponent.unsigned_abs() > 127 {
+                return None;
+            }
+            u128::from(significand) << exponent.unsigned_abs()
+        } else {
+            // `significand × 10^18 / 2^shift`, rounded to the nearest integer with
+            // ties toward zero. The product is below 2^53 × 10^18 < 2^113, so
+            // it neither overflows nor survives a shift of 114 or more except
+            // as a remainder short of one half.
+            let shift = exponent.unsigned_abs();
+            let product = u128::from(significand) * 10_u128.pow(u32::from(MAX_DECIMAL_SCALE));
+            let rounded = if shift >= 114 {
+                0
+            } else {
+                let quotient = product >> shift;
+                let remainder = product & ((1_u128 << shift) - 1);
+                quotient + u128::from(remainder > 1_u128 << (shift - 1))
+            };
+            let mut decimal = Self {
+                mantissa: i128::try_from(rounded).ok()?,
+                scale: MAX_DECIMAL_SCALE,
+            };
+            while decimal.scale > 0 && decimal.mantissa % 10 == 0 {
+                decimal.mantissa /= 10;
+                decimal.scale -= 1;
+            }
+            if negative {
+                decimal.mantissa = -decimal.mantissa;
+            }
+            return Some(decimal);
+        };
+        let mantissa = i128::try_from(magnitude).ok()?;
+        Some(Self::from_integer(if negative {
+            -mantissa
+        } else {
+            mantissa
+        }))
+    }
+
     /// The mantissa (signed significant digits).
     #[must_use]
     pub fn mantissa(&self) -> i128 {
@@ -2904,5 +3000,93 @@ mod tests {
         // The same bits through promotion into double arithmetic.
         let sum = numeric_add(&XsdValue::Decimal(decimal), &double_val(0.0)).unwrap();
         assert_eq!(as_double(&sum).to_bits(), expected.to_bits());
+    }
+    /// The closest 18-fractional-digit decimal to `value`, ties toward zero, read
+    /// off the exact decimal expansion `{:.1100}` prints (every binary64 has at
+    /// most 1074 fractional digits).
+    fn closest_decimal_reference(value: f64) -> Option<String> {
+        let exact = format!("{:.1100}", value.abs());
+        let (int, frac) = exact.split_once('.').expect("a fractional part");
+        if value.abs() >= 2f64.powi(53) {
+            // An integer, exact at scale 0.
+            let mantissa = i128::try_from(int.parse::<u128>().ok()?).ok()?;
+            let signed = if value.is_sign_negative() {
+                -mantissa
+            } else {
+                mantissa
+            };
+            return Some(signed.to_string());
+        }
+        let (kept, rest) = frac.split_at(18);
+        let above_half = match rest.as_bytes()[0] {
+            b'6'..=b'9' => true,
+            b'5' => rest.bytes().skip(1).any(|b| b != b'0'),
+            _ => false,
+        };
+        let mut digits: u128 = format!("{int}{kept}").parse().ok()?;
+        digits += u128::from(above_half);
+        let mantissa = i128::try_from(digits).ok()?;
+        let decimal = Decimal::from_parts(
+            if value.is_sign_negative() {
+                -mantissa
+            } else {
+                mantissa
+            },
+            MAX_DECIMAL_SCALE,
+        );
+        Some(decimal.canonical_lexical())
+    }
+
+    #[test]
+    fn from_f64_closest_matches_the_exact_expansion() {
+        for (value, expected) in [
+            (0.1_f64, Some("0.100000000000000006")),
+            (f64::from(0.1_f32), Some("0.100000001490116119")),
+            (3.0 * 2f64.powi(-19), Some("0.000005722045898437")),
+            (-3.0 * 2f64.powi(-19), Some("-0.000005722045898437")),
+            (5.0 * 2f64.powi(-19), Some("0.000009536743164062")),
+            (1e30, Some("1000000000000000019884624838656")),
+            (-0.0, Some("0")),
+            (2f64.powi(-1074), Some("0")),
+            (2f64.powi(127), None),
+            (-(2f64.powi(127)), None),
+            (f64::NAN, None),
+            (f64::INFINITY, None),
+        ] {
+            assert_eq!(
+                Decimal::from_f64_closest(value)
+                    .map(|d| d.canonical_lexical())
+                    .as_deref(),
+                expected,
+                "{value:e}"
+            );
+        }
+        let below = f64::from_bits(2f64.powi(127).to_bits() - 1);
+        assert_eq!(
+            Decimal::from_f64_closest(below).map(|d| d.mantissa()),
+            i128::try_from(below as u128).ok()
+        );
+        let mut state = 0xdec1_3a1f_u64;
+        let mut next = || purrdf_testkit::rng::splitmix64_next(&mut state);
+        for index in 0..20_000_u32 {
+            let bits = next();
+            // Anywhere in the finite range, or a magnitude in [2^-70, 2^70).
+            let value = if index % 2 == 0 {
+                f64::from_bits(bits & 0xffef_ffff_ffff_ffff)
+            } else {
+                let exponent = (bits >> 52) % 140;
+                f64::from_bits((bits & 0x800f_ffff_ffff_ffff) | ((953 + exponent) << 52))
+            };
+            let reference = if value.abs() < 2f64.powi(127) {
+                closest_decimal_reference(value)
+            } else {
+                None
+            };
+            assert_eq!(
+                Decimal::from_f64_closest(value).map(|d| d.canonical_lexical()),
+                reference,
+                "{value:e}"
+            );
+        }
     }
 }

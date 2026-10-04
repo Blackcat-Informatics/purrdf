@@ -425,6 +425,9 @@ fn palette() -> Vec<TermValue> {
         },
         literal("-7", "integer"),
         literal("abc", "string"),
+        literal("0.1", "float"),
+        literal("1.5e-7", "double"),
+        literal("-0", "double"),
     ]
 }
 
@@ -474,7 +477,7 @@ struct Run {
 const ROWS: usize = 6;
 
 /// The rows `expr` is evaluated over: every variable it mentions, bound from the
-/// palette in a pattern that differs per row and per column, two picks in thirteen
+/// palette in a pattern that differs per row and per column, two picks in sixteen
 /// unbound.
 fn rows_for(expr: &Expression, terms: &[Term]) -> (VarSchema, Vec<Vec<Option<Term>>>) {
     let mut vars = crate::DetHashSet::default();
@@ -650,7 +653,15 @@ fn call(function: Function, args: Vec<Expression>) -> Expression {
 }
 
 fn leaf(choices: &mut Choices) -> Expression {
-    match choices.next(12) {
+    match choices.next(14) {
+        12 => Expression::Literal(Literal::new_typed(
+            "0.1",
+            NamedNode::new_unchecked(format!("{XSD}float")),
+        )),
+        13 => Expression::Literal(Literal::new_typed(
+            "1e7",
+            NamedNode::new_unchecked(format!("{XSD}double")),
+        )),
         0 => var("a"),
         1 => var("b"),
         2 => var("c"),
@@ -805,10 +816,18 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
         27 => call(Function::BNode, Vec::new()),
         28 => call(Function::Rand, Vec::new()),
         29 => call(Function::StrUuid, Vec::new()),
-        30 => call(
-            Function::Custom(NamedNode::new_unchecked(format!("{XSD}integer"))),
-            vec![sub(choices, budget)],
-        ),
+        30 => {
+            // Every XSD constructor cast among the numeric, boolean and string
+            // types, which casts a numeric or boolean value by value.
+            let targets = [
+                "integer", "decimal", "float", "double", "string", "boolean", "byte",
+            ];
+            let target = targets[choices.next(targets.len())];
+            call(
+                Function::Custom(NamedNode::new_unchecked(format!("{XSD}{target}"))),
+                vec![sub(choices, budget)],
+            )
+        }
         31 => call(
             Function::Custom(NamedNode::new_unchecked(format!("{EX}unregistered"))),
             vec![sub(choices, budget)],
@@ -872,6 +891,48 @@ fn the_vm_matches_the_tree_walk_over_generated_expressions() {
         let mut budget = 12;
         let expr = generate(&mut choices, &mut budget);
         assert_same(&expr, &format!("generated expression {index}"));
+    }
+}
+
+/// **Every numeric constructor cast evaluates as the tree walk evaluates it**: each
+/// numeric, boolean and string target over sources of every numeric type, a boolean, a
+/// string, an ill-typed literal and an IRI, alone and over a bound variable.
+#[test]
+fn the_vm_matches_the_tree_walk_over_numeric_casts() {
+    let typed = |lexical: &str, datatype: &str| {
+        Expression::Literal(Literal::new_typed(
+            lexical,
+            NamedNode::new_unchecked(format!("{XSD}{datatype}")),
+        ))
+    };
+    let sources = [
+        typed("0.1", "float"),
+        typed("16777217", "float"),
+        typed("1.00000005960464477539062500001", "double"),
+        typed("0.0000057220458984375", "double"),
+        typed("1e300", "double"),
+        typed("-0", "double"),
+        typed("NaN", "float"),
+        typed("INF", "double"),
+        typed("170141183460469231731687303715884105727", "integer"),
+        typed("12345678901234567.5", "decimal"),
+        typed("300", "integer"),
+        typed("true", "boolean"),
+        typed("abc", "integer"),
+        Expression::Literal(Literal::new_simple("0.1")),
+        Expression::NamedNode(NamedNode::new_unchecked(format!("{EX}a"))),
+        var("a"),
+    ];
+    for target in [
+        "integer", "decimal", "float", "double", "string", "boolean", "byte", "long",
+    ] {
+        for source in &sources {
+            let expr = call(
+                Function::Custom(NamedNode::new_unchecked(format!("{XSD}{target}"))),
+                vec![source.clone()],
+            );
+            assert_same(&expr, &format!("xsd:{target} cast"));
+        }
     }
 }
 

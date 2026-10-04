@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Added
+
+- **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
+  exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
+  binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
+  2^127 or more.
+
 ### Fixed
 
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
@@ -30,6 +37,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   but too large to represent now report an out-of-range error instead of an
   invalid lexical form. Fractional seconds with trailing zeros beyond 18
   digits now parse.
+- **SPARQL numeric casts:** an XSD constructor cast from a numeric or boolean
+  literal converts its value instead of reparsing its lexical form, following
+  the XPath casting rules SPARQL 1.1 §17.5 adopts. `xsd:double("0.1"^^xsd:float)`
+  is now `1.0000000149011612E-1`, the float's value, and
+  `xsd:integer("16777217"^^xsd:float)` is now `16777216`. A double cast to
+  `xsd:float` rounds the double's value once. A float or double cast to
+  `xsd:decimal` gives the decimal closest to its binary value, with ties
+  rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
+  `0.100000001490116119` instead of `0.1`. Casts from strings still parse the
+  string.
+- **SPARQL numeric-to-string casts:** `xsd:string` of a float or double uses
+  plain notation only for magnitudes from 0.000001 up to, but not including,
+  1000000, and scientific notation with a digit after the point otherwise:
+  `xsd:string("1e7"^^xsd:double)` is `1.0E7` instead of `10000000`, and
+  `1e-7` gives `1.0E-7` instead of `1E-7`. Digits are the shortest that read
+  back as the same value, at the source's own precision.
+  `xsd:string("0.1"^^xsd:double)` is now `0.1` instead of
+  `0.100000000000000006`, and `xsd:string("0.1"^^xsd:float)` is `0.1` instead
+  of `0.100000001490116119`. `STR` still returns a literal's lexical form
+  unchanged.
 
 ## [3.0.1] - 2026-10-02
 
