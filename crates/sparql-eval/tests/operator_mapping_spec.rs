@@ -428,3 +428,107 @@ fn a_having_condition_is_a_constraint() {
         assert_eq!(rows(query).len(), 1, "{query}");
     }
 }
+
+/// The `(lexical, datatype)` an XSD cast of `source` to `xsd:{target}` binds.
+fn cast(target: &str, source: &str) -> Option<(String, String)> {
+    select(&format!("xsd:{target}({source})"))
+}
+
+fn typed(lexical: &str, datatype: &str) -> Option<(String, String)> {
+    Some((lexical.to_owned(), format!("{XSD}{datatype}")))
+}
+
+#[test]
+fn date_time_casts_keep_their_components_and_timezone() {
+    // XPath F&O 3.1 §19.3: dateTime to date, time and the Gregorian types keeps the
+    // components the target has, timezone included.
+    let dt = "\"2002-10-10T17:30:05.5+05:00\"^^xsd:dateTime";
+    assert_eq!(cast("date", dt), typed("2002-10-10+05:00", "date"));
+    assert_eq!(cast("time", dt), typed("17:30:05.5+05:00", "time"));
+    assert_eq!(cast("gYear", dt), typed("2002+05:00", "gYear"));
+    assert_eq!(cast("gYearMonth", dt), typed("2002-10+05:00", "gYearMonth"));
+    assert_eq!(cast("gMonth", dt), typed("--10+05:00", "gMonth"));
+    assert_eq!(cast("gMonthDay", dt), typed("--10-10+05:00", "gMonthDay"));
+    assert_eq!(cast("gDay", dt), typed("---10+05:00", "gDay"));
+    let utc = "\"-0044-03-15T12:00:00Z\"^^xsd:dateTime";
+    assert_eq!(cast("date", utc), typed("-0044-03-15Z", "date"));
+    assert_eq!(cast("gYear", utc), typed("-0044Z", "gYear"));
+    let local = "\"2002-10-10T17:00:00\"^^xsd:dateTime";
+    assert_eq!(cast("date", local), typed("2002-10-10", "date"));
+    assert_eq!(cast("time", local), typed("17:00:00", "time"));
+    // date to dateTime is midnight of that date, with its timezone.
+    let d = "\"2002-10-10-05:00\"^^xsd:date";
+    assert_eq!(
+        cast("dateTime", d),
+        typed("2002-10-10T00:00:00-05:00", "dateTime")
+    );
+    assert_eq!(cast("gYearMonth", d), typed("2002-10-05:00", "gYearMonth"));
+    assert_eq!(cast("gMonthDay", d), typed("--10-10-05:00", "gMonthDay"));
+    assert_eq!(
+        cast("gDay", "\"2002-10-10\"^^xsd:date"),
+        typed("---10", "gDay")
+    );
+    // The neighbours the lexical path already served: same-type casts and simple
+    // literals.
+    assert_eq!(
+        cast("date", "\"2002-10-10Z\"^^xsd:date"),
+        typed("2002-10-10Z", "date")
+    );
+    assert_eq!(
+        cast("dateTime", "\"2002-10-10T00:00:00\""),
+        typed("2002-10-10T00:00:00", "dateTime")
+    );
+    assert_eq!(cast("gYear", "\"2002\""), typed("2002", "gYear"));
+}
+
+#[test]
+fn duration_and_binary_casts_convert_by_value() {
+    let dur = "\"P1Y2M3DT4H\"^^xsd:duration";
+    assert_eq!(
+        cast("yearMonthDuration", dur),
+        typed("P1Y2M", "yearMonthDuration")
+    );
+    assert_eq!(
+        cast("dayTimeDuration", dur),
+        typed("P3DT4H", "dayTimeDuration")
+    );
+    assert_eq!(
+        cast("duration", "\"P3DT4H\"^^xsd:dayTimeDuration"),
+        typed("P3DT4H", "duration")
+    );
+    // The two binary spaces share spellings that mean different bytes: "abcd" is
+    // three bytes as base64 and two as hex. The cast keeps the bytes.
+    assert_eq!(
+        cast("hexBinary", "\"abcd\"^^xsd:base64Binary"),
+        typed("69B71D", "hexBinary")
+    );
+    assert_eq!(
+        cast("base64Binary", "\"69B71D\"^^xsd:hexBinary"),
+        typed("abcd", "base64Binary")
+    );
+    assert_eq!(
+        cast("hexBinary", "\"0fb7\"^^xsd:hexBinary"),
+        typed("0FB7", "hexBinary")
+    );
+}
+
+#[test]
+fn a_temporal_or_binary_cast_the_table_forbids_is_an_error() {
+    for (target, source) in [
+        ("time", "\"2002-10-10\"^^xsd:date"),
+        ("date", "\"17:00:00\"^^xsd:time"),
+        ("dateTime", "\"17:00:00\"^^xsd:time"),
+        ("gYear", "\"17:00:00\"^^xsd:time"),
+        ("date", "\"2002\"^^xsd:gYear"),
+        ("dateTime", "\"2002-10\"^^xsd:gYearMonth"),
+        ("gMonth", "\"2002-10\"^^xsd:gYearMonth"),
+        ("gYear", "\"2020\"^^xsd:hexBinary"),
+        ("date", "\"P1D\"^^xsd:duration"),
+        ("hexBinary", "\"2002-10-10\"^^xsd:date"),
+        ("dayTimeDuration", "\"2002-10-10\"^^xsd:date"),
+        // An ill-typed source has no value to cast.
+        ("date", "\"not a date\"^^xsd:dateTime"),
+    ] {
+        assert_eq!(cast(target, source), None, "xsd:{target}({source})");
+    }
+}

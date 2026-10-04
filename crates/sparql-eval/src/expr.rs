@@ -4369,6 +4369,9 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     if !cast_source_admitted(source, target) {
         return Ok(None);
     }
+    if let Some(cast) = cast_temporal_or_binary(source, target) {
+        return cast.map(|value| xsd_to_term(ctx, &value)).transpose();
+    }
     let lexical = match source {
         TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
         _ => return Ok(None),
@@ -4382,6 +4385,134 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         return Ok(None);
     };
     Ok(Some(xsd_to_term(ctx, &value)?))
+}
+
+/// The cast of a date/time, duration, Gregorian or binary literal, by VALUE (XPath
+/// F&O 3.1 §19.1–§19.3), or `None` when `source` is not one — the caller's lexical
+/// and numeric paths then decide.
+///
+/// Such a source is never re-parsed by its lexical form under the target: the two
+/// value spaces can share a spelling that means different values (`"abcd"` is both
+/// base64Binary and hexBinary, for three bytes and two), or a spelling the table
+/// forbids (`"2020"^^xsd:hexBinary` is not a gYear). Instead, `Some(Some(v))` is the
+/// target value the table allows, and `Some(None)` is a cast error: an ill-typed
+/// source, or a pair the table marks `N`.
+///
+/// * `xsd:dateTime` to `xsd:date`, `xsd:time` and the five Gregorian types keeps
+///   the components the target has, and the timezone.
+/// * `xsd:date` to `xsd:dateTime` is midnight of that date, with its timezone; to
+///   the Gregorian types it keeps their components and the timezone.
+/// * `xsd:duration` and its two subtypes cast among themselves, a subtype keeping
+///   only its own component (months, or seconds).
+/// * `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes.
+/// * A value casts to its own datatype unchanged; every other pair is refused.
+fn cast_temporal_or_binary(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue>> {
+    use XsdDatatype as T;
+    let TermValue::Literal {
+        datatype,
+        language: None,
+        ..
+    } = source
+    else {
+        return None;
+    };
+    let from = XsdDatatype::from_iri(datatype)?;
+    let is_temporal = |dt: XsdDatatype| {
+        matches!(
+            dt,
+            T::Date
+                | T::Time
+                | T::DateTime
+                | T::Duration
+                | T::DayTimeDuration
+                | T::YearMonthDuration
+                | T::GYear
+                | T::GMonth
+                | T::GDay
+                | T::GYearMonth
+                | T::GMonthDay
+                | T::HexBinary
+                | T::Base64Binary
+        )
+    };
+    if !is_temporal(from) || target == T::String {
+        return None;
+    }
+    let Some(value) = xsd_of(source) else {
+        return Some(None);
+    };
+    if from == target {
+        return Some(Some(value));
+    }
+    let reparse = |lexical: String| parse_xsd10(&lexical, target).ok();
+    let gregorian = |year: &str, month: u8, day: u8, tz: &str| -> Option<String> {
+        Some(match target {
+            T::GYear => format!("{year}{tz}"),
+            T::GYearMonth => format!("{year}-{month:02}{tz}"),
+            T::GMonth => format!("--{month:02}{tz}"),
+            T::GMonthDay => format!("--{month:02}-{day:02}{tz}"),
+            T::GDay => format!("---{day:02}{tz}"),
+            _ => return None,
+        })
+    };
+    Some(match &value {
+        XsdValue::DateTime(dt) => {
+            let lexical = dt.canonical_lexical();
+            let (date, rest) = lexical.split_once('T')?;
+            let time_len = rest
+                .find(|c: char| !(c.is_ascii_digit() || c == ':' || c == '.'))
+                .unwrap_or(rest.len());
+            let (time, tz) = rest.split_at(time_len);
+            let (year, month, day, _) = split_canonical_date(date)?;
+            match target {
+                T::Date => reparse(format!("{date}{tz}")),
+                T::Time => reparse(format!("{time}{tz}")),
+                _ => gregorian(year, month, day, tz).and_then(reparse),
+            }
+        }
+        XsdValue::Date(d) => {
+            let lexical = d.canonical_lexical();
+            let (year, month, day, tz) = split_canonical_date(&lexical)?;
+            match target {
+                T::DateTime => reparse(format!("{year}-{month:02}-{day:02}T00:00:00{tz}")),
+                _ => gregorian(year, month, day, tz).and_then(reparse),
+            }
+        }
+        XsdValue::Duration(dur) => {
+            let zero = || match purrdf_xsd::parse("0", T::Decimal) {
+                Ok(XsdValue::Decimal(zero)) => Some(zero),
+                _ => None,
+            };
+            let (months, seconds) = match target {
+                T::Duration => (dur.months(), dur.seconds()),
+                T::YearMonthDuration => (dur.months(), zero()?),
+                T::DayTimeDuration => (0, dur.seconds()),
+                _ => return Some(None),
+            };
+            purrdf_xsd::temporal::Duration::new(months, seconds, target)
+                .ok()
+                .map(XsdValue::Duration)
+        }
+        XsdValue::Binary { bytes, .. } if matches!(target, T::HexBinary | T::Base64Binary) => {
+            Some(XsdValue::Binary {
+                bytes: bytes.clone(),
+                datatype: target,
+            })
+        }
+        _ => None,
+    })
+}
+
+/// Split a canonical `xsd:date` lexical form — or the date half of a canonical
+/// `xsd:dateTime` — into its signed year digits, month, day and whatever follows
+/// (the timezone, if any). `None` for text that is not one.
+fn split_canonical_date(lexical: &str) -> Option<(&str, u8, u8, &str)> {
+    let digits_from = usize::from(lexical.starts_with('-'));
+    let year_len = digits_from + lexical[digits_from..].find('-')?;
+    let (year, rest) = lexical.split_at(year_len);
+    let month = rest.get(1..3)?.parse().ok()?;
+    let day = rest.get(4..6)?.parse().ok()?;
+    Some((year, month, day, rest.get(6..)?))
 }
 
 /// Whether the casting table (SPARQL §17.5, over XPath F&O §19.1 "Casting from
