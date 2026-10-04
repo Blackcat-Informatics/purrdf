@@ -21,13 +21,13 @@ use ::purrdf_rdf::{DatasetView, RdfDataset};
 use ::purrdf_rdf::{FastMap, FastSet};
 use purrdf_sparql_eval::Prebinding;
 
-use crate::data::{GraphFilter, native_quads, objects_of};
+use crate::data::{GraphFilter, native_quads, objects_of, resolve_id};
 use crate::error::{IllFormedDeclaration, PrebindingViolation, RuleViolation as Violation};
-use crate::model::{rdf, rdfs, sh, xsd};
+use crate::model::{rdf, sh, xsd};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
 use crate::shapes::prefixes::PrefixResolver;
-use crate::shapes::{ComponentValidator, Path};
+use crate::shapes::{ComponentValidator, Path, ShaclInstances};
 use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_prebinding_view};
 use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 use crate::validator_alternatives::{AlternativeValidator, ValidatorLanguage};
@@ -176,7 +176,7 @@ impl ComponentRegistry {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
         let mut seen: FastSet<String> = FastSet::default();
-        let mut subclass_memo: FastMap<(String, String), bool> = FastMap::default();
+        let mut instances = ShaclInstances::new(data);
         let mut builtin_alternatives: Vec<AlternativeValidator> = Vec::new();
         let mut ill_formed: Vec<IllFormedDeclaration> = Vec::new();
         let mut alternative_prebinding: Vec<PrebindingViolation> = Vec::new();
@@ -184,15 +184,11 @@ impl ComponentRegistry {
         for (subject, _pred, object) in
             native_quads(data, None, Some(&rdf_type), None, GraphFilter::AnyGraph)
         {
-            let Term::NamedNode(class) = object else {
-                continue;
-            };
-            if !is_subclass_of(
-                data,
-                class.as_str(),
-                sh::CONSTRAINT_COMPONENT,
-                &mut subclass_memo,
-            ) {
+            // SHACL type: an `rdf:type` value of any kind, IRI or blank, and its
+            // superclasses through `rdfs:subClassOf` nodes of any kind.
+            let is_component = resolve_id(data, &object)
+                .is_some_and(|class| instances.reaches_iri(class, sh::CONSTRAINT_COMPONENT));
+            if !is_component {
                 continue;
             }
             let Term::NamedNode(component) = subject else {
@@ -229,7 +225,7 @@ impl ComponentRegistry {
                     .map(|param| purrdf_iri::local_name(param.path).to_owned())
                     .collect();
                 for (attachment, validator, kind) in
-                    declared_validators(data, &component_term, &mut subclass_memo)
+                    declared_validators(data, &component_term, &mut instances)
                 {
                     let declaration =
                         builtin_validator_declaration(&validator, component.as_str(), attachment);
@@ -296,7 +292,7 @@ impl ComponentRegistry {
                 prefixes,
                 &component_term,
                 &component_iri,
-                &mut subclass_memo,
+                &mut instances,
                 &mut ill_formed,
             )?;
             for param in &component.parameters {
@@ -334,7 +330,7 @@ impl ComponentRegistry {
                         &owner.to_string(),
                         attachment,
                         &node,
-                        &mut subclass_memo,
+                        &mut instances,
                     ) {
                         ill_formed.push(IllFormedDeclaration::new(
                             format!("validator {node} of {owner}, via <{attachment}>"),
@@ -807,47 +803,6 @@ fn first_object_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Option
     objects_of(data, subject, predicate).into_iter().next()
 }
 
-/// Whether `class_iri` is `target_iri` or a subclass thereof under
-/// `rdfs:subClassOf` (reflexive transitive closure).
-///
-/// A memo table avoids repeated superclass walks; `false` is inserted before
-/// recursion to break `rdfs:subClassOf` cycles.
-fn is_subclass_of(
-    data: &RdfDataset,
-    class_iri: &str,
-    target_iri: &str,
-    memo: &mut FastMap<(String, String), bool>,
-) -> bool {
-    if class_iri == target_iri {
-        return true;
-    }
-    let key = (class_iri.to_owned(), target_iri.to_owned());
-    if let Some(&result) = memo.get(&key) {
-        return result;
-    }
-    memo.insert(key.clone(), false);
-    let class_term = Term::NamedNode(NamedNode::from(class_iri));
-    let sub_class_of = Term::NamedNode(NamedNode::from(rdfs::SUB_CLASS_OF));
-    let mut result = false;
-    for (_subject, _pred, object) in native_quads(
-        data,
-        Some(&class_term),
-        Some(&sub_class_of),
-        None,
-        GraphFilter::AnyGraph,
-    ) {
-        let Term::NamedNode(super_class) = object else {
-            continue;
-        };
-        if is_subclass_of(data, super_class.as_str(), target_iri, memo) {
-            result = true;
-            break;
-        }
-    }
-    memo.insert(key, result);
-    result
-}
-
 /// The query form `validator`'s `rdf:type` declarations make it, respecting subclasses
 /// of `sh:SPARQLAskValidator` and `sh:SPARQLSelectValidator`.
 ///
@@ -860,18 +815,20 @@ fn is_subclass_of(
 fn validator_kind(
     data: &RdfDataset,
     validator: &Term,
-    memo: &mut FastMap<(String, String), bool>,
+    instances: &mut ShaclInstances<'_>,
 ) -> Result<ValidatorKind, String> {
     let mut is_ask = false;
     let mut is_select = false;
     let mut is_js = false;
+    // SHACL type, as for a component: every `rdf:type` value, IRI or blank, through
+    // `rdfs:subClassOf` nodes of any kind.
     for q in objects_of(data, validator, rdf::TYPE) {
-        let Term::NamedNode(class) = q else {
+        let Some(class) = resolve_id(data, &q) else {
             continue;
         };
-        is_ask |= is_subclass_of(data, class.as_str(), sh::SPARQL_ASK_VALIDATOR, memo);
-        is_select |= is_subclass_of(data, class.as_str(), sh::SPARQL_SELECT_VALIDATOR, memo);
-        is_js |= is_subclass_of(data, class.as_str(), sh::JS_VALIDATOR, memo);
+        is_ask |= instances.reaches_iri(class, sh::SPARQL_ASK_VALIDATOR);
+        is_select |= instances.reaches_iri(class, sh::SPARQL_SELECT_VALIDATOR);
+        is_js |= instances.reaches_iri(class, sh::JS_VALIDATOR);
     }
     match (is_ask, is_select) {
         (true, true) => Err(format!(
@@ -915,7 +872,7 @@ fn class_rule(attachment: &str) -> &'static str {
 fn declared_validators(
     data: &RdfDataset,
     component: &Term,
-    memo: &mut FastMap<(String, String), bool>,
+    instances: &mut ShaclInstances<'_>,
 ) -> Vec<(&'static str, Term, Result<ValidatorKind, Violation>)> {
     let mut out = Vec::new();
     for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
@@ -927,7 +884,7 @@ fn declared_validators(
                 &format!("component {component}"),
                 attachment,
                 &node,
-                memo,
+                instances,
             );
             out.push((attachment, node, kind));
         }
@@ -943,10 +900,10 @@ fn attachment_class(
     owner: &str,
     attachment: &'static str,
     node: &Term,
-    memo: &mut FastMap<(String, String), bool>,
+    instances: &mut ShaclInstances<'_>,
 ) -> Result<ValidatorKind, Violation> {
     let expects_ask = attachment == sh::VALIDATOR;
-    let form = validator_kind(data, node, memo).map_err(|e| {
+    let form = validator_kind(data, node, instances).map_err(|e| {
         (
             Some(class_rule(attachment)),
             format!("{owner} validator {node}: {e}"),
@@ -1128,7 +1085,7 @@ fn parse_component(
     prefixes: &PrefixResolver,
     component: &Term,
     component_iri: &str,
-    subclass_memo: &mut FastMap<(String, String), bool>,
+    instances: &mut ShaclInstances<'_>,
     ill_formed: &mut Vec<IllFormedDeclaration>,
 ) -> Result<Component, String> {
     let component_declaration = format!("the constraint component <{component_iri}>");
@@ -1176,7 +1133,7 @@ fn parse_component(
     let mut node_validators = Vec::new();
     let mut property_validators = Vec::new();
     let mut validators = Vec::new();
-    for (attachment, node, kind) in declared_validators(data, component, subclass_memo) {
+    for (attachment, node, kind) in declared_validators(data, component, instances) {
         let declaration = custom_validator_declaration(&node, component_iri, attachment);
         let kind = match kind {
             Ok(kind) => kind,
