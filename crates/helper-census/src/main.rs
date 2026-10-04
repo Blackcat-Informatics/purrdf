@@ -13,10 +13,15 @@
 //! which names the one home of each job and the sanctioned variants, and reports
 //! against it. `scripts/check-shared-helpers.py` is the gate built on it; see
 //! [`USAGE`] for the modes.
+//!
+//! It also hosts the non-Rust ratchet (`--non-rust-ratchet`, [`non_rust`]): the
+//! repository-hygiene check that keeps tooling and tests in Rust, run by the
+//! pre-commit hook, `make check` and CI.
 
 mod census;
 mod layout;
 mod ledger;
+mod non_rust;
 mod normalize;
 mod rules;
 mod source;
@@ -32,6 +37,9 @@ use crate::source::{Disk, Memory, Tree, Workspace};
 /// The CLI contract, printed by `--help` and beside every argument error.
 const USAGE: &str = "\
 Usage: helper-census [--root DIR] [--ledger FILE] <mode>
+       helper-census [--root DIR] --non-rust-ratchet
+                     (--base REV | --merge-base-with REF)
+                     --target (index | worktree | rev:REV)
 
 Modes:
   --baseline [PATH]  write every isomorphic group, shim group, hex table and
@@ -45,10 +53,23 @@ Modes:
   --index            print the JSON index scripts/check-shared-helpers.py reads
   --dump-ledger      print the parsed ledger as JSON
   --self-test        run the seeded fixtures and exit
+  --non-rust-ratchet fail when TARGET adds a non-Rust file without a
+                     `Why not Rust:` explanation, or grows a legacy one under
+                     a ratcheted root, compared with BASE (see AGENTS.md)
   --help, -h         print this text
 
---root defaults to the workspace this binary was built from; --ledger defaults
-to helpers-ledger.toml under the root.
+Non-Rust ratchet options:
+  --base REV            BASE is this commit
+  --merge-base-with REF BASE is the merge-base of REF with the target (with
+                        HEAD and any MERGE_HEAD for index and worktree)
+  --target index        TARGET is the staged index (GIT_INDEX_FILE honoured)
+  --target worktree     TARGET is the working tree: tracked and untracked,
+                        unignored files
+  --target rev:REV      TARGET is this commit
+
+--root defaults to the workspace this binary was built from (for the ratchet,
+the git work tree to read); --ledger defaults to helpers-ledger.toml under the
+root.
 ";
 
 /// What the arguments ask for.
@@ -61,6 +82,7 @@ enum Mode {
     Index,
     DumpLedger,
     SelfTest,
+    NonRustRatchet,
     Help,
 }
 
@@ -70,12 +92,16 @@ struct Arguments {
     root: PathBuf,
     ledger: Option<PathBuf>,
     mode: Mode,
+    base: Option<non_rust::Base>,
+    target: Option<non_rust::Target>,
 }
 
 fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, String> {
     let mut root = purrdf_testkit::paths::workspace_root();
     let mut ledger = None;
     let mut mode = None;
+    let mut base = None;
+    let mut target = None;
     let set = |next: Mode, mode: &mut Option<Mode>| {
         if mode.replace(next).is_some() {
             Err("give exactly one mode".to_owned())
@@ -110,14 +136,49 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
             "--index" => set(Mode::Index, &mut mode)?,
             "--dump-ledger" => set(Mode::DumpLedger, &mut mode)?,
             "--self-test" => set(Mode::SelfTest, &mut mode)?,
+            "--non-rust-ratchet" => set(Mode::NonRustRatchet, &mut mode)?,
+            "--base" | "--merge-base-with" => {
+                let rev = args
+                    .next()
+                    .ok_or_else(|| format!("{arg} needs a revision"))?;
+                let next = if arg == "--base" {
+                    non_rust::Base::Rev(rev)
+                } else {
+                    non_rust::Base::MergeBaseWith(rev)
+                };
+                if base.replace(next).is_some() {
+                    return Err("give exactly one of --base and --merge-base-with".to_owned());
+                }
+            }
+            "--target" => {
+                let spec = args.next().ok_or("--target needs a value")?;
+                if target.replace(non_rust::Target::parse(&spec)?).is_some() {
+                    return Err("give --target once".to_owned());
+                }
+            }
             "--help" | "-h" => set(Mode::Help, &mut mode)?,
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
+    let mode = mode.ok_or("give a mode")?;
+    if mode == Mode::NonRustRatchet {
+        if base.is_none() {
+            return Err("--non-rust-ratchet needs --base or --merge-base-with".to_owned());
+        }
+        if target.is_none() {
+            return Err("--non-rust-ratchet needs --target".to_owned());
+        }
+    } else if base.is_some() || target.is_some() {
+        return Err(
+            "--base, --merge-base-with and --target belong to --non-rust-ratchet".to_owned(),
+        );
+    }
     Ok(Arguments {
         root,
         ledger,
-        mode: mode.ok_or("give a mode")?,
+        mode,
+        base,
+        target,
     })
 }
 
@@ -145,6 +206,12 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Mode::SelfTest => return Ok(self_test()),
+        Mode::NonRustRatchet => {
+            let (Some(base), Some(target)) = (&arguments.base, &arguments.target) else {
+                unreachable!("parse_arguments requires both");
+            };
+            return non_rust::run(&arguments.root, base, target);
+        }
         _ => {}
     }
     let root = arguments
@@ -224,7 +291,9 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
             );
         }
         Mode::Index => println!("{}", census::index(&workspace, &ledger)),
-        Mode::DumpLedger | Mode::SelfTest | Mode::Help => unreachable!("handled above"),
+        Mode::DumpLedger | Mode::SelfTest | Mode::NonRustRatchet | Mode::Help => {
+            unreachable!("handled above")
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -776,7 +845,7 @@ fn self_test() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{Mode, parse_arguments, self_test_cases};
+    use super::{Mode, non_rust, parse_arguments, self_test_cases};
 
     fn args(list: &[&str]) -> impl Iterator<Item = String> {
         list.iter()
@@ -820,5 +889,50 @@ mod tests {
                 .mode,
             Mode::Count("fnv".to_owned())
         );
+    }
+
+    #[test]
+    fn the_ratchet_needs_exactly_one_base_and_a_target() {
+        let ok = parse_arguments(args(&[
+            "--non-rust-ratchet",
+            "--merge-base-with",
+            "origin/main",
+            "--target",
+            "index",
+        ]))
+        .expect("complete");
+        assert_eq!(ok.mode, Mode::NonRustRatchet);
+        assert_eq!(
+            ok.base,
+            Some(non_rust::Base::MergeBaseWith("origin/main".to_owned()))
+        );
+        assert_eq!(ok.target, Some(non_rust::Target::Index));
+        let rev = parse_arguments(args(&[
+            "--non-rust-ratchet",
+            "--base",
+            "abc",
+            "--target",
+            "rev:HEAD",
+        ]))
+        .expect("explicit base and commit target");
+        assert_eq!(rev.target, Some(non_rust::Target::Rev("HEAD".to_owned())));
+        for refused in [
+            &["--non-rust-ratchet", "--target", "index"][..],
+            &["--non-rust-ratchet", "--base", "a"],
+            &[
+                "--non-rust-ratchet",
+                "--base",
+                "a",
+                "--merge-base-with",
+                "b",
+                "--target",
+                "index",
+            ],
+            &["--non-rust-ratchet", "--base", "a", "--target", "staged"],
+            &["--non-rust-ratchet", "--base", "a", "--target", "rev:"],
+            &["--check", "--target", "index"],
+        ] {
+            assert!(parse_arguments(args(refused)).is_err(), "{refused:?}");
+        }
     }
 }
