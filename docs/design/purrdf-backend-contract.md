@@ -582,7 +582,11 @@ writer**: a pure function of the source dataset's value content (no
 hash-iteration order, wall-clock, or RNG reaches the output — two calls on the
 same dataset produce byte-identical bytes) that encodes the value dictionary,
 graph-partitioned bitmap-triples, and RDF 1.2 side-tables (reifiers,
-annotations) into one fixed-layout container.
+annotations) into one fixed-layout container. A named graph the source declares
+without any row is a zero-row partition of the bitmap-triples, so `PackView`'s
+`named_graphs` lists it exactly as the source dataset does; a source without such
+a graph writes the bytes it always wrote, and every format-version-1 reader
+decodes either.
 
 `PackView::from_bytes(&[u8]) -> Result<PackView<'_>, PackError>` is the
 **borrowed, zero-copy reader**: it never allocates a copy of the section
@@ -614,7 +618,9 @@ statement annotations) into a fresh dataset, canonicalizes that
 reconstruction with the SAME RDFC-1.0 procedure `PackBuilder::build_bytes`
 used, and compares the two digests. Only a pack whose stored digest agrees
 with its own independently-recomputed contents is a **certified read-only
-projection** of its source dataset — this catches a tampered digest header
+projection** of its source dataset (canonical N-Quads cannot spell an empty
+graph, so declared empty graphs leave this digest unchanged; they change only the
+pack bytes) — this catches a tampered digest header
 field that per-section SHA-256 integrity alone cannot see (the digest field
 sits outside the section directory's coverage). `pack_digest` reads the
 stored (unverified) header value only, for a caller that wants the claimed

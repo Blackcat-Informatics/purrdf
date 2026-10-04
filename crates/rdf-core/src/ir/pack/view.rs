@@ -309,8 +309,36 @@ impl DatasetView for PackView<'_> {
             })
     }
 
+    /// Every named graph the pack carries, ascending: each TRIPLES partition (a graph
+    /// that owns a base quad, or a declaration-only graph's zero-row partition) and
+    /// each graph only the side tables name — the same set the frozen dataset the
+    /// pack was written from enumerates.
+    ///
+    /// Both sources are walked in ascending order and merged, so a pack whose side
+    /// tables name no graph enumerates its partitions without allocating.
     fn named_graphs(&self) -> impl Iterator<Item = PackId> + '_ {
-        self.triples().named_graph_ids().map(PackId::from_unified)
+        let mut side: Vec<PackTermId> = self.side().graph_references().collect();
+        side.sort_unstable();
+        side.dedup();
+        let mut partitions = self.triples().named_graph_ids().peekable();
+        let mut side = side.into_iter().peekable();
+        std::iter::from_fn(move || {
+            let next = match (partitions.peek(), side.peek()) {
+                (Some(&p), Some(&s)) => {
+                    if s < p {
+                        side.next()
+                    } else {
+                        if s == p {
+                            side.next();
+                        }
+                        partitions.next()
+                    }
+                }
+                (Some(_), None) => partitions.next(),
+                (None, _) => side.next(),
+            };
+            next.map(PackId::from_unified)
+        })
     }
 }
 

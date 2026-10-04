@@ -17,6 +17,15 @@
 //! order and the [`GraphMatch::Any`] union order (`partition 0 first, then named
 //! graphs ascending`), so iteration order is deterministic byte-for-byte.
 //!
+//! A named graph the source declares without giving it any row — no base quad,
+//! no reifier row, no annotation row — is carried as a **zero-row partition**:
+//! the same well-formed empty partition the default graph can always be, so every
+//! version-1 reader decodes it and lists it among
+//! [`TriplesRef::named_graph_ids`]. A graph that owns statement-layer rows but no
+//! base quad gets no partition; the side tables name it (see
+//! [`super::side`]). Consequently a source with no declaration-only graph writes
+//! exactly the partitions it wrote before declarations were carried.
+//!
 //! # Per-partition local numbering
 //!
 //! Role numbering in [`super::dict::PackDict`] is global (one unified id space
@@ -95,7 +104,7 @@
 //! panics on a successfully-opened buffer.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_hash::frame::frame_le;
 
@@ -302,7 +311,8 @@ pub struct Triples {
 impl Triples {
     /// Scan `view`'s quads, partition them by graph (partition 0 = default
     /// graph, always present even if empty; each named graph gets its own
-    /// partition, stored ascending by graph unified id), and build each
+    /// partition, stored ascending by graph unified id, and each declaration-only
+    /// graph of [`DatasetView::named_graphs`] a zero-row one), and build each
     /// partition's bitmap-triples + FoQ indexes. `dict` resolves every quad
     /// component — subject, predicate, object, and graph name alike — to its
     /// single unified [`PackTermId`] via [`PackDict::id_by_value`] (see
@@ -352,6 +362,36 @@ impl Triples {
                     Some(g) => {
                         let g_uni = resolve_unified(view, dict, &mut cache, g)?;
                         named.entry(g_uni).or_default().push((s_uni, p_uni, o_uni));
+                    }
+                }
+            }
+
+            // Declaration-only graphs: a named graph the view addresses that owns no
+            // row of any kind gets a zero-row partition, the same well-formed empty
+            // partition the default graph has always been allowed to be. A graph that
+            // owns statement-layer rows but no base quad is NOT given one — the side
+            // tables already name it, and leaving it out keeps every pack without a
+            // declaration-only graph byte-identical to what the writer produced before
+            // declarations were carried.
+            let mut declared: Vec<PackTermId> = Vec::new();
+            for g in view.named_graphs() {
+                let g_uni = resolve_unified(view, dict, &mut cache, g)?;
+                if !named.contains_key(&g_uni) {
+                    declared.push(g_uni);
+                }
+            }
+            if !declared.is_empty() {
+                let mut side_graphs: BTreeSet<PackTermId> = BTreeSet::new();
+                for g in view
+                    .reifier_quads()
+                    .filter_map(|q| q.g)
+                    .chain(view.annotation_quads().filter_map(|q| q.g))
+                {
+                    side_graphs.insert(resolve_unified(view, dict, &mut cache, g)?);
+                }
+                for g_uni in declared {
+                    if !side_graphs.contains(&g_uni) {
+                        named.entry(g_uni).or_default();
                     }
                 }
             }
@@ -1136,9 +1176,11 @@ impl<'a> TriplesRef<'a> {
         self.pattern(None, None, None, GraphMatch::Any)
     }
 
-    /// Every named graph's unified id, ascending — the source for
-    /// [`DatasetView::named_graphs`](crate::DatasetView::named_graphs) over a
-    /// `PackView`-backed dataset.
+    /// Every named graph partition's unified id, ascending: each graph that owns a
+    /// base quad and each declaration-only graph. Graphs that own only
+    /// statement-layer rows have no partition; `PackView`'s
+    /// [`DatasetView::named_graphs`](crate::DatasetView::named_graphs) adds them
+    /// from the side tables.
     pub fn named_graph_ids(&self) -> impl Iterator<Item = PackTermId> + '_ {
         self.graph_index.keys().copied()
     }
