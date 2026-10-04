@@ -197,6 +197,32 @@ pub fn one_quad(subject: &str, predicate: &str, object: &str) -> Arc<RdfDataset>
     )])
 }
 
+/// A dataset whose terms and named graphs differ: `s p phantom{tag}` in the default
+/// graph, `s p o` in named graph `g{tag}`, and `empty{tag}` declared with no quads, all
+/// under `http://example.org/`. `phantom{tag}` is a term that names no graph; `tag`
+/// keeps several such datasets' graphs apart.
+///
+/// # Panics
+///
+/// Never: every term is an absolute IRI in a valid position.
+#[must_use]
+pub fn graph_slots(tag: &str) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let [s, p, o, phantom, graph, empty] = [
+        "s".to_owned(),
+        "p".to_owned(),
+        "o".to_owned(),
+        format!("phantom{tag}"),
+        format!("g{tag}"),
+        format!("empty{tag}"),
+    ]
+    .map(|name| intern_value(&mut builder, &iri(&name)));
+    builder.push_quad(s, p, phantom, None);
+    builder.push_quad(s, p, o, Some(graph));
+    builder.declare_named_graph(empty);
+    builder.freeze().expect("graph-slot fixture freezes")
+}
+
 /// Split `triples` round-robin across `page_count` quad-disjoint pages, so
 /// consecutive triples land on different pages.
 #[must_use]

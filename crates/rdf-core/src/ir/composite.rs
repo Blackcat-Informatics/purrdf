@@ -672,6 +672,21 @@ impl CompositeSource {
             }
         }
     }
+    /// Whether [`graphs`](Self::graphs) yields `local`, answered without
+    /// enumerating the source's graphs.
+    fn has_graph(&self, local: LocalId) -> bool {
+        match &self.carrier {
+            Carrier::Native(ds) => matches!(local, LocalId::Base(id) if ds.has_named_graph(id)),
+            Carrier::Delta(view) => view.has_named_graph(local),
+            Carrier::Selected(selection) => match local {
+                LocalId::Base(id) => selection
+                    .ids
+                    .get(id.index())
+                    .is_some_and(|handle| selection.graphs.contains(handle)),
+                LocalId::Delta(_) => false,
+            },
+        }
+    }
     fn graphs(&self) -> impl Iterator<Item = LocalId> + '_ {
         self.native()
             .into_iter()
@@ -1981,6 +1996,20 @@ impl DatasetView for CompositeDatasetView {
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
+    }
+    /// Membership in [`named_graphs`](DatasetView::named_graphs), source by source:
+    /// a replacing placement names its one graph (or none, for the default graph),
+    /// and a preserving source is asked about its own local id for `graph`.
+    fn has_named_graph(&self, graph: Self::Id) -> bool {
+        self.sources[..self.user_sources]
+            .iter()
+            .enumerate()
+            .any(|(index, source)| match self.placement[index] {
+                SourceGraph::Preserve => self
+                    .local_id(index, graph)
+                    .is_some_and(|local| source.has_graph(local)),
+                SourceGraph::Replace(placed) => placed == Some(graph),
+            })
     }
 }
 

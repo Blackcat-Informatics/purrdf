@@ -857,6 +857,16 @@ impl DatasetView for DeltaDatasetView {
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
+
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): `graph` names a
+    /// graph of either layer, each asked through its own sorted graph set.
+    fn has_named_graph(&self, graph: Self::Id) -> bool {
+        self.local_id(graph, Layer::Base)
+            .is_some_and(|id| self.base.has_named_graph(id))
+            || self
+                .local_id(graph, Layer::Delta)
+                .is_some_and(|id| self.delta.has_named_graph(id))
+    }
 }
 
 /// A snapshot borrows two frozen dictionaries and its own copied delta — nothing
