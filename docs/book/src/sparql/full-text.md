@@ -11,7 +11,7 @@ store for ranked text search: the question becomes a property-function call in
 the SPARQL query that already holds the graph, in-process, over the same
 dataset, and the answer is byte-identical natively and on wasm32. It is BM25
 ranking, not a Lucene — Unicode case folding and word-boundary segmentation,
-no stemming, no stop-word lists, no query dialect (phrase and proximity compose
+explicit English stemming and costed dictionary analysis, no stop-word lists, no query dialect (phrase and proximity compose
 in SPARQL from the term-occurrence relation), fixed `k1`/`b`, and an in-memory
 index built once over a frozen dataset.
 
@@ -78,6 +78,7 @@ use purrdf::{SparqlRequest, TermValue};
 let config = TextIndexConfig::new(
     vec![TermValue::iri("https://example.org/note")],
     GraphSelector::Any,
+    purrdf::text::Analyzer::empty_lexicon(), // Explicitly choose grapheme fallback.
 )?;
 let index = Arc::new(TextIndex::from_dataset(&dataset, &config)?);
 

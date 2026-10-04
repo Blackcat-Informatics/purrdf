@@ -123,6 +123,10 @@ sync_file "$tmp/unicode-ecma-properties.rs" crates/jsonschema/src/ecma/property_
 sync_file "$tmp/unicode-ecma-ranges.rs" crates/jsonschema/src/ecma/unicode_ranges.rs
 sync_file "$tmp/html-entities.rs" crates/lex/src/html/entities.rs
 
+# Recompute every dictionary row, cost, collision report, canonical artifact and
+# expected identity from the frozen separately distributed source data.
+cargo run -p purrdf-text --example gen_lexicons --locked -- --check
+
 # The inventory above is now known-current. Prose elsewhere RESTATES its numbers
 # (and the conformance matrix's), and prose is not covered by any byte-diff — a
 # coverage table sat at `RDFS 14 / 18` for exactly that reason, three lines under

@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-02T01:01:23-06:00\n"
+"POT-Creation-Date: 2026-10-04T02:06:59-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -474,11 +474,12 @@ msgstr ""
 
 #: src/introduction.md:114
 msgid ""
-"BM25 ranking, not a Lucene: no stemming, no stop-word lists, no query "
-"dialect; an in-memory index built once over a frozen dataset."
+"Exact BM25F, explicit stemming/dictionaries and independent Han retrieval; "
+"no stop-word lists or query dialect; an in-memory index built once over a "
+"frozen dataset."
 msgstr ""
-"是 BM25 排名，不是 Lucene：没有词干提取，没有停用词表，没有查询方言；一个在冻"
-"结数据集上一次性构建的内存索引。"
+"精确 BM25F、显式词干提取与词典分析，以及独立的汉字检索；没有停用词表或查询方"
+"言；一个在冻结数据集上一次性构建的内存索引。"
 
 #: src/introduction.md:115
 msgid "Spatial predicates"
@@ -10547,17 +10548,18 @@ msgid ""
 "function call in the SPARQL query that already holds the graph, in-process, "
 "over the same dataset, and the answer is byte-identical natively and on "
 "wasm32. It is BM25 ranking, not a Lucene — Unicode case folding and word-"
-"boundary segmentation, no stemming, no stop-word lists, no query dialect "
-"(phrase and proximity compose in SPARQL from the term-occurrence relation), "
-"fixed `k1`/`b`, and an in-memory index built once over a frozen dataset."
+"boundary segmentation, explicit English stemming and costed dictionary "
+"analysis, no stop-word lists, no query dialect (phrase and proximity compose "
+"in SPARQL from the term-occurrence relation), fixed `k1`/`b`, and an in-"
+"memory index built once over a frozen dataset."
 msgstr ""
 "**它能取代什么，以及止步于何处。** 正是这一接口，让一个 RDF 项目可以舍弃它为"
 "带排名的文本检索而放在三元组存储旁边的 PostgreSQL `tsvector`/`tsquery`：问题"
 "变成了在已持有该图的 SPARQL 查询中的一次属性函数调用，在进程内、针对同一数据"
 "集执行，且答案在原生环境与 wasm32 上逐字节相同。它是 BM25 排名，而不是 Lucene"
-"——Unicode 大小写折叠与词边界切分，没有词干提取，没有停用词表，没有查询方言"
-"（短语与邻近查询在 SPARQL 中由词项出现关系组合而成），`k1`/`b` 固定，索引在内"
-"存中、针对冻结数据集只构建一次。"
+"——Unicode 大小写折叠与词边界切分、显式英语词干提取和带代价的词典分析，没有停"
+"用词表或查询方言（短语与邻近查询在 SPARQL 中由词项出现关系组合而成），`k1`/"
+"`b` 固定，索引在内存中、针对冻结数据集只构建一次。"
 
 #: src/sparql/full-text.md:18
 msgid ""
@@ -10693,19 +10695,23 @@ msgstr "// 索引哪些字面量：由调用方指名谓词。\n"
 msgid "\"https://example.org/note\""
 msgstr "\"https://example.org/note\""
 
-#: src/sparql/full-text.md:83
+#: src/sparql/full-text.md:81
+msgid "// Explicitly choose grapheme fallback.\n"
+msgstr ""
+
+#: src/sparql/full-text.md:84
 msgid "// Which IRIs a query calls the index by: the caller names those too.\n"
 msgstr "// 查询通过哪些 IRI 调用索引：同样由调用方指名。\n"
 
-#: src/sparql/full-text.md:87
+#: src/sparql/full-text.md:88
 msgid "\"https://example.org/pf/search\""
 msgstr "\"https://example.org/pf/search\""
 
-#: src/sparql/full-text.md:91
+#: src/sparql/full-text.md:92
 msgid "\"https://example.org/pf/occurs\""
 msgstr "\"https://example.org/pf/occurs\""
 
-#: src/sparql/full-text.md:93
+#: src/sparql/full-text.md:94
 msgid ""
 "// The environment a query text is read in: every registered IRI is claimed "
 "in\n"
@@ -10714,7 +10720,7 @@ msgstr ""
 "// 读取查询文本所处的环境：每个已注册的 IRI 都在谓语位置\n"
 "// 被认领，并依据这个注册表解析。\n"
 
-#: src/sparql/full-text.md:101
+#: src/sparql/full-text.md:102
 msgid ""
 "r#\"SELECT ?doc ?score ?rank WHERE {\n"
 "                    ?doc <https://example.org/pf/search> ( \"quick brown\" ?"
@@ -10726,7 +10732,7 @@ msgstr ""
 "score ?rank ?lang ?matched )\n"
 "                  } LIMIT 3\"#"
 
-#: src/sparql/full-text.md:111
+#: src/sparql/full-text.md:112
 msgid ""
 "A registered IRI is recognized in predicate position exactly, so no parser "
 "option is needed to reach it. An IRI a query names that is declared through "
@@ -10737,7 +10743,7 @@ msgstr ""
 "指名的某个 IRI 已通过 `ParserOptions` 声明但未注册，则会以点名该 IRI 的方式硬"
 "失败；两者皆非的 IRI 仍是普通的三元组模式。"
 
-#: src/sparql/full-text.md:116
+#: src/sparql/full-text.md:117
 msgid ""
 "This is a Rust-host seam. The index and its relations are host closures, so "
 "they do not cross the Python, WebAssembly or C boundary — only the data-"
@@ -10749,11 +10755,11 @@ msgstr ""
 "WebAssembly 或 C 边界——只有数据形态的属性函数（冻结表、以图为后端的表以及路径"
 "见证）才会。参见[从其他宿主到达扩展](querying.md#从其他宿主到达扩展)。"
 
-#: src/sparql/full-text.md:121
+#: src/sparql/full-text.md:122
 msgid "Every score is exact, and identical on every target"
 msgstr "每个分数都是精确的，且在每个目标上都相同"
 
-#: src/sparql/full-text.md:123
+#: src/sparql/full-text.md:124
 msgid ""
 "Ranking is done entirely in base-10 fixed-point integer arithmetic (`i128`, "
 "twelve fractional digits). No floating-point value enters the crate: its "
@@ -10762,7 +10768,7 @@ msgstr ""
 "排名完全以十进制定点整数运算（`i128`，十二位小数）完成。没有任何浮点值进入该 "
 "crate：其根模块禁用了 `clippy::float_arithmetic`，因此也不可能有。"
 
-#: src/sparql/full-text.md:127
+#: src/sparql/full-text.md:128
 msgid ""
 "That is a correctness requirement, not a preference. BM25 needs a natural "
 "logarithm, and a libm `ln` may differ by a unit in the last place between "
@@ -10785,7 +10791,7 @@ msgstr ""
 "`#[wasm_bindgen_test]` 的同一个测试体固定，因此 `make wasm-test` 会在 wasm32 "
 "上按 `cargo test` 在原生环境中断言的同一组预期执行它。"
 
-#: src/sparql/full-text.md:139
+#: src/sparql/full-text.md:140
 msgid ""
 "The BM25 constants `k1 = 1.2` and `b = 0.75` are crate constants rather than "
 "caller parameters. PurRDF is a carrier, and optionality that changes "
@@ -10796,11 +10802,11 @@ msgstr ""
 "载体，禁止按使用方改变语义的可选项：两个调用方不得从同一索引、同一检索词得到"
 "不同的排名。"
 
-#: src/sparql/full-text.md:144
+#: src/sparql/full-text.md:145
 msgid "Ordering, and the idioms that reproduce it"
 msgstr "排序，以及复现它的惯用写法"
 
-#: src/sparql/full-text.md:146
+#: src/sparql/full-text.md:147
 msgid ""
 "Corpus statistics are computed per `(graph, language)` partition, so a score "
 "is a number relative to one corpus and `?rank` is a position within that "
@@ -10818,11 +10824,11 @@ msgstr ""
 "的索引之间可复现。想要一个统一排名列表的查询，应绑定 `?lang`（并通过选择器绑"
 "定 `?graph`），或构建一个单分区索引。"
 
-#: src/sparql/full-text.md:155
+#: src/sparql/full-text.md:156
 msgid "Two consequences worth knowing:"
 msgstr "有两个值得了解的推论："
 
-#: src/sparql/full-text.md:157
+#: src/sparql/full-text.md:158
 msgid ""
 "**Bare `LIMIT k` is top-k.** Emission order _is_ rank order, so the "
 "evaluator's row-ceiling licence applies and the relation stops after `k` "
@@ -10835,7 +10841,7 @@ msgstr ""
 "`ORDER BY` 加 `LIMIT` 没有 governor（执行调控器）可以许可的、经认证的下界——而"
 "且这里的 `ORDER BY` 本来就是多余的。"
 
-#: src/sparql/full-text.md:162
+#: src/sparql/full-text.md:163
 msgid ""
 "**`ORDER BY ?rank` is the reproducing idiom.** A score reaches the consumer "
 "as a decimal of fixed width, so two rows can report the same `?score` while "
@@ -10846,11 +10852,11 @@ msgstr ""
 "方，因此两行可能报告相同的 `?score`，却带有不同的 `?rank`；所以 `ORDER BY "
 "DESC(?score)` 可能与精确的内部顺序不一致，而 `?rank` 不会。"
 
-#: src/sparql/full-text.md:167
+#: src/sparql/full-text.md:168
 msgid "RDF 1.2 first class"
 msgstr "RDF 1.2 一等支持"
 
-#: src/sparql/full-text.md:169
+#: src/sparql/full-text.md:170
 msgid ""
 "`RdfDataset::quads()` returns only the asserted triple table; annotations "
 "live in a separate side table. The index reads both layers, so text carried "
@@ -10864,11 +10870,11 @@ msgstr ""
 "体化节点作为文档主语。只读取已断言层的索引将索引零个注解字面量，并且什么也不"
 "报告——该 crate 的测试恰恰防范这一点。"
 
-#: src/sparql/full-text.md:175
+#: src/sparql/full-text.md:176
 msgid "Stated limits"
 msgstr "明确的限制"
 
-#: src/sparql/full-text.md:177
+#: src/sparql/full-text.md:178
 msgid ""
 "Document ids are a function of content _except_ through blank-node labels, "
 "which are a parsing artifact: two isomorphic datasets with different labels "
@@ -10877,7 +10883,7 @@ msgstr ""
 "文档 id 是内容的函数，*但*空节点标签*除外*——标签是解析的产物：两个同构但标签"
 "不同的数据集会产生不同的索引指纹。"
 
-#: src/sparql/full-text.md:180
+#: src/sparql/full-text.md:181
 msgid ""
 "The index is in-memory and built over a frozen dataset. `verify_binding` "
 "checks that the index a query runs against was built over the dataset in "
@@ -10888,7 +10894,7 @@ msgstr ""
 "于眼前这个数据集构建，从而堵住一个静默通道：过时的索引输出的文档在连接回数据"
 "时得到零行。"
 
-#: src/sparql/full-text.md:185
+#: src/sparql/full-text.md:186
 msgid ""
 "The scoring design record — including the fixed-point logarithm and the "
 "Unicode table versions folded into the index fingerprint — is [`docs/design/"

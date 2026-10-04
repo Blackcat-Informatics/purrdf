@@ -210,7 +210,9 @@ class PublicationTests(unittest.TestCase):
         self.assertLess(events.index("create"), events.index("upload"))
         self.assertLess(events.index("upload"), events.index("download"))
         self.assertLess(events.index("download"), events.index("publish"))
-        self.assertEqual(events.count("download"), 8)
+        self.assertEqual(
+            events.count("download"), 2 * len(publisher.asset_names(VERSION))
+        )
 
     def test_existing_draft_is_reused_after_failed_upload(self):
         self.github.fail_at = "upload"
@@ -239,7 +241,7 @@ class PublicationTests(unittest.TestCase):
     def test_missing_immutable_assets_fail_without_any_mutation(self):
         self.published()
         self.github.record["assets"] = []
-        with self.assertRaisesRegex(publisher.ReleaseError, "exactly four"):
+        with self.assertRaisesRegex(publisher.ReleaseError, "exactly five"):
             self.publish()
         self.assertEqual(set(self.github.events), {"tag", "read"})
 
@@ -373,7 +375,9 @@ class PublicationTests(unittest.TestCase):
         self.transport_publish(transport)
         self.assertTrue(transport.record["immutable"])
         self.assertEqual(transport.events.count("create"), 1)
-        self.assertEqual(transport.events.count("download"), 8)
+        self.assertEqual(
+            transport.events.count("download"), 2 * len(publisher.asset_names(VERSION))
+        )
         self.assertEqual(transport.paths.count("releases?per_page=100&page=1"), 3)
         self.assertEqual(transport.paths.count("releases/12"), 3)
         self.assertLess(
@@ -767,4 +771,25 @@ class TransportTests(unittest.TestCase):
             workflow.split("name: license-evidence-cargo-c", 1)[1].split("- name:", 1)[
                 0
             ],
+        )
+
+
+class LexiconArchiveTests(unittest.TestCase):
+    def test_reproducible_archive_and_exact_inventory_refusals(self):
+        spec = importlib.util.spec_from_file_location(
+            "lexicon_archive", Path(__file__).with_name("package-text-lexicons.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.self_test()
+
+    def test_release_builds_and_retains_the_separate_data_archive(self):
+        workflow = (
+            Path(__file__).resolve().parent.parent
+            / ".github/workflows/release-cargo.yaml"
+        ).read_text()
+        self.assertIn("python3 scripts/package-text-lexicons.py", workflow)
+        self.assertIn("target/dist/purrdf-text-lexicons-*.tar.gz", workflow)
+        self.assertIn(
+            f"purrdf-text-lexicons-{VERSION}.tar.gz", publisher.asset_names(VERSION)
         )
