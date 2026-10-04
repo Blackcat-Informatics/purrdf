@@ -6353,6 +6353,9 @@ mod tests {
             "SELECT (SUM(?o) / COUNT(?o) AS ?avg) WHERE { ?s ?p ?o }",
             "SELECT ?s (EXISTS { ?s ?q ?z } AS ?e) WHERE { ?s ?p ?o } GROUP BY ?s",
             "SELECT (STR(?o) AS ?t) WHERE { ?s ?p ?o }",
+            // A variable the WHERE clause never binds is a constant to the grouping:
+            // a SHACL-SPARQL pre-bound `$this` or a request substitution.
+            "SELECT (IF(sameTerm(SAMPLE(?x), $this), ?k, 0) AS ?v) WHERE { ?x ?p ?k } GROUP BY ?k",
         ] {
             assert!(try_parse(accepted).is_ok(), "{accepted}");
         }

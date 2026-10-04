@@ -54,18 +54,18 @@ const AGGREGATE_HERE: &str = "aggregate in this position";
 /// replaced by, and the aggregation it stands for.
 type Lifted = (Variable, AggregateExpression);
 
-/// The first variable `expr` reads, outside any `EXISTS` body, that is not in
-/// `readable` — the grouping constraint's witness for a SELECT expression of an
+/// The first variable `expr` reads, outside any `EXISTS` body, that `readable`
+/// rejects — the grouping constraint's witness for a SELECT expression of an
 /// aggregate query — or `None` when every variable it reads is readable.
-fn first_projection_read<'e>(
-    expr: &'e Expression,
-    readable: &std::collections::HashSet<&Variable, FixedState>,
-) -> Option<&'e Variable> {
+fn first_projection_read(
+    expr: &Expression,
+    readable: impl Fn(&Variable) -> bool,
+) -> Option<&Variable> {
     use crate::walk::NodeRef;
     let mut pending = vec![NodeRef::Expr(expr)];
     while let Some(node) = pending.pop() {
         if let NodeRef::Expr(Expression::Variable(v) | Expression::Bound(v)) = node
-            && !readable.contains(v)
+            && !readable(v)
         {
             return Some(v);
         }
@@ -2250,11 +2250,23 @@ impl Parser<'_, '_> {
                 // does not make the variables in it keys, so `SELECT ((?a + ?b) AS ?s)
                 // … GROUP BY (?a + ?b)` is refused (vendored W3C `aggregates/agg08`,
                 // `agg11`). An `EXISTS` body is not read: a variable that occurs only
-                // there is local to it.
+                // there is local to it. Only a variable the WHERE clause can bind is
+                // judged: one it never binds is unbound in every group, or is supplied
+                // from outside the query text before evaluation — a SHACL-SPARQL
+                // pre-bound `$this`, or a request substitution — and is a constant
+                // there, never a per-row value the grouping would have to collapse.
+                let bindable: std::collections::HashSet<Variable, FixedState> =
+                    if select_exprs.is_empty() {
+                        std::collections::HashSet::default()
+                    } else {
+                        visible_variables(&where_pat).into_iter().collect()
+                    };
                 let mut readable: std::collections::HashSet<&Variable, FixedState> = group_vars;
                 readable.extend(aggregates.iter().map(|(v, _)| v));
                 for (target, expr) in &select_exprs {
-                    if let Some(var) = first_projection_read(expr, &readable) {
+                    if let Some(var) = first_projection_read(expr, |v| {
+                        readable.contains(v) || !bindable.contains(v)
+                    }) {
                         return Err(ParseError::syntax(
                             format!(
                                 "SELECT expression for ?{} reads ?{}, which is neither a \
