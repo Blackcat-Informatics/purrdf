@@ -42,8 +42,12 @@ fn index_of(rows: &[(&str, &str, Option<&str>)]) -> TextIndex {
     let dataset: Arc<RdfDataset> = builder.freeze().expect("the fixture must validate");
     TextIndex::from_dataset(
         &*dataset,
-        &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-            .expect("the fixture configuration is well formed"),
+        &TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Any,
+            Analyzer::empty_lexicon(),
+        )
+        .expect("the fixture configuration is well formed"),
     )
     .expect("the fixture index must build")
 }
@@ -143,8 +147,15 @@ fn bm25_matches_a_hand_computed_golden() {
     assert_eq!(index.document_frequency(&plain(), "alpha"), 2);
     assert_eq!(index.document_frequency(&plain(), "beta"), 2);
 
-    let rows = rank_partition(&index, &plain(), &Analyzer::new().terms("alpha beta"), None)
-        .expect("the fixture scores without overflowing");
+    let rows = rank_partition(
+        &index,
+        &plain(),
+        &Analyzer::empty_lexicon()
+            .terms("alpha beta")
+            .expect("valid text analysis"),
+        None,
+    )
+    .expect("the fixture scores without overflowing");
 
     assert_eq!(rows.len(), 2, "only two documents hold a needle term");
     assert_eq!(rows[0].document, 0);
@@ -161,7 +172,14 @@ fn bm25_matches_a_hand_computed_golden() {
 #[test]
 fn each_term_contribution_matches_the_hand_computation() {
     let index = golden_index();
-    let rows = explain(&index, 0, &Analyzer::new().terms("alpha beta")).expect("document 0 exists");
+    let rows = explain(
+        &index,
+        0,
+        &Analyzer::empty_lexicon()
+            .terms("alpha beta")
+            .expect("valid text analysis"),
+    )
+    .expect("document 0 exists");
 
     assert_eq!(rows.len(), 2, "two distinct needle terms");
     assert_eq!(rows[0].term, "alpha", "terms come back in sorted order");
@@ -200,8 +218,15 @@ fn equal_scores_are_broken_by_document_id_deterministically() {
     let backward = tie_index([subjects[1], subjects[0]]);
 
     for index in [&forward, &backward] {
-        let rows = rank_partition(index, &plain(), &Analyzer::new().terms("alpha"), None)
-            .expect("the fixture scores without overflowing");
+        let rows = rank_partition(
+            index,
+            &plain(),
+            &Analyzer::empty_lexicon()
+                .terms("alpha")
+                .expect("valid text analysis"),
+            None,
+        )
+        .expect("the fixture scores without overflowing");
         assert_eq!(rows.len(), 2);
         assert_eq!(
             rows[0].score, rows[1].score,
@@ -252,8 +277,15 @@ fn order_by_score_and_order_by_rank_can_disagree_under_rounding() {
     }
 
     let tied = tie_index(["https://example.org/a", "https://example.org/b"]);
-    let rows =
-        rank_partition(&tied, &plain(), &Analyzer::new().terms("alpha"), None).expect("scores");
+    let rows = rank_partition(
+        &tied,
+        &plain(),
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
+        None,
+    )
+    .expect("scores");
     assert_eq!(
         rows[0].score.to_decimal_lexical(),
         rows[1].score.to_decimal_lexical(),
@@ -278,7 +310,9 @@ fn order_by_score_and_order_by_rank_can_disagree_under_rounding() {
     let rows = rank_partition(
         &golden,
         &plain(),
-        &Analyzer::new().terms("alpha beta"),
+        &Analyzer::empty_lexicon()
+            .terms("alpha beta")
+            .expect("valid text analysis"),
         None,
     )
     .expect("scores");
@@ -314,7 +348,9 @@ fn rank_is_per_partition_not_global() {
 
     let rows = select(
         &index,
-        &Analyzer::new().terms("alpha"),
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
         &everything(),
         None,
         None,
@@ -352,7 +388,9 @@ fn a_partition_filter_selects_without_changing_any_rank() {
     ]);
     let everything_rows = select(
         &index,
-        &Analyzer::new().terms("alpha"),
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
         &everything(),
         None,
         None,
@@ -362,7 +400,9 @@ fn a_partition_filter_selects_without_changing_any_rank() {
     let english = everything().with_language(Constraint::Exactly("en".to_owned()));
     let english_rows = select(
         &index,
-        &Analyzer::new().terms("alpha"),
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
         &english,
         None,
         None,
@@ -412,18 +452,44 @@ fn statistics_are_not_pooled_across_partitions() {
     assert_eq!(index.document_frequency(&english, "alpha"), 1);
     assert_eq!(index.document_frequency(&french, "alpha"), 3);
 
-    let english_document = rank_partition(&index, &english, &Analyzer::new().terms("alpha"), None)
-        .expect("scores")[0]
+    let english_document = rank_partition(
+        &index,
+        &english,
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
+        None,
+    )
+    .expect("scores")[0]
         .document;
-    let french_document = rank_partition(&index, &french, &Analyzer::new().terms("alpha"), None)
-        .expect("scores")[0]
+    let french_document = rank_partition(
+        &index,
+        &french,
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
+        None,
+    )
+    .expect("scores")[0]
         .document;
 
-    let english_idf = explain(&index, english_document, &Analyzer::new().terms("alpha"))
-        .expect("explains")[0]
+    let english_idf = explain(
+        &index,
+        english_document,
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
+    )
+    .expect("explains")[0]
         .inverse_document_frequency;
-    let french_idf = explain(&index, french_document, &Analyzer::new().terms("alpha"))
-        .expect("explains")[0]
+    let french_idf = explain(
+        &index,
+        french_document,
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
+    )
+    .expect("explains")[0]
         .inverse_document_frequency;
 
     assert_ne!(
@@ -509,7 +575,9 @@ fn spread_index() -> TextIndex {
 #[test]
 fn bounded_heap_equals_the_full_sort_prefix() {
     let index = spread_index();
-    let query = Analyzer::new().terms("alpha beta gamma");
+    let query = Analyzer::empty_lexicon()
+        .terms("alpha beta gamma")
+        .expect("valid text analysis");
     let full = select(&index, &query, &everything(), None, None).expect("scores");
     assert_eq!(
         full.len(),
@@ -544,7 +612,9 @@ fn bounded_heap_equals_the_full_sort_prefix() {
 #[test]
 fn a_bound_rank_selects_that_rank() {
     let index = golden_index();
-    let query = Analyzer::new().terms("alpha beta");
+    let query = Analyzer::empty_lexicon()
+        .terms("alpha beta")
+        .expect("valid text analysis");
 
     let first = select(&index, &query, &everything(), None, Some(1)).expect("scores");
     assert_eq!(first.len(), 1);
@@ -564,7 +634,9 @@ fn a_bound_rank_selects_that_rank() {
 #[test]
 fn an_out_of_range_rank_yields_nothing() {
     let index = golden_index();
-    let query = Analyzer::new().terms("alpha beta");
+    let query = Analyzer::empty_lexicon()
+        .terms("alpha beta")
+        .expect("valid text analysis");
     for rank in [0, 3, 99] {
         assert!(
             select(&index, &query, &everything(), None, Some(rank))
@@ -586,7 +658,9 @@ fn a_bound_rank_applies_to_every_admitted_partition() {
     ]);
     let rows = select(
         &index,
-        &Analyzer::new().terms("alpha"),
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
         &everything(),
         None,
         Some(1),
@@ -600,7 +674,9 @@ fn a_bound_rank_applies_to_every_admitted_partition() {
 
     let ceiling = select(
         &index,
-        &Analyzer::new().terms("alpha"),
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
         &everything(),
         Some(1),
         Some(1),
@@ -626,7 +702,9 @@ fn a_bound_rank_applies_to_every_admitted_partition() {
 #[test]
 fn explain_contributions_sum_exactly_to_the_score() {
     let index = spread_index();
-    let query = Analyzer::new().terms("alpha beta gamma");
+    let query = Analyzer::empty_lexicon()
+        .terms("alpha beta gamma")
+        .expect("valid text analysis");
     let rows = select(&index, &query, &everything(), None, None).expect("scores");
     assert_eq!(
         rows.len(),
@@ -664,8 +742,14 @@ fn explain_contributions_sum_exactly_to_the_score() {
 #[test]
 fn explain_reports_a_term_the_document_does_not_hold() {
     let index = golden_index();
-    let rows =
-        explain(&index, 0, &Analyzer::new().terms("alpha omicron")).expect("document 0 exists");
+    let rows = explain(
+        &index,
+        0,
+        &Analyzer::empty_lexicon()
+            .terms("alpha omicron")
+            .expect("valid text analysis"),
+    )
+    .expect("document 0 exists");
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].term, "omicron");
     assert_eq!(rows[1].term_frequency, 0);
@@ -679,8 +763,14 @@ fn explain_reports_a_term_the_document_does_not_hold() {
 #[test]
 fn explaining_an_unknown_document_is_a_data_error() {
     let index = golden_index();
-    let error = explain(&index, 999, &Analyzer::new().terms("alpha"))
-        .expect_err("there is no document 999");
+    let error = explain(
+        &index,
+        999,
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
+    )
+    .expect_err("there is no document 999");
     assert!(matches!(error, TextError::Data(_)), "got {error:?}");
 
     // One past the end is the boundary that matters, and 999 is nowhere near
@@ -688,12 +778,24 @@ fn explaining_an_unknown_document_is_a_data_error() {
     // every partition and this test would still pass. So the neighbouring valid
     // case is the highest id the index holds, and the first id past it.
     let last = u32::try_from(index.document_count() - 1).expect("a small fixture");
-    explain(&index, last, &Analyzer::new().terms("alpha"))
-        .unwrap_or_else(|error| panic!("document {last} is the last one the index holds: {error}"));
+    explain(
+        &index,
+        last,
+        &Analyzer::empty_lexicon()
+            .terms("alpha")
+            .expect("valid text analysis"),
+    )
+    .unwrap_or_else(|error| panic!("document {last} is the last one the index holds: {error}"));
     let past = last + 1;
     assert!(
         matches!(
-            explain(&index, past, &Analyzer::new().terms("alpha")),
+            explain(
+                &index,
+                past,
+                &Analyzer::empty_lexicon()
+                    .terms("alpha")
+                    .expect("valid text analysis")
+            ),
             Err(TextError::Data(_))
         ),
         "document {past} is one past the end and must be refused"
@@ -708,12 +810,21 @@ fn explaining_an_unknown_document_is_a_data_error() {
 fn matched_counts_distinct_needle_terms_present() {
     let index = golden_index();
 
-    let plain_rows = rank_partition(&index, &plain(), &Analyzer::new().terms("alpha beta"), None)
-        .expect("scores");
+    let plain_rows = rank_partition(
+        &index,
+        &plain(),
+        &Analyzer::empty_lexicon()
+            .terms("alpha beta")
+            .expect("valid text analysis"),
+        None,
+    )
+    .expect("scores");
     let padded = rank_partition(
         &index,
         &plain(),
-        &Analyzer::new().terms("alpha beta alpha omicron"),
+        &Analyzer::empty_lexicon()
+            .terms("alpha beta alpha omicron")
+            .expect("valid text analysis"),
         None,
     )
     .expect("scores");
@@ -729,8 +840,15 @@ fn matched_counts_distinct_needle_terms_present() {
     );
 
     // A needle only one of the two documents holds.
-    let single =
-        rank_partition(&index, &plain(), &Analyzer::new().terms("delta"), None).expect("scores");
+    let single = rank_partition(
+        &index,
+        &plain(),
+        &Analyzer::empty_lexicon()
+            .terms("delta")
+            .expect("valid text analysis"),
+        None,
+    )
+    .expect("scores");
     assert_eq!(single.len(), 1);
     assert_eq!(single[0].document, 1);
     assert_eq!(single[0].matched, 1);
@@ -749,7 +867,9 @@ fn matched_counts_distinct_needle_terms_present() {
 #[test]
 fn a_needle_analyzing_to_zero_terms() {
     let index = golden_index();
-    let empty = Analyzer::new().terms("--- ... !!!");
+    let empty = Analyzer::empty_lexicon()
+        .terms("--- ... !!!")
+        .expect("valid text analysis");
     assert!(
         empty.is_empty(),
         "the fixture needle must analyze to nothing"
@@ -781,8 +901,15 @@ fn an_unknown_partition_scores_nothing() {
     let index = golden_index();
     let absent = PartitionKey::new(None, Some("kl".to_owned()));
     assert_eq!(
-        rank_partition(&index, &absent, &Analyzer::new().terms("alpha"), None)
-            .expect("an absent partition is not a failure"),
+        rank_partition(
+            &index,
+            &absent,
+            &Analyzer::empty_lexicon()
+                .terms("alpha")
+                .expect("valid text analysis"),
+            None
+        )
+        .expect("an absent partition is not a failure"),
         Vec::new(),
         "a partition the index does not hold contains no document, so it ranks none — \
          the true answer rather than a refusal"
@@ -798,7 +925,9 @@ fn an_unknown_partition_scores_nothing() {
 #[test]
 fn score_is_a_pure_function_of_index_and_needle() {
     let index = spread_index();
-    let query = Analyzer::new().terms("alpha beta gamma");
+    let query = Analyzer::empty_lexicon()
+        .terms("alpha beta gamma")
+        .expect("valid text analysis");
     let first = select(&index, &query, &everything(), None, None).expect("scores");
     let rendered: Vec<(u32, u32, u32, String)> = first
         .iter()
@@ -845,7 +974,9 @@ fn two_independently_built_indexes_rank_identically() {
     let backward = index_of(&reversed);
 
     assert_eq!(forward.fingerprint(), backward.fingerprint());
-    let query = Analyzer::new().terms("alpha beta");
+    let query = Analyzer::empty_lexicon()
+        .terms("alpha beta")
+        .expect("valid text analysis");
     let ranked = select(&forward, &query, &everything(), None, None).expect("scores");
     // Two empty answers agree, and equal fingerprints do not imply retrieval,
     // so the shape of the answer is pinned before the two are compared.
@@ -866,13 +997,17 @@ fn two_independently_built_indexes_rank_identically() {
 /// Every identity a text index publishes is frozen over the golden fixture: the index
 /// fingerprint, the source fingerprint, the analyzer fingerprint and the term-sequence
 /// fingerprint. Each is recorded by callers, so a moved value is a changed identity.
+/// The explicit empty-lexicon profile now binds scoped accents, projection bounds,
+/// control and emoji laws, and auxiliary retrieval parameters. Its analyzer and
+/// index identities therefore differ from the former implicit unit analyzer;
+/// the unchanged RDF source and term-sequence identities remain frozen.
 #[test]
 fn the_published_text_identities_are_frozen() {
     let hex = |digest: [u8; 32]| purrdf_hash::hex::Lower(&digest).to_string();
     let index = golden_index();
     assert_eq!(
         hex(index.fingerprint()),
-        "306c41a867ec5c307143a22c3b9333f442b90a88ecbf4fd8c0ea4fcd4fa9d85b",
+        "e7c3f0c0a5d200448f816f0e1d70b0abc4c993f46046a7004d516c2ca328863e",
         "the index fingerprint"
     );
     assert_eq!(
@@ -882,7 +1017,7 @@ fn the_published_text_identities_are_frozen() {
     );
     assert_eq!(
         hex(index.analyzer_fingerprint()),
-        "6e1a59a6f3920ed993b019ea436ce99a444b0a614c6a042fded8988a8c7b7b74",
+        "6b97e57edd41a2fc8c8fb6192d41295a81a48e9501471c55724df366d9e8eb02",
         "the analyzer fingerprint"
     );
     let terms = [

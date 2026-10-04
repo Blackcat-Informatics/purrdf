@@ -149,8 +149,12 @@ fn dataset_of(rows: &[(&str, &str, Option<&str>)]) -> Arc<RdfDataset> {
 /// is the condition `TextSearchRelation::ranked_declaration` requires before it
 /// will claim a ranked order.
 fn text_config() -> TextIndexConfig {
-    TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("the fixture configuration is well formed")
+    TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .expect("the fixture configuration is well formed")
 }
 
 /// A real index over the real dataset.

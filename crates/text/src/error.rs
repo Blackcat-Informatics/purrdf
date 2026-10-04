@@ -19,6 +19,8 @@
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TextError {
+    /// Exact substring admission or resource refusal, with generation and counters.
+    Substring(crate::surface::SubstringRefusal),
     /// Explicit phonetic-domain or pronunciation refusal.
     Phonetic(crate::phonetic::PhoneticRefusal),
     /// The caller's configuration is not usable as written — an absent
@@ -29,6 +31,8 @@ pub enum TextError {
     /// Field parameters and predicate routing are validated by the immutable
     /// [`crate::RankingProfile`], whose identity carries every scoring choice.
     Config(String),
+    /// Strict HTML character-reference parse errors with original source ranges.
+    Html(Vec<purrdf_lex::html::Diagnostic>),
 
     /// The input data cannot be indexed or queried as given — a literal whose
     /// datatype does not resolve to an IRI, a corpus larger than the `u32`
@@ -80,7 +84,9 @@ purrdf_lex::constructors! {
 impl core::fmt::Display for TextError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Substring(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Phonetic(refusal) => core::fmt::Display::fmt(refusal, f),
+            Self::Html(diagnostics) => write!(f, "HTML reference errors: {diagnostics:?}"),
             Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
             Self::SourceRead(msg) => write!(f, "text-index source read error: {msg}"),
@@ -93,6 +99,7 @@ impl core::fmt::Display for TextError {
 impl std::error::Error for TextError {}
 
 purrdf_lex::variant_from!(TextError {
+    Substring(crate::surface::SubstringRefusal),
     Phonetic(crate::phonetic::PhoneticRefusal),
 });
 
@@ -116,7 +123,11 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
     ///   dataset, so neither borrows those labels.
     fn from(err: TextError) -> Self {
         match err {
+            TextError::Substring(refusal) => Self::data(refusal.to_string()),
             TextError::Phonetic(refusal) => Self::data(refusal.to_string()),
+            TextError::Html(diagnostics) => {
+                Self::data(format!("HTML reference errors: {diagnostics:?}"))
+            }
             TextError::Config(msg) => Self::config(msg),
             TextError::Data(msg) => Self::data(msg),
             TextError::SourceRead(msg) => Self::SourceRead(msg),
@@ -169,7 +180,7 @@ mod tests {
         ] {
             let rendered = err.to_string();
             let detail = match &err {
-                TextError::Phonetic(_) => {
+                TextError::Html(_) | TextError::Substring(_) | TextError::Phonetic(_) => {
                     unreachable!("test uses string diagnostic variants")
                 }
                 TextError::Config(m)

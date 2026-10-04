@@ -150,8 +150,12 @@ fn index_of(dataset: &RdfDataset) -> Arc<TextIndex> {
     Arc::new(
         TextIndex::from_dataset(
             dataset,
-            &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-                .expect("the fixture configuration is well formed"),
+            &TextIndexConfig::new(
+                vec![TermValue::iri(NOTE)],
+                GraphSelector::Any,
+                purrdf_text::Analyzer::empty_lexicon(),
+            )
+            .expect("the fixture configuration is well formed"),
         )
         .expect("the fixture indexes"),
     )

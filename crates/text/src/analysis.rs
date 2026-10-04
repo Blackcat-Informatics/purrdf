@@ -1,151 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The analysis pipeline: the one tokenizer both sides of a search agree on.
-//!
-//! Every literal that enters the index and every needle that enters a query is
-//! put through [`Analyzer`], and through nothing else. That is not a tidiness
-//! preference. A retrieval engine matches a query's terms against an index's
-//! terms by equality, so if the two sides tokenize differently — a different
-//! normal form, a different case rule, a different word boundary — the
-//! comparison is between two vocabularies that merely resemble each other, and
-//! the failure mode is silence: correct-looking queries that return nothing,
-//! with nothing anywhere reporting an error. One pipeline, used identically at
-//! both ends, is what makes a match mean what it says.
-//!
-//! # Compatibility case folding, not lowercasing
-//!
-//! The pipeline folds and normalizes before it segments. The choice of *which*
-//! fold and *which* normal form is the difference between an index that
-//! retrieves and one that quietly does not:
-//!
-//! * `str::to_lowercase` is **lowercasing**, which is not case folding. It
-//!   leaves `ß` as `ß`, so `STRASSE` lowercases to `strasse` while `Straße`
-//!   lowercases to `straße`: two terms, no match, no diagnostic. Full case
-//!   folding (Unicode `CaseFolding.txt`, the `C` and `F` mappings) maps both to
-//!   `strasse`.
-//! * NFC alone is **canonical** normalization, which by construction preserves
-//!   compatibility distinctions. Fullwidth `ｒｕｓｔ` stays distinct from
-//!   `rust`, and the ligature `ﬁ` stays distinct from `fi`. Compatibility
-//!   normalization is what collapses them.
-//!
-//! Compatibility normalization plus full case folding is the Unicode standard's
-//! own answer for search and identifier matching (`UAX #31`, `UTS #18`), and it
-//! is what this module implements.
-//!
-//! # The exact fold, spelled out
-//!
-//! The form is composed from the full case fold (Unicode `CaseFolding.txt`,
-//! statuses `C` and `F`) and the normalization forms of `UAX #15`, both from
-//! [`crate::unicode`], in the order the Unicode Standard defines compatibility
-//! caseless matching in (`UAX #21`, "Default Case Algorithms", definition
-//! D146):
-//!
-//! ```text
-//! NFKD( fold( NFKD( fold( NFD( x ) ) ) ) )
-//! ```
-//!
-//! and then one final **NFC** recomposition, so a token is a composed string
-//! rather than a base character trailed by loose combining marks.
-//!
-//! That last step cannot merge two terms the standard keeps apart. NFKD output
-//! is already in canonical decomposed form, and NFC restricted to canonically
-//! decomposed input is injective — decomposing an NFC result returns the input
-//! it was composed from — so appending NFC preserves the equivalence class
-//! exactly: two strings analyze to the same token text if and only if they are
-//! compatibility caseless matches of one another, and a test asserts that over
-//! the equivalence classes of a fixed sample.
-//!
-//! # Fold first, then segment
-//!
-//! Normalization runs over the whole input **before** segmentation, never after
-//! and never per token. A canonically decomposed `é` is `e` followed by
-//! `U+0301 COMBINING ACUTE ACCENT`, and a lone combining mark is not
-//! `Alphabetic`; the word-boundary rules of `UAX #29` would split it off the
-//! base character it modifies, so the decomposed spelling of a word would
-//! segment into different tokens than the precomposed spelling of the same
-//! word. Normalizing first removes the question.
-//!
-//! # How this pipeline segments CJK, as measured
-//!
-//! `UAX #29` assigns Han ideographs and Hiragana the `Word_Break` property
-//! value `Other`, and rule WB999 breaks between any pair of characters not
-//! joined by an earlier rule. The observable consequence, asserted by this
-//! crate's tests rather than assumed:
-//!
-//! * **Han** segments to one token per ideograph — `中文全文検索` yields
-//!   `中`, `文`, `全`, `文`, `検`, `索`, not one token for the phrase.
-//! * **Hiragana** likewise segments one token per character.
-//! * **Katakana** does not: it carries `Word_Break = Katakana` and rule WB13
-//!   keeps a katakana run together, so `サンドイッチ` is a single token.
-//! * **Hangul syllables** are `ALetter`, so Korean — which is written with
-//!   spaces — segments into whole words.
-//! * None of this is discarded by the word filter. It keeps any segment
-//!   containing an alphanumeric character ([`crate::unicode::is_alphanumeric`]:
-//!   `Alphabetic`, or a number), and Han, Kana and Hangul are all
-//!   `Alphabetic`.
-//!
-//! Because unspaced CJK arrives as a stream of one-character tokens, expanding
-//! *each token* into bigrams would do nothing at all: every token is already a
-//! single character. Bigrams have to be formed **across adjacent tokens**, so
-//! this module segments with [`crate::unicode::word_indices`], which carries the
-//! byte offsets that say whether two tokens touched in the source. A maximal run of adjacent all-CJK tokens is
-//! rejoined and expanded into overlapping character bigrams; `中文` and `中 文`
-//! therefore analyze differently, which is the point.
-//!
-//! Bigrams are the standard answer to retrieval over a script with no spaces.
-//! Indexing unigrams would reduce a phrase query to a bag of characters —
-//! `全文` would match any document containing `全` and `文` anywhere — while a
-//! dictionary segmenter would need a dictionary, which is per-language data
-//! this crate does not have and would make results depend on its vintage. A
-//! run of exactly one character has no bigram to form and is emitted whole, so
-//! a single ideograph is still retrievable.
-//!
-//! # Positions
-//!
-//! Every emitted token carries its zero-based ordinal in the stream, bigrams
-//! included and consecutively numbered. Positions are what make phrase and
-//! proximity matching expressible downstream: two term occurrences bound to
-//! `?p1` and `?p2` are adjacent exactly when `FILTER(?p2 = ?p1 + 1)` holds.
+//! One fallible, source-aligned analysis law for documents and queries.
+use crate::segment::{Dictionary, SegmentationScratch};
+use crate::{AccentFold, AnalyzerProfile, InputMode, Segmentation, Stemming, TextError, unicode};
+use purrdf_hash::{Domain, frame::frame_le};
+const ANALYZER_DOMAIN: Domain = Domain::new(b"purrdf-text/resolved-analyzer/v4\0");
+use purrdf_lex::unicode::{TaggedScalar, compose_tagged, decompose_tagged};
+use std::{borrow::Cow, collections::BTreeMap, fmt, ops::Range, sync::Arc};
 
-use std::borrow::Cow;
-use std::fmt;
-
-use crate::unicode::{self, Compare};
-
-/// One analyzed token: its text and its position in the token stream.
-///
-/// The text is a [`Cow`] because the analysis form of an input is usually, but
-/// not always, byte-identical to the input. When it is, tokens borrow the
-/// caller's string and nothing is allocated; when it is not, the normalized
-/// text has to live somewhere, and through [`Analyzer::analyze`] the only owner
-/// available is the token. [`Analyzer::analyze_each`] is the form that supplies
-/// a buffer instead and keeps every token borrowed.
+/// A lexical token and its consecutive ordinal.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Token<'a> {
-    /// The token's text, in the analyzer's compatibility caseless form.
+    /// Final, possibly stemmed and bounded spelling.
     pub text: Cow<'a, str>,
-    /// The token's zero-based ordinal in the stream it was produced from.
-    ///
-    /// Consecutive for every emitted token, CJK bigrams included, so adjacency
-    /// in the source is adjacency in this number.
+    /// Lexical position; auxiliary projections have independent positions.
     pub position: u32,
 }
-
-/// A Unicode table version, as `major.minor.patch`.
+/// Unicode table version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UnicodeVersion {
-    /// The major version — `17` in `17.0.0`.
+    /// Major number.
     pub major: u64,
-    /// The minor version — the first `0` in `17.0.0`.
+    /// Minor number.
     pub minor: u64,
-    /// The patch version — the second `0` in `17.0.0`.
+    /// Patch number.
     pub patch: u64,
 }
-
 impl From<(u8, u8, u8)> for UnicodeVersion {
-    /// Widen the `(u8, u8, u8)` shape table versions are published in, as
-    /// [`crate::unicode::UNICODE_VERSION`] is.
     fn from((major, minor, patch): (u8, u8, u8)) -> Self {
         Self {
             major: u64::from(major),
@@ -154,9 +36,7 @@ impl From<(u8, u8, u8)> for UnicodeVersion {
         }
     }
 }
-
 impl From<(u64, u64, u64)> for UnicodeVersion {
-    /// Adopt a `(u64, u64, u64)` version triple.
     fn from((major, minor, patch): (u64, u64, u64)) -> Self {
         Self {
             major,
@@ -165,490 +45,913 @@ impl From<(u64, u64, u64)> for UnicodeVersion {
         }
     }
 }
-
 impl fmt::Display for UnicodeVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
     }
 }
-
-/// The Unicode table versions this analyzer's output depends on.
-///
-/// Tokenization is not one table but four — the alphanumeric predicate, the
-/// normalization tables, the case fold and the word-break properties — and this
-/// crate's headline promise is that the same corpus and the same query produce
-/// the same ranking. A term dictionary is a function of these tables: raise any
-/// of them and a literal may fold, decompose or segment differently, the
-/// index's vocabulary changes, and queries that used to match stop matching —
-/// silently, because nothing about a retrieval that returns fewer rows
-/// announces itself as wrong.
-///
-/// Recording these alongside an index turns that into something detectable. A
-/// later stage folds them into the index fingerprint, so an index built under
-/// one set of tables is distinguishable from one built under another without
-/// comparing a single term.
+/// Pinned versions of each Unicode stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct UnicodeVersions {
-    /// The alphanumeric predicate the word filter applies: `Alphabetic` and
-    /// `General_Category` `Nd`, `Nl` and `No`, from this crate's generated
-    /// tables rather than the toolchain's `char` tables.
+    /// Character properties.
     pub core: UnicodeVersion,
-    /// The NFD, NFKD and NFC tables.
+    /// Normalization.
     pub normalization: UnicodeVersion,
-    /// The `CaseFolding.txt` tables: the full case fold.
+    /// Full case folding.
     pub case_folding: UnicodeVersion,
-    /// The `UAX #29` word-break tables.
+    /// Word and grapheme boundaries.
     pub segmentation: UnicodeVersion,
 }
-
-/// The Unicode table versions [`Analyzer`] currently resolves against.
-///
-/// Every table is generated by this crate from the vendored Unicode Character
-/// Database in `crates/iri/unicode/`, so all four report the same
-/// version, [`crate::unicode::UNICODE_VERSION`]: no table trails another, and
-/// none follows the toolchain the crate is built with. Raising the version is
-/// a regeneration, which changes which literals produce which terms, and so
-/// changes the term dictionary, both fingerprints and
-/// [`crate::ANALYZER_PROFILE_ID`] — a change that has to be seen, with its
-/// goldens re-derived, rather than absorbed silently.
-///
-/// # Versions pin vintage, not contents
-///
-/// The golden token-vector test in this crate's test suite asserts exact token
-/// vectors across a spread of scripts, and the frozen differential vectors
-/// replay every scalar value's fold and normalization forms, so a changed
-/// mapping fails a test rather than rewriting the term dictionary in silence.
+/// Every table is generated from the same versioned Unicode data.
 pub fn unicode_versions() -> UnicodeVersions {
+    let version = unicode::UNICODE_VERSION.into();
     UnicodeVersions {
-        core: unicode::UNICODE_VERSION.into(),
-        normalization: unicode::UNICODE_VERSION.into(),
-        case_folding: unicode::FOLD_UNICODE_VERSION.into(),
-        segmentation: unicode::UNICODE_VERSION.into(),
+        core: version,
+        normalization: version,
+        case_folding: version,
+        segmentation: version,
     }
 }
-
-/// The analysis pipeline described in this module's documentation.
-///
-/// Config-free and zero-sized: there are no options, because an option here is
-/// a way for the index side and the query side to disagree.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Analyzer;
-
-impl Analyzer {
-    /// The analyzer.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self
-    }
-
-    /// Analyze `input`, replacing the contents of `out`.
-    ///
-    /// `out` is cleared first and is the caller's to reuse across every literal
-    /// in a corpus, so the token vector itself is allocated once rather than
-    /// once per document.
-    ///
-    /// Tokens borrow `input` whenever the analysis form leaves it unchanged,
-    /// which covers the common case of text that is already lowercase and
-    /// already composed. When the form differs — any uppercase letter is enough
-    /// — the normalized text has to live somewhere, and the only owner
-    /// available through this signature is the token itself, so tokens are
-    /// owned in that case. [`Analyzer::analyze_each`] is the form that allocates
-    /// nothing at all; prefer it when indexing a corpus.
-    pub fn analyze<'a>(&self, input: &'a str, out: &mut Vec<Token<'a>>) {
-        out.clear();
-        if is_in_analysis_form(input) {
-            segment_each(input, |text, position| {
-                out.push(Token {
-                    text: Cow::Borrowed(text),
-                    position,
-                });
-            });
-        } else {
-            let normalized = self.analysis_form(input);
-            segment_each(&normalized, |text, position| {
-                out.push(Token {
-                    text: Cow::Owned(text.to_owned()),
-                    position,
-                });
-            });
+/// Normalized bytes and their actual original UTF-8 contributors.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AlignedText {
+    /// Normalized projection buffer, including preserved emoji atoms.
+    pub text: String,
+    scalar_offsets: Vec<usize>,
+    scalar_sources: Vec<usize>,
+    records: Vec<Range<usize>>,
+    sources: Vec<Range<usize>>,
+}
+impl AlignedText {
+    fn identity(text: String) -> Self {
+        Self {
+            text,
+            scalar_offsets: Vec::new(),
+            scalar_sources: Vec::new(),
+            records: Vec::new(),
+            sources: Vec::new(),
         }
     }
-
-    /// The terms of `input`, owned, in token order: what the index's own pipeline
-    /// produces for a needle, and so what a caller matches a stored term against.
-    ///
-    /// The convenience form of [`Analyzer::analyze`] for a caller that keeps the
-    /// terms rather than streaming them: one `String` per term.
-    #[must_use]
-    pub fn terms(&self, input: &str) -> Vec<String> {
-        let mut tokens = Vec::new();
-        self.analyze(input, &mut tokens);
-        tokens
-            .into_iter()
-            .map(|token| token.text.into_owned())
-            .collect()
+    /// An unchanged normalized projection with exact contributor evidence.
+    pub fn projection(&self, range: Range<usize>) -> Projection {
+        project(self, self.text[range.clone()].to_owned(), range, false)
     }
-
-    /// Analyze `input` through `scratch`, handing each token to `sink`.
-    ///
-    /// The allocation-free form, and the one to drive a corpus with. `scratch`
-    /// is cleared, grows once to the length of the longest analysis form seen
-    /// and is then reused for every literal after it; each token is a borrowed
-    /// slice of it. Indexing a million literals therefore allocates neither a
-    /// `String` per token nor a `String` per literal.
-    ///
-    /// The tokens are delivered one at a time rather than collected into a
-    /// vector because they borrow `scratch`, and a vector of them would pin that
-    /// borrow for as long as the vector's own type exists — which is what stops
-    /// one vector from being reused across a loop that re-fills the same
-    /// buffer. An indexer consumes a token the moment it has it (intern the
-    /// term, append a posting) and needs no such vector, so handing tokens over
-    /// as they are produced costs it nothing and keeps the buffer reusable.
-    pub fn analyze_each<F>(&self, input: &str, scratch: &mut String, mut sink: F)
-    where
-        F: FnMut(Token<'_>),
-    {
-        scratch.clear();
-        unicode::analysis_form(input, scratch);
-        segment_each(scratch, |text, position| {
+    /// Sorted merged original contributors to a normalized byte range.
+    pub fn contributors(&self, range: Range<usize>) -> Vec<Range<usize>> {
+        if self.scalar_sources.is_empty() {
+            return if range.is_empty() {
+                Vec::new()
+            } else {
+                vec![range]
+            };
+        }
+        let start = self.scalar_offsets.partition_point(|&at| at < range.start);
+        let end = self.scalar_offsets.partition_point(|&at| at < range.end);
+        let mut sources = Vec::new();
+        for &record in &self.scalar_sources[start..end] {
+            sources.extend_from_slice(&self.sources[self.records[record].clone()]);
+        }
+        merge_ranges(&mut sources);
+        sources
+    }
+}
+/// One independently bounded projection with inspectable source evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Projection {
+    /// Final spelling.
+    pub text: String,
+    /// Originating normalized byte range; stems may differ from these bytes.
+    pub range: Range<usize>,
+    /// Original UTF-8 contributor ranges, distinct from projected offsets.
+    pub sources: Vec<Range<usize>>,
+    /// Enclosing original highlight; may include removed bytes between contributors.
+    pub highlight: Range<usize>,
+    /// True when a stem carries whole-word evidence rather than character alignment.
+    pub coarse: bool,
+}
+/// All views produced atomically by one analysis pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Analysis {
+    /// Shared normalized source-aligned text.
+    pub normalized: AlignedText,
+    /// Lexical terms, after optional stemming and final bounding.
+    pub lexical: Vec<Projection>,
+    /// Pre-stem words with word-internal controls retained.
+    pub surface: Vec<Projection>,
+    /// Punctuation-bearing whitespace spans.
+    pub spans: Vec<Projection>,
+}
+/// Reusable lexical normalization, segmentation and word storage.
+#[derive(Debug, Default)]
+pub struct AnalyzerScratch {
+    normalization: NormalizationScratch<()>,
+    ranges: Vec<Range<usize>>,
+    segmentation: SegmentationScratch,
+    word: String,
+}
+/// Immutable resolved analysis law. No filesystem, network or hidden data access.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Analyzer {
+    profile: AnalyzerProfile,
+    dictionary: Option<Arc<Dictionary>>,
+}
+impl Analyzer {
+    /// Explicit no-artifact grapheme fallback with the standard linguistic choices.
+    pub const fn empty_lexicon() -> Self {
+        Self {
+            profile: AnalyzerProfile::empty_lexicon(),
+            dictionary: None,
+        }
+    }
+    /// Resolve an explicit empty or caller-dictionary profile.
+    /// # Errors
+    /// Refuses a baseline profile without its five artifact byte strings.
+    pub fn with_profile(profile: AnalyzerProfile) -> Result<Self, TextError> {
+        Self::resolve(profile, &[])
+    }
+    /// Resolve baseline physical identities and bind effective profile-normalized costs.
+    /// # Errors
+    /// Refuses missing, duplicate, unexpected or corrupt artifacts and conflicting caller costs.
+    pub fn resolve(profile: AnalyzerProfile, artifacts: &[&[u8]]) -> Result<Self, TextError> {
+        let mut normalization = NormalizationScratch::default();
+        let dictionary = match profile.segmentation() {
+            Segmentation::EmptyLexicon => {
+                if !artifacts.is_empty() {
+                    return Err(TextError::config(
+                        "empty lexicon profile refuses artifact bytes",
+                    ));
+                }
+                None
+            }
+            Segmentation::Dictionary(dictionary) => {
+                if !artifacts.is_empty() {
+                    return Err(TextError::config(
+                        "caller dictionary profile refuses baseline artifacts",
+                    ));
+                }
+                let entries = dictionary
+                    .weighted_entries()
+                    .map(|(word, cost)| {
+                        dictionary_key(word, &profile, &mut normalization)
+                            .map(|word| (word.to_owned(), cost))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Some(Arc::new(Dictionary::with_costs(entries)?))
+            }
+            Segmentation::Baseline => {
+                let expected = crate::profile::baseline_ids();
+                let mut seen = [false; 5];
+                let mut entries: BTreeMap<String, u32> = BTreeMap::new();
+                for bytes in artifacts {
+                    let hash = *purrdf_hash::blake3::hash(bytes).as_bytes();
+                    let identity = purrdf_hash::hex::encode(&hash);
+                    let Some(at) = expected.iter().position(|&id| id == identity) else {
+                        return Err(TextError::config("unexpected baseline artifact identity"));
+                    };
+                    if std::mem::replace(&mut seen[at], true) {
+                        return Err(TextError::config("duplicate baseline artifact"));
+                    }
+                    let dictionary = Dictionary::from_artifact(hash, bytes)?;
+                    for (word, cost) in dictionary.weighted_entries() {
+                        let word = dictionary_key(word, &profile, &mut normalization)?;
+                        if let Some(prior) = entries.get_mut(word) {
+                            *prior = (*prior).min(cost);
+                        } else {
+                            entries.insert(word.to_owned(), cost);
+                        }
+                    }
+                }
+                if !seen.into_iter().all(|present| present) {
+                    return Err(TextError::config(
+                        "standard analysis requires all five full baseline artifacts",
+                    ));
+                }
+                Some(Arc::new(Dictionary::with_costs(entries)?))
+            }
+        };
+        Ok(Self {
+            profile,
+            dictionary,
+        })
+    }
+    /// Validated profile.
+    pub const fn profile(&self) -> &AnalyzerProfile {
+        &self.profile
+    }
+    /// Identity of semantic data, resolved costed keys and all ordered choices.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        let mut bytes = Vec::new();
+        frame_le(&mut bytes, ANALYZER_DOMAIN.as_bytes());
+        frame_le(&mut bytes, &self.profile.fingerprint());
+        if let Some(dictionary) = &self.dictionary {
+            frame_le(&mut bytes, &dictionary.fingerprint());
+        }
+        *purrdf_hash::blake3::hash(&bytes).as_bytes()
+    }
+    /// Analyze atomically; no partial output survives a refusal.
+    /// # Errors
+    /// Propagates strict reference errors and position-space exhaustion.
+    pub fn analyze<'a>(&self, input: &'a str, out: &mut Vec<Token<'a>>) -> Result<(), TextError> {
+        out.clear();
+        let analysis = self.projections(input)?;
+        for (position, term) in analysis.lexical.into_iter().enumerate() {
+            out.push(Token {
+                text: if !term.coarse
+                    && input.get(term.highlight.clone()) == Some(term.text.as_str())
+                {
+                    Cow::Borrowed(&input[term.highlight])
+                } else {
+                    Cow::Owned(term.text)
+                },
+                position: u32::try_from(position)
+                    .map_err(|_| TextError::data("token positions exceed u32"))?,
+            });
+        }
+        Ok(())
+    }
+    /// Collect lexical terms through the same law used by indexing.
+    /// # Errors
+    /// Propagates analysis refusal.
+    pub fn terms(&self, input: &str) -> Result<Vec<String>, TextError> {
+        let mut terms = Vec::new();
+        self.analyze_each(input, &mut String::new(), |token| {
+            terms.push(token.text.into_owned());
+        })?;
+        Ok(terms)
+    }
+    /// Consume lexical tokens after a complete successful analysis.
+    /// # Errors
+    /// Propagates analysis refusal before invoking the sink.
+    pub fn analyze_each(
+        &self,
+        input: &str,
+        scratch: &mut String,
+        mut sink: impl FnMut(Token<'_>),
+    ) -> Result<(), TextError> {
+        let mut buffers = AnalyzerScratch::default();
+        std::mem::swap(scratch, &mut buffers.normalization.output);
+        let result = self.analyze_into(input, &mut buffers, &mut sink);
+        std::mem::swap(scratch, &mut buffers.normalization.output);
+        result
+    }
+    /// Stream lexical terms using reusable normalization, lattice and word storage.
+    /// # Errors
+    /// Strict input errors and position exhaustion are refused before the sink runs.
+    pub fn analyze_each_with_scratch(
+        &self,
+        input: &str,
+        scratch: &mut AnalyzerScratch,
+        mut sink: impl FnMut(Token<'_>),
+    ) -> Result<(), TextError> {
+        self.analyze_into(input, scratch, &mut sink)
+    }
+    fn analyze_into(
+        &self,
+        input: &str,
+        scratch: &mut AnalyzerScratch,
+        sink: &mut impl FnMut(Token<'_>),
+    ) -> Result<(), TextError> {
+        normalize_into(
+            input,
+            self.profile.input_mode(),
+            self.profile.accent_fold(),
+            &mut scratch.normalization,
+            &mut Unaligned,
+        )?;
+        let normalized = &scratch.normalization.output;
+        self.fill_word_ranges(
+            normalized,
+            true,
+            &mut scratch.ranges,
+            &mut scratch.segmentation,
+        );
+        if scratch.ranges.len() > u32::MAX as usize {
+            return Err(TextError::data("token positions exceed u32"));
+        }
+        for (position, range) in scratch.ranges.iter().cloned().enumerate() {
+            let word = &normalized[range];
+            let protected = unicode::is_emoji_grapheme(word);
+            let changed = !protected
+                && (self.profile.stemming() == Stemming::English
+                    || word.chars().any(unicode::is_word_internal_control));
+            let text = if changed {
+                scratch.word.clear();
+                scratch.word.extend(
+                    word.chars()
+                        .filter(|&c| !unicode::is_word_internal_control(c)),
+                );
+                if self.profile.stemming() == Stemming::English {
+                    crate::stem::english_in_place(&mut scratch.word);
+                }
+                self.bounded(&scratch.word)
+            } else {
+                self.bounded(word)
+            };
             sink(Token {
                 text: Cow::Borrowed(text),
-                position,
+                position: position as u32,
             });
-        });
-    }
-
-    /// The analysis form of `input` — folded and normalized, but not segmented.
-    ///
-    /// Exposed because the fold is half of what makes a match a match: a caller
-    /// comparing a stored term against a needle, or explaining to a user why
-    /// two strings did or did not match, needs the same form the tokenizer saw.
-    #[must_use]
-    pub fn analysis_form(&self, input: &str) -> String {
-        let mut form = String::with_capacity(input.len());
-        unicode::analysis_form(input, &mut form);
-        form
-    }
-}
-
-/// Hangul Jamo — conjoining jamo (`U+1100..=U+11FF`).
-///
-/// Hangul Compatibility Jamo (`U+3130..=U+318F`) is absent deliberately: it has
-/// compatibility decompositions into this block, so normalization has already
-/// rewritten it by the time segmentation runs.
-const HANGUL_JAMO: (char, char) = ('\u{1100}', '\u{11FF}');
-/// Hiragana (`U+3040..=U+309F`).
-const HIRAGANA: (char, char) = ('\u{3040}', '\u{309F}');
-/// Katakana (`U+30A0..=U+30FF`).
-///
-/// Halfwidth katakana (`U+FF66..=U+FF9F`) is absent deliberately: NFKD maps it
-/// into this block before segmentation sees it.
-const KATAKANA: (char, char) = ('\u{30A0}', '\u{30FF}');
-/// Katakana Phonetic Extensions (`U+31F0..=U+31FF`).
-const KATAKANA_PHONETIC_EXTENSIONS: (char, char) = ('\u{31F0}', '\u{31FF}');
-/// CJK Unified Ideographs Extension A (`U+3400..=U+4DBF`).
-const CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A: (char, char) = ('\u{3400}', '\u{4DBF}');
-/// CJK Unified Ideographs (`U+4E00..=U+9FFF`) — the main Han block.
-const CJK_UNIFIED_IDEOGRAPHS: (char, char) = ('\u{4E00}', '\u{9FFF}');
-/// Hangul Syllables (`U+AC00..=U+D7A3`).
-const HANGUL_SYLLABLES: (char, char) = ('\u{AC00}', '\u{D7A3}');
-/// CJK Compatibility Ideographs (`U+F900..=U+FAFF`).
-///
-/// Most of this block has canonical singleton decompositions and is gone before
-/// segmentation runs, but a dozen code points in it have none and survive
-/// normalization, so the block stays in the set.
-const CJK_COMPATIBILITY_IDEOGRAPHS: (char, char) = ('\u{F900}', '\u{FAFF}');
-/// CJK Unified Ideographs Extension B (`U+20000..=U+2A6DF`).
-const CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B: (char, char) = ('\u{20000}', '\u{2A6DF}');
-/// CJK Unified Ideographs Extensions C onward (`U+2A700..=U+2EBEF`).
-const CJK_UNIFIED_IDEOGRAPHS_EXTENSIONS_BEYOND_B: (char, char) = ('\u{2A700}', '\u{2EBEF}');
-
-/// The blocks whose tokens are rejoined and expanded into bigrams.
-///
-/// Ascending by start code point, and non-overlapping.
-const CJK_BLOCKS: [(char, char); 10] = [
-    HANGUL_JAMO,
-    HIRAGANA,
-    KATAKANA,
-    KATAKANA_PHONETIC_EXTENSIONS,
-    CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A,
-    CJK_UNIFIED_IDEOGRAPHS,
-    HANGUL_SYLLABLES,
-    CJK_COMPATIBILITY_IDEOGRAPHS,
-    CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B,
-    CJK_UNIFIED_IDEOGRAPHS_EXTENSIONS_BEYOND_B,
-];
-
-/// Whether `input` is already its own analysis form, decided without
-/// allocating.
-///
-/// This is what lets [`Analyzer::analyze`] hand back borrowed tokens. It runs
-/// the fold pipeline against the input and stops at the first character that
-/// differs rather than building the form and testing equality.
-fn is_in_analysis_form(input: &str) -> bool {
-    let mut compare = Compare::new(input);
-    unicode::analysis_form(input, &mut compare);
-    compare.finish()
-}
-
-/// Whether `word` is entirely CJK, and so joins a bigram run.
-fn is_cjk_word(word: &str) -> bool {
-    word.chars().all(is_cjk_char)
-}
-
-/// Whether `c` lies in one of [`CJK_BLOCKS`].
-fn is_cjk_char(c: char) -> bool {
-    CJK_BLOCKS.iter().any(|&(low, high)| c >= low && c <= high)
-}
-
-/// Hand one token to `sink`, reporting whether the position counter can carry
-/// another.
-///
-/// Positions are a `u32`, and refusing to emit past `u32::MAX` is the honest
-/// alternative to wrapping (which would give two tokens the same position and
-/// silently corrupt phrase matching). The bound is unreachable in practice:
-/// every token spans at least one byte of its input, so exceeding it needs a
-/// single literal larger than four gigabytes — which cannot be addressed at all
-/// on `wasm32`, where `usize` is 32 bits.
-fn emit<'t, F>(sink: &mut F, text: &'t str, position: &mut u32) -> bool
-where
-    F: FnMut(&'t str, u32),
-{
-    sink(text, *position);
-    match position.checked_add(1) {
-        Some(next) => {
-            *position = next;
-            true
         }
-        None => false,
+        Ok(())
     }
-}
 
-/// Segment already-normalized `text`, handing each token's slice and position
-/// to `sink` in order.
-///
-/// Every caller wants the same segmentation but a different token type — a
-/// borrowed [`Cow`], an owned one, or no [`Token`] at all — so this yields the
-/// slices themselves and lets each caller decide. Nothing here allocates: a
-/// token is always a subslice of `text`, bigrams included, because a bigram
-/// spans two adjacent characters of one contiguous run.
-fn segment_each<'t, F>(text: &'t str, mut sink: F)
-where
-    F: FnMut(&'t str, u32),
-{
-    let mut position: u32 = 0;
-    let mut words = unicode::word_indices(text).peekable();
-    while let Some((start, word)) = words.next() {
-        if !is_cjk_word(word) {
-            if !emit(&mut sink, word, &mut position) {
-                return;
+    /// Folded normalized text, preserving meaningful controls and emoji.
+    /// # Errors
+    /// Propagates strict HTML reference errors.
+    pub fn analysis_form(&self, input: &str) -> Result<String, TextError> {
+        let mut scratch = NormalizationScratch::default();
+        normalize_into(
+            input,
+            self.profile.input_mode(),
+            self.profile.accent_fold(),
+            &mut scratch,
+            &mut Unaligned,
+        )?;
+        Ok(scratch.output)
+    }
+    /// Pre-stem bounded surface words.
+    /// # Errors
+    /// Propagates analysis refusal.
+    pub fn surface_terms(&self, input: &str) -> Result<Vec<String>, TextError> {
+        Ok(self
+            .projections(input)?
+            .surface
+            .into_iter()
+            .map(|term| term.text)
+            .collect())
+    }
+    /// Bounded punctuation-bearing spans.
+    /// # Errors
+    /// Propagates analysis refusal.
+    pub fn substring_terms(&self, input: &str) -> Result<Vec<String>, TextError> {
+        Ok(self
+            .projections(input)?
+            .spans
+            .into_iter()
+            .map(|term| term.text)
+            .collect())
+    }
+    /// Produce all independent views from one source-aligned normalization.
+    /// # Errors
+    /// Propagates strict reference errors and position-space exhaustion.
+    pub fn projections(&self, input: &str) -> Result<Analysis, TextError> {
+        let normalized = self.normalize(input)?;
+        let mut surface_ranges = Vec::new();
+        let mut lexical_ranges = Vec::new();
+        let mut segmentation = SegmentationScratch::default();
+        self.fill_word_ranges(
+            &normalized.text,
+            false,
+            &mut surface_ranges,
+            &mut segmentation,
+        );
+        self.fill_word_ranges(
+            &normalized.text,
+            true,
+            &mut lexical_ranges,
+            &mut segmentation,
+        );
+        let mut surface = Vec::new();
+        let mut lexical = Vec::new();
+        let mut spans = Vec::new();
+        for range in surface_ranges {
+            let origin = range;
+            let text = self.bounded(&normalized.text[origin.clone()]);
+            let range = origin.start..origin.start + text.len();
+            surface.push(project(&normalized, text.to_owned(), range, false));
+        }
+        for range in lexical_ranges {
+            let original = &normalized.text[range.clone()];
+            let protected = unicode::is_emoji_grapheme(original);
+            let mut text = original
+                .chars()
+                .filter(|&c| protected || !unicode::is_word_internal_control(c))
+                .collect::<String>();
+            let coarse = if self.profile.stemming() == Stemming::English && !protected {
+                let before = text.clone();
+                crate::stem::english_in_place(&mut text);
+                text != before
+            } else {
+                false
+            };
+            text.truncate(self.bounded(&text).len());
+            let mut projection = project(&normalized, text, range.clone(), coarse);
+            if !coarse {
+                projection.sources.clear();
+                let mut bytes = 0;
+                let mut end = range.start;
+                for (at, c) in original.char_indices() {
+                    if !protected && unicode::is_word_internal_control(c) {
+                        continue;
+                    }
+                    if bytes == projection.text.len() {
+                        break;
+                    }
+                    let origin = range.start + at..range.start + at + c.len_utf8();
+                    end = origin.end;
+                    bytes += c.len_utf8();
+                    projection.sources.extend(normalized.contributors(origin));
+                }
+                projection.range.end = end;
+                merge_ranges(&mut projection.sources);
+                projection.highlight = projection.sources.first().map_or(0, |range| range.start)
+                    ..projection.sources.last().map_or(0, |range| range.end);
             }
-            continue;
+            lexical.push(projection);
         }
-
-        // Extend the run over every following word that is both CJK and
-        // physically adjacent. Adjacency is what a space would break, and it is
-        // the only reason this segments with offsets instead of bare words.
-        let mut end = start + word.len();
-        while let Some(&(next_start, next_word)) = words.peek() {
-            if next_start != end || !is_cjk_word(next_word) {
+        let mut start = None;
+        for (at, c) in normalized
+            .text
+            .char_indices()
+            .chain(std::iter::once((normalized.text.len(), ' ')))
+        {
+            if unicode::is_whitespace_separator(c) {
+                if let Some(begin) = start.take() {
+                    let text = self.bounded(&normalized.text[begin..at]);
+                    spans.push(project(
+                        &normalized,
+                        text.to_owned(),
+                        begin..begin + text.len(),
+                        false,
+                    ));
+                }
+            } else {
+                start.get_or_insert(at);
+            }
+        }
+        if lexical.len() > u32::MAX as usize {
+            return Err(TextError::data("token positions exceed u32"));
+        }
+        Ok(Analysis {
+            normalized,
+            lexical,
+            surface,
+            spans,
+        })
+    }
+    pub(crate) fn bounded<'a>(&self, text: &'a str) -> &'a str {
+        let mut total = 0;
+        let mut end = 0;
+        for (at, cluster) in unicode::grapheme_bounds(text) {
+            let count = cluster.chars().count();
+            if total + count > self.profile.max_token_scalars() {
+                if at == 0 {
+                    end = cluster.len();
+                }
                 break;
             }
-            end = next_start + next_word.len();
-            words.next();
+            total += count;
+            end = at + cluster.len();
         }
-        let run = &text[start..end];
-
-        // Overlapping character bigrams. Walking the run from its second
-        // character gives each bigram's closing character; the previous
-        // character's offset is its opening one.
-        let mut closers = run.char_indices();
-        closers.next();
-        let mut opener = 0_usize;
-        let mut any_bigram = false;
-        for (offset, closer) in closers {
-            let bigram = &run[opener..offset + closer.len_utf8()];
-            if !emit(&mut sink, bigram, &mut position) {
-                return;
+        &text[..end]
+    }
+    fn fill_word_ranges(
+        &self,
+        text: &str,
+        split_punctuation: bool,
+        ranges: &mut Vec<Range<usize>>,
+        segmentation: &mut SegmentationScratch,
+    ) {
+        ranges.clear();
+        let mut run_start = 0;
+        for (at, cluster) in unicode::grapheme_bounds(text) {
+            if unicode::is_emoji_grapheme(cluster) {
+                self.segment_run(text, run_start..at, split_punctuation, ranges, segmentation);
+                ranges.push(at..at + cluster.len());
+                run_start = at + cluster.len();
             }
-            opener = offset;
-            any_bigram = true;
         }
-        // A one-character run has no bigram, and dropping it would make a
-        // single ideograph unretrievable, so it is emitted whole.
-        if !any_bigram && !emit(&mut sink, run, &mut position) {
-            return;
-        }
+        self.segment_run(
+            text,
+            run_start..text.len(),
+            split_punctuation,
+            ranges,
+            segmentation,
+        );
     }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::{Analyzer, CJK_BLOCKS, is_cjk_char, is_in_analysis_form};
-    use crate::unicode;
-
-    /// The no-allocation predicate must agree with the form it is a shortcut
-    /// for, or [`Analyzer::analyze`] would borrow text it had no right to.
-    #[test]
-    fn the_borrow_check_agrees_with_the_form() {
-        for input in [
-            "",
-            "rust",
-            "Rust",
-            "STRASSE",
-            "straße",
-            "strasse",
-            "café",
-            "cafe\u{0301}",
-            "ｒｕｓｔ",
-            "ﬁ",
-            "中文",
-            "σοφός",
-            "ΣΟΦΟΣ",
-            "don't",
-            "3.14",
-        ] {
-            let form = Analyzer::new().analysis_form(input);
-            assert_eq!(
-                is_in_analysis_form(input),
-                form == input,
-                "the predicate disagreed with the form for {input:?}"
-            );
+    fn segment_run(
+        &self,
+        text: &str,
+        range: Range<usize>,
+        split_punctuation: bool,
+        out: &mut Vec<Range<usize>>,
+        segmentation: &mut SegmentationScratch,
+    ) {
+        let mut begin = range.start;
+        for (relative, c) in text[range.clone()].char_indices() {
+            let at = range.start + relative;
+            if split_punctuation && matches!(c, '.' | ':') && letter_sides(text, at, c.len_utf8()) {
+                self.segment_chunk(text, begin..at, split_punctuation, out, segmentation);
+                begin = at + c.len_utf8();
+            }
         }
+        self.segment_chunk(text, begin..range.end, split_punctuation, out, segmentation);
     }
-
-    /// The block table is ordered and disjoint, as its documentation claims.
-    #[test]
-    fn the_cjk_blocks_are_ordered_and_disjoint() {
-        for window in CJK_BLOCKS.windows(2) {
-            let [(low, high), (next_low, _)] = window else {
-                unreachable!("windows(2) yields pairs")
+    fn segment_chunk(
+        &self,
+        text: &str,
+        range: Range<usize>,
+        tailor: bool,
+        out: &mut Vec<Range<usize>>,
+        segmentation: &mut SegmentationScratch,
+    ) {
+        let part = &text[range.clone()];
+        if let Some(dictionary) = &self.dictionary {
+            let mut sink = |word: &str| {
+                let at = word.as_ptr() as usize - part.as_ptr() as usize + range.start;
+                out.push(at..at + word.len());
             };
-            assert!(low <= high, "a block ends before it starts");
-            assert!(high < next_low, "two blocks overlap or are out of order");
-        }
-    }
-
-    /// Latin text is never treated as CJK, which is what keeps bigram expansion
-    /// away from scripts that segment into whole words.
-    #[test]
-    fn latin_is_not_cjk() {
-        for c in ['a', 'Z', '0', ' ', '-', 'é', 'Я', 'א', 'ا'] {
-            assert!(!is_cjk_char(c), "{c:?} must not be classified as CJK");
-        }
-    }
-
-    /// The analysis form is what the tokens are built from, so the two must not
-    /// be able to drift apart.
-    #[test]
-    fn the_analysis_form_matches_the_tokens() {
-        let analyzer = Analyzer::new();
-        assert_eq!(analyzer.analysis_form("Straße"), "strasse");
-        assert_eq!(analyzer.analysis_form("ｒｕｓｔ"), "rust");
-    }
-
-    /// The form this module composes decides compatibility caseless matching
-    /// (`UAX #21` D146), in both directions.
-    ///
-    /// This is the claim the module documentation makes and the one the final
-    /// NFC step could have broken: two strings must analyze to the same text
-    /// exactly when they are compatibility caseless matches of one another. A
-    /// normalization that merged two inequivalent strings would merge two terms
-    /// the standard keeps apart, and one that split an equivalent pair would
-    /// lose a match. The classes below are the verdicts of an independent
-    /// implementation of the relation, recorded over every pair of these
-    /// samples before that implementation left this workspace (answers only,
-    /// see `PROVENANCE.md`), and every pair is checked against them.
-    #[test]
-    fn the_form_decides_compatibility_caseless_matching() {
-        let analyzer = Analyzer::new();
-        let classes: [&[&str]; 8] = [
-            &["STRASSE", "Straße", "strasse", "straße"],
-            &["rust", "ｒｕｓｔ", "RUST"],
-            &["fi", "ﬁ"],
-            &["café", "cafe\u{0301}", "CAFÉ"],
-            &["σοφος", "ΣΟΦΟΣ"],
-            &["σοφός"],
-            &["中文"],
-            &[""],
-        ];
-        for (left_class, lefts) in classes.iter().enumerate() {
-            for left in *lefts {
-                for (right_class, rights) in classes.iter().enumerate() {
-                    for right in *rights {
-                        assert_eq!(
-                            analyzer.analysis_form(left) == analyzer.analysis_form(right),
-                            left_class == right_class,
-                            "the form and the recorded verdict disagreed on {left:?} vs {right:?}"
-                        );
+            if tailor {
+                dictionary.segment_each_with_scratch(part, segmentation, &mut sink);
+            } else {
+                dictionary.segment_surface_each_with_scratch(part, segmentation, &mut sink);
+            }
+        } else {
+            for (at, word) in unicode::word_indices(part) {
+                if word.chars().any(unicode::is_alphanumeric) {
+                    if word.chars().any(unspaced) {
+                        for (offset, cluster) in unicode::grapheme_bounds(word) {
+                            out.push(
+                                range.start + at + offset
+                                    ..range.start + at + offset + cluster.len(),
+                            );
+                        }
+                    } else {
+                        out.push(range.start + at..range.start + at + word.len());
                     }
                 }
             }
         }
     }
-
-    /// The case fold and the other tables are one Unicode version, so there
-    /// is no skew between them to measure.
-    ///
-    /// The fold is generated from `CaseFolding.txt` of the same release as the
-    /// normalization and word-break tables, all from the vendored database;
-    /// none of them is the toolchain's. What skew there was between a fold
-    /// table and the case mappings is therefore now a property of Unicode
-    /// itself, and the one code point where the fold is not a case invariant
-    /// is Unicode's own deliberate exclusion: `U+0131` LATIN SMALL LETTER
-    /// DOTLESS I, whose Turkic `T` mapping `C` + `F` folding does not apply.
-    #[test]
-    fn the_case_folding_table_is_level_with_the_others() {
-        let versions = super::unicode_versions();
-        assert_eq!(versions.case_folding, versions.normalization);
-        assert_eq!(versions.case_folding, versions.segmentation);
-        assert_eq!(versions.case_folding, versions.core);
-        assert_eq!(unicode::FOLD_UNICODE_VERSION, unicode::UNICODE_VERSION);
-        // The 17.0.0 capitals the 16.0.0 table did not fold now reach their
-        // lowercase partners.
-        for (capital, small) in [('\u{A7CE}', '\u{A7CF}'), ('\u{16EA0}', '\u{16EBB}')] {
-            assert_eq!(unicode::case_fold(&capital.to_string()), small.to_string());
+    fn normalize(&self, input: &str) -> Result<AlignedText, TextError> {
+        let mut scratch = NormalizationScratch::default();
+        let mut store = SourceStore::default();
+        normalize_into(
+            input,
+            self.profile.input_mode(),
+            self.profile.accent_fold(),
+            &mut scratch,
+            &mut store,
+        )?;
+        let text = scratch.output;
+        if text == input {
+            return Ok(AlignedText::identity(text));
         }
-        assert_eq!(unicode::case_fold("\u{0131}"), "\u{0131}");
+        Ok(AlignedText {
+            text,
+            scalar_offsets: store.scalar_offsets,
+            scalar_sources: store.scalar_sources,
+            records: store.records,
+            sources: store.sources,
+        })
     }
+}
 
-    /// The measured `UAX #29` behaviour the CJK model is built on.
-    ///
-    /// The bigram path exists because of what this asserts, and the assertion
-    /// is here rather than in prose because the premise is the sort that is
-    /// easy to state confidently and get backwards. Han and Hiragana segment to
-    /// one token per character, so expanding each token into bigrams would
-    /// expand nothing; Katakana does not, because rule WB13 keeps a katakana
-    /// run together; Hangul syllables are `ALetter` and segment into whole
-    /// space-delimited words; and none of it is dropped by the alphanumeric
-    /// filter the word iterator applies.
-    #[test]
-    fn the_measured_cjk_segmentation_matches_the_documented_model() {
-        let words = |text: &'static str| -> Vec<&'static str> {
-            unicode::word_indices(text).map(|(_, word)| word).collect()
-        };
-        assert_eq!(
-            words("中文全文検索"),
-            vec!["中", "文", "全", "文", "検", "索"],
-            "Han must segment to one token per ideograph"
-        );
-        assert_eq!(
-            words("私はサンドイッチを食べます"),
-            vec!["私", "は", "サンドイッチ", "を", "食", "べ", "ま", "す"],
-            "Hiragana must segment per character while a Katakana run stays whole"
-        );
-        assert_eq!(
-            words("한국어 전문 검색"),
-            vec!["한국어", "전문", "검색"],
-            "Hangul must segment into whole space-delimited words"
-        );
+/// One reusable pipeline, specialized only by the metadata it carries.
+#[derive(Debug, Default)]
+struct NormalizationScratch<M> {
+    output: String,
+    cleaned: String,
+    scalars: Vec<TaggedScalar<M>>,
+    pending: Vec<TaggedScalar<M>>,
+    working: Vec<TaggedScalar<M>>,
+}
 
-        for c in ['中', 'は', 'サ', '한'] {
-            assert!(
-                unicode::is_alphanumeric(c),
-                "{c:?} must pass the alphanumeric filter the word iterator applies"
+/// Source tracking is orthogonal to every normalization decision. Streaming
+/// instantiates the same pipeline with unit metadata and no source allocations.
+trait Alignment {
+    type Metadata: Copy;
+    fn source(&mut self, source: Range<usize>) -> Self::Metadata;
+    fn merge(&mut self, left: &mut Self::Metadata, right: Self::Metadata);
+    fn emit(&mut self, offset: usize, metadata: Self::Metadata);
+}
+
+struct Unaligned;
+impl Alignment for Unaligned {
+    type Metadata = ();
+    fn source(&mut self, _: Range<usize>) {}
+    fn merge(&mut self, (): &mut (), (): ()) {}
+    fn emit(&mut self, _: usize, (): ()) {}
+}
+
+fn normalize_into<A: Alignment>(
+    input: &str,
+    mode: InputMode,
+    accent: AccentFold,
+    scratch: &mut NormalizationScratch<A::Metadata>,
+    alignment: &mut A,
+) -> Result<(), TextError> {
+    admit_source_size(input.len(), "analysis input")?;
+    scratch.output.clear();
+    let mode = match mode {
+        InputMode::Plain => purrdf_lex::html::Mode::Plain,
+        InputMode::HtmlText => purrdf_lex::html::Mode::Text,
+        InputMode::HtmlAttribute => purrdf_lex::html::Mode::Attribute,
+    };
+    let decoded = purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::Html)?;
+    admit_source_size(decoded.text.len(), "decoded input")?;
+    let mut cleanup = CleanupCursor::new(&decoded.text);
+    let no_cleanup = if decoded.text.is_ascii() {
+        !decoded
+            .text
+            .char_indices()
+            .any(|(at, c)| !cleanup.survives(at, c, false))
+    } else {
+        !unicode::grapheme_bounds(&decoded.text).any(|(at, cluster)| {
+            let protected = unicode::is_emoji_grapheme(cluster);
+            cluster
+                .char_indices()
+                .any(|(relative, c)| !cleanup.survives(at + relative, c, protected))
+        })
+    };
+    if decoded.sources.is_empty() && no_cleanup {
+        // These paths preserve byte positions exactly, so neither projection
+        // needs per-scalar source records. Both still apply the same admission.
+        if decoded.text.is_ascii() {
+            scratch.output.extend(
+                decoded
+                    .text
+                    .bytes()
+                    .map(|byte| char::from(byte.to_ascii_lowercase())),
             );
+            return Ok(());
+        }
+        let accent_safe = accent == AccentFold::Preserve
+            || !decoded.text.chars().any(|c| {
+                use unicode::AccentScript::{Arabic, Cyrillic, Greek, Hebrew, Latin};
+                unicode::is_nonspacing_mark(c)
+                    || !c.is_ascii()
+                        && [Latin, Greek, Cyrillic]
+                            .into_iter()
+                            .any(|script| script.contains(c))
+                    || accent == AccentFold::LatinGreekCyrillicArabicHebrew
+                        && [Arabic, Hebrew]
+                            .into_iter()
+                            .any(|script| script.contains(c))
+            });
+        if accent_safe {
+            let mut compare = unicode::Compare::new(&decoded.text);
+            unicode::analysis_form(&decoded.text, &mut compare);
+            if compare.finish() {
+                scratch.output.push_str(&decoded.text);
+                return Ok(());
+            }
         }
     }
+    scratch.scalars.clear();
+    scratch.cleaned.clear();
+    let mut ordinal = 0;
+    let mut cleanup = CleanupCursor::new(&decoded.text);
+    for (at, cluster) in unicode::grapheme_bounds(&decoded.text) {
+        let protected = unicode::is_emoji_grapheme(cluster);
+        for (relative, c) in cluster.char_indices() {
+            let offset = at + relative;
+            let source = decoded
+                .sources
+                .get(ordinal)
+                .cloned()
+                .unwrap_or_else(|| offset..offset + c.len_utf8());
+            ordinal += 1;
+            if !cleanup.survives(offset, c, protected) {
+                continue;
+            }
+            let metadata = alignment.source(source);
+            scratch.scalars.push(TaggedScalar { value: c, metadata });
+            scratch.cleaned.push(c);
+        }
+    }
+    // Re-segment after cleanup: deleted controls can reveal new emoji joins or
+    // permit canonical composition across their former positions.
+    scratch.pending.clear();
+    let mut offset = 0;
+    for (_, cluster) in unicode::grapheme_bounds(&scratch.cleaned) {
+        let count = cluster.chars().count();
+        let slice = &scratch.scalars[offset..offset + count];
+        offset += count;
+        if unicode::is_emoji_grapheme(cluster) {
+            normalize_run(
+                &mut scratch.pending,
+                &mut scratch.working,
+                accent,
+                |left, right| alignment.merge(left, right),
+            );
+            emit_scalars(&mut scratch.output, scratch.pending.drain(..), alignment);
+            emit_scalars(&mut scratch.output, slice.iter().cloned(), alignment);
+        } else {
+            scratch.pending.extend_from_slice(slice);
+        }
+    }
+    normalize_run(
+        &mut scratch.pending,
+        &mut scratch.working,
+        accent,
+        |left, right| alignment.merge(left, right),
+    );
+    emit_scalars(&mut scratch.output, scratch.pending.drain(..), alignment);
+    Ok(())
+}
+
+fn emit_scalars<A: Alignment>(
+    output: &mut String,
+    scalars: impl IntoIterator<Item = TaggedScalar<A::Metadata>>,
+    alignment: &mut A,
+) {
+    for scalar in scalars {
+        alignment.emit(output.len(), scalar.metadata);
+        output.push(scalar.value);
+    }
+}
+
+#[derive(Default)]
+struct SourceStore {
+    scalar_offsets: Vec<usize>,
+    scalar_sources: Vec<usize>,
+    records: Vec<Range<usize>>,
+    sources: Vec<Range<usize>>,
+}
+impl Alignment for SourceStore {
+    type Metadata = usize;
+    fn source(&mut self, source: Range<usize>) -> usize {
+        let at = self.sources.len();
+        self.sources.push(source);
+        let id = self.records.len();
+        self.records.push(at..at + 1);
+        id
+    }
+    fn merge(&mut self, left: &mut usize, right: usize) {
+        if *left == right {
+            return;
+        }
+        let mut sources = self.sources[self.records[*left].clone()].to_vec();
+        sources.extend_from_slice(&self.sources[self.records[right].clone()]);
+        merge_ranges(&mut sources);
+        let at = self.sources.len();
+        self.sources.extend(sources);
+        let id = self.records.len();
+        self.records.push(at..self.sources.len());
+        *left = id;
+    }
+    fn emit(&mut self, offset: usize, metadata: usize) {
+        self.scalar_offsets.push(offset);
+        self.scalar_sources.push(metadata);
+    }
+}
+
+pub(crate) fn merge_ranges(ranges: &mut Vec<Range<usize>>) {
+    ranges.sort_unstable_by_key(|range| (range.start, range.end));
+    let mut count = 0;
+    for at in 0..ranges.len() {
+        if count != 0 && ranges[at].start <= ranges[count - 1].end {
+            ranges[count - 1].end = ranges[count - 1].end.max(ranges[at].end);
+        } else {
+            ranges[count] = ranges[at].clone();
+            count += 1;
+        }
+    }
+    ranges.truncate(count);
+}
+fn normalize_run<M: Copy>(
+    scalars: &mut Vec<TaggedScalar<M>>,
+    scratch: &mut Vec<TaggedScalar<M>>,
+    accent: AccentFold,
+    merge: impl FnMut(&mut M, M),
+) {
+    decompose_tagged::<false, _>(scalars, scratch);
+    fold_tagged(scalars, scratch);
+    decompose_tagged::<true, _>(scalars, scratch);
+    fold_tagged(scalars, scratch);
+    decompose_tagged::<true, _>(scalars, scratch);
+    if accent != AccentFold::Preserve {
+        use unicode::AccentScript::{Arabic, Cyrillic, Greek, Hebrew, Latin};
+        let scripts = if accent == AccentFold::LatinGreekCyrillic {
+            &[Latin, Greek, Cyrillic][..]
+        } else {
+            &[Latin, Greek, Cyrillic, Arabic, Hebrew][..]
+        };
+        let mut base = None;
+        scalars.retain(|scalar| {
+            let c = scalar.value;
+            if unicode::is_nonspacing_mark(c) && !unicode::is_word_internal_control(c) {
+                !base.is_some_and(|script: unicode::AccentScript| script.admits_mark(c))
+            } else {
+                if !unicode::is_combining_mark(c) && !unicode::is_word_internal_control(c) {
+                    base = scripts.iter().copied().find(|script| script.contains(c));
+                }
+                true
+            }
+        });
+    }
+    compose_tagged(scalars, scratch, merge);
+}
+fn fold_tagged<M: Copy>(scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>) {
+    scratch.clear();
+    for scalar in scalars.drain(..) {
+        unicode::fold_scalar(scalar.value, |value| {
+            scratch.push(TaggedScalar {
+                value,
+                metadata: scalar.metadata,
+            });
+        });
+    }
+    std::mem::swap(scalars, scratch);
+}
+fn admit_source_size(bytes: usize, kind: &str) -> Result<(), TextError> {
+    if bytes > u32::MAX as usize {
+        return Err(TextError::data(format!(
+            "{kind} exceeds source record space"
+        )));
+    }
+    Ok(())
+}
+/// Two monotonic scalar walks supply nearest significant neighbors. Each
+/// scalar is visited at most once for context, even across long control runs.
+struct CleanupCursor<'a> {
+    remaining: std::str::CharIndices<'a>,
+    left: Option<char>,
+    right: Option<(usize, char)>,
+}
+impl<'a> CleanupCursor<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            remaining: text.char_indices(),
+            left: None,
+            right: None,
+        }
+    }
+    fn survives(&mut self, at: usize, c: char, protected: bool) -> bool {
+        protected
+            || !(unicode::is_removed_control(c) || c == '\u{200d}' && !self.meaningful_joiner(at))
+    }
+    fn meaningful_joiner(&mut self, at: usize) -> bool {
+        while self.right.is_none_or(|(offset, _)| offset < at) {
+            if let Some((_, c)) = self.right.take() {
+                self.left = Some(c);
+            }
+            self.right = self.remaining.find(|&(_, c)| {
+                !unicode::is_combining_mark(c)
+                    && !unicode::is_removed_control(c)
+                    && !unicode::is_word_internal_control(c)
+            });
+            if self.right.is_none() {
+                break;
+            }
+        }
+        self.left
+            .zip(self.right.map(|(_, c)| c))
+            .is_some_and(|(left, right)| {
+                unicode::is_joining_character(left) && unicode::is_joining_character(right)
+                    || unicode::is_conjunct_consonant(left) && unicode::is_conjunct_consonant(right)
+            })
+    }
+}
+fn unspaced(c: char) -> bool {
+    use unicode::SegmentationScript::{Han, Hiragana, Katakana, Khmer, Lao, Myanmar, Thai};
+    [Han, Hiragana, Katakana, Thai, Lao, Khmer, Myanmar]
+        .into_iter()
+        .any(|script| unicode::has_segmentation_script(c, script))
+}
+fn letter_sides(text: &str, at: usize, len: usize) -> bool {
+    text[..at]
+        .chars()
+        .rev()
+        .find(|&c| !unicode::is_combining_mark(c) && !unicode::is_word_internal_control(c))
+        .is_some_and(unicode::is_letter)
+        && text[at + len..]
+            .chars()
+            .find(|&c| !unicode::is_combining_mark(c) && !unicode::is_word_internal_control(c))
+            .is_some_and(unicode::is_letter)
+}
+fn project(
+    normalized: &AlignedText,
+    text: String,
+    range: Range<usize>,
+    coarse: bool,
+) -> Projection {
+    let sources = normalized.contributors(range.clone());
+    let highlight =
+        sources.first().map_or(0, |range| range.start)..sources.last().map_or(0, |range| range.end);
+    Projection {
+        text,
+        range,
+        sources,
+        highlight,
+        coarse,
+    }
+}
+fn dictionary_key<'a>(
+    word: &str,
+    profile: &AnalyzerProfile,
+    scratch: &'a mut NormalizationScratch<()>,
+) -> Result<&'a str, TextError> {
+    normalize_into(
+        word,
+        InputMode::Plain,
+        profile.accent_fold(),
+        scratch,
+        &mut Unaligned,
+    )?;
+    scratch
+        .output
+        .retain(|c| !unicode::is_word_internal_control(c));
+    Ok(&scratch.output)
 }

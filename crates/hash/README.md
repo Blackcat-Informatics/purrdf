@@ -496,10 +496,12 @@ source on every run.
 |---|---|---|
 | `b"assertion"` | `ASSERTION_KIND` | `crates/gts/src/examples/agent_memory.rs` |
 | `b"citation"` | `CITATION_KIND` | `crates/markdown/src/identity.rs` |
+| `b"five-full-baselines-minimum-collision-cost-v1"` | `BASELINE_LAW` | `crates/text/src/profile.rs` |
 | `b"gts-mmr-leaf-v1"` | `LEAF_DOMAIN` | `crates/gts/src/mmr.rs` |
 | `b"gts-mmr-parent-v1"` | `PARENT_DOMAIN` | `crates/gts/src/mmr.rs` |
 | `b"gts-mmr-root-v1"` | `ROOT_DOMAIN` | `crates/gts/src/mmr.rs` |
 | `b"gts-segment-heads-v1"` | `SEGMENT_HEADS_DOMAIN` | `crates/gts/src/replication.rs` |
+| `b"lexical-transparent-controls-letter-dot-colon-v2"` | `LEXICAL_LAW` | `crates/text/src/profile.rs` |
 | `b"merkle-root\x1f"` | `MERKLE_ROOT_DOMAIN` | `crates/slice/src/cache.rs` |
 | `b"path-snapshot-edge-set-v1"` | `PATH_SNAPSHOT_DOMAIN_V1` | `crates/sparql-eval/src/path_relation.rs` |
 | `b"path-witness-identifier-v1"` | `PATH_ID_DOMAIN_V1` | `crates/sparql-eval/src/path_relation.rs` |
@@ -508,6 +510,7 @@ source on every run.
 | `b"phase:reason"` | `REASON_PHASE` | `crates/slice/src/cache.rs` |
 | `b"phase:shacl"` | `SHACL_PHASE` | `crates/slice/src/cache.rs` |
 | `b"phase:syntax"` | `SYNTAX_PHASE` | `crates/slice/src/cache.rs` |
+| `b"positional-grams-1-2-3-relative-offsets-emoji-endpoints-rarest-anchor-v1"` | `SUBSTRING_LAW` | `crates/text/src/profile.rs` |
 | `b"purrdf-datalog restricted chase witness v1"` | `WITNESS_DIGEST_TAG` | `crates/datalog/src/chase.rs` |
 | `b"purrdf-datalog-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-dl-clause-ir-v3"` | `CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
@@ -534,8 +537,13 @@ source on every run.
 | `b"purrdf-sparql-eval/extension-env"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/extension_env.rs` |
 | `b"purrdf-sparql-eval/property-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/property_fn_plan.rs` |
 | `b"purrdf-sparql-eval/user-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/user_fn.rs` |
-| `b"purrdf-text/index/v2"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text-analysis-profile-v2\0"` | `PROFILE_DOMAIN` | `crates/text/src/profile.rs` |
+| `b"purrdf-text/dictionary-lattice/v2"` | `DICTIONARY_DOMAIN` | `crates/text/src/segment.rs` |
+| `b"purrdf-text/index/v3"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/resolved-analyzer/v4\0"` | `ANALYZER_DOMAIN` | `crates/text/src/analysis.rs` |
 | `b"purrdf-text/source/v1"` | `SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/surface-generation/v1\0"` | `GENERATION_DOMAIN` | `crates/text/src/surface.rs` |
+| `b"purrdf-text/surface-literal/v1\0"` | `LITERAL_DOMAIN` | `crates/text/src/surface.rs` |
 | `b"purrdf.pipeline-root.v1"` | `PIPELINE_ROOT_DOMAIN` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |
 | `b"purrdf.purremb.v1.artifact\0"` | `D_ARTIFACT` | `crates/rdf-core/src/ir/embedding/identity.rs` |
 | `b"purrdf.purremb.v1.chunking\0"` | `D_CHUNKING` | `crates/rdf-core/src/ir/embedding/identity.rs` |
@@ -557,7 +565,9 @@ source on every run.
 | `b"purrdf:evidence:v1"` | `EVIDENCE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"purrdf:fusion-profile:v1"` | `FUSION_PROFILE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"purrdf:plan:v1"` | `PLAN_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
+| `b"references-once-emoji-protect-caseless-scoped-accents-v2"` | `ORDERED_LAW` | `crates/text/src/profile.rs` |
 | `b"section"` | `SECTION_KIND` | `crates/markdown/src/identity.rs` |
+| `b"stem-then-whole-egc-prefix-first-oversized-intact-v1"` | `BOUNDING_LAW` | `crates/text/src/profile.rs` |
 | `b"structure"` | `STRUCTURE_KIND` | `crates/markdown/src/identity.rs` |
 | `b"toolcall"` | `TOOLCALL_KIND` | `crates/gts/src/examples/agent_memory.rs` |
 | `b"unit"` | `UNIT_KIND` | `crates/markdown/src/identity.rs` |

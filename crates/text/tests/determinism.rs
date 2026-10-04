@@ -81,8 +81,12 @@ fn dataset_of(rows: &[(&str, &str)]) -> Arc<RdfDataset> {
 /// `http://example.org/note`, that one's is `https://…`): two fixtures of two
 /// crates' tests, each over its own corpus, not one helper written twice.
 fn config() -> TextIndexConfig {
-    TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("the fixture configuration is well formed")
+    TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .expect("the fixture configuration is well formed")
 }
 
 /// An index over `dataset`.
@@ -569,7 +573,7 @@ fn no_source_file_mentions_a_float_width() {
     // is scanned, rather than passing the count while never being read.
     assert_eq!(
         sources.len(),
-        11,
+        23,
         "expected to scan every module of the crate, scanned {sources:?}"
     );
     assert_eq!(

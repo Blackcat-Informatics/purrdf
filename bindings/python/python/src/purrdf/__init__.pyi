@@ -14,7 +14,7 @@ from __future__ import annotations
 import builtins
 from collections.abc import Mapping, Sequence
 from types import CapsuleType
-from typing import IO, Any, Callable, TypeAlias, TypedDict, overload
+from typing import IO, Any, Callable, Required, TypeAlias, TypedDict, overload
 
 # `Literal` is aliased because this package DEFINES an RDF `Literal` class below.
 # Importing typing's under its own name shadows it, and mypy then resolves the RDF
@@ -139,7 +139,6 @@ def project(
     config: bytes | str,
     assets: bytes | None = ...,
 ) -> ProjectionPackage: ...
-
 def project_artifacts(
     data: bytes | str,
     *,
@@ -149,7 +148,6 @@ def project_artifacts(
     artifact_callback: Callable[[ArtifactEvent, str | None, bytes], None],
     progress_callback: Callable[[ProjectionProgress], None] | None = ...,
 ) -> ProjectionStream: ...
-
 def lift(
     archive: bytes,
     *,
@@ -411,9 +409,7 @@ class QueryTriples:
     def __len__(self) -> int: ...
     # `base` is the document base the output is written under, exactly as on the
     # module-level `serialize`.
-    def serialize(
-        self, format: RdfFormat, *, base: str | None = ...
-    ) -> bytes: ...
+    def serialize(self, format: RdfFormat, *, base: str | None = ...) -> bytes: ...
 
 # A CONSTRUCT/DESCRIBE result carrying at least one NAMED graph — a quad template
 # (`CONSTRUCT { GRAPH ?g { ... } }`, a first-party extension, NOT defined by SPARQL 1.2),
@@ -510,7 +506,9 @@ class PartialAnswers:
     @property
     def is_certain(self) -> bool: ...
     @property
-    def result(self) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean | None: ...
+    def result(
+        self,
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean | None: ...
     @property
     def is_positional_prefix(self) -> bool | None: ...
     @property
@@ -560,7 +558,9 @@ class QueryOutcome:
     # The COMPLETE result only; `None` when a governor tripped. The rows a trip
     # reached are on `partial`, behind the certificate that says what they bound.
     @property
-    def result(self) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean | None: ...
+    def result(
+        self,
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean | None: ...
     @property
     def partial(self) -> PartialAnswers | None: ...
     @property
@@ -1045,9 +1045,17 @@ _ProvenanceNamespace = tuple[str, str]
 # Canonical names, media types and aliases. Any ASCII case and surrounding
 # whitespace are accepted at runtime; `str` also admits those normalized spellings.
 type SparqlResultsFormat = TypingLiteral[
-    "json", "srj", "sparql-json", "application/sparql-results+json",
-    "xml", "sparql-xml", "application/sparql-results+xml",
-    "csv", "text/csv", "tsv", "text/tab-separated-values",
+    "json",
+    "srj",
+    "sparql-json",
+    "application/sparql-results+json",
+    "xml",
+    "sparql-xml",
+    "application/sparql-results+xml",
+    "csv",
+    "text/csv",
+    "tsv",
+    "text/tab-separated-values",
 ]
 
 def serialize_sparql_solutions(
@@ -1068,7 +1076,9 @@ def serialize_sparql_boolean(
 
 # A parsed SELECT is `("SELECT", variables, rows)`; a parsed ASK is `("ASK", bool)`
 # — a heterogeneous tuple discriminated by its first element.
-def parse_sparql_results(format: SparqlResultsFormat | str, data: bytes) -> tuple[Any, ...]: ...
+def parse_sparql_results(
+    format: SparqlResultsFormat | str, data: bytes
+) -> tuple[Any, ...]: ...
 
 #: Decoded provenance: `{"query_hash": str | None, "engine": str | None}`.
 _ProvenanceDict = dict[str, str | None]
@@ -1216,7 +1226,6 @@ def to_json_ld(
     context: CompiledJsonLdContext | None = ...,
     base: str | None = ...,
 ) -> str: ...
-
 def serialize_jsonld(
     data: bytes,
     *,
@@ -1243,9 +1252,7 @@ def from_json_ld(
 # `rdf:resource` references spelled against it. The RDF 1.2 statement layer is still
 # emitted (RDF/XML renders a reifier binding as `rdf:parseType="Triple"`), so the base
 # is not bought at the cost of reifier and annotation rows.
-def to_rdf_xml(
-    data: bytes, *, format: RdfFormat, base: str | None = ...
-) -> str: ...
+def to_rdf_xml(data: bytes, *, format: RdfFormat, base: str | None = ...) -> str: ...
 def from_rdf_xml(text: str, *, base: str | None = ...) -> bytes: ...
 def feedback_bundle_native(
     data: bytes,
@@ -1264,7 +1271,13 @@ def feedback_bundle_native(
 # row positionally, so widening it would break them at runtime with no type
 # boundary to catch it.
 _TermRow = tuple[
-    int, int, str | None, int | None, str | None, int | None, tuple[int, int, int] | None
+    int,
+    int,
+    str | None,
+    int | None,
+    str | None,
+    int | None,
+    tuple[int, int, int] | None,
 ]
 _QuadRow = tuple[int, int, int, int | None]
 _ReifierRow = tuple[int, int, int, int, int | None]
@@ -1272,7 +1285,13 @@ _AnnotationRow = tuple[int, int, int, int | None]
 _FoldReifierRow = tuple[int, tuple[int, int, int], int | None]
 _BlobExportRow = tuple[str, bytes]
 _InputTermRow = tuple[
-    int, str | None, int | None, str | None, str | None, int | None, tuple[int, int, int] | None
+    int,
+    str | None,
+    int | None,
+    str | None,
+    str | None,
+    int | None,
+    tuple[int, int, int] | None,
 ]
 
 class GtsRelationalRows(TypedDict):
@@ -2559,16 +2578,16 @@ class slice:
 # fingerprint included: that is a function of what a producer declares to the
 # PLANNER, and an attestation declares nothing there.
 #
-# The position is FIFTH rather than fourth-or-fifth, and the `domains` position is
-# written explicitly (as `None` to restrict nothing) to reach it. A four-element
+# The attestation is SIXTH, following the mandatory analyzer mapping and optional
+# domains. Write `None` for domains to restrict nothing. A five-element
 # value's tail is always `domains`: `("a", "b")` is a well-formed two-tag
 # restriction and a well-formed attestation at once, and guessing which the host
 # meant would report a domain tag back to an operator as an index generation, or
 # register a producer whose rows cannot back a restriction it never made. A value
-# of any other width, or a fifth position that is not a two-member sequence (a
+# of any other width, or a sixth position that is not a two-member sequence (a
 # bare string included — a `str` is a sequence of its own characters, and reading
 # `"ab"` as `generation="a"` would put a claim in the host's mouth), raises
-# `TypeError` naming all three accepted widths. A fifth position that IS a
+# `TypeError` naming the accepted widths. A sixth position that IS a
 # two-member sequence whose member is neither `str` nor `None` raises `TypeError`
 # naming that member.
 #
@@ -2580,6 +2599,7 @@ class slice:
 #                 "https://example.org/stratum/lexical",
 #                 "https://example.org/note",
 #                 "any",
+#                 {"lexicon": "empty"},
 #                 None,
 #                 ("notes-index-7", "shard 3 of 4 is still rebuilding"),
 #             )
@@ -2618,6 +2638,7 @@ class slice:
 #                 "https://example.org/stratum/lexical",
 #                 "https://example.org/note",
 #                 "any",
+#                 {"lexicon": "empty"},
 #                 None,
 #                 (None, None),
 #                 ("a 10% sample of the corpus", None),
@@ -2629,11 +2650,29 @@ class slice:
 #     #  "completeness_evidence": "a 10% sample of the corpus",
 #     #  "order": "faithful"}
 _Fidelity: TypeAlias = tuple[str | None, str | None]
+
+class _TextAnalyzerSpec(TypedDict, total=False):
+    lexicon: Required[TypingLiteral["empty", "baseline", "dictionary"]]
+    artifacts: list[bytes]
+    entries: list[tuple[str, int]]
+    max_token_scalars: int
+    accent: TypingLiteral[
+        "preserve", "latin-greek-cyrillic", "latin-greek-cyrillic-arabic-hebrew"
+    ]
+    stemming: TypingLiteral["none", "english"]
+    input_mode: TypingLiteral["plain", "html-text", "html-attribute"]
+    code_length: int
+    edit_distance: int
+    projection: TypingLiteral["lexical", "han"]
+    substring_posting_operations: int
+    substring_candidate_spans: int
+    substring_verification_bytes: int
+
 _TextProducerSpec: TypeAlias = (
-    tuple[str, str, str]
-    | tuple[str, str, str, list[str] | None]
-    | tuple[str, str, str, list[str] | None, _Attestation]
-    | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity]
+    tuple[str, str, str, _TextAnalyzerSpec]
+    | tuple[str, str, str, _TextAnalyzerSpec, list[str] | None]
+    | tuple[str, str, str, _TextAnalyzerSpec, list[str] | None, _Attestation]
+    | tuple[str, str, str, _TextAnalyzerSpec, list[str] | None, _Attestation, _Fidelity]
 )
 # One vector space, as the rows a vector producer ranks: `(iri, vector)` pairs
 # in the host's own row order, which is kept because it is what ranks two
@@ -2759,14 +2798,14 @@ class retrieval:
     # ("numeric", predicate, lower_raw | None, upper_raw | None), or
     # ("entity", term).
     #
-    # `text_producers` maps a producer IRI to (stratum, predicate, graph), to
-    # (stratum, predicate, graph, domains), or to those four followed by one
+    # `text_producers` maps a producer IRI to (stratum, predicate, graph, analyzer),
+    # optionally followed by domains, then one
     # (generation, incompleteness) attestation and then one (completeness, order)
     # fidelity, where `graph` is "any", "default",
     # or a named-graph IRI and `domains` is the producer's candidate-domain
-    # declaration (see `_TextProducerSpec`: `None` or an omitted fourth element
+    # declaration (see `_TextProducerSpec`: `None` or an omitted fifth element
     # promises nothing and restricts nothing, a list of tag IRIs restricts the
-    # producer to those blocks, and an empty list is refused by name; the fifth
+    # producer to those blocks, and an empty list is refused by name; the sixth
     # position is what the host attests about the index behind the producer, and
     # declaring nothing there is silence rather than a claim the index was whole).
     #
@@ -3113,7 +3152,7 @@ class retrieval:
     # absent rather than reported as having declined to answer.
     #
     # Either axis may be the HOST's word rather than the relation's, through the
-    # fifth position of that producer's `_TextProducerSpec` or the attestation
+    # sixth position of that producer's `_TextProducerSpec` or the attestation
     # position of a `_HnswProducerSpec` / `_KnnProducerSpec`. That is the only way
     # an incompleteness reaches this map at all: every shipped relation indexes
     # what it was handed in this call and has no way to know what was missing from
