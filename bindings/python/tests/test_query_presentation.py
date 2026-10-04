@@ -154,3 +154,103 @@ def test_a_valid_neighbour_still_runs() -> None:
     assert store.query(f"SELECT * WHERE {{ <{EX}s> ?p ?o }}")
     store.update(f"INSERT DATA {{ <{EX}a> <{EX}p> 1 }}")
     assert len(store) == 2
+
+
+def _assert_no_presentation(error: BaseException) -> None:
+    assert isinstance(error, ValueError)
+    assert error.message_id is None
+    assert error.presentation is None
+
+
+def _short_row_relation() -> dict:
+    """A relation declared 1 x 1 whose one row carries a single term."""
+    return {f"{EX}r": (1, 1, [(purrdf.NamedNode(f"{EX}a"),)])}
+
+
+def _full_row_relation() -> dict:
+    return {f"{EX}r": (1, 1, [(purrdf.NamedNode(f"{EX}a"), purrdf.NamedNode(f"{EX}b"))])}
+
+
+# Every argument refusal of the six SPARQL methods, each beside its parse-failure
+# neighbour on the same method, which carries a presentation.
+ARGUMENT_REFUSALS = [
+    (
+        "unknown entailment regime",
+        lambda s: s.query_entailment_governed("ASK {}", "bogus"),
+        lambda s: s.query_entailment_governed("ASK {", "rdfs"),
+        "unknown entailment regime",
+    ),
+    (
+        "a rule document on a regime that takes none",
+        lambda s: s.query_entailment_governed("ASK {}", "rdfs", program="garbage((("),
+        lambda s: s.query_entailment_governed("ASK {", "rdfs"),
+        "takes no rule document",
+    ),
+    (
+        "query: a relation row of the wrong arity",
+        lambda s: s.query("ASK {}", relations=_short_row_relation()),
+        lambda s: s.query("ASK {", relations=_full_row_relation()),
+        r"row 0 has 1 value\(s\)",
+    ),
+    (
+        "query_governed: a ceiling named beside no ceiling",
+        lambda s: s.query_governed("ASK {}", no_ceiling=True, fuel=5),
+        lambda s: s.query_governed("ASK {", fuel=5),
+        "no ceiling at all",
+    ),
+    (
+        "prepare: a parameter declared twice",
+        lambda s: s.prepare("SELECT ?x WHERE { ?x ?p ?o }", parameters=["x", "x"]),
+        lambda s: s.prepare("ASK {", parameters=["x"]),
+        "declared more than once",
+    ),
+    (
+        "update: a relation row of the wrong arity",
+        lambda s: s.update("INSERT DATA {}", relations=_short_row_relation()),
+        lambda s: s.update("DELETE WHERE {", relations=_full_row_relation()),
+        r"row 0 has 1 value\(s\)",
+    ),
+    (
+        "update_governed: a ceiling named beside no ceiling",
+        lambda s: s.update_governed("INSERT DATA {}", no_ceiling=True, fuel=5),
+        lambda s: s.update_governed("DELETE WHERE {", fuel=5),
+        "no ceiling at all",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("refused", "parse_failure", "words"),
+    [case[1:] for case in ARGUMENT_REFUSALS],
+    ids=[case[0] for case in ARGUMENT_REFUSALS],
+)
+def test_every_value_error_of_the_sparql_methods_carries_both_attributes(
+    refused, parse_failure, words: str
+) -> None:
+    store = _store()
+    with pytest.raises(ValueError, match=words) as raised:
+        refused(store)
+    _assert_no_presentation(raised.value)
+    with pytest.raises(ValueError) as neighbour:
+        parse_failure(store)
+    assert neighbour.value.message_id.startswith("sparql-parse-")
+    assert neighbour.value.presentation["message_id"] == neighbour.value.message_id
+
+
+def test_the_valid_neighbours_of_the_argument_refusals_run() -> None:
+    store = _store()
+    assert store.query_entailment_governed("ASK {}", "rdfs").is_complete
+    assert store.query("ASK {}", relations=_full_row_relation())
+    assert store.query_governed("ASK {}", fuel=1_000_000).is_complete
+    store.prepare("SELECT ?x WHERE { ?x ?p ?o }", parameters=["x"])
+    store.update("INSERT DATA {}", relations=_full_row_relation())
+    store.update_governed("INSERT DATA {}", fuel=1_000_000)
+    assert len(store) == 1
+
+
+def test_a_type_error_is_left_as_it_was() -> None:
+    """Only `ValueError` gains the attributes; a wrong-typed argument stays a plain `TypeError`."""
+    with pytest.raises(TypeError) as raised:
+        _store().query("ASK {}", relations={f"{EX}r": []})
+    assert not hasattr(raised.value, "message_id")
+    assert not hasattr(raised.value, "presentation")

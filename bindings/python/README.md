@@ -737,8 +737,10 @@ IRI refusal came from the IRI checker, `detail` holds that condition in the same
 shape. For example, `iri-bad-percent-encoding` comes with its byte `offset`, and
 `iri-relative-no-base` with the `reference`. `query`, `query_governed`,
 `query_entailment_governed`, `prepare`, `update` and `update_governed` attach
-both attributes. A failure on those calls that has no typed presentation
-carries `None` in both.
+both attributes to every `ValueError` they raise. A failure with no typed
+presentation, such as an argument refusal, an unknown entailment regime or a
+rule document the regime does not take, carries `None` in both. A wrong-typed
+argument is still a plain `TypeError`.
 
 ## Base IRIs
 

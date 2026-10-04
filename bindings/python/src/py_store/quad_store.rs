@@ -104,44 +104,48 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        let subs = collect_substitutions(substitutions)?;
-        // Python data is converted to owned `TermValue`s HERE, while the GIL is
-        // held; nothing below re-enters the interpreter.
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let inner = &self.inner;
-        // Snapshot + engine build + evaluation run detached (GIL released);
-        // results are materialized into Python objects after reacquiring.
-        let result = py.detach(move || {
-            let dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates =
-                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
-            let parser_options = engine_parser_options(&config);
-            let engine = build_engine(config);
-            engine
-                .query_with_options_view(
-                    &*dataset,
-                    SparqlRequest {
-                        query,
-                        base_iri: None,
-                        substitutions: &subs,
-                    },
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
-                )
-                .map_err(|e| presentation::value_error(format!("query evaluation error: {e}"), &e))
-        })?;
-        materialize_results(py, result)
+        presentation::settled(move || {
+            let subs = collect_substitutions(substitutions)?;
+            // Python data is converted to owned `TermValue`s HERE, while the GIL is
+            // held; nothing below re-enters the interpreter.
+            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let config = EngineConfig {
+                extension_namespaces,
+                property_fn_namespaces,
+                standpoint_predicates,
+            };
+            let inner = &self.inner;
+            // Snapshot + engine build + evaluation run detached (GIL released);
+            // results are materialized into Python objects after reacquiring.
+            let result = py.detach(move || {
+                let dataset = inner
+                    .freeze()
+                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+                let registry = build_relations(specs, &dataset)?;
+                let aggregates =
+                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+                let parser_options = engine_parser_options(&config);
+                let engine = build_engine(config);
+                engine
+                    .query_with_options_view(
+                        &*dataset,
+                        SparqlRequest {
+                            query,
+                            base_iri: None,
+                            substitutions: &subs,
+                        },
+                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?),
+                    )
+                    .map_err(|e| {
+                        presentation::value_error(format!("query evaluation error: {e}"), &e)
+                    })
+            })?;
+            materialize_results(py, result)
+        })
     }
 
     /// Run a SPARQL query under caller-supplied execution governors, returning a
@@ -218,52 +222,56 @@ impl PyQuadStore {
         no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyQueryOutcome>> {
-        let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let args = GovernorArgs {
-            fuel,
-            deadline_ms,
-            max_answers,
-            max_intermediate_cells,
-            max_scratch_bytes,
-            max_remote_requests,
-            no_ceiling,
-        };
-        let inner = &self.inner;
-        // Snapshot + engine build + governed evaluation run detached (GIL released), so
-        // the thread holding `cancel` keeps running while this one is in the engine.
-        let outcome = run_governed(py, args, cancel, move |governors| {
-            let dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates =
-                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
-            let parser_options = engine_parser_options(&config);
-            let engine = build_engine(config);
-            engine
-                .query_governed(
-                    &dataset,
-                    SparqlRequest {
-                        query,
-                        base_iri: None,
-                        substitutions: &subs,
-                    },
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
-                    governors,
-                )
-                .map_err(|e| presentation::value_error(format!("query evaluation error: {e}"), &e))
-        })?;
-        materialize_outcome(py, outcome)
+        presentation::settled(move || {
+            let subs = collect_substitutions(substitutions)?;
+            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let config = EngineConfig {
+                extension_namespaces,
+                property_fn_namespaces,
+                standpoint_predicates,
+            };
+            let args = GovernorArgs {
+                fuel,
+                deadline_ms,
+                max_answers,
+                max_intermediate_cells,
+                max_scratch_bytes,
+                max_remote_requests,
+                no_ceiling,
+            };
+            let inner = &self.inner;
+            // Snapshot + engine build + governed evaluation run detached (GIL released), so
+            // the thread holding `cancel` keeps running while this one is in the engine.
+            let outcome = run_governed(py, args, cancel, move |governors| {
+                let dataset = inner
+                    .freeze()
+                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+                let registry = build_relations(specs, &dataset)?;
+                let aggregates =
+                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+                let parser_options = engine_parser_options(&config);
+                let engine = build_engine(config);
+                engine
+                    .query_governed(
+                        &dataset,
+                        SparqlRequest {
+                            query,
+                            base_iri: None,
+                            substitutions: &subs,
+                        },
+                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?),
+                        governors,
+                    )
+                    .map_err(|e| {
+                        presentation::value_error(format!("query evaluation error: {e}"), &e)
+                    })
+            })?;
+            materialize_outcome(py, outcome)
+        })
     }
 
     /// Run a governed SPARQL query over a closure produced by the named entailment
@@ -359,97 +367,100 @@ impl PyQuadStore {
         no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
-        let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let plan =
-            QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
-        // The store's `owl:imports` table, parsed by the shared boundary before any closure
-        // work. Absent is EMPTY — "imports nothing" — so a store that does import a document
-        // is refused by name rather than closed without it.
-        let imports = crate::py_entail::entailment_import_map(imports, premise_iris)?;
-        let limits = purrdf_validate::MaterializeLimits {
-            max_stored_facts,
-            max_join_steps,
-            host: purrdf_validate::RegimeHost::Python,
-        };
-        let args = GovernorArgs {
-            fuel,
-            deadline_ms,
-            max_answers,
-            max_intermediate_cells,
-            max_scratch_bytes,
-            max_remote_requests,
-            no_ceiling,
-        };
-        let inner = &self.inner;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let outcome = run_governed(py, args, cancel, move |governors| {
-            let dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-            // Two registries, and only the second one answers. This one is what the query
-            // is PARSED against — a registered predicate becomes a call node only if its
-            // registry was in scope when the query was read — and it is built over the
-            // store's own snapshot. The one below is built over the CLOSURE the regime
-            // materializes, which is the dataset the query is evaluated over, so a
-            // `path_relations` traversal and a `relations_from_graph` table both read the
-            // same data every other pattern in the query does. Before this pairing existed
-            // they read the pre-closure store and returned a SHORT bag with no diagnostic.
-            let registry = build_relations(specs.clone(), &dataset)?;
-            let rebuild = |closure: &RdfDataset| {
-                registry_over(specs.clone(), closure).map_err(purrdf_sparql_eval::EvalError::data)
+        presentation::settled(move || {
+            let subs = collect_substitutions(substitutions)?;
+            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let plan =
+                QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
+            // The store's `owl:imports` table, parsed by the shared boundary before any closure
+            // work. Absent is EMPTY — "imports nothing" — so a store that does import a document
+            // is refused by name rather than closed without it.
+            let imports = crate::py_entail::entailment_import_map(imports, premise_iris)?;
+            let limits = purrdf_validate::MaterializeLimits {
+                max_stored_facts,
+                max_join_steps,
+                host: purrdf_validate::RegimeHost::Python,
             };
-            let relations = if specs.is_empty() {
-                ClosureRelations::NONE
-            } else {
-                ClosureRelations::rebuilt_by(&rebuild)
+            let args = GovernorArgs {
+                fuel,
+                deadline_ms,
+                max_answers,
+                max_intermediate_cells,
+                max_scratch_bytes,
+                max_remote_requests,
+                no_ceiling,
             };
-            let parser_options = engine_parser_options(&config);
-            let engine = build_engine(config);
-            let aggregates =
-                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
-            query_with_entailment_closure_governed(
-                &engine,
-                &dataset,
-                SparqlRequest {
-                    query,
-                    base_iri: None,
-                    substitutions: &subs,
-                },
-                &EntailmentClosure::new(plan.entailment(), &imports)
-                    .with_limits(limits.eval_options()),
-                purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                    parser_options,
-                    registry.as_ref(),
-                    aggregates.as_ref(),
-                )?),
-                &relations,
-                governors,
-            )
-            .map_err(|failure| match &failure {
-                // Rendered by the shared boundary, so a passed evaluation limit names this
-                // method's keyword rather than a Rust type a Python caller cannot reach.
-                crate::ReasoningError::Entailment(error) => PyValueError::new_err(format!(
-                    "entailment query failed: {}",
-                    purrdf_validate::render_entail_error_in(
-                        entailment,
-                        error,
-                        purrdf_validate::RegimeHost::Python,
-                        purrdf_validate::RegimeService::Query,
-                    )
-                )),
-                crate::ReasoningError::Query(diagnostic) => presentation::value_error(
-                    format!("entailment query failed: {failure}"),
-                    diagnostic,
-                ),
-                _ => PyValueError::new_err(format!("entailment query failed: {failure}")),
-            })
-        })?;
-        materialize_entailment_outcome(py, outcome)
+            let inner = &self.inner;
+            let config = EngineConfig {
+                extension_namespaces,
+                property_fn_namespaces,
+                standpoint_predicates,
+            };
+            let outcome = run_governed(py, args, cancel, move |governors| {
+                let dataset = inner
+                    .freeze()
+                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+                // Two registries, and only the second one answers. This one is what the query
+                // is PARSED against — a registered predicate becomes a call node only if its
+                // registry was in scope when the query was read — and it is built over the
+                // store's own snapshot. The one below is built over the CLOSURE the regime
+                // materializes, which is the dataset the query is evaluated over, so a
+                // `path_relations` traversal and a `relations_from_graph` table both read the
+                // same data every other pattern in the query does. Before this pairing existed
+                // they read the pre-closure store and returned a SHORT bag with no diagnostic.
+                let registry = build_relations(specs.clone(), &dataset)?;
+                let rebuild = |closure: &RdfDataset| {
+                    registry_over(specs.clone(), closure)
+                        .map_err(purrdf_sparql_eval::EvalError::data)
+                };
+                let relations = if specs.is_empty() {
+                    ClosureRelations::NONE
+                } else {
+                    ClosureRelations::rebuilt_by(&rebuild)
+                };
+                let parser_options = engine_parser_options(&config);
+                let engine = build_engine(config);
+                let aggregates =
+                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+                query_with_entailment_closure_governed(
+                    &engine,
+                    &dataset,
+                    SparqlRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &subs,
+                    },
+                    &EntailmentClosure::new(plan.entailment(), &imports)
+                        .with_limits(limits.eval_options()),
+                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                        parser_options,
+                        registry.as_ref(),
+                        aggregates.as_ref(),
+                    )?),
+                    &relations,
+                    governors,
+                )
+                .map_err(|failure| match &failure {
+                    // Rendered by the shared boundary, so a passed evaluation limit names this
+                    // method's keyword rather than a Rust type a Python caller cannot reach.
+                    crate::ReasoningError::Entailment(error) => PyValueError::new_err(format!(
+                        "entailment query failed: {}",
+                        purrdf_validate::render_entail_error_in(
+                            entailment,
+                            error,
+                            purrdf_validate::RegimeHost::Python,
+                            purrdf_validate::RegimeService::Query,
+                        )
+                    )),
+                    crate::ReasoningError::Query(diagnostic) => presentation::value_error(
+                        format!("entailment query failed: {failure}"),
+                        diagnostic,
+                    ),
+                    _ => PyValueError::new_err(format!("entailment query failed: {failure}")),
+                })
+            })?;
+            materialize_entailment_outcome(py, outcome)
+        })
     }
 
     /// Run a SPARQL UPDATE against the store (COW-atomic: a failed update leaves the
@@ -487,46 +498,48 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
     ) -> PyResult<()> {
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        // Snapshot + evaluation run detached (GIL released); the fresh frozen
-        // base is adopted after reacquiring.
-        let inner = &self.inner;
-        let dataset = py.detach(move || {
-            let mut dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates =
-                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
-            let parser_options = engine_parser_options(&config);
-            let engine = build_engine(config);
-            engine
-                .update_with_options(
-                    &mut dataset,
-                    SparqlRequest {
-                        query: update,
-                        base_iri: None,
-                        substitutions: &[],
-                    },
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
-                )
-                .map_err(|e| {
-                    presentation::value_error(format!("update evaluation error: {e}"), &e)
-                })?;
-            Ok::<_, PyErr>(dataset)
-        })?;
-        // The UPDATE produced a fresh frozen base; adopt it as the new COW base.
-        self.inner = MutableDataset::new(dataset);
-        Ok(())
+        presentation::settled(move || {
+            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let config = EngineConfig {
+                extension_namespaces,
+                property_fn_namespaces,
+                standpoint_predicates,
+            };
+            // Snapshot + evaluation run detached (GIL released); the fresh frozen
+            // base is adopted after reacquiring.
+            let inner = &self.inner;
+            let dataset = py.detach(move || {
+                let mut dataset = inner
+                    .freeze()
+                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+                let registry = build_relations(specs, &dataset)?;
+                let aggregates =
+                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+                let parser_options = engine_parser_options(&config);
+                let engine = build_engine(config);
+                engine
+                    .update_with_options(
+                        &mut dataset,
+                        SparqlRequest {
+                            query: update,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?),
+                    )
+                    .map_err(|e| {
+                        presentation::value_error(format!("update evaluation error: {e}"), &e)
+                    })?;
+                Ok::<_, PyErr>(dataset)
+            })?;
+            // The UPDATE produced a fresh frozen base; adopt it as the new COW base.
+            self.inner = MutableDataset::new(dataset);
+            Ok(())
+        })
     }
 
     /// Run a SPARQL UPDATE under caller-supplied execution governors, returning an
@@ -586,59 +599,61 @@ impl PyQuadStore {
         no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyUpdateOutcome>> {
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let args = GovernorArgs {
-            fuel,
-            deadline_ms,
-            max_answers: None,
-            max_intermediate_cells,
-            max_scratch_bytes,
-            max_remote_requests,
-            no_ceiling,
-        };
-        let inner = &self.inner;
-        // Snapshot + governed evaluation run detached (GIL released).
-        let (outcome, dataset) = run_governed(py, args, cancel, move |governors| {
-            let mut dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates =
-                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
-            let parser_options = engine_parser_options(&config);
-            let outcome = build_engine(config)
-                .update_governed(
-                    &mut dataset,
-                    SparqlRequest {
-                        query: update,
-                        base_iri: None,
-                        substitutions: &[],
-                    },
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
-                    governors,
-                )
-                .map_err(|e| {
-                    presentation::value_error(format!("update evaluation error: {e}"), &e)
-                })?;
-            Ok((outcome, dataset))
-        })?;
-        // The engine publishes into its own `Arc` only on the applied path, so adopting
-        // the returned base on a trip would adopt a base nothing was written to. Adopt it
-        // only when the request applied, and the tripped path leaves this store's COW
-        // base untouched.
-        if outcome.is_applied() {
-            self.inner = MutableDataset::new(dataset);
-        }
-        materialize_update_outcome(py, &outcome)
+        presentation::settled(move || {
+            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let config = EngineConfig {
+                extension_namespaces,
+                property_fn_namespaces,
+                standpoint_predicates,
+            };
+            let args = GovernorArgs {
+                fuel,
+                deadline_ms,
+                max_answers: None,
+                max_intermediate_cells,
+                max_scratch_bytes,
+                max_remote_requests,
+                no_ceiling,
+            };
+            let inner = &self.inner;
+            // Snapshot + governed evaluation run detached (GIL released).
+            let (outcome, dataset) = run_governed(py, args, cancel, move |governors| {
+                let mut dataset = inner
+                    .freeze()
+                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+                let registry = build_relations(specs, &dataset)?;
+                let aggregates =
+                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+                let parser_options = engine_parser_options(&config);
+                let outcome = build_engine(config)
+                    .update_governed(
+                        &mut dataset,
+                        SparqlRequest {
+                            query: update,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?),
+                        governors,
+                    )
+                    .map_err(|e| {
+                        presentation::value_error(format!("update evaluation error: {e}"), &e)
+                    })?;
+                Ok((outcome, dataset))
+            })?;
+            // The engine publishes into its own `Arc` only on the applied path, so adopting
+            // the returned base on a trip would adopt a base nothing was written to. Adopt it
+            // only when the request applied, and the tripped path leaves this store's COW
+            // base untouched.
+            if outcome.is_applied() {
+                self.inner = MutableDataset::new(dataset);
+            }
+            materialize_update_outcome(py, &outcome)
+        })
     }
 
     fn __len__(&self) -> usize {

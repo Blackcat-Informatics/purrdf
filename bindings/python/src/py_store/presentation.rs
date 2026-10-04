@@ -15,6 +15,12 @@
 //!   condition of the same shape, such as an IRI refusal's `iri-*` cause.
 //!
 //! A host reads the condition and its typed arguments without parsing English.
+//!
+//! Every `ValueError` that leaves `query`, `query_governed`,
+//! `query_entailment_governed`, `prepare`, `update` or `update_governed` carries both
+//! attributes, whatever raised it: [`settled`] is those methods' one exit, and it
+//! gives a `ValueError` without a presentation (an argument refusal, an unknown
+//! regime, a rule document a regime refuses) `None` for both.
 
 use purrdf_core::{DiagnosticPresentation, DiagnosticValue, RdfDiagnostic};
 use pyo3::exceptions::PyValueError;
@@ -46,6 +52,31 @@ pub(super) fn value_error(message: String, diagnostic: &RdfDiagnostic) -> PyErr 
         // interpreter memory exhaustion; that failure, not the parse failure, is then
         // the exception the caller sees.
         attached.map_or_else(|failure| failure, |()| error)
+    })
+}
+
+/// Run a SPARQL method's body, so that every `ValueError` it raises carries
+/// `message_id` and `presentation`. One raised with them already set by
+/// [`value_error`] keeps them, and any other gets `None` for both. Other exception
+/// types (a `TypeError`, a `KeyboardInterrupt`) pass through untouched.
+pub(super) fn settled<T>(body: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
+    body().map_err(|error| {
+        Python::attach(|py| {
+            if !error.is_instance_of::<PyValueError>(py) {
+                return error;
+            }
+            let value = error.value(py);
+            let attached = ["message_id", "presentation"]
+                .into_iter()
+                .try_for_each(|name| {
+                    if value.hasattr(name)? {
+                        Ok(())
+                    } else {
+                        value.setattr(name, py.None())
+                    }
+                });
+            attached.map_or_else(|failure| failure, |()| error)
+        })
     })
 }
 
