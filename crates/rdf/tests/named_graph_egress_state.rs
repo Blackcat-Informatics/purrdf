@@ -196,3 +196,73 @@ fn trix_parser_reads_an_empty_graph_block_as_a_declared_graph() {
     assert_eq!(parsed.named_graphs().count(), 1);
     assert_eq!(parsed.quad_count(), 0);
 }
+
+/// Every format that writes the whole dataset either spells a declared empty graph or
+/// lists it among `empty_named_graphs_dropped` — never neither. The list is exact: it
+/// names the IRI- and blank-named empty graphs and never `g1`, which owns a row.
+#[test]
+fn a_whole_dataset_serialization_lists_each_empty_graph_it_cannot_spell() {
+    let dataset = source();
+    for format in NativeRdfFormat::all() {
+        let dropped =
+            purrdf_rdf::empty_named_graphs_dropped(&*dataset, format, SerializeGraph::Dataset)
+                .expect("lists");
+        let text = select(&dataset, format, SerializeGraph::Dataset);
+        let spelled = text.contains("http://example.org/empty");
+        if format.carries_empty_named_graphs() {
+            assert!(spelled, "{format:?} writes the empty graph, got:\n{text}");
+            assert!(dropped.is_empty(), "{format:?}: {dropped:?}");
+        } else {
+            assert!(
+                !spelled,
+                "{format:?} has no empty-graph spelling, got:\n{text}"
+            );
+            assert_eq!(dropped.len(), 2, "{format:?}: {dropped:?}");
+            assert_eq!(
+                dropped[0],
+                TermValue::Iri("http://example.org/empty".to_owned()),
+                "{format:?}"
+            );
+            assert!(matches!(dropped[1], TermValue::Blank { .. }), "{format:?}");
+        }
+    }
+    assert!(NativeRdfFormat::TriG.carries_empty_named_graphs());
+    assert!(!NativeRdfFormat::NQuads.carries_empty_named_graphs());
+    assert!(!NativeRdfFormat::HexTuples.carries_empty_named_graphs());
+}
+
+/// The neighbouring cases list nothing: a dataset with no declared empty graph, and a
+/// selection the caller spelled out (default graph, or one named graph).
+#[test]
+fn nothing_is_listed_without_a_declared_empty_graph_or_for_a_chosen_selection() {
+    let plain = parse_dataset(
+        "<http://example.org/g1> { <http://example.org/s> <http://example.org/p> <http://example.org/o> . }\n"
+            .as_bytes(),
+        NativeRdfFormat::TriG.media_type(),
+        None,
+    )
+    .expect("parses");
+    let declared = source();
+    let g1 = TermValue::Iri("http://example.org/g1".to_owned());
+    for format in [
+        NativeRdfFormat::NQuads,
+        NativeRdfFormat::HexTuples,
+        NativeRdfFormat::Turtle,
+    ] {
+        let list = |dataset: &RdfDataset, selection| {
+            purrdf_rdf::empty_named_graphs_dropped(dataset, format, selection).expect("lists")
+        };
+        assert!(
+            list(&plain, SerializeGraph::Dataset).is_empty(),
+            "{format:?}"
+        );
+        assert!(
+            list(&declared, SerializeGraph::DefaultGraph).is_empty(),
+            "{format:?}"
+        );
+        assert!(
+            list(&declared, SerializeGraph::Named(&g1)).is_empty(),
+            "{format:?}"
+        );
+    }
+}

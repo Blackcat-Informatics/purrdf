@@ -57,6 +57,20 @@ pub const LOSS_ANNOTATION_LAYER_DROPPED: &str = "annotation-layer-dropped";
 /// standpoint scope is lost. Emitted in addition to the annotation-layer code, never alone.
 pub const LOSS_STANDPOINT_SCOPE_DROPPED: &str = "standpoint-scope-dropped";
 
+/// Runtime (`record`-discipline) code: a named graph the source dataset declares
+/// without giving it any row was dropped, because the target syntax has no spelling
+/// for an EMPTY named graph — N-Quads and HexTuples name a graph only on a row, and a
+/// single-graph syntax has no graph construct at all. One entry is recorded per
+/// dropped graph, naming it; a dataset with no declaration-only graph records none.
+///
+/// Not a static contract entry: the contract half of a ledger fires for every
+/// conversion of a pair, and this loss exists only for datasets that declare an
+/// empty graph. It is nonetheless REGISTERED — [`profile_for`] lists it for every
+/// syntax pair whose source can write an empty graph and whose target cannot — so a
+/// recorded entry renders `"intentional": true`. The realized source is
+/// `purrdf_rdf::empty_named_graphs_dropped`.
+pub const LOSS_EMPTY_NAMED_GRAPH_DROPPED: &str = "empty-named-graph-dropped";
+
 /// Fixed schema-language carriers that the shapes engine can interpret as
 /// SHACL. Order is canonical and used by the enumerable loss registry.
 pub const SCHEMA_IMPORT_CODECS: &[&str] = &[
@@ -831,6 +845,50 @@ pub fn is_projection(name: &str) -> bool {
 const NAMED_GRAPH_DROPPED_NOTE: &str = "The target syntax has no named-graph construct; a quad asserted in a named graph is \
      DROPPED entirely — statement and graph name alike — and only the default graph \
      survives. The quads are NOT folded into the default graph.";
+
+/// `true` when the syntax codec can write a named graph that holds no row: TriG's
+/// `<g> { }` and the JSON-LD family's `{"@id": g, "@graph": []}`. N-Quads names a graph
+/// only on a row, the single-graph syntaxes have no graph construct, and the frozen GTS
+/// payload has no declarations slot.
+///
+/// Panics on unknown codec name.
+fn carries_empty_named_graphs(name: &str) -> bool {
+    matches!(
+        canonical_codec_name(name),
+        "trig" | "jsonld" | "jsonld-star" | "yaml-ld-star"
+    )
+}
+
+/// The note on every registered [`LOSS_EMPTY_NAMED_GRAPH_DROPPED`] row.
+const EMPTY_NAMED_GRAPH_DROPPED_NOTE: &str = "A named graph the source declares without any row has no spelling in the target \
+     syntax, which names a graph only on a row or has no named-graph construct; each such \
+     graph is DROPPED and recorded by name at run time.";
+
+/// The registered profile of the runtime [`LOSS_EMPTY_NAMED_GRAPH_DROPPED`] code: one
+/// row per non-identity syntax pair whose source can write a declared empty graph and
+/// whose target cannot. Registry-only — [`pair_loss_ledger`] never emits it, because
+/// the loss belongs to the datasets that declare an empty graph, not to the pair.
+fn empty_named_graph_entries() -> Vec<LossEntry> {
+    let mut entries = Vec::new();
+    for &from in SYNTAX_CODECS {
+        if !carries_empty_named_graphs(from) {
+            continue;
+        }
+        for &to in SYNTAX_CODECS {
+            if carries_empty_named_graphs(to) {
+                continue;
+            }
+            entries.push(LossEntry {
+                code: Cow::Borrowed(LOSS_EMPTY_NAMED_GRAPH_DROPPED),
+                from: Cow::Borrowed(from),
+                to: Cow::Borrowed(to),
+                note: Cow::Borrowed(EMPTY_NAMED_GRAPH_DROPPED_NOTE),
+                location: None,
+            });
+        }
+    }
+    entries
+}
 
 /// Compute the static loss contract for a `from → to` transcoding pair.
 ///
@@ -2061,7 +2119,8 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
 /// [`transcode_and_shapes_entries`] (the full
 /// syntax/projection transcode matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪
 /// PROJECTION_CODECS)` and the non-syntax shapes pair `("shacl", "json-schema")`),
-/// and the standalone JSON Schema emitter profiles.
+/// the registered profile of the runtime [`LOSS_EMPTY_NAMED_GRAPH_DROPPED`] code
+/// ([`empty_named_graph_entries`]), and the standalone JSON Schema emitter profiles.
 ///
 /// [`loss_matrix_json`] renders these rows (with their `note` text intact) and
 /// [`registry`] folds them into a `(from, to) -> codes` lookup table — both
@@ -2084,6 +2143,7 @@ fn registry_entries() -> Vec<LossEntry> {
         entries.extend_from_slice(research_object_to_rdf_loss_ledger(profile).entries());
     }
     entries.extend(transcode_and_shapes_entries());
+    entries.extend(empty_named_graph_entries());
     entries.extend(json_schema_pydantic_entries());
     entries.extend(json_schema_linkml_entries());
     entries.extend(json_schema_typescript_entries());
@@ -3027,6 +3087,39 @@ mod tests {
     #[should_panic(expected = "unknown schema import codec")]
     fn schema_shacl_contract_rejects_unknown_source() {
         let _ = schema_to_shacl_loss_ledger("python-source");
+    }
+
+    /// The runtime empty-graph code is registered exactly where it can occur — a source
+    /// that writes empty graphs into a target that cannot — and is never a contract
+    /// entry, so a conversion of a dataset without declared empty graphs stays clean.
+    #[test]
+    fn empty_named_graph_code_is_registered_but_never_contracted() {
+        for (from, to, expected) in [
+            ("trig", "nquads", true),
+            ("trig", "turtle", true),
+            ("jsonld-star", "gts", true),
+            ("yaml-ld-star", "ntriples", true),
+            ("trig", "jsonld", false),
+            ("nquads", "turtle", false),
+            ("turtle", "nquads", false),
+        ] {
+            assert_eq!(
+                profile_for(from, to).contains(LOSS_EMPTY_NAMED_GRAPH_DROPPED),
+                expected,
+                "profile_for({from:?}, {to:?})"
+            );
+        }
+        for &from in SYNTAX_CODECS {
+            for &to in SYNTAX_CODECS.iter().chain(PROJECTION_CODECS) {
+                assert!(
+                    !pair_loss_ledger(from, to)
+                        .entries()
+                        .iter()
+                        .any(|entry| entry.code == LOSS_EMPTY_NAMED_GRAPH_DROPPED),
+                    "pair_loss_ledger({from:?}, {to:?}) must not contract the runtime code"
+                );
+            }
+        }
     }
 
     #[test]

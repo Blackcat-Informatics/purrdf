@@ -19,6 +19,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   writer emits an empty named `<graph>` block and the reader declares it.
   Documents for datasets without empty named graphs are byte-identical to
   before; existing graph order is unchanged.
+- **core:** Packs keep declared empty named graphs, IRI- and blank-named.
+  `PackBuilder` writes each named graph that has no base quad, reifier row or
+  annotation row as a zero-row partition in the existing TRIPLES section.
+  `PackView::named_graphs`, `dataset_from_view`, `restore_pack`,
+  `SegmentedImage::from_pack_v1`, queries over a pack and
+  `purrdf convert --from pack` all return these graphs. The pack format version
+  (1) and section count (3) are unchanged. Existing packs read as before, and
+  3.0.x readers open the new packs and list their declared graphs. A dataset
+  with no declaration-only graph writes byte-identical pack bytes. The canonical
+  `rdfc_digest` never changes, because canonical N-Quads has no empty graph.
+  `PackView::named_graphs` now also lists graphs that hold only reifier or
+  annotation rows, matching the frozen dataset.
+- **cli:** `--loss-ledger` records one `empty-named-graph-dropped` entry for each
+  declared empty named graph dropped by a target that cannot write one: N-Quads,
+  HexTuples, and every single-graph syntax. Before, this loss produced an empty
+  ledger. Conversions of datasets without such graphs, and conversions to TriG,
+  TriX, JSON-LD, YAML-LD or a pack, record no entry.
+
+### Added
+
+- **core:** `loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED`, a runtime loss code. The
+  loss registry and `generated/transcode-loss-matrix.json` list it for every
+  syntax pair whose source can write an empty named graph and whose target
+  cannot. `pair_loss_ledger` never emits it as a contract entry.
+- **rdf:** `NativeRdfFormat::carries_empty_named_graphs` and
+  `empty_named_graphs_dropped(dataset, format, selection)`. The function lists
+  the declared empty named graphs that a whole-dataset serialization to a format
+  drops.
 
 ## [3.0.1] - 2026-10-02
 

@@ -79,6 +79,9 @@ pub(crate) struct FormatDescriptor {
     /// Whether this format can carry named graphs (see
     /// [`NativeRdfFormat::supports_datasets`]).
     pub supports_datasets: bool,
+    /// Whether this format can write a named graph that holds no row (see
+    /// [`NativeRdfFormat::carries_empty_named_graphs`]).
+    pub carries_empty_named_graphs: bool,
     /// Whether this format's parser records per-statement source spans (see
     /// [`NativeRdfFormat::tokenizer_carries_spans`]).
     pub tokenizer_carries_spans: bool,
@@ -110,6 +113,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: false,
+        carries_empty_named_graphs: false,
         line_oriented: false,
         tokenizer_carries_spans: true,
         admits_relative_iri: true,
@@ -125,6 +129,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: true,
+        carries_empty_named_graphs: true,
         line_oriented: false,
         tokenizer_carries_spans: true,
         admits_relative_iri: true,
@@ -140,6 +145,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: false,
+        carries_empty_named_graphs: false,
         line_oriented: true,
         tokenizer_carries_spans: true,
         admits_relative_iri: false,
@@ -155,6 +161,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: true,
+        carries_empty_named_graphs: false,
         line_oriented: true,
         tokenizer_carries_spans: true,
         admits_relative_iri: false,
@@ -174,6 +181,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: false,
         carries_direction: true,
         supports_datasets: false,
+        carries_empty_named_graphs: false,
         line_oriented: false,
         tokenizer_carries_spans: false,
         admits_relative_iri: true,
@@ -189,6 +197,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: false,
         carries_direction: false,
         supports_datasets: true,
+        carries_empty_named_graphs: true,
         line_oriented: false,
         tokenizer_carries_spans: false,
         admits_relative_iri: false,
@@ -204,6 +213,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: false,
         carries_direction: false,
         supports_datasets: true,
+        carries_empty_named_graphs: false,
         line_oriented: true,
         tokenizer_carries_spans: false,
         admits_relative_iri: false,
@@ -219,6 +229,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: true,
+        carries_empty_named_graphs: true,
         line_oriented: false,
         tokenizer_carries_spans: false,
         admits_relative_iri: true,
@@ -234,6 +245,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: true,
+        carries_empty_named_graphs: true,
         line_oriented: false,
         tokenizer_carries_spans: false,
         admits_relative_iri: true,
@@ -280,6 +292,15 @@ impl NativeRdfFormat {
     /// (see `serialize.rs`).
     pub fn supports_datasets(self) -> bool {
         descriptor(self).supports_datasets
+    }
+
+    /// Whether this format can write a named graph that holds no row: TriG
+    /// (`<g> { }`), TriX (an empty `<graph>` block), JSON-LD and YAML-LD
+    /// (`{"@id": g, "@graph": []}`). N-Quads and HexTuples spell a graph only through
+    /// a row that names it, and the single-graph syntaxes have no graph construct at
+    /// all, so a declared graph that owns no row has no spelling there.
+    pub fn carries_empty_named_graphs(self) -> bool {
+        descriptor(self).carries_empty_named_graphs
     }
 
     /// Whether this format carries the RDF-1.2 statement layer (quoted-triple reifiers +

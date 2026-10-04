@@ -726,6 +726,65 @@ fn count_named_graph_rows<D: DatasetView>(dataset: &D) -> usize {
         + dataset.annotation_quads().filter(|q| q.g.is_some()).count()
 }
 
+/// The declared named graphs a serialization of `dataset` to `format` under `selection`
+/// leaves out with no row to account for them, sorted by value.
+///
+/// A named graph the dataset declares without any base quad, reifier row or annotation
+/// row reaches a document only through a construct for an EMPTY graph: TriG's
+/// `<g> { }`, TriX's empty `<graph>`, JSON-LD's and YAML-LD's
+/// `{"@id": g, "@graph": []}` ([`NativeRdfFormat::carries_empty_named_graphs`]).
+/// N-Quads and HexTuples name a graph only on a row, and the single-graph syntaxes have
+/// no graph at all, so serializing the whole dataset to one of them drops each such
+/// graph — and no row count ([`SerializeReport::named_graph_rows_dropped`] counts rows)
+/// can see it. This lists them so the drop is reported rather than silent; it is the
+/// realized source of `purrdf_core::loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED`.
+///
+/// Empty when `format` carries empty graphs, and for a [`SerializeGraph::DefaultGraph`]
+/// or [`SerializeGraph::Named`] selection: the caller spelled out the subset they
+/// wanted, exactly as [`SerializeReport::named_graph_rows_dropped`] treats them.
+///
+/// # Errors
+///
+/// `source-read` when the dataset's read session refuses or a graph name does not
+/// resolve.
+pub fn empty_named_graphs_dropped<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    selection: SerializeGraph<'_>,
+) -> Result<Vec<purrdf_core::TermValue>, RdfDiagnostic> {
+    if !matches!(selection, SerializeGraph::Dataset) || format.carries_empty_named_graphs() {
+        return Ok(Vec::new());
+    }
+    dataset
+        .checked_read(|dataset| {
+            let rowless: Vec<D::Id> = dataset
+                .named_graphs()
+                .filter(|&g| {
+                    dataset
+                        .quads_for_pattern(None, None, None, purrdf_core::GraphMatch::Named(g))
+                        .next()
+                        .is_none()
+                })
+                .collect();
+            if rowless.is_empty() {
+                return Ok(Vec::new());
+            }
+            let side_graphs: std::collections::BTreeSet<D::Id> = dataset
+                .reifier_quads()
+                .filter_map(|q| q.g)
+                .chain(dataset.annotation_quads().filter_map(|q| q.g))
+                .collect();
+            let mut dropped = rowless
+                .into_iter()
+                .filter(|g| !side_graphs.contains(g))
+                .map(|g| dataset.term_value(g).map_err(source_read_failure))
+                .collect::<Result<Vec<_>, _>>()?;
+            dropped.sort();
+            Ok(dropped)
+        })
+        .map_err(source_read_failure)?
+}
+
 /// Build the first-party [`SerGraph`] from the frozen IR, applying the
 /// [`SerializeGraph`] filter while populating the quad and statement-row tables.
 ///
