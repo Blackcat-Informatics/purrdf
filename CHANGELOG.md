@@ -6,6 +6,26 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+### Fixed
+
+- **SHACL Core:** `sh:datatype` now rejects ill-formed literals of every XSD
+  datatype PurRDF models, not only the numeric and boolean types. This covers
+  `xsd:dateTime`, `xsd:date`, `xsd:time`, `xsd:dateTimeStamp` (which also
+  requires a timezone), the `xsd:g*` types, the duration types, `xsd:hexBinary`
+  and `xsd:base64Binary`. For example, `"notadate"^^xsd:date` no longer
+  conforms. Well-formed values that exceed PurRDF's numeric range, such as
+  years beyond 64 bits, still conform. Custom datatypes are not checked.
+- **XSD lexical forms:** durations follow the XSD grammar. Designators must
+  appear in order, each at most once, and `T` must be followed by a time
+  component, so `P1YT` and `P1D1Y` are rejected. A `base64Binary` value's
+  final character before padding may not encode extra bits, so `AQJ=` is
+  rejected. Years, duration fields and fractional seconds that are well-formed
+  but too large to represent now report an out-of-range error instead of an
+  invalid lexical form. Fractional seconds with trailing zeros beyond 18
+  digits now parse.
+
 ## [3.0.1] - 2026-10-02
 
 ### Fixed

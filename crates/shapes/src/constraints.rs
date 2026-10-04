@@ -31,8 +31,8 @@ use crate::shapes::{
 use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
 use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::datatype::{
-    XSD_BOOLEAN, XSD_BYTE, XSD_DATE, XSD_DATE_TIME, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INT,
-    XSD_INTEGER, XSD_LONG, XSD_NEGATIVE_INTEGER, XSD_NON_NEGATIVE_INTEGER,
+    XSD_BOOLEAN, XSD_BYTE, XSD_DATE, XSD_DATE_TIME, XSD_DATE_TIME_STAMP, XSD_DECIMAL, XSD_DOUBLE,
+    XSD_FLOAT, XSD_INT, XSD_INTEGER, XSD_LONG, XSD_NEGATIVE_INTEGER, XSD_NON_NEGATIVE_INTEGER,
     XSD_NON_POSITIVE_INTEGER, XSD_POSITIVE_INTEGER, XSD_SHORT, XSD_STRING, XSD_TIME,
     XSD_UNSIGNED_BYTE, XSD_UNSIGNED_INT, XSD_UNSIGNED_LONG, XSD_UNSIGNED_SHORT,
 };
@@ -3481,9 +3481,11 @@ fn is_xsd_decimal_lexical(s: &str) -> bool {
 ///   §4.1.2: sh:datatype compares the rdf:type of the literal, so a
 ///   `"55"^^xsd:integer` value violates a shape requiring `xsd:byte` even
 ///   though 55 fits in a byte — W3C `core/property/datatype-ill-formed`).
-/// - On the exact match, additionally validates the lexical form for common
-///   XSD types (xsd:integer unbounded, xsd:decimal no scientific notation,
-///   xsd:double/float, xsd:boolean), and for a DERIVED integer type validates
+/// - On the exact match, additionally validates the lexical form of every XSD
+///   datatype the workspace models ([`xsd_lexical_valid`]: xsd:integer
+///   unbounded, xsd:decimal without scientific notation, xsd:double/float,
+///   xsd:boolean, the temporal, Gregorian, duration and binary types,
+///   xsd:dateTimeStamp), and for a DERIVED integer type validates
 ///   the VALUE space: the native codec keeps `"-2"^^xsd:nonNegativeInteger`
 ///   faithfully typed, but the value is outside the derived range and must
 ///   violate.
@@ -3522,8 +3524,20 @@ fn is_derived_integer_type(dt: &str) -> bool {
     dt != XSD_INTEGER && XsdDatatype::from_iri(dt).is_some_and(XsdDatatype::is_integer_family)
 }
 
-/// Lexical-form validity for an exact datatype-IRI match. Unknown datatypes are
-/// accepted (no lexical facet enforced).
+/// Lexical-form validity for an exact datatype-IRI match (SHACL Core §4.1.1: a
+/// literal ill-formed for its datatype does not conform).
+///
+/// The numeric and boolean arms below keep their SHACL-pinned readings
+/// (`whiteSpace` = `collapse`, the XSD 1.0 float/double profile). Every other
+/// datatype [`XsdDatatype`] models — the temporal and Gregorian types, the
+/// durations, the binary types, `xsd:string` — is read by
+/// [`purrdf_xsd::parse_xsd10`], the same profile, after the same `collapse` trim
+/// its `whiteSpace` facet fixes; `xsd:dateTimeStamp` is an `xsd:dateTime` whose
+/// timezone is required. Only [`XsdError::InvalidLexical`](purrdf_xsd::XsdError)
+/// is ill-formed: a lexical form that is well-formed but past this crate's
+/// representable range (a year beyond `i64`, more fractional seconds than the
+/// decimal holds) is in the lexical space and conforms. A datatype outside that
+/// model (a custom IRI, `rdf:HTML`, `xsd:anyURI`, ...) has no lexical check.
 fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     match dt {
         XSD_INTEGER => is_xsd_integer_lexical(lex),
@@ -3540,8 +3554,23 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
                 "true" | "false" | "1" | "0"
             )
         }
-        _ => true,
+        XSD_DATE_TIME_STAMP => {
+            match purrdf_xsd::temporal::parse_datetime(purrdf_iri::terminals::trim_ws(lex)) {
+                Ok(stamp) => stamp.timezone_minutes().is_some(),
+                Err(error) => in_lexical_space(&error),
+            }
+        }
+        _ => XsdDatatype::from_iri(dt).is_none_or(|datatype| {
+            purrdf_xsd::parse_xsd10(purrdf_iri::terminals::trim_ws(lex), datatype)
+                .map_or_else(|error| in_lexical_space(&error), |_| true)
+        }),
     }
+}
+
+/// Whether a failed XSD parse still leaves the lexical form in its datatype's
+/// lexical space: only [`purrdf_xsd::XsdError::InvalidLexical`] says it is not.
+const fn in_lexical_space(error: &purrdf_xsd::XsdError) -> bool {
+    !matches!(error, purrdf_xsd::XsdError::InvalidLexical { .. })
 }
 
 /// Whether a literal stored as the canonical base type satisfies a
