@@ -152,6 +152,13 @@ impl ParseError {
                 ],
             ),
         };
+        // Unreachable refusal: `DiagnosticPresentation::new` judges only the identity,
+        // the template and the parameter names, and every one of those is a literal
+        // fixed per arm above. Argument values are spliced into the rendering and never
+        // re-read as template text, so no field value can make an arm fail.
+        // `presentation_preserves_variant_identity_fields_and_english` constructs every
+        // arm, and `presentation_is_independent_of_field_values` feeds each one
+        // template-like text, so a drifted arm fails the test suite, not a caller.
         DiagnosticPresentation::new(identity, template, parameters)
             .expect("parse error templates and their typed argument sets agree")
     }
@@ -279,6 +286,46 @@ mod tests {
                     .as_str(),
                 Some("9007199254740993")
             );
+        }
+    }
+
+    /// Field values never reach template validation: brace-, colon- and
+    /// quote-bearing text in every textual field renders verbatim (or `Debug`-quoted
+    /// where the template asks), and extreme offsets render exactly, in every arm.
+    #[test]
+    fn presentation_is_independent_of_field_values() {
+        let hostile = "{at} }{ {{x}} {reason:?} \"\\ \u{0}";
+        let errors = [
+            ParseError::lex(hostile, usize::MAX),
+            ParseError::syntax(hostile, 0),
+            ParseError::unsupported(hostile),
+            ParseError::Iri {
+                lexical: hostile.into(),
+                reason: hostile.into(),
+            },
+            ParseError::CdtArity {
+                iri: hostile.into(),
+                expected: hostile.into(),
+                found: usize::MAX,
+                at: usize::MAX,
+            },
+        ];
+        let expected = [
+            format!("SPARQL lex error at byte {}: {hostile}", usize::MAX),
+            format!("SPARQL syntax error at byte 0: {hostile}"),
+            format!(
+                "unsupported SPARQL construct: {hostile} is outside the SPARQL 1.2 \
+                 query language this processor implements"
+            ),
+            format!("invalid IRI {hostile:?} in term position: {hostile}"),
+            format!(
+                "SPARQL syntax error at byte {max}: <{hostile}> takes {hostile}, not {max}",
+                max = usize::MAX
+            ),
+        ];
+        for (error, english) in errors.iter().zip(expected) {
+            assert_eq!(error.presentation().english(), english);
+            assert_eq!(error.to_string(), english);
         }
     }
 

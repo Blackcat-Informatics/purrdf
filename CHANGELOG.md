@@ -6,6 +6,27 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+### Added
+
+- **SPARQL parse diagnostics:** `ParseError::presentation()` returns the parse
+  failure as a typed `DiagnosticPresentation`. Each kind of failure has a stable
+  message identity (`sparql-parse-lex`, `sparql-parse-syntax`,
+  `sparql-parse-unsupported`, `sparql-parse-iri`, `sparql-parse-cdt-arity`)
+  and exact typed arguments: byte offsets and counts as unsigned integers, and
+  reasons, IRIs and construct names as text. `Display` renders through it, and
+  its English is unchanged byte for byte. Query and update parse diagnostics
+  from the native engine now carry this presentation. `RdfDiagnostic::to_json()`
+  adds a `presentation` key to them and leaves the existing keys and the
+  message unchanged.
+- **Diagnostic presentations in `purrdf-lex`:** `DiagnosticValue`,
+  `DiagnosticParameter`, `DiagnosticPresentation` and
+  `DiagnosticPresentationError` now live in `purrdf_lex::diagnostic`, so crates
+  below `purrdf-core` can build presentations. `purrdf_core::diagnostic` and the
+  `purrdf_core` crate root re-export the same types, so existing paths and
+  matches keep compiling.
+
 ## [3.0.1] - 2026-10-02
 
 ### Fixed

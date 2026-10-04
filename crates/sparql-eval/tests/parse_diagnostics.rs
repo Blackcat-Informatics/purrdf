@@ -3,6 +3,8 @@
 
 //! The public engine retains the parser's exact failure rather than a coarse code.
 
+use purrdf_core::RdfDiagnostic;
+use purrdf_lex::json::Value;
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
@@ -40,9 +42,20 @@ fn query_admission_retains_each_original_parser_condition() {
             diagnostic.presentation().expect("original typed source"),
             &source.presentation()
         );
+        let mut record = diagnostic.to_json();
         assert_eq!(
-            diagnostic.to_json().get("presentation"),
+            record.get("presentation"),
             Some(&source.presentation().to_json())
+        );
+        // The presentation is the record's only addition: without it, the record is
+        // exactly the message-only diagnostic's.
+        let Value::Object(members) = &mut record else {
+            panic!("a diagnostic record is an object");
+        };
+        members.remove("presentation");
+        assert_eq!(
+            record,
+            RdfDiagnostic::error("native-sparql-query-parse", source.to_string()).to_json()
         );
     }
     assert!(
