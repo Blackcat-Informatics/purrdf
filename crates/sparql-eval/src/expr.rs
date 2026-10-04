@@ -4369,7 +4369,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     if !cast_source_admitted(source, target) {
         return Ok(None);
     }
-    if let Some(cast) = cast_temporal_or_binary(source, target) {
+    if let ValueCast::Cast(cast) = cast_temporal_or_binary(source, target) {
         return cast.map(|value| xsd_to_term(ctx, &value)).transpose();
     }
     let lexical = match source {
@@ -4387,15 +4387,23 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     Ok(Some(xsd_to_term(ctx, &value)?))
 }
 
+/// What [`cast_temporal_or_binary`] decided.
+enum ValueCast {
+    /// The source is not a date/time, duration, Gregorian or binary literal.
+    NotApplicable,
+    /// The cast's value, or `None` for a cast error.
+    Cast(Option<XsdValue>),
+}
+
 /// The cast of a date/time, duration, Gregorian or binary literal, by VALUE (XPath
-/// F&O 3.1 §19.1–§19.3), or `None` when `source` is not one — the caller's lexical
-/// and numeric paths then decide.
+/// F&O 3.1 §19.1–§19.3), or [`ValueCast::NotApplicable`] when `source` is not one —
+/// the caller's lexical and numeric paths then decide.
 ///
 /// Such a source is never re-parsed by its lexical form under the target: the two
 /// value spaces can share a spelling that means different values (`"abcd"` is both
 /// base64Binary and hexBinary, for three bytes and two), or a spelling the table
-/// forbids (`"2020"^^xsd:hexBinary` is not a gYear). Instead, `Some(Some(v))` is the
-/// target value the table allows, and `Some(None)` is a cast error: an ill-typed
+/// forbids (`"2020"^^xsd:hexBinary` is not a gYear). Instead, `Cast(Some(v))` is the
+/// target value the table allows, and `Cast(None)` is a cast error: an ill-typed
 /// source, or a pair the table marks `N`.
 ///
 /// * `xsd:dateTime` to `xsd:date`, `xsd:time` and the five Gregorian types keeps
@@ -4406,7 +4414,17 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
 ///   only its own component (months, or seconds).
 /// * `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes.
 /// * A value casts to its own datatype unchanged; every other pair is refused.
-fn cast_temporal_or_binary(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue>> {
+fn cast_temporal_or_binary(source: &TermValue, target: XsdDatatype) -> ValueCast {
+    value_cast(source, target).map_or(ValueCast::NotApplicable, ValueCast::Cast)
+}
+
+/// [`cast_temporal_or_binary`] with `None` for a source it does not apply to.
+#[allow(
+    clippy::option_option,
+    reason = "the outer layer is \"not this family\", the inner one the cast error; the \
+              public face is `ValueCast`"
+)]
+fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue>> {
     use XsdDatatype as T;
     let TermValue::Literal {
         datatype,
