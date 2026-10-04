@@ -215,7 +215,9 @@ impl DeltaDatasetView {
     /// # Errors
     /// Returns native admission errors without publishing a partial dataset.
     pub fn materialize(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
-        let result = crate::ir::pack::dataset_from_view(self)?;
+        // Rebuilt under the base's configuration, as `MutableDataset::freeze` is.
+        let result =
+            crate::ir::pack::certify::dataset_from_view_into(self, self.base.rebuild_builder())?;
         self.work.add(crate::ViewWork {
             copied_terms: result.as_ref().term_count(),
             copied_rows: result.rdf_row_count(),
@@ -875,6 +877,18 @@ impl DatasetView for DeltaDatasetView {
             .chain(self.delta.named_graphs().map(|id| self.delta_id(id)))
             .collect::<BTreeSet<_>>()
             .into_iter()
+    }
+
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): `graph` names a
+    /// graph of either layer, each asked through its own sorted graph set, with a base
+    /// graph an operation emptied withdrawn exactly as the enumeration withdraws it. A
+    /// graph repopulated since is a delta graph, so it answers through the delta.
+    fn has_named_graph(&self, graph: Self::Id) -> bool {
+        self.local_id(graph, Layer::Base)
+            .is_some_and(|id| self.base.has_named_graph(id) && !self.is_withdrawn_graph(id))
+            || self
+                .local_id(graph, Layer::Delta)
+                .is_some_and(|id| self.delta.has_named_graph(id))
     }
 }
 

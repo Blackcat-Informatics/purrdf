@@ -312,6 +312,12 @@ impl DatasetView for PackView<'_> {
     fn named_graphs(&self) -> impl Iterator<Item = PackId> + '_ {
         self.triples().named_graph_ids().map(PackId::from_unified)
     }
+
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): one lookup in the
+    /// triples buffer's graph-to-partition index.
+    fn has_named_graph(&self, graph: PackId) -> bool {
+        self.triples().has_named_graph(graph.as_unified())
+    }
 }
 
 /// `PackView<'static>` implements [`DatasetView`] and is `Send + Sync` — the two

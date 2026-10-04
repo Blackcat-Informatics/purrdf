@@ -672,6 +672,21 @@ impl CompositeSource {
             }
         }
     }
+    /// Whether [`graphs`](Self::graphs) yields `local`, answered without
+    /// enumerating the source's graphs.
+    fn has_graph(&self, local: LocalId) -> bool {
+        match &self.carrier {
+            Carrier::Native(ds) => matches!(local, LocalId::Base(id) if ds.has_named_graph(id)),
+            Carrier::Delta(view) => view.has_named_graph(local),
+            Carrier::Selected(selection) => match local {
+                LocalId::Base(id) => selection
+                    .ids
+                    .get(id.index())
+                    .is_some_and(|handle| selection.graphs.contains(handle)),
+                LocalId::Delta(_) => false,
+            },
+        }
+    }
     fn graphs(&self) -> impl Iterator<Item = LocalId> + '_ {
         self.native()
             .into_iter()
@@ -1292,7 +1307,13 @@ impl CompositeDatasetView {
     /// # Errors
     /// Returns admission errors without publishing a partial dataset.
     pub fn materialize(&self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let result = crate::ir::pack::dataset_from_view(self)?;
+        // Rebuilt under the configuration the sources agree on, by `union`'s rule.
+        let mut configured = Vec::new();
+        self.configured_datasets(&mut configured);
+        let result = crate::ir::pack::certify::dataset_from_view_into(
+            self,
+            RdfDataset::agreed_builder(&configured),
+        )?;
         self.work.add(ViewWork {
             copied_terms: result.as_ref().term_count(),
             copied_rows: result.rdf_row_count(),
@@ -1302,6 +1323,18 @@ impl CompositeDatasetView {
             ..Default::default()
         });
         Ok(result)
+    }
+    /// The frozen datasets whose configuration this view's user sources were built
+    /// under: a native source itself, a delta's base, and a selection's retained
+    /// composite's own, in source order.
+    fn configured_datasets<'a>(&'a self, out: &mut Vec<&'a RdfDataset>) {
+        for source in &self.sources[..self.user_sources] {
+            match &source.carrier {
+                Carrier::Native(dataset) => out.push(dataset),
+                Carrier::Delta(view) => out.push(view.base()),
+                Carrier::Selected(selection) => selection.view.configured_datasets(out),
+            }
+        }
     }
     fn map_id(&self, source: usize, local: LocalId) -> CompositeViewId {
         if source == 0 {
@@ -1981,6 +2014,20 @@ impl DatasetView for CompositeDatasetView {
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
+    }
+    /// Membership in [`named_graphs`](DatasetView::named_graphs), source by source:
+    /// a replacing placement names its one graph (or none, for the default graph),
+    /// and a preserving source is asked about its own local id for `graph`.
+    fn has_named_graph(&self, graph: Self::Id) -> bool {
+        self.sources[..self.user_sources]
+            .iter()
+            .enumerate()
+            .any(|(index, source)| match self.placement[index] {
+                SourceGraph::Preserve => self
+                    .local_id(index, graph)
+                    .is_some_and(|local| source.has_graph(local)),
+                SourceGraph::Replace(placed) => placed == Some(graph),
+            })
     }
 }
 

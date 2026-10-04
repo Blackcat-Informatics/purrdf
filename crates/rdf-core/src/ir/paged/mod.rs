@@ -1482,4 +1482,10 @@ impl DatasetView for PagedDataset {
         // `RdfDataset`/`CompositeDatasetView`.
         self.graph_index().keys().iter().copied()
     }
+
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): a binary search of
+    /// the same ascending, deduplicated graph-index keys. Materializes no page.
+    fn has_named_graph(&self, graph: GlobalTermId) -> bool {
+        self.graph_index().keys().binary_search(&graph).is_ok()
+    }
 }

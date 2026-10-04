@@ -417,15 +417,15 @@ fuel 7..=64 x58 complete rows=1 digest=c882a7040292cb85 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#existsGraphVariableCorrelated> SEP-0007: GRAPH ?g inside FILTER EXISTS is the definition-path Graph-substitution shape, ?g bound from the row being filtered — a second :p row bound to a graph holding NOTHING must be excluded, not wrongly admitted by an unresolved ?g enumerating every named graph
 solutions vars=["s"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <https://example.org/exists#s1> .
-metered complete fuel=37 answer-rows=1 intermediate-cells=4 scratch-bytes=153
-explain fuel=37 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+metered complete fuel=34 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+explain fuel=34 answer-rows=1 intermediate-cells=4 scratch-bytes=153
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=2 exists-definition-answered=2 exists-inner-solutions-consumed=1
 node 2 depth=2 Bgp rows=2 cells=4 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=2
 node 3 depth=2 Graph rows=1 cells=2 algebra-node-entry=8 committed-output-row=5
-node 4 depth=3 Slice rows=1 cells=1 algebra-node-entry=2 committed-output-row=1
-node 5 depth=4 Project rows=1 cells=1 algebra-node-entry=2 committed-output-row=1
-node 6 depth=5 Bgp rows=1 cells=2 algebra-node-entry=2 committed-output-row=1 bgp-candidate-quad=1
+node 4 depth=3 Slice rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
+node 5 depth=4 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
+node 6 depth=5 Bgp rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=3
@@ -457,12 +457,9 @@ fuel 28 tripped fuel-exhausted consumed=29 unknown barrier=Filter | fuel=29
 fuel 29 tripped fuel-exhausted consumed=30 unknown barrier=Filter | fuel=30
 fuel 30 tripped fuel-exhausted consumed=31 unknown barrier=Filter | fuel=31
 fuel 31 tripped fuel-exhausted consumed=32 unknown barrier=Filter | fuel=32
-fuel 32 tripped fuel-exhausted consumed=33 unknown barrier=Filter | fuel=33
-fuel 33 tripped fuel-exhausted consumed=34 unknown barrier=Filter | fuel=34
-fuel 34 tripped fuel-exhausted consumed=35 unknown barrier=Filter | fuel=35
-fuel 35 tripped fuel-exhausted consumed=36 certain prefix=true rows=1 digest=f7ba218075ffaddc | fuel=36
-fuel 36 tripped fuel-exhausted consumed=37 certain prefix=true rows=1 digest=f7ba218075ffaddc | fuel=37
-fuel 37..=64 x28 complete rows=1 digest=f7ba218075ffaddc | fuel=37
+fuel 32 tripped fuel-exhausted consumed=33 certain prefix=true rows=1 digest=f7ba218075ffaddc | fuel=33
+fuel 33 tripped fuel-exhausted consumed=34 certain prefix=true rows=1 digest=f7ba218075ffaddc | fuel=34
+fuel 34..=64 x31 complete rows=1 digest=f7ba218075ffaddc | fuel=34
 == purrdf-extend <http://purrdf.test/extend#existsMinusDomain> SEP-0007 Issue 4: the correlated variable occurs only in MINUS's subtracted (right) operand, contributing nothing to MINUS's own output schema
 solutions vars=["s"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <https://example.org/exists#other> .

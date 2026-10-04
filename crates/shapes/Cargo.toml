@@ -181,6 +181,14 @@ name = "shared_views"
 harness = false
 
 [[bench]]
+# Constant-`GRAPH` addressing through the SHACL data view: one named-graph
+# membership probe per row of a 10 000-row `LATERAL { GRAPH ?o { ... } }`, over a
+# native source and a mutation snapshot. Report-only; `make bench` lane only —
+# excluded from `make check`.
+name = "graph_membership"
+harness = false
+
+[[bench]]
 # Per-constraint cost of the SHACL `sh:pattern` arm's `OnceLock` compile cache:
 # a cold constraint (fresh parse, first `get_or_init` compiles) and a warm one
 # (matching only), across focus-node and values-per-focus scales. Report-only;
