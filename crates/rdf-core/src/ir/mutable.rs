@@ -215,10 +215,13 @@ pub struct MutableDataset {
     /// whether or not it owns a quad.
     declared_graphs: Vec<TermValue>,
     /// The live RDF row count — quads, reifier bindings and annotations, base and
-    /// added — of every base graph a mutation has touched. Seeded from the base on
-    /// first touch ([`RdfDataset::named_graph_row_count`]) and kept exact in O(1) by
-    /// every insert, removal, suppression and un-suppression after it.
-    graph_rows: FastMap<TermId, usize>,
+    /// added — of every named graph a mutation has touched, base-named or
+    /// delta-named. A base graph is seeded from the base on first touch
+    /// ([`RdfDataset::named_graph_row_count`]); a delta graph holds no base row, and
+    /// its first touch is the insert of its first row, so it is seeded with zero.
+    /// Kept exact in O(1) by every insert, removal, suppression and un-suppression
+    /// after it, so deciding whether a removal emptied a graph never scans.
+    graph_rows: FastMap<MutTermId, usize>,
     /// Base graphs a mutation emptied — removed their last row, or withdrew their
     /// declaration while they held none — and that hold no row now. Publication
     /// shares it with each snapshot, which withholds these graphs from named-graph
@@ -525,11 +528,14 @@ impl MutableDataset {
     fn insert_key(&mut self, key: QuadKey) -> bool {
         let rows = self.insert_rows(key);
         if rows > 0
-            && let Some(MutTermId::Base(graph)) = key.g
+            && let Some(graph) = key.g
         {
             let live = self.graph_rows_of(graph);
             *live += rows;
-            if *live == rows && self.withdrawn_graphs.contains(&graph) {
+            if *live == rows
+                && let MutTermId::Base(graph) = graph
+                && self.withdrawn_graphs.contains(&graph)
+            {
                 Arc::make_mut(&mut self.withdrawn_graphs).remove(&graph);
             }
         }
@@ -565,34 +571,40 @@ impl MutableDataset {
     fn remove_key(&mut self, key: QuadKey) -> bool {
         let rows = self.remove_rows(key);
         if rows > 0
-            && let Some(MutTermId::Base(graph)) = key.g
+            && let Some(graph) = key.g
         {
             let live = self.graph_rows_of(graph);
             *live -= rows;
             if *live == 0 {
-                Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
+                if let MutTermId::Base(graph) = graph {
+                    Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
+                }
+                self.withdraw_emptied_declaration(graph);
             }
-        }
-        if rows > 0
-            && let Some(graph) = key.g
-        {
-            self.withdraw_emptied_declaration(graph);
         }
         rows > 0
     }
 
     /// A graph declared through [`Self::declare_named_graph`] follows the base's rule:
-    /// the mutation that removes its last row withdraws the declaration. Probes only
-    /// when such a declaration names the graph, so a dataset without one pays nothing.
+    /// the mutation that removes its last row withdraws the declaration. Called only
+    /// when the graph's live row count reaches zero, and probes only when some
+    /// declaration exists, so neither a dataset without one nor a removal that leaves
+    /// rows behind pays anything.
     fn withdraw_emptied_declaration(&mut self, graph: MutTermId) {
         if self.declared_graphs.is_empty() {
             return;
         }
-        let value = self.mut_value(graph);
-        let Some(index) = self.declared_graphs.iter().position(|g| *g == value) else {
-            return;
+        let index = match graph {
+            MutTermId::Base(_) => {
+                let value = self.mut_value(graph);
+                self.declared_graphs.iter().position(|g| *g == value)
+            }
+            MutTermId::Delta(id) => {
+                let value = self.delta.value(id);
+                self.declared_graphs.iter().position(|g| g == value)
+            }
         };
-        if !self.effective_keys().any(|k| k.g == Some(graph)) {
+        if let Some(index) = index {
             self.declared_graphs.remove(index);
         }
     }
@@ -616,14 +628,16 @@ impl MutableDataset {
         0
     }
 
-    /// The live row count of the base graph `graph`, seeded from the base on first
-    /// touch. Every mutation in a base graph passes through here, so a graph not yet
-    /// in the map has never been mutated and its base count is its live count.
-    fn graph_rows_of(&mut self, graph: TermId) -> &mut usize {
+    /// The live row count of the named graph `graph`, seeded on first touch. Every
+    /// mutation in a graph passes through here, so a graph not yet in the map has
+    /// never been mutated: a base graph's live count is then its base count, and a
+    /// delta graph — which no base row can name — holds none.
+    fn graph_rows_of(&mut self, graph: MutTermId) -> &mut usize {
         let base = &self.base;
-        self.graph_rows
-            .entry(graph)
-            .or_insert_with(|| base.named_graph_row_count(graph))
+        self.graph_rows.entry(graph).or_insert_with(|| match graph {
+            MutTermId::Base(id) => base.named_graph_row_count(id),
+            MutTermId::Delta(_) => 0,
+        })
     }
 
     /// Whether a [`QuadKey`] is in the effective set: `(base ∪ added) − suppressed`.
@@ -703,7 +717,9 @@ impl MutableDataset {
     }
 
     fn withdraw_base_graph(&mut self, graph: TermId) {
-        if *self.graph_rows_of(graph) == 0 && !self.withdrawn_graphs.contains(&graph) {
+        if *self.graph_rows_of(MutTermId::Base(graph)) == 0
+            && !self.withdrawn_graphs.contains(&graph)
+        {
             Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
         }
     }
