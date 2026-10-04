@@ -2575,8 +2575,8 @@ impl<'a> Parser<'a, '_> {
     /// `BuiltInCall` or `FunctionCall`: the bare alternative of a `Constraint`
     /// (`Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`) and,
     /// by the same productions, of a `GROUP BY` `GroupCondition`. Every bare call
-    /// begins with a callee token (a builtin keyword, an IRI or a prefixed name);
-    /// the modifier-list terminators (`HAVING`/`ORDER`/`LIMIT`/`OFFSET`/`VALUES`)
+    /// begins with a callee token (a builtin keyword, or an IRI or prefixed name
+    /// followed by its `ArgList`'s `(`); the modifier-list terminators (`HAVING`/`ORDER`/`LIMIT`/`OFFSET`/`VALUES`)
     /// and boolean literals are excluded so a `GROUP BY`, `HAVING` or `ORDER BY`
     /// list stops cleanly at the next clause.
     ///
@@ -2588,7 +2588,9 @@ impl<'a> Parser<'a, '_> {
     /// bare `Var` or literal (neither is a call).
     fn at_bare_constraint(&self) -> bool {
         match self.peek() {
-            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
+            // `FunctionCall ::= iri ArgList`: an IRI alone is not a call, and the
+            // `ArgList` always opens with `(` (`NIL` lexes as its two brackets).
+            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => self.peek2() == Some(&Token::LParen),
             Some(Token::Word(w)) => !is_modifier_terminator_word(w),
             _ => false,
         }
@@ -6330,6 +6332,43 @@ mod tests {
             "INSERT { ?s ?p 2 . ?s ?p 3 } WHERE { ?s ?p ?o }",
         ] {
             assert!(update(accepted).is_ok(), "{accepted}");
+        }
+    }
+
+    /// `FunctionCall ::= iri ArgList`: a bare IRI or prefixed name is not a
+    /// `Constraint`, a `GroupCondition` or an `OrderCondition`, in any of the four
+    /// clauses; with its argument list it is.
+    #[test]
+    fn a_bare_iri_is_not_a_call_in_any_clause() {
+        let ex = "PREFIX : <http://example.org/> ";
+        for refused in [
+            "SELECT * WHERE { ?s ?p ?o FILTER :f }",
+            "SELECT * WHERE { ?s ?p ?o FILTER <http://example.org/f> }",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING :f",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING <http://example.org/f>",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY :f",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY <http://example.org/f>",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY :f",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY <http://example.org/f>",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY ?s :f",
+        ] {
+            let q = format!("{ex}{refused}");
+            assert!(try_parse(&q).is_err(), "{q}");
+        }
+        for accepted in [
+            "SELECT * WHERE { ?s ?p ?o FILTER :f(?o) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER <http://example.org/f>(?o) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER :f() }",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING :f(?s)",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING <http://example.org/f>(?s)",
+            "SELECT (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY :f(?o)",
+            "SELECT (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY <http://example.org/f>(?o)",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY :f(?o)",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY <http://example.org/f>(?o)",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY ?s :f(?o)",
+        ] {
+            let q = format!("{ex}{accepted}");
+            assert!(try_parse(&q).is_ok(), "{q}");
         }
     }
 
