@@ -4629,8 +4629,13 @@ pub(crate) fn lang_matches(tag: &str, range: &str) -> bool {
         || (t.len() > r.len() && t[r.len()] == b'-' && t[..r.len()].eq_ignore_ascii_case(r))
 }
 
-/// A term read as a string argument: its lexical form and language tag, when it is a
-/// simple, `xsd:string`, `rdf:langString` or `rdf:dirLangString` literal.
+/// A string argument as the string built-ins read it: its lexical form, language tag
+/// and RDF 1.2 base direction.
+pub(crate) type StringArg = (String, Option<String>, Option<RdfTextDirection>);
+
+/// A term read as a string argument: its lexical form, language tag and base
+/// direction, when it is a simple, `xsd:string`, `rdf:langString` or
+/// `rdf:dirLangString` literal.
 ///
 /// Out of line, so the per-row `String` it materializes is one compiled function
 /// rather than a fragment of each expression-VM caller.
@@ -4638,8 +4643,8 @@ pub(crate) fn lang_matches(tag: &str, range: &str) -> bool {
 pub(crate) fn string_arg_of_term<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
-) -> Result<Option<(String, Option<String>)>, EvalError> {
-    Ok(string_arg_value_owned(value_of(ctx, term)?).map(|(s, l, _)| (s, l)))
+) -> Result<Option<StringArg>, EvalError> {
+    Ok(string_arg_value_owned(value_of(ctx, term)?))
 }
 
 /// The lexical form `STR(term)` has, read straight off the term without minting it.
@@ -4871,49 +4876,88 @@ fn eval_concat<D: DatasetView + Sync>(
     }
 }
 
-/// `SUBSTR(str, start[, length])` with 1-based indexing over Unicode scalars.
+/// `SUBSTR(str, start[, length])`: XPath F&O `fn:substring` over SPARQL's
+/// `xsd:integer` arguments (§17.4.3.3). The result is the characters at the 1-based
+/// positions `p` with `start <= p` and, when a length is given, `p < start + length`,
+/// so a start at or below zero eats into the length rather than being moved to one:
+/// `SUBSTR("12345", 0, 3)` is `"12"`. The result keeps the source's language tag and
+/// base direction.
+///
+/// A length that is supplied but unbound (or an error) is an error, not an omitted
+/// length; a non-integer start or length is an error. The bounds are computed without
+/// overflow over the integers' whole range.
 fn eval_substr<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some((s, lang)) = string_arg(vals, 0) else {
+    let Some((s, lang, dir)) = string_arg3(vals, 0) else {
         return Ok(None);
     };
-    let Some(start) = arg(vals, 1).and_then(xsd_int_of) else {
+    let Some(start) = arg(vals, 1).and_then(xsd_integer_of) else {
         return Ok(None);
     };
-    let chars: Vec<char> = s.chars().collect();
-    // SPARQL substr is 1-based; clamp to the string bounds.
-    let start0 = (start - 1).max(0) as usize;
-    let end = match vals.get(2).and_then(|v| v.as_ref()) {
-        Some(len_val) => {
-            let Some(len) = xsd_int_of(len_val) else {
+    let end = match vals.get(2) {
+        None => None,
+        Some(length) => {
+            let Some(length) = length.as_ref().and_then(xsd_integer_of) else {
                 return Ok(None);
             };
-            ((start - 1).max(0) + len.max(0)) as usize
+            // Saturating is exact here: the sum overflows only when both operands
+            // have the same sign, and then the saturated end lies past every position
+            // a string has (upwards) or before the first one (downwards), as the true
+            // end does.
+            Some(start.saturating_add(length))
         }
-        None => chars.len(),
     };
-    let slice: String = chars
-        .get(start0..end.min(chars.len()))
-        .unwrap_or(&[])
-        .iter()
-        .collect();
-    make_string(ctx, slice, lang)
+    let slice = substring(&s, start, end).to_owned();
+    make_string_dir(ctx, slice, lang, dir)
 }
 
-/// SPARQL 1.1 §17.4.1.1 "argument compatibility": whether a string operand
-/// tagged `arg1_lang` may be compared against one tagged `arg2_lang`.
-/// Compatible when: both are simple/`xsd:string` (no language); both carry the
-/// *same* language tag (compared case-insensitively per RFC 4646); or `arg1`
-/// has a language tag and `arg2` is simple/`xsd:string`. NOT compatible the
-/// other way around (`arg1` simple, `arg2` tagged) — a plain string cannot be
-/// searched for a language-tagged pattern.
-fn args_compatible(arg1_lang: Option<&str>, arg2_lang: Option<&str>) -> bool {
+/// The characters of `s` at the 1-based positions `p` with `start <= p` and, when
+/// `end` is given, `p < end`.
+fn substring(s: &str, start: i128, end: Option<i128>) -> &str {
+    let first = start.max(1);
+    // `first - 1` is non-negative; a position past `usize` is past the string.
+    let skip = usize::try_from(first - 1).unwrap_or(usize::MAX);
+    let from = s
+        .char_indices()
+        .nth(skip)
+        .map_or(s.len(), |(offset, _)| offset);
+    let rest = &s[from..];
+    let to = match end {
+        None => rest.len(),
+        Some(end) if end <= first => 0,
+        // `end > first >= 1`, so `end - first` neither overflows nor is negative.
+        Some(end) => {
+            let take = usize::try_from(end - first).unwrap_or(usize::MAX);
+            rest.char_indices()
+                .nth(take)
+                .map_or(rest.len(), |(offset, _)| offset)
+        }
+    };
+    &rest[..to]
+}
+
+/// SPARQL 1.1 §17.4.1.1 "argument compatibility", with RDF 1.2's base direction as
+/// a facet of the language tag: whether a string operand with facets
+/// `(arg1_lang, arg1_dir)` may be searched for one with `(arg2_lang, arg2_dir)`.
+///
+/// Compatible when `arg2` is simple/`xsd:string` (whatever `arg1` is), or when both
+/// carry the *same* language tag (compared case-insensitively, RFC 4646) **and** the
+/// same base direction (both none, or both `ltr`, or both `rtl`). NOT compatible when
+/// `arg1` is simple/`xsd:string` and `arg2` is tagged — a plain string cannot be
+/// searched for a language-tagged pattern — nor when the tags or directions differ.
+/// `CONTAINS`, `STRSTARTS`, `STRENDS`, `STRBEFORE` and `STRAFTER` are an error
+/// (unbound) over an incompatible pair.
+pub(crate) fn args_compatible(
+    arg1_lang: Option<&str>,
+    arg1_dir: Option<RdfTextDirection>,
+    arg2_lang: Option<&str>,
+    arg2_dir: Option<RdfTextDirection>,
+) -> bool {
     match (arg1_lang, arg2_lang) {
-        (None, None) => true,
-        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-        (Some(_), None) => true,
+        (_, None) => true,
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b) && arg1_dir == arg2_dir,
         (None, Some(_)) => false,
     }
 }
@@ -4924,14 +4968,16 @@ fn eval_str_before_after<D: DatasetView + Sync>(
     vals: &[Option<TermValue>],
     before: bool,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some((h, lang)), Some((n, needle_lang))) = (string_arg(vals, 0), string_arg(vals, 1))
+    let (Some((h, lang, dir)), Some((n, needle_lang, needle_dir))) =
+        (string_arg3(vals, 0), string_arg3(vals, 1))
     else {
         return Ok(None);
     };
     // §17.4.1.1: the needle must be argument-compatible with the haystack, or
     // the call is a type error (unbound) — e.g. a `@cy`-tagged needle can never
-    // match an untagged or `@en`-tagged haystack.
-    if !args_compatible(lang.as_deref(), needle_lang.as_deref()) {
+    // match an untagged or `@en`-tagged haystack, nor an `@en--ltr` one an
+    // `@en--rtl` haystack.
+    if !args_compatible(lang.as_deref(), dir, needle_lang.as_deref(), needle_dir) {
         return Ok(None);
     }
     // An empty needle matches at the start: STRBEFORE → "", STRAFTER → the haystack.
@@ -4946,7 +4992,7 @@ fn eval_str_before_after<D: DatasetView + Sync>(
         // No match → empty (typed xsd:string, no language).
         None => return Ok(Some(string_term(ctx, "")?)),
     };
-    make_string(ctx, result, lang)
+    make_string_dir(ctx, result, lang, dir)
 }
 
 /// `REPLACE(str, pattern, replacement[, flags])` via the regex engine.
@@ -5262,10 +5308,10 @@ fn triple_part<D: DatasetView + Sync>(
     }
 }
 
-/// An `i64` from an XSD integer argument value.
-fn xsd_int_of(v: &TermValue) -> Option<i64> {
+/// The value of an XSD integer argument (`xsd:integer` or a type derived from it).
+fn xsd_integer_of(v: &TermValue) -> Option<i128> {
     match xsd_of(v)? {
-        XsdValue::Integer { value, .. } => i64::try_from(value).ok(),
+        XsdValue::Integer { value, .. } => Some(value),
         _ => None,
     }
 }

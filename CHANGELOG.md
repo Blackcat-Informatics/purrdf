@@ -6,6 +6,23 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+### Fixed
+
+- **SPARQL string functions:** `SUBSTR` follows XPath `fn:substring` for a
+  start at or below zero (`SUBSTR("12345", 0, 3)` is `"12"`, not `"123"`),
+  computes its bounds without overflow across the whole integer range, treats a
+  supplied but unbound length as an error rather than an omitted one, and keeps
+  the source's base direction as well as its language tag. `CONTAINS`,
+  `STRSTARTS` and `STRENDS` now apply SPARQL argument compatibility — an
+  incompatible pair such as `CONTAINS("abc", "b"@en)` is an error, not `true`
+  — and, with `STRBEFORE` and `STRAFTER`, treat two RDF 1.2 directional
+  strings as compatible only when their language and base direction both
+  match; `STRBEFORE` and `STRAFTER` keep the base direction of their result.
+  A `REGEX` flags argument that is supplied but unbound, or is not a simple
+  literal, is an error instead of being read as no flags.
+
 ## [3.0.1] - 2026-10-02
 
 ### Fixed

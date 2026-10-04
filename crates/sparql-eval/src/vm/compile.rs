@@ -9,7 +9,8 @@
 //! * [`Mode::Term`] — the operand's value as a solution term. A constant is interned
 //!   the first time it is read; a computed value is interned where it is computed.
 //! * [`Mode::StringArg`] — a string built-in's argument (`CONTAINS`, `STRSTARTS`,
-//!   `STRENDS`, `REGEX`, `LANGMATCHES`) as a lexical form and a language tag. A string
+//!   `STRENDS`, `REGEX`, `LANGMATCHES`) as a lexical form, a language tag and a base
+//!   direction. A string
 //!   constant is read as written and never interned, and `STR(x)` / `LANG(x)` in this
 //!   position read `x`'s lexical form or tag straight off the term rather than minting
 //!   the string `STR`/`LANG` would return.
@@ -156,7 +157,7 @@ pub(crate) enum Op {
     StrConst(u32),
     /// Push an absent string argument.
     StrNone,
-    /// Pop a term; push it as a string argument (lexical form and tag).
+    /// Pop a term; push it as a string argument (lexical form, tag and direction).
     ToStrArg,
     /// Pop a term; push its `STR` lexical form as a string argument.
     ToStrLexical,
@@ -164,9 +165,17 @@ pub(crate) enum Op {
     ToLangLexical,
     /// Pop the needle and haystack string arguments; push the predicate.
     StrPred(StrPred),
-    /// Pop flags, pattern and text string arguments; push `REGEX`. Regex slot `k`
-    /// holds the link-time pattern when pattern and flags are constants.
-    Regex(u32),
+    /// Pop flags (when the call supplies them), pattern and text string arguments;
+    /// push `REGEX`. Regex slot `slot` holds the link-time pattern when pattern and
+    /// flags are constants.
+    Regex {
+        /// The call's regex slot.
+        slot: u32,
+        /// Whether the call supplies a flags argument. Omitted flags are no flags; a
+        /// supplied flags argument must be a bound simple literal, so an unbound one
+        /// is an error rather than an omission.
+        flags: bool,
+    },
     /// Pop the object — a term, or a value a nested constructor built — then the
     /// predicate and subject terms; build the triple term `TRIPLE` builds. `intern`
     /// pushes it interned as a term; otherwise it is pushed as the value, for the
@@ -212,7 +221,7 @@ pub(crate) struct ExprProgram {
     /// The term constants, one per occurrence, inline up to two.
     pub(super) consts: purrdf_core::SmallVec<[Constant; 2]>,
     /// The string-argument constants.
-    pub(super) strs: Vec<(String, Option<String>)>,
+    pub(super) strs: Vec<crate::expr::StringArg>,
     /// The functions called, inline up to two.
     pub(super) calls: purrdf_core::SmallVec<[Function; 2]>,
     /// For each regex slot, the constant `(pattern, flags)` it links, when both are
@@ -370,7 +379,9 @@ impl Compiler {
 
     /// A new string constant.
     fn string(&mut self, lexical: String, language: Option<String>) -> Op {
-        self.program.strs.push((lexical, language));
+        // The constants read in place are the untagged and `rdf:langString` ones; a
+        // directional literal is read through its interned term.
+        self.program.strs.push((lexical, language, None));
         Op::StrConst((self.program.strs.len() - 1) as u32)
     }
 
@@ -601,8 +612,9 @@ impl Compiler {
                     Some((pattern, flags))
                 });
                 let slot = self.regex(constant);
-                string_args(3, out);
-                out.push(Task::Emit(Op::Regex(slot)));
+                let flags = args.len() > 2;
+                string_args(if flags { 3 } else { 2 }, out);
+                out.push(Task::Emit(Op::Regex { slot, flags }));
             }
             Function::LangMatches => {
                 string_args(2, out);

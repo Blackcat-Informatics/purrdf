@@ -2679,8 +2679,9 @@ const fn is_type_test(function: &Function) -> bool {
 /// What is NOT strict, and why:
 ///
 /// * a type test (`isIRI` and its kin) answers `false` for an unbound argument;
-/// * `REGEX`'s and `REPLACE`'s flags and `SUBSTR`'s length are optional, and an unbound
-///   one is read as absent;
+/// * `REPLACE`'s flags are optional, and an unbound one is read as absent (`REGEX`'s
+///   flags and `SUBSTR`'s length are optional too, but a supplied one that is unbound
+///   is an error, so both are strict in every position);
 /// * `cdt:List` and `cdt:Map` keep an unbound argument as a `null` element, and
 ///   `cdt:put` an unbound value as a `null` entry;
 /// * a custom function is resolved at run time against what the host registered — a
@@ -2700,9 +2701,7 @@ pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> 
         | Function::IsNumeric
         | Function::IsTriple
         | Function::Custom(_) => false,
-        Function::Regex => position < 2,
         Function::Replace => position < 3,
-        Function::SubStr => position < 2,
         Function::Cdt(call) => match call.fn_kind {
             CdtFn::ListConstructor | CdtFn::MapConstructor => false,
             CdtFn::Put => position < 2,
@@ -2729,6 +2728,8 @@ pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> 
             | PurrdfFn::ListConcat => true,
         },
         Function::Str
+        | Function::Regex
+        | Function::SubStr
         | Function::Lang
         | Function::LangMatches
         | Function::Datatype
