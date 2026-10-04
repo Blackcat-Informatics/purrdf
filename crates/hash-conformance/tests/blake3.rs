@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Frozen public-API oracle answers, replayed with unrelated update boundaries.
+//! The native suite owns caller scheduling and generic snapshot/reset behavior.
+//! `make wasm-test` selects required-backend checks and the explicit backend
+//! frozen, alignment, tree and streaming differentials on baseline and SIMD128.
 use purrdf_hash::Backend as _;
 use purrdf_hash::blake3::{Backend, Hasher, hash};
 use purrdf_hash::dispatch::{assert_required_available, host_advertises};
@@ -197,7 +200,8 @@ fn random_inputs_cover_irregular_trees_and_alignment() {
 }
 
 // A small independent-answer slice of the frozen corpus, suitable for Miri.
-// The full corpus above remains the native and wasm conformance requirement.
+// The full explicit-backend corpus above remains the scalar/SIMD differential
+// requirement on native and wasm; general state/scheduling cases remain native.
 fn streaming_boundary_answers() {
     let data: Vec<u8> = (0..16385).map(|i| (i % 251) as u8).collect();
     let cases = [

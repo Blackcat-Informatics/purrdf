@@ -62,6 +62,9 @@ jobs:
       - name: Check the gate-parity gate can still fail
         run: python3 scripts/check-gate-parity.py --self-test
 
+      - name: Check exact WASM selections refuse missing cases
+        run: cargo run -q --locked -p wasm-link --bin wasm-focused-tests -- --self-test
+
       - name: Check `make check` and this workflow run the same hygiene gates
         run: python3 scripts/check-gate-parity.py
 
@@ -703,18 +706,14 @@ jobs:
         # argument.
         run: make hnsw-determinism
 
-      - name: Execute the cross-target determinism tests on wasm32 (Node)
+      - name: Execute focused WASM arithmetic, SIMD, stack and host/ABI probes (Node)
         if: matrix.gate == 'wasm-test'
-        # The wasm job proves the crates COMPILE for wasm32. This one proves
-        # they ANSWER the same way there: the embedding kNN surface ranks by binary64
-        # arithmetic, and a reassociated sum or a fused multiply-add would swap two
-        # near-tied neighbours rather than merely shift a last digit. Same test body,
-        # same pinned expectations, executed on both targets: every target is
-        # `harness = false` on the shared test runner, and Cargo hands each wasm32
-        # binary to scripts/wasm-test-runner.sh, which runs it in Node. The runner
-        # is itself observed failing a planted panic first. The reassociated HNSW
-        # index is built, recorded, decoded, verified and searched here too, on the
-        # baseline (wasm-scalar) and +simd128 (wasm-simd128) builds alike.
+        # Native workspace tests own complete semantic/conformance corpora.
+        # docs/WASM_TESTING.md records every retained named target obligation.
+        # Each exact selection is listed and checked before execution; the runner
+        # preflight separately observes panic, refused flags and sealed host reads.
+        # Actual kernels run on baseline and +simd128 builds; width, shadow-stack,
+        # host-clock and wire-identity probes use only the build they require.
         run: make wasm-test
 
   # Native schema oracles need no wasm package and run in parallel.

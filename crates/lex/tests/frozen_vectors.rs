@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The frozen lexical vectors, replayed against `purrdf-lex`, natively and on
-//! wasm32.
+//! The complete frozen lexical vectors replayed against `purrdf-lex` natively.
+//! `make wasm-test` selects frozen needle-search differentials and compact JSON
+//! and percent byte-scanner probes on baseline and SIMD128. General escape,
+//! Unicode, pointer and decoder semantics remain native coverage.
 //!
 //! Each file in `tests/vectors/` was recorded from the implementation that
 //! did the job before it moved here: UCHAR and ECHAR decoding from the
@@ -18,8 +20,10 @@ use std::borrow::Cow;
 use purrdf_lex::json_escape;
 use purrdf_lex::json_pointer;
 use purrdf_lex::percent::{self, EncodeSet};
-use purrdf_lex::scan::{find_byte, find_byte2};
-use purrdf_lex::terminals::{ByteClass, byte_run_count, decode_uchar, echar_value};
+use purrdf_lex::scan::{find_byte, find_byte2, find_first_json_string_special};
+use purrdf_lex::terminals::{
+    ByteClass, byte_run_count, decode_uchar, echar_value, is_json_string_forbidden_byte,
+};
 use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_bytes, decode_str, encode_str};
 
 /// A hex field of a vector record.
@@ -312,7 +316,140 @@ fn needle_searches_replay_the_frozen_vectors() {
     assert_eq!(replayed, file.records().len());
 }
 
+/// A packed production scanner against table lookup, at every byte value,
+/// start alignment and planted hit, including a member just beyond the slice.
+fn assert_byte_scan_matches_scalar(name: &str, scan: EncodeSet, members: &[bool; 256]) {
+    const LENGTHS: [usize; 11] = [0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65];
+    assert!(!members[usize::from(b'a')], "the clean filler stays clean");
+    let outside = u8::try_from(members.iter().position(|&member| member).expect("a member"))
+        .expect("a byte index");
+    let mut backing = [b'a'; 16 + 65 + 1];
+    for start in 0..16 {
+        for length in LENGTHS {
+            for byte in 0..=u8::MAX {
+                for plant in std::iter::once(None).chain((0..length).map(Some)) {
+                    backing.fill(b'a');
+                    backing[start + length] = outside;
+                    if let Some(at) = plant {
+                        backing[start + at] = byte;
+                    }
+                    let bytes = &backing[start..start + length];
+                    let expected = bytes.iter().position(|&value| members[usize::from(value)]);
+                    assert_eq!(
+                        scan(bytes),
+                        expected,
+                        "{name}, start {start}, length {length}, byte {byte:#04x}, plant {plant:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The JSON string stop scan lowers its byte lanes differently on scalar and
+/// SIMD128 builds. Compare those lanes with the terminal home's scalar predicate
+/// across vector seams, then decode a bounded frozen slice behind clean prefixes.
+fn json_byte_scans_match_scalar_on_this_target() {
+    let members = std::array::from_fn(|index| {
+        is_json_string_forbidden_byte(u8::try_from(index).expect("a byte index"))
+    });
+    assert_byte_scan_matches_scalar("json", find_first_json_string_special, &members);
+    let file = VectorFile::parse(include_str!("vectors/json_string_vectors.txt"))
+        .expect("frozen vector integrity");
+    let records = file.records().get(..16).expect("the frozen boundary slice");
+    let mut checked = 0;
+    for width in [0, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+        let prefix = "a".repeat(width);
+        for record in records {
+            let body = decode_str(record.fields[0]).expect("a frozen body");
+            let answer = decode_str(record.fields[1]).expect("a frozen answer");
+            let expected = if answer == "-" {
+                answer
+            } else {
+                let decoded = answer.strip_prefix('=').expect("a decoded answer");
+                encode_str(&format!("={prefix}{decoded}"))
+            };
+            assert_eq!(json_answer(&format!("{prefix}{body}")), expected);
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 160);
+}
+
+/// Each percent set is an actual out-of-line SIMD128 byte scanner. The frozen
+/// ASCII answers supply its independent class table; every set encodes non-ASCII
+/// UTF-8 bytes. Qualify vector alignments, hit lanes and tails, plus real encodings
+/// with the frozen answers behind clean prefixes at chunk boundaries.
+fn percent_byte_scans_match_scalar_on_this_target() {
+    let sets: [(&str, &str, EncodeSet); 7] = [
+        (
+            "unreserved",
+            include_str!("vectors/percent_unreserved_vectors.txt"),
+            percent::UNRESERVED,
+        ),
+        (
+            "unreserved-slash",
+            include_str!("vectors/percent_unreserved_slash_vectors.txt"),
+            percent::UNRESERVED_SLASH,
+        ),
+        (
+            "reg-name",
+            include_str!("vectors/percent_sub_delims_vectors.txt"),
+            percent::REG_NAME,
+        ),
+        (
+            "path",
+            include_str!("vectors/percent_path_vectors.txt"),
+            percent::PATH,
+        ),
+        (
+            "fragment",
+            include_str!("vectors/percent_fragment_vectors.txt"),
+            percent::FRAGMENT,
+        ),
+        (
+            "uri-template-reserved",
+            include_str!("vectors/percent_uri_template_reserved_vectors.txt"),
+            percent::URI_TEMPLATE_RESERVED,
+        ),
+        (
+            "non-ascii",
+            include_str!("vectors/percent_non_ascii_vectors.txt"),
+            percent::NON_ASCII,
+        ),
+    ];
+    let mut checked = 0;
+    for (name, vectors, set) in sets {
+        let file = VectorFile::parse(vectors).expect("frozen vector integrity");
+        let mut members = [true; 256];
+        for byte in 0..=127_u8 {
+            let record = file
+                .records()
+                .get(2 * usize::from(byte))
+                .expect("a frozen ASCII record");
+            assert_eq!(record.fields[0], "text");
+            let input = decode_str(record.fields[1]).expect("a frozen input");
+            let answer = decode_str(record.fields[2]).expect("a frozen encoding");
+            assert_eq!(input.as_bytes(), &[byte]);
+            members[usize::from(byte)] = input != answer;
+            for width in [0, 15, 16, 17, 32, 64] {
+                let prefix = "a".repeat(width);
+                assert_eq!(
+                    percent::encode(&format!("{prefix}{input}"), set),
+                    format!("{prefix}{answer}"),
+                    "{name}, prefix {width}, byte {byte:#04x}"
+                );
+                checked += 1;
+            }
+        }
+        assert_byte_scan_matches_scalar(name, set, &members);
+    }
+    assert_eq!(checked, 7 * 128 * 6);
+}
+
 purrdf_testkit::harness_main!(
+    json_byte_scans_match_scalar_on_this_target,
+    percent_byte_scans_match_scalar_on_this_target,
     escapes_replay_the_frozen_vectors,
     every_uchar_value_replays_the_frozen_digests,
     json_strings_replay_the_frozen_vectors,

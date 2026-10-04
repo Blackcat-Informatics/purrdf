@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash-conformance"
-description = "The frozen-vector conformance suites of purrdf-hash: digest differentials, BLAKE3 streaming boundaries, base16 rendering, length framing and the fixed-key table hasher's self-vectors and quality, replayed natively and on wasm32-unknown-unknown, plus the digest and base16 throughput bench and the table hasher's latency bench"
+description = "The native frozen-vector conformance suites of purrdf-hash, focused WebAssembly integer-lowering and SIMD differentials, and native digest, base16 and table-hasher benchmarks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -45,10 +45,10 @@ name = "hasher"
 harness = false
 
 # The frozen-vector replay of MD5, SHA-1, SHA-3 and CRC-32 over every path the
-# host runs. Every target below runs on purrdf_testkit's `harness = false`
-# runner, so the same named cases run natively under `cargo test` and on
-# wasm32-unknown-unknown in Node under scripts/wasm-test-runner.sh
-# (`make wasm-test`).
+# host runs natively. Every target below uses purrdf_testkit's `harness = false`
+# runner. make wasm-test executes exact named subsets in Node: compact integer
+# lowering probes and actual scalar/SIMD backend differentials. General semantic
+# corpora remain in the complete native cargo test run.
 [[test]]
 name = "digest_differential"
 harness = false
@@ -71,16 +71,14 @@ harness = false
 name = "blake3"
 harness = false
 
-# SplitMix64's three streams and FNV-1a over structured corpora: frozen
-# answers replayed natively and on wasm32, where the 64-bit multiplies are
-# built from 32-bit halves.
+# SplitMix64's three streams and FNV-1a over structured corpora replay natively.
+# Compact frozen boundary probes execute wasm i64 wrapping arithmetic.
 [[test]]
 name = "splitmix_fnv"
 harness = false
 
 # Length framing, u64_le(len) || field: the frozen prefixes and framed-field
-# digests over structured corpora, replayed natively and on wasm32, where
-# usize is 32 bits wide.
+# digests over structured corpora are native semantic coverage.
 [[test]]
 name = "frame_le"
 harness = false

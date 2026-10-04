@@ -1,14 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Round trips, hand-built edge streams, refusals beside their valid
-//! neighbours, and the kernel differentials.
+//! Native DEFLATE conformance and direct WASM kernel qualification.
 //!
-//! Every refusal here is executed twice: once on the stream believed invalid,
-//! and once on the nearest stream that is valid, which must decode. The
-//! target is `harness = false` on `purrdf_testkit`'s runner, so the same named
-//! cases run natively under `cargo test` and on wasm32-unknown-unknown in
-//! Node (`make wasm-test`, baseline and `+simd128`).
+//! Native Rust runs every round trip, hand-built edge stream and refusal beside
+//! its nearest valid neighbour, together with all kernel differentials. Every
+//! body and registration remains on the testkit's `harness = false` runner.
+//!
+//! `make wasm-test` selects eight backend-presence and direct kernel cases in
+//! both scalar and `+simd128` builds: selected/required path availability,
+//! encoding and decoding byte equality, copy, match-length and hash kernels,
+//! frozen match-length vectors, and backend reporting. These exercise the actual
+//! WASM dispatch and simd128 implementations against portable results. General
+//! stream conformance stays native. The exact names, obligations and native
+//! owners are documented in
+//! [WASM test ownership](../../../docs/WASM_TESTING.md).
 
 use purrdf_testkit::rng::{splitmix64_bytes, xoshiro256_bytes};
 use std::io::{Read, Write};

@@ -14,8 +14,11 @@
 //! from its seed, which must agree with the one-shot digest.
 //!
 //! The target is `harness = false` on `purrdf_testkit`'s runner, so the same
-//! cases run natively under `cargo test` and on `wasm32-unknown-unknown` in
-//! Node (`make wasm-test`), where only the portable paths exist.
+//! full corpus runs natively under `cargo test`. `make wasm-test` selects only
+//! the compact integer-lowering probe below: wasm32 has no additional MD5,
+//! SHA-1, SHA-3 or CRC-32 backend, so it does not repeat their semantic corpora.
+//! The probe uses frozen answers at block and padding boundaries to qualify
+//! wasm integer operations and streamed length arithmetic.
 
 use purrdf_hash::backend::{Crc32Backend, Sha1Backend};
 use purrdf_hash::dispatch::{assert_required_available, host_advertises};
@@ -208,7 +211,85 @@ fn required_sha1_and_crc32_paths_are_available_and_selected() {
     }
 }
 
+/// Small independent-answer boundaries for wasm integer lowering: the u64
+/// SHA-3 lanes and rotations, and digest block/padding length arithmetic.
+/// Every algorithm keeps its complete differential corpus in the native suite.
+fn integer_digest_lowering_matches_frozen_boundaries() {
+    const LENGTHS: [usize; 20] = [
+        0, 1, 55, 56, 57, 63, 64, 65, 71, 72, 73, 103, 104, 105, 135, 136, 137, 143, 144, 145,
+    ];
+    let mut md5 = Md5::new();
+    let mut sha1 = purrdf_hash::sha1::Sha1::new();
+    let mut sha3_224 = Sha3_224::new();
+    let mut sha3_256 = Sha3_256::new();
+    let mut sha3_384 = Sha3_384::new();
+    let mut sha3_512 = Sha3_512::new();
+    let mut crc32 = purrdf_hash::crc32::Crc32::new();
+    let cases: [(&str, &str, &mut dyn Digest); 7] = [
+        (
+            "md5",
+            include_str!("vectors/md5_differential_vectors.txt"),
+            &mut md5,
+        ),
+        (
+            "sha1",
+            include_str!("vectors/sha1_differential_vectors.txt"),
+            &mut sha1,
+        ),
+        (
+            "sha3-224",
+            include_str!("vectors/sha3_224_differential_vectors.txt"),
+            &mut sha3_224,
+        ),
+        (
+            "sha3-256",
+            include_str!("vectors/sha3_256_differential_vectors.txt"),
+            &mut sha3_256,
+        ),
+        (
+            "sha3-384",
+            include_str!("vectors/sha3_384_differential_vectors.txt"),
+            &mut sha3_384,
+        ),
+        (
+            "sha3-512",
+            include_str!("vectors/sha3_512_differential_vectors.txt"),
+            &mut sha3_512,
+        ),
+        (
+            "crc32",
+            include_str!("vectors/crc32_differential_vectors.txt"),
+            &mut crc32,
+        ),
+    ];
+    let mut checked = 0;
+    for (name, text, hasher) in cases {
+        let file = VectorFile::parse(text).expect("frozen vector integrity");
+        for length in LENGTHS {
+            // The frozen prefix records each length 0..=4096 exactly once,
+            // with the high-word seed its header specifies.
+            let record = file.records().get(length).expect("the boundary record");
+            assert_eq!(record.fields[0], length.to_string());
+            let seed = u64::from_str_radix(record.fields[1], 16).expect("the frozen seed");
+            assert_eq!(seed, 0x7075_7272_6466_0000 + u64::try_from(length).unwrap());
+            let data = xoshiro256_bytes(length, seed);
+            hasher.reset();
+            hasher.update(&data);
+            let mut answer = [0_u8; purrdf_hash::MAX_OUTPUT_LEN];
+            let answer_len = hasher.finalize_reset(&mut answer);
+            let actual = one_shot_and_streamed(&answer[..answer_len], hasher, &data, length / 2);
+            assert_eq!(actual, record.fields[2], "{name}, length {length}");
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 7 * LENGTHS.len());
+    purrdf_testkit::harness::print_line(&format!(
+        "digest integer lowering: {checked} frozen boundaries"
+    ));
+}
+
 purrdf_testkit::harness_main!(
+    integer_digest_lowering_matches_frozen_boundaries,
     md5_vectors_are_reproduced,
     required_sha1_and_crc32_paths_are_available_and_selected,
     sha1_vectors_are_reproduced_on_every_path,
