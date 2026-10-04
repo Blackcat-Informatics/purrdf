@@ -18,6 +18,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Chains of several blank nodes, and cycles among them, work too. A blank node
   that is not on a path between two IRI classes adds no membership. Results
   with the option off are unchanged.
+- **SHACL-SPARQL custom components:** a constraint component or a SPARQL
+  validator now has the SHACL type that any other node has. Its `rdf:type`
+  values may be blank nodes, and its `rdfs:subClassOf` chain may run through
+  blank nodes. Before, a component typed through `_:x rdfs:subClassOf
+  sh:ConstraintComponent` was silently not registered, so its constraints
+  never ran. A validator whose class reached `sh:SPARQLAskValidator` through a
+  blank node was refused as a `validator-class` syntax violation. Cycles
+  among blank nodes terminate, and a blank node on no path to the SHACL class
+  registers nothing.
 
 ## [3.0.1] - 2026-10-02
 
