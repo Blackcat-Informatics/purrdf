@@ -29,6 +29,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   may still be any string. `STRLANGDIR`, like `STRLANG`, refuses a lexical
   form that is already tagged instead of silently replacing its language and
   direction.
+- **SPARQL simple-literal arguments:** the hash built-ins (`MD5`, `SHA1`,
+  `SHA256`, `SHA384`, `SHA512` and the SHA-3 family) take only a simple
+  literal or `xsd:string`, as SPARQL 1.1 §17.4.6 requires; a language-tagged
+  or directional string is an error instead of being hashed on its text.
+  Plain and `xsd:string` inputs keep the same digests. The same rule now
+  holds for the language and direction of `STRLANG` and `STRLANGDIR`, both
+  arguments of `LANGMATCHES`, the label of `BNODE` and the string form of
+  `IRI`/`URI`, which also no longer resolves a non-string literal such as
+  `IRI(1)` against the base.
 
 ## [3.0.1] - 2026-10-02
 

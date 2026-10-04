@@ -273,7 +273,7 @@ impl Walker {
                 }));
             }
             Function::LangMatches => {
-                let (Some((tag, ..)), Some((range, ..))) = (
+                let (Some((tag, None, _)), Some((range, None, _))) = (
                     self.string_arg(args.first(), row, schema, ctx)?,
                     self.string_arg(args.get(1), row, schema, ctx)?,
                 ) else {
@@ -721,7 +721,7 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
     }
     *budget -= 1;
     let sub = |choices: &mut Choices, budget: &mut usize| generate(choices, budget);
-    match choices.next(39) {
+    match choices.next(43) {
         0..=3 => leaf(choices),
         4 => {
             let (a, b) = (sub(choices, budget), sub(choices, budget));
@@ -897,6 +897,30 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
             },
             vec![sub(choices, budget)],
         ),
+        38 => call(
+            Function::LangMatches,
+            vec![sub(choices, budget), sub(choices, budget)],
+        ),
+        39 => call(
+            match choices.next(3) {
+                0 => Function::Md5,
+                1 => Function::Sha256,
+                _ => Function::Sha3_256,
+            },
+            vec![sub(choices, budget)],
+        ),
+        40 => {
+            let lexical = sub(choices, budget);
+            let mut args = vec![lexical, sub(choices, budget)];
+            let function = if choices.next(2) == 0 {
+                Function::StrLang
+            } else {
+                args.push(sub(choices, budget));
+                Function::StrLangDir
+            };
+            call(function, args)
+        }
+        41 => call(Function::Iri, vec![sub(choices, budget)]),
         _ => call(Function::IsLiteral, vec![sub(choices, budget)]),
     }
 }

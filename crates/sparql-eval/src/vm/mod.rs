@@ -622,11 +622,11 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 Op::LangMatches => {
                     let range = pop_str(stack, &program.strs)?;
                     let tag = pop_str(stack, &program.strs)?;
+                    // Both are simple literals (§17.4.3.13); a tagged one is an error.
                     let value = match (tag, range) {
-                        (Some(tag), Some(range)) => Some(helpers::intern_boolean(
-                            ctx,
-                            helpers::lang_matches(&tag.0, &range.0),
-                        )?),
+                        (Some(tag), Some(range)) if tag.1.is_none() && range.1.is_none() => Some(
+                            helpers::intern_boolean(ctx, helpers::lang_matches(&tag.0, &range.0))?,
+                        ),
                         _ => None,
                     };
                     stack.push(Val::Term(value));

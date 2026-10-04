@@ -3927,7 +3927,13 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         // ---- term constructors --------------------------------------------
         Function::Iri | Function::Uri => match arg(vals, 0) {
             Some(TermValue::Iri(iri)) => Ok(Some(iri_term(ctx, iri.clone())?)),
-            Some(TermValue::Literal { lexical_form, .. }) => {
+            // §17.4.2.8: the string form is a simple literal or `xsd:string`; a tagged
+            // string or any other literal is an error.
+            Some(TermValue::Literal {
+                lexical_form,
+                datatype,
+                ..
+            }) if datatype == XSD_STRING => {
                 match resolve_against_base(ctx.base_iri.as_deref(), lexical_form) {
                     Some(resolved) => Ok(Some(iri_term(ctx, resolved)?)),
                     // Relative reference with no base to resolve against — a SPARQL
@@ -3946,8 +3952,9 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         // BNODE(strExpr): the SAME argument string within the SAME query solution
         // (§17.4.2.9) reuses the previously-minted blank; see `ctx.bnode_memo`'s
         // doc for the row-identity mechanism and its scope.
+        // The label is a simple literal or `xsd:string` (§17.4.2.9).
         Function::BNode => {
-            let Some((s, _)) = string_arg(vals, 0) else {
+            let Some(s) = plain_string_arg(vals, 0) else {
                 return Ok(None);
             };
             let key = (ctx.current_row, s);
@@ -4103,43 +4110,43 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- hash functions ------------------------------------------------
         //
-        // Every arm here reads its argument through `string_arg_ref`, NOT
-        // `string_arg`: a hash consumes the lexical form as bytes and never
+        // Every arm here reads its argument through `plain_string_arg_ref`, NOT
+        // `plain_string_arg`: a hash consumes the lexical form as bytes and never
         // keeps it, so copying it into a fresh `String` first would be one
         // wasted heap allocation and one wasted memcpy of the whole literal,
         // per solution row, on every one of these nine built-ins. The only
         // allocation a hash call still makes per row is the hex digest it
         // returns, which is genuinely new text.
-        Function::Md5 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Md5 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::md5::Md5::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha1 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha1 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha1::Sha1::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha256 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha256 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha384 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha384 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha512 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha512 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
@@ -4147,31 +4154,31 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         },
 
         // SEP-0008 SHA-3 (FIPS 202). Same call convention as SHA1/SHA256: one
-        // simple-literal/xsd:string argument in, the lowercase hex digest out,
+        // simple-literal/xsd:string argument in (a tagged string is an error), the lowercase hex digest out,
         // an unbound/ill-typed argument yielding an error (`None`).
-        Function::Sha3_224 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha3_224 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_224::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha3_256 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha3_256 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha3_384 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha3_384 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha3_512 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha3_512 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
@@ -4695,31 +4702,25 @@ fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<St
     string_arg_value(arg(vals, i)?).map(|(s, l, _)| (s, l))
 }
 
-/// [`string_arg`] without the copy: `(lexical, language)` BORROWED from the
-/// argument rather than cloned out of it.
+/// [`plain_string_arg`] without the copy: the lexical form of a simple literal or
+/// `xsd:string` argument, BORROWED from the argument rather than cloned out of it.
 ///
-/// The accepted-datatype rule is identical to [`string_arg`]'s (simple literal,
-/// `xsd:string`, `rdf:langString`, `rdf:dirLangString`); only the ownership
-/// differs. Callers that merely READ the lexical form — the hash built-ins,
-/// which hash it straight from its bytes — must use this one:
-/// [`string_arg`] heap-allocates a fresh `String` per call, and these are
-/// evaluated once per solution row, so a `SHA3-256(?o)` over a million-row scan
-/// paid a million allocations to hand `as_bytes()` a pointer it could have had
-/// for free. The hex digest is still allocated (it is a genuinely new string),
-/// so the per-row allocation count for a hash call drops from two to one.
-fn string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<&str>)> {
+/// The accepted-datatype rule is identical to [`plain_string_arg`]'s: a
+/// language-tagged or directional string is an error, as the hash built-ins'
+/// signatures require (SPARQL 1.1 §17.4.6, SEP-0008). Callers that merely READ
+/// the lexical form — the hash built-ins, which hash it straight from its bytes —
+/// must use this one: [`plain_string_arg`] heap-allocates a fresh `String` per
+/// call, and these are evaluated once per solution row, so a `SHA3-256(?o)` over a
+/// million-row scan would pay a million allocations to hand `as_bytes()` a pointer
+/// it could have had for free. The hex digest is still allocated (it is a
+/// genuinely new string), so a hash call allocates once per row.
+fn plain_string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<&str> {
     match arg(vals, i)? {
         TermValue::Literal {
             lexical_form,
             datatype,
-            language,
             ..
-        } if datatype == XSD_STRING
-            || datatype == RDF_LANG_STRING
-            || datatype == RDF_DIR_LANG_STRING =>
-        {
-            Some((lexical_form.as_str(), language.as_deref()))
-        }
+        } if datatype == XSD_STRING => Some(lexical_form.as_str()),
         _ => None,
     }
 }
@@ -4731,14 +4732,7 @@ fn string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<
 /// `rdf:dirLangString`) argument is a type error here, not an accepted input
 /// whose language would silently be discarded.
 fn plain_string_arg(vals: &[Option<TermValue>], i: usize) -> Option<String> {
-    match arg(vals, i)? {
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            ..
-        } if datatype == XSD_STRING => Some(lexical_form.clone()),
-        _ => None,
-    }
+    plain_string_arg_ref(vals, i).map(str::to_owned)
 }
 
 /// Like [`string_arg`] but also returns the RDF 1.2 base direction (for functions
@@ -5157,7 +5151,8 @@ fn eval_str_lang<D: DatasetView + Sync>(
     // §17.4.2.5: the lexical-form argument must be a simple/`xsd:string` literal
     // — one that ALREADY carries a language tag (or RDF 1.2 base direction) is a
     // type error, not silently re-tagged.
-    let (Some(lex), Some((lang, _))) = (plain_string_arg(vals, 0), string_arg(vals, 1)) else {
+    // Both arguments are simple literals (§17.4.2.4): a tagged tag is an error too.
+    let (Some(lex), Some(lang)) = (plain_string_arg(vals, 0), plain_string_arg(vals, 1)) else {
         return Ok(None);
     };
     if lang.is_empty() {
@@ -5183,10 +5178,11 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     // Like `STRLANG`, the lexical form must carry no tag of its own: re-tagging an
     // already tagged string would silently discard its language and direction.
-    let (Some(lex), Some((lang, _)), Some((dir, _))) = (
+    // The language and direction are simple literals too.
+    let (Some(lex), Some(lang), Some(dir)) = (
         plain_string_arg(vals, 0),
-        string_arg(vals, 1),
-        string_arg(vals, 2),
+        plain_string_arg(vals, 1),
+        plain_string_arg(vals, 2),
     ) else {
         return Ok(None);
     };
@@ -7184,19 +7180,14 @@ mod tests {
     }
 
     /// The hash built-ins read their argument through the BORROWING accessor
-    /// (`string_arg_ref`) rather than the cloning one, and that swap must not
-    /// have narrowed which arguments they accept.
-    ///
-    /// `string_arg` admits a simple literal, an explicitly `xsd:string`-typed
-    /// one, an `rdf:langString` and an RDF 1.2 `rdf:dirLangString` — hashing the
-    /// LEXICAL form in every case and ignoring the tag — and refuses everything
-    /// else. This pins the same four accepts and one refuse across all nine
-    /// hash functions, against the `xsd:string` digest of the same lexical form,
-    /// so an accessor that dropped an accepted datatype (or started hashing the
-    /// language tag along with the text) fails here rather than silently
-    /// erroring on tagged data at a host boundary.
+    /// (`plain_string_arg_ref`) rather than the cloning one, and take exactly the
+    /// arguments their signatures name (SPARQL 1.1 §17.4.6, SEP-0008): a simple
+    /// literal and an explicitly `xsd:string`-typed one hash to the same digest of
+    /// the lexical form, while an `rdf:langString`, an RDF 1.2 `rdf:dirLangString`
+    /// and a non-string literal are expression errors. This pins both halves across
+    /// all nine hash functions, so neither a wider nor a narrower accessor passes.
     #[test]
-    fn every_hash_builtin_accepts_the_same_argument_shapes_by_reference() {
+    fn every_hash_builtin_accepts_exactly_simple_literals_by_reference() {
         let ds = empty_ds();
         let functions = [
             Function::Md5,
@@ -7215,36 +7206,36 @@ mod tests {
                 &Expression::FunctionCall(f.clone(), vec![lit("abc")].into()),
             )
             .unwrap_or_else(|| panic!("{f:?} must hash a simple literal"));
-            for accepted in [
-                typed_lit("abc", "http://www.w3.org/2001/XMLSchema#string"),
+            assert_eq!(
+                lex(
+                    &ds,
+                    &Expression::FunctionCall(
+                        f.clone(),
+                        vec![typed_lit("abc", "http://www.w3.org/2001/XMLSchema#string")].into()
+                    )
+                )
+                .as_deref(),
+                Some(baseline.as_str()),
+                "{f:?} must hash an xsd:string's lexical form as a simple literal's"
+            );
+            for refused in [
                 Expression::Literal(Literal::new_lang("abc", "en", None)),
                 Expression::Literal(Literal::new_lang(
                     "abc",
                     "en",
                     Some(purrdf_sparql_algebra::BaseDirection::Ltr),
                 )),
+                typed_lit("1", "http://www.w3.org/2001/XMLSchema#integer"),
             ] {
                 assert_eq!(
                     lex(
                         &ds,
-                        &Expression::FunctionCall(f.clone(), vec![accepted].into())
-                    )
-                    .as_deref(),
-                    Some(baseline.as_str()),
-                    "{f:?} must hash the lexical form of every string-shaped literal"
+                        &Expression::FunctionCall(f.clone(), vec![refused.clone()].into())
+                    ),
+                    None,
+                    "{f:?} over {refused:?} must be an expression error"
                 );
             }
-            assert_eq!(
-                lex(
-                    &ds,
-                    &Expression::FunctionCall(
-                        f.clone(),
-                        vec![typed_lit("1", "http://www.w3.org/2001/XMLSchema#integer")].into()
-                    )
-                ),
-                None,
-                "{f:?} over a non-string literal must stay an expression error"
-            );
         }
     }
 

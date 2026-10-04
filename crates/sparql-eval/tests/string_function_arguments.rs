@@ -496,3 +496,170 @@ fn regex_and_replace_patterns_are_simple_literals() {
         assert_eq!(select_over(&empty_dataset(), &query), expected, "{query}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// simple-literal-only arguments
+// ---------------------------------------------------------------------------
+
+/// The hash built-ins take a simple literal or `xsd:string` (SPARQL 1.1 §17.4.6, and
+/// SEP-0008 for SHA-3): a language-tagged or directional argument is an error, while a
+/// plain and an `xsd:string` argument hash to the same digest.
+#[test]
+fn hash_built_ins_take_only_simple_literals() {
+    for (function, digest_of_abc) in [
+        ("MD5", "900150983cd24fb0d6963f7d28e17f72"),
+        ("SHA1", "a9993e364706816aba3e25717850c26c9cd0d89d"),
+        (
+            "SHA256",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
+        (
+            "SHA384",
+            "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed\
+             8086072ba1e7cc2358baeca134c825a7",
+        ),
+        (
+            "SHA512",
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\
+             2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+        ),
+        (
+            "SHA3-256",
+            "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+        ),
+    ] {
+        for argument in [r#""abc""#.to_owned(), format!(r#""abc"^^<{XSD}string>"#)] {
+            let expression = format!("{function}({argument})");
+            assert_eq!(
+                select(&expression),
+                Some(string(digest_of_abc)),
+                "{expression}"
+            );
+        }
+        for argument in [
+            r#""abc"@en"#,
+            r#""abc"@en--rtl"#,
+            "1",
+            "<http://example.org/abc>",
+        ] {
+            let expression = format!("{function}({argument})");
+            assert_eq!(select(&expression), None, "{expression}");
+        }
+        // The same over a value bound per row.
+        for (argument, expected) in [
+            (r#""abc""#, Some(string(digest_of_abc))),
+            (r#""abc"@en"#, None),
+            (r#""abc"@en--ltr"#, None),
+        ] {
+            let query =
+                format!("SELECT ({function}(?v) AS ?y) WHERE {{ VALUES ?v {{ {argument} }} }}");
+            assert_eq!(select_over(&empty_dataset(), &query), expected, "{query}");
+        }
+    }
+    for function in ["SHA3-224", "SHA3-384", "SHA3-512"] {
+        assert!(
+            select(&format!(r#"{function}("abc")"#)).is_some(),
+            "{function}"
+        );
+        assert_eq!(
+            select(&format!(r#"{function}("abc"^^<{XSD}string>)"#)),
+            select(&format!(r#"{function}("abc")"#)),
+            "{function}"
+        );
+        assert_eq!(
+            select(&format!(r#"{function}("abc"@en)"#)),
+            None,
+            "{function}"
+        );
+        assert_eq!(
+            select(&format!(r#"{function}("abc"@en--rtl)"#)),
+            None,
+            "{function}"
+        );
+    }
+}
+
+/// The language and direction arguments of `STRLANG` and `STRLANGDIR` are simple
+/// literals (§17.4.2.4 and SPARQL 1.2), as is `LANGMATCHES`'s tag and range
+/// (§17.4.3.13), `BNODE`'s label (§17.4.2.9) and `IRI`'s string form (§17.4.2.8).
+#[test]
+fn simple_literal_arguments_refuse_tagged_strings() {
+    for expression in [
+        r#"STRLANG("abc", "en"@fr)"#,
+        r#"STRLANG("abc", "en"@fr--ltr)"#,
+        r#"STRLANGDIR("abc", "en"@fr, "rtl")"#,
+        r#"STRLANGDIR("abc", "en", "rtl"@en)"#,
+        r#"LANGMATCHES("en"@fr, "*")"#,
+        r#"LANGMATCHES("en", "*"@en)"#,
+        r#"LANGMATCHES("en"@fr--rtl, "en")"#,
+        r#"BNODE("x"@en)"#,
+        r#"BNODE("x"@en--rtl)"#,
+        r#"IRI("http://example.org/x"@en)"#,
+        r#"URI("http://example.org/x"@en--ltr)"#,
+        "IRI(1)",
+    ] {
+        assert_eq!(select(expression), None, "{expression}");
+    }
+    let rtl = Some(RdfTextDirection::Rtl);
+    for (expression, expected) in [
+        (
+            r#"STRLANG("abc", "en")"#.to_owned(),
+            tagged("abc", "en", None),
+        ),
+        (
+            format!(r#"STRLANG("abc", "en"^^<{XSD}string>)"#),
+            tagged("abc", "en", None),
+        ),
+        (
+            format!(r#"STRLANGDIR("abc", "en"^^<{XSD}string>, "rtl"^^<{XSD}string>)"#),
+            tagged("abc", "en", rtl),
+        ),
+        (r#"LANGMATCHES("en", "*")"#.to_owned(), boolean(true)),
+        (
+            r#"LANGMATCHES(LANG("x"@en--rtl), "EN")"#.to_owned(),
+            boolean(true),
+        ),
+        (
+            format!(r#"LANGMATCHES("en-GB"^^<{XSD}string>, "en")"#),
+            boolean(true),
+        ),
+        (r#"LANGMATCHES("fr", "en")"#.to_owned(), boolean(false)),
+        (r#"isBLANK(BNODE("x"))"#.to_owned(), boolean(true)),
+        (
+            format!(r#"isBLANK(BNODE("x"^^<{XSD}string>))"#),
+            boolean(true),
+        ),
+        (
+            r#"IRI("http://example.org/x")"#.to_owned(),
+            TermValue::Iri("http://example.org/x".to_owned()),
+        ),
+        (
+            format!(r#"IRI("http://example.org/x"^^<{XSD}string>)"#),
+            TermValue::Iri("http://example.org/x".to_owned()),
+        ),
+        (
+            "URI(<http://example.org/x>)".to_owned(),
+            TermValue::Iri("http://example.org/x".to_owned()),
+        ),
+    ] {
+        assert_eq!(select(&expression), Some(expected), "{expression}");
+    }
+    // Under a base, a non-string or tagged literal still makes no IRI; a string does.
+    for (argument, expected) in [
+        ("1", None),
+        (r#""x"@en"#, None),
+        (
+            r#""x""#,
+            Some(TermValue::Iri("http://example.org/x".to_owned())),
+        ),
+    ] {
+        let query = format!("BASE <http://example.org/> SELECT (IRI({argument}) AS ?y) WHERE {{}}");
+        assert_eq!(select_over(&empty_dataset(), &query), expected, "{query}");
+    }
+    // LANGMATCHES over values bound per row.
+    for (tag, expected) in [(r#""en""#, Some(boolean(true))), (r#""en"@fr"#, None)] {
+        let query =
+            format!("SELECT (LANGMATCHES(?t, \"*\") AS ?y) WHERE {{ VALUES ?t {{ {tag} }} }}");
+        assert_eq!(select_over(&empty_dataset(), &query), expected, "{query}");
+    }
+}

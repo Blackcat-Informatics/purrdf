@@ -826,17 +826,17 @@ Each function takes **one** argument and hashes the UTF-8 bytes of its
 same contract `SHA256` has, so a query can swap one for the other without
 changing anything else about the row.
 
-The accepted arguments are a simple literal, an explicitly `xsd:string`-typed
-literal, an `rdf:langString`, and an RDF 1.2 `rdf:dirLangString`. A tagged
-literal is hashed on its **text only**: `SHA3-256("abc"@en)` and
-`SHA3-256("abc")` are the same digest, because the tag is not part of the
-lexical form.
+The accepted arguments are a simple literal and an explicitly
+`xsd:string`-typed literal, as SPARQL 1.1 §17.4.6 requires of every hash
+built-in: `SHA3-256("abc")` and `SHA3-256("abc"^^xsd:string)` are the same
+digest.
 
 Anything else is an expression error, which is SPARQL's ordinary
 "this row produces no value" outcome rather than a query failure:
 
 - an **unbound** variable (`SHA3-256(?missing)`),
 - an IRI or a blank node,
+- a language-tagged or RDF 1.2 directional string (`SHA3-256("abc"@en)`),
 - a non-string literal (`SHA3-256(7)`).
 
 In a `SELECT` projection an errored call leaves the projected variable
