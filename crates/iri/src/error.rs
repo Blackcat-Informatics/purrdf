@@ -10,6 +10,8 @@
 
 use core::fmt;
 
+use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
+
 use crate::base::BaseInScope;
 
 /// The remedy for [`IriError::NoBase`].
@@ -240,6 +242,105 @@ impl IriError {
     }
 }
 
+impl IriError {
+    /// The failure as a typed [`DiagnosticPresentation`]: a stable message identity
+    /// per condition (`iri-bad-percent-encoding`, `iri-relative-no-base`, …), the
+    /// variant's exact fields as typed arguments (byte offsets as unsigned integers),
+    /// and English identical to this error's [`Display`](fmt::Display) rendering,
+    /// remedy included. Hosts read the condition and its offset without parsing
+    /// English.
+    #[must_use]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "these templates are interpreted and contract-checked by DiagnosticPresentation"
+    )]
+    pub fn presentation(&self) -> DiagnosticPresentation {
+        use crate::base::{BaseInScope, BaseOrigin};
+        use DiagnosticValue::{Character, Text, Unsigned};
+        let parameter = |name, value| DiagnosticParameter::new(name, value);
+        let (identity, template, parameters) = match self {
+            Self::Empty => ("iri-empty", "empty IRI/URI string", vec![]),
+            Self::MissingScheme => ("iri-missing-scheme", "missing scheme", vec![]),
+            Self::BadScheme(value) => (
+                "iri-bad-scheme",
+                "malformed scheme: {scheme:?}",
+                vec![parameter("scheme", Text(value.clone()))],
+            ),
+            Self::BadPercentEncoding(offset) => (
+                "iri-bad-percent-encoding",
+                "malformed percent-encoding at byte {offset}",
+                vec![parameter("offset", Unsigned(*offset as u64))],
+            ),
+            Self::DisallowedChar(character, offset) => (
+                "iri-disallowed-char",
+                "disallowed character {character:?} at byte {offset}",
+                vec![
+                    parameter("character", Character(*character)),
+                    parameter("offset", Unsigned(*offset as u64)),
+                ],
+            ),
+            Self::BadAuthority(reason) => (
+                "iri-bad-authority",
+                "malformed authority: {reason}",
+                vec![parameter("reason", Text(reason.clone()))],
+            ),
+            Self::NonAbsoluteBase(base) => (
+                "iri-non-absolute-base",
+                "base IRI is not absolute (no scheme): {base:?}",
+                vec![parameter("base", Text(base.clone()))],
+            ),
+            Self::NoBase { reference } => (
+                "iri-relative-no-base",
+                "relative IRI reference {reference:?} cannot be resolved: no base IRI is in scope",
+                vec![parameter("reference", Text(reference.clone()))],
+            ),
+            Self::NotAbsoluteByGrammar { reference, base } => {
+                let mut parameters = vec![parameter("reference", Text(reference.clone()))];
+                let (identity, template) = match base {
+                    BaseInScope::Absent => (
+                        "iri-not-absolute-by-grammar.absent",
+                        "relative IRI reference {reference:?} is not permitted by this syntax (no base IRI is in scope)",
+                    ),
+                    BaseInScope::InForce { iri, origin } => {
+                        parameters.push(parameter("base", Text(iri.clone())));
+                        match origin {
+                            BaseOrigin::Caller => (
+                                "iri-not-absolute-by-grammar.caller",
+                                "relative IRI reference {reference:?} is not permitted by this syntax (the caller-supplied base, <{base}>, is in scope but is never applied here)",
+                            ),
+                            BaseOrigin::Directive { line, column } => {
+                                parameters.push(parameter("line", Unsigned(*line)));
+                                parameters.push(parameter("column", Unsigned(u64::from(*column))));
+                                (
+                                    "iri-not-absolute-by-grammar.directive",
+                                    "relative IRI reference {reference:?} is not permitted by this syntax (the `@base` at line {line} column {column}, <{base}>, is in scope but is never applied here)",
+                                )
+                            }
+                            BaseOrigin::Enclosing => (
+                                "iri-not-absolute-by-grammar.enclosing",
+                                "relative IRI reference {reference:?} is not permitted by this syntax (the enclosing scope's base, <{base}>, is in scope but is never applied here)",
+                            ),
+                        }
+                    }
+                };
+                (identity, template, parameters)
+            }
+        };
+        let template = if let Some(remedy) = self.remedy_hint() {
+            format!("{template}; {remedy}")
+        } else {
+            template.to_owned()
+        };
+        // Unreachable refusal: validation judges only the identity, the template
+        // and the parameter names, which are literals fixed per arm (the remedy
+        // suffix is a brace-free constant); field values are spliced in and never
+        // re-read as template text. `presentation_covers_every_variant` constructs
+        // every arm.
+        DiagnosticPresentation::new(identity, &template, parameters)
+            .expect("IRI templates and typed argument sets agree")
+    }
+}
+
 impl fmt::Display for IriError {
     /// The condition, then the remedy — `"<what went wrong>; <what to do>"`.
     ///
@@ -311,6 +412,47 @@ mod tests {
         }
         assert_eq!(seen, all.len());
         all
+    }
+
+    /// Every variant (and every base origin of the grammar refusal) presents under
+    /// its own diagnostic code's family, with English byte-identical to `Display`.
+    #[test]
+    fn presentation_covers_every_variant() {
+        use crate::base::BaseOrigin;
+        let mut all = every_variant();
+        for origin in [
+            BaseOrigin::Caller,
+            BaseOrigin::Directive { line: 3, column: 9 },
+            BaseOrigin::Enclosing,
+        ] {
+            all.push(IriError::NotAbsoluteByGrammar {
+                reference: "{x}".to_owned(),
+                base: BaseInScope::InForce {
+                    iri: "http://example.org/{y}".to_owned(),
+                    origin,
+                },
+            });
+        }
+        for error in &all {
+            let presentation = error.presentation();
+            assert_eq!(presentation.english(), error.to_string());
+            assert!(
+                presentation
+                    .message_id()
+                    .starts_with(error.diagnostic_code()),
+                "{} under {}",
+                presentation.message_id(),
+                error.diagnostic_code()
+            );
+            assert!(presentation.detail().is_none());
+        }
+        let offset = IriError::BadPercentEncoding(7).presentation();
+        assert_eq!(offset.message_id(), "iri-bad-percent-encoding");
+        assert_eq!(offset.parameters()[0].name(), "offset");
+        assert_eq!(
+            offset.parameters()[0].value(),
+            &DiagnosticValue::Unsigned(7)
+        );
     }
 
     #[test]

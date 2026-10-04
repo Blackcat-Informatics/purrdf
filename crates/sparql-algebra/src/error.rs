@@ -97,12 +97,40 @@ impl ParseError {
     /// The original parse condition, with stable variant identity and exact typed
     /// fields. Hosts can distinguish a syntax rejection from lexical, IRI,
     /// unsupported-construct and arity failures without interpreting English.
+    ///
+    /// An [`Iri`](Self::Iri) failure that `purrdf-iri` refused carries that refusal's
+    /// own typed presentation as [`detail`](DiagnosticPresentation::detail) (for
+    /// example `iri-bad-percent-encoding` with its unsigned byte `offset`, or
+    /// `iri-relative-no-base`), so a host reads the IRI condition without parsing
+    /// `reason`. The cause is recovered from `lexical` by the same context-free
+    /// `purrdf-iri` checks the parser ran, and attached only when it renders
+    /// `reason` exactly; a reason no such check produced (a scheme-less term-position
+    /// IRI, or a hand-built value) carries no detail. The English never includes the
+    /// detail: it is exactly this error's `Display`.
     #[must_use]
+    pub fn presentation(&self) -> DiagnosticPresentation {
+        let presentation = self.own_presentation();
+        let Self::Iri { lexical, reason } = self else {
+            return presentation;
+        };
+        match iri_cause(lexical, reason) {
+            // `with_detail` refuses only a detail that itself has detail, and an
+            // `IriError` presentation never does; keep the parse condition alone
+            // rather than panic if that ever changed.
+            Some(cause) => presentation
+                .with_detail(cause.presentation())
+                .unwrap_or_else(|_| self.own_presentation()),
+            None => presentation,
+        }
+    }
+
+    /// The parse condition's own presentation, without secondary detail: what
+    /// `Display` renders.
     #[expect(
         clippy::literal_string_with_formatting_args,
         reason = "these templates are validated and rendered by DiagnosticPresentation"
     )]
-    pub fn presentation(&self) -> DiagnosticPresentation {
+    fn own_presentation(&self) -> DiagnosticPresentation {
         use DiagnosticValue::{Text, Unsigned};
         let parameter = |name, value| DiagnosticParameter::new(name, value);
         let (identity, template, parameters) = match self {
@@ -190,9 +218,40 @@ impl ParseError {
     }
 }
 
+/// The typed `purrdf-iri` refusal behind an [`ParseError::Iri`], when one renders
+/// `reason` exactly.
+///
+/// The parser builds `reason` from an [`purrdf_iri::IriError`] in one of two
+/// spellings: `"{diagnostic_code}: {error}"` when resolving or rebinding a base,
+/// and `"{error}"` when [`crate::NamedNode::new`] validates an IRI. Every error
+/// those paths raise is a function of `lexical` alone: the IRI grammar
+/// ([`purrdf_iri::parse`]), the base grammar ([`purrdf_iri::BaseIri::parse`]), and
+/// reference classification, whose only scope-dependent outcome is a relative
+/// reference with no base ([`purrdf_iri::BaseScope::resolve`] on an empty scope).
+/// A candidate is accepted only if it reproduces `reason` byte for byte, so a
+/// cause is never guessed: no match, no cause.
+fn iri_cause(lexical: &str, reason: &str) -> Option<purrdf_iri::IriError> {
+    let renders = |error: &purrdf_iri::IriError| {
+        let display = error.to_string();
+        reason == display
+            || reason
+                .strip_prefix(error.diagnostic_code())
+                .and_then(|rest| rest.strip_prefix(": "))
+                .is_some_and(|rest| rest == display)
+    };
+    [
+        purrdf_iri::parse(lexical).err(),
+        purrdf_iri::BaseIri::parse(lexical).err(),
+        purrdf_iri::BaseScope::empty().resolve(lexical).err(),
+    ]
+    .into_iter()
+    .flatten()
+    .find(renders)
+}
+
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.presentation().english())
+        f.write_str(self.own_presentation().english())
     }
 }
 
@@ -326,6 +385,88 @@ mod tests {
         for (error, english) in errors.iter().zip(expected) {
             assert_eq!(error.presentation().english(), english);
             assert_eq!(error.to_string(), english);
+        }
+    }
+
+    /// An IRI refusal carries the `purrdf-iri` condition as typed detail, from every
+    /// path that raises one (term resolution, a `BASE` directive, a caller base, an
+    /// AST constructor), while the English stays exactly the parse error's own.
+    #[test]
+    fn iri_failures_carry_the_typed_iri_cause_as_detail() {
+        use crate::{NamedNode, SparqlParser};
+        let parser = SparqlParser::new();
+        let cases = [
+            (
+                parser
+                    .parse_query("SELECT * WHERE { <http://example.org/%zz> ?p ?o }")
+                    .unwrap_err(),
+                "iri-bad-percent-encoding",
+                Some(("offset", DiagnosticValue::Unsigned(19))),
+            ),
+            (
+                parser
+                    .parse_query("SELECT * WHERE { <relative> ?p ?o }")
+                    .unwrap_err(),
+                "iri-relative-no-base",
+                Some(("reference", DiagnosticValue::Text("relative".into()))),
+            ),
+            (
+                parser
+                    .parse_query("BASE <http://example.org/%g0> SELECT * WHERE { ?s ?p ?o }")
+                    .unwrap_err(),
+                "iri-bad-percent-encoding",
+                Some(("offset", DiagnosticValue::Unsigned(19))),
+            ),
+            (
+                SparqlParser::new()
+                    .with_base_iri("relative/")
+                    .parse_query("SELECT * WHERE { ?s ?p ?o }")
+                    .unwrap_err(),
+                "iri-non-absolute-base",
+                None,
+            ),
+            (
+                NamedNode::new("http://example.org/a b").unwrap_err(),
+                "iri-disallowed-char",
+                Some(("offset", DiagnosticValue::Unsigned(20))),
+            ),
+        ];
+        for (error, identity, parameter) in cases {
+            let ParseError::Iri { reason, .. } = &error else {
+                panic!("an IRI refusal, got {error:?}");
+            };
+            let presentation = error.presentation();
+            assert_eq!(presentation.message_id(), "sparql-parse-iri");
+            assert_eq!(presentation.english(), error.to_string());
+            let detail = presentation.detail().expect("typed IRI cause");
+            assert_eq!(detail.message_id(), identity, "{error}");
+            assert!(reason.contains(detail.english()), "{reason}");
+            if let Some((name, value)) = parameter {
+                let found = detail
+                    .parameters()
+                    .iter()
+                    .find(|candidate| candidate.name() == name)
+                    .expect("named parameter");
+                assert_eq!(found.value(), &value, "{error}");
+            }
+            let json = presentation.to_json();
+            assert_eq!(
+                json.get("detail")
+                    .and_then(|detail| detail.get("messageId"))
+                    .and_then(purrdf_lex::json::Value::as_str),
+                Some(identity)
+            );
+        }
+        // A refusal no `purrdf-iri` check produced carries no cause, and neither does
+        // a hand-built reason that no check renders.
+        for error in [
+            NamedNode::new("relative").unwrap_err(),
+            ParseError::Iri {
+                lexical: "http://example.org/%zz".into(),
+                reason: "not what purrdf-iri says".into(),
+            },
+        ] {
+            assert!(error.presentation().detail().is_none(), "{error}");
         }
     }
 

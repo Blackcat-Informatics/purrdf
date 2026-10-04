@@ -4263,12 +4263,19 @@ fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
 }
 
 /// The diagnostic for request text the parser refused: `code`, the query or update parse
-/// code.
+/// code, with the parse error's typed presentation.
+///
+/// An IRI failure's presentation carries the `purrdf-iri` refusal as typed detail,
+/// whose English the parse message already contains (its `reason`). The diagnostic's
+/// human `detail` therefore stays empty: its rendering is the parse error's own words,
+/// exactly, and the typed cause is read from the presentation.
 fn parse_diagnostic(
     error: &purrdf_sparql_algebra::ParseError,
     code: &'static str,
 ) -> RdfDiagnostic {
-    RdfDiagnostic::error(code, "").with_presentation(error.presentation())
+    let mut diagnostic = RdfDiagnostic::error(code, "").with_presentation(error.presentation());
+    diagnostic.detail = None;
+    diagnostic
 }
 
 /// Admit `query`'s structure: its height against the stack left here, for the recursive
