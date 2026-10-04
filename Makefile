@@ -47,6 +47,9 @@ ifeq ($(strip $(CARGO_TARGET_DIR)),)
 $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo metadata and python3 are available)
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
+# The integration branch the non-Rust ratchet compares against: its BASE is the
+# merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
+PURRDF_RATCHET_BASE ?= origin/main
 
 .PHONY: help doctor metadata fmt hooks check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
@@ -82,7 +85,7 @@ metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 fmt: ## Auto-format the workspace.
 	cargo fmt --all
 
-hooks: ## Install the pre-commit hook: the quick subset of `make check`, run on the staged snapshot.
+hooks: ## Install the pre-commit and pre-merge-commit hooks: the quick subset of `make check`, run on the staged snapshot.
 	git config core.hooksPath .githooks
 
 check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
@@ -126,6 +129,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-layers.py --self-test
 	python3 scripts/check-layers.py
 	cargo run -q --locked -p helper-census -- --self-test
+	cargo run -q --locked -p helper-census -- --non-rust-ratchet --merge-base-with $(PURRDF_RATCHET_BASE) --target worktree
 	python3 scripts/check-shared-helpers.py --self-test
 	python3 scripts/check-shared-helpers.py
 	python3 scripts/check-hash-domains.py --self-test
@@ -274,7 +278,7 @@ test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|
 		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
 		doc) set -x; cargo test --workspace --locked --doc \
 			&& cargo build --workspace --locked --examples --profile test \
-			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture ;; \
+			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance ;; \
 		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
 		integration-2) set -x; cargo test --workspace --locked --test '[e-o]*' ;; \
 		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \

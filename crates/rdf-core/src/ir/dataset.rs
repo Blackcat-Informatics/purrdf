@@ -346,6 +346,12 @@ pub struct RdfDataset {
     /// configured" and "configured but never interned" — both mean "no
     /// derivations present", not an error (no-fabricated-default policy).
     derivation_predicate: Option<TermId>,
+    /// The derivation-predicate IRI the builder was configured with, kept whether or
+    /// not this dataset interned it, so a rebuild of this identity space
+    /// ([`rebuild_builder`](Self::rebuild_builder), [`union`](Self::union)) is
+    /// configured as this one was and recognizes derivations the rebuild adds.
+    /// Configuration only, like `content_scheme`: never serialized.
+    derivation_predicate_iri: Option<Box<str>>,
     /// Lazy successor→predecessors reverse index backing
     /// [`RdfDataset::predecessors`]/[`RdfDataset::predecessor_chain`]. DERIVED,
     /// NON-SERIALIZED: a pure function of the frozen `annotations` table plus
@@ -355,6 +361,11 @@ pub struct RdfDataset {
     /// dataset-local `TermId`s (C0.8: never serialized, never read by a
     /// writer).
     predecessor_index: OnceLock<PredecessorIndex>,
+    /// Lazy count of statement rows (reifier bindings plus annotations) per named
+    /// graph, backing [`RdfDataset::named_graph_row_count`]. DERIVED,
+    /// NON-SERIALIZED: a pure function of the frozen statement tables, built by
+    /// one pass on first use and read only by dataset-local `TermId`s.
+    statement_graph_rows: OnceLock<HashMap<TermId, usize, FastHasher>>,
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
@@ -806,6 +817,7 @@ impl RdfDataset {
         content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
         content_scheme: Option<ContentIdScheme>,
         derivation_predicate: Option<TermId>,
+        derivation_predicate_iri: Option<Box<str>>,
     ) -> Self {
         Self {
             arena,
@@ -821,7 +833,9 @@ impl RdfDataset {
             content_ids,
             content_scheme,
             derivation_predicate,
+            derivation_predicate_iri,
             predecessor_index: OnceLock::new(),
+            statement_graph_rows: OnceLock::new(),
         }
     }
 
@@ -829,6 +843,46 @@ impl RdfDataset {
     /// declared empty — see the `named_graphs` field doc). Sorted, deduplicated.
     pub fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
         self.named_graphs.iter().copied()
+    }
+
+    /// Whether `graph` names a named graph of this dataset, quad-bearing or
+    /// explicitly declared empty: exactly whether [`named_graphs`](Self::named_graphs)
+    /// yields it, answered by a binary search of the sorted set.
+    #[must_use]
+    pub fn has_named_graph(&self, graph: TermId) -> bool {
+        self.named_graphs.binary_search(&graph).is_ok()
+    }
+
+    /// The number of RDF rows in the named graph `graph`: its quads, reifier
+    /// bindings and annotations. The quads are counted by the bounds of the graph's
+    /// run in the graph-leading index; the statement rows come from a per-graph
+    /// histogram of the statement tables, built by one pass on first use (and never
+    /// when the dataset has no statement rows).
+    pub(crate) fn named_graph_row_count(&self, graph: TermId) -> usize {
+        let g = GraphMatch::Named(graph);
+        let plan = Self::probe_plan(false, false, false, g);
+        let (_, lo, hi) = self.candidate_run(&plan, None, None, None, g);
+        let statements = if self.reifiers.is_empty() && self.annotations.is_empty() {
+            0
+        } else {
+            self.statement_graph_rows
+                .get_or_init(|| {
+                    let mut rows: HashMap<TermId, usize, FastHasher> = HashMap::default();
+                    let graphs = self
+                        .reifiers
+                        .iter()
+                        .map(|&(_, _, g)| g)
+                        .chain(self.annotations.iter().map(|&(_, _, _, g)| g));
+                    for graph in graphs.flatten() {
+                        *rows.entry(graph).or_default() += 1;
+                    }
+                    rows
+                })
+                .get(&graph)
+                .copied()
+                .unwrap_or(0)
+        };
+        hi - lo + statements
     }
 
     /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
@@ -1753,6 +1807,21 @@ impl RdfDataset {
             .map(|i| &self.locations[i].1)
     }
 
+    /// A fresh builder configured as `datasets` agree (the rule
+    /// [`union`](Self::union) builds under), for any rebuild that merges several
+    /// sources; a plain builder when they agree on no scheme.
+    pub(crate) fn agreed_builder(datasets: &[&Self]) -> super::builder::RdfDatasetBuilder {
+        match Self::agreed_content_addressing(datasets) {
+            Some((scheme, derivation_predicate)) => {
+                super::builder::RdfDatasetBuilder::with_content_addressing(
+                    scheme,
+                    derivation_predicate,
+                )
+            }
+            None => super::builder::RdfDatasetBuilder::new(),
+        }
+    }
+
     /// Decide whether [`union`](Self::union) can carry content addressing forward
     /// onto the merged output, and with which config.
     ///
@@ -1791,17 +1860,10 @@ impl RdfDataset {
             if ds.content_id_scheme() != Some(&winner) {
                 continue;
             }
-            if let Some(id) = ds.derivation_predicate() {
-                let iri = match ds.resolve(id) {
-                    TermRef::Iri(iri) => iri.to_owned(),
-                    other => unreachable!(
-                        "the frozen derivation-predicate TermId must resolve to an IRI, got \
-                         {other:?}"
-                    ),
-                };
-                if !predicates.contains(&iri) {
-                    predicates.push(iri);
-                }
+            if let Some(iri) = ds.derivation_predicate_iri()
+                && !predicates.contains(&iri)
+            {
+                predicates.push(iri);
             }
         }
         let derivation_predicate = match predicates.as_slice() {
@@ -1852,15 +1914,7 @@ impl RdfDataset {
     /// Disagreeing inputs carry none forward — no fabricated compromise.
     #[must_use]
     pub fn union(datasets: &[&Self]) -> Self {
-        let mut builder = match Self::agreed_content_addressing(datasets) {
-            Some((scheme, derivation_predicate)) => {
-                super::builder::RdfDatasetBuilder::with_content_addressing(
-                    scheme,
-                    derivation_predicate,
-                )
-            }
-            None => super::builder::RdfDatasetBuilder::new(),
-        };
+        let mut builder = Self::agreed_builder(datasets);
         for ds in datasets {
             builder.push_dataset(ds);
         }
@@ -1893,7 +1947,9 @@ impl RdfDataset {
             content_ids: self.content_ids.clone(),
             content_scheme: self.content_scheme.clone(),
             derivation_predicate: self.derivation_predicate,
+            derivation_predicate_iri: self.derivation_predicate_iri.clone(),
             predecessor_index: OnceLock::new(),
+            statement_graph_rows: OnceLock::new(),
         }
     }
 
@@ -1970,6 +2026,26 @@ impl RdfDataset {
     #[must_use]
     pub fn content_id_scheme(&self) -> Option<&ContentIdScheme> {
         self.content_scheme.as_ref()
+    }
+
+    /// A fresh builder carrying this dataset's caller-supplied configuration — its
+    /// content-id scheme and derivation predicate — for a rebuild of this identity
+    /// space; a plain builder when it has none. A derivation predicate this dataset
+    /// never interned is carried too, so derivations the rebuild adds are recognized.
+    pub(crate) fn rebuild_builder(&self) -> super::builder::RdfDatasetBuilder {
+        match self.content_id_scheme() {
+            Some(scheme) => super::builder::RdfDatasetBuilder::with_content_addressing(
+                scheme.clone(),
+                self.derivation_predicate_iri(),
+            ),
+            None => super::builder::RdfDatasetBuilder::new(),
+        }
+    }
+
+    /// The configured derivation predicate's IRI, the form a builder is configured
+    /// with — present whether or not this dataset interned it.
+    fn derivation_predicate_iri(&self) -> Option<String> {
+        self.derivation_predicate_iri.as_deref().map(str::to_owned)
     }
 
     /// The decoded [`Blake3ContentId`] of a content-addressed term, or `None` if
@@ -3197,6 +3273,50 @@ mod tests {
             0,
             "no content ids are fabricated without an agreed scheme"
         );
+    }
+
+    /// A union whose derivation predicate is configured on one input that never
+    /// interned it still recognizes the derivation another input carries; the
+    /// neighbouring union of the same inputs with the predicate interned agrees.
+    #[test]
+    fn union_carries_a_configured_but_unused_derivation_predicate() {
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        const IRI_A: &str =
+            "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const IRI_C: &str =
+            "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        for interned in [false, true] {
+            let configured = {
+                let mut b = RdfDatasetBuilder::with_content_addressing(
+                    scheme.clone(),
+                    Some(DERIVED_FROM.into()),
+                );
+                let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
+                let o = if interned {
+                    b.intern_iri(DERIVED_FROM)
+                } else {
+                    iri(&mut b, "o")
+                };
+                b.push_quad(s, p, o, None);
+                b.freeze().expect("configured input")
+            };
+            let carrier = {
+                let mut b = RdfDatasetBuilder::with_content_addressing(scheme.clone(), None);
+                let c = b.intern_iri(IRI_C);
+                let a = b.intern_iri(IRI_A);
+                let (x, y, z) = (iri(&mut b, "x"), iri(&mut b, "y"), iri(&mut b, "z"));
+                let triple = b.intern_triple(x, y, z);
+                let derived_from = b.intern_iri(DERIVED_FROM);
+                b.push_reifier(c, triple);
+                b.push_annotation(c, derived_from, a);
+                b.freeze().expect("carrier input")
+            };
+            let u = RdfDataset::union(&[&configured, &carrier]);
+            let c = u.term_id_by_iri(IRI_C).expect("C");
+            let a = u.term_id_by_iri(IRI_A).expect("A");
+            assert_eq!(u.predecessors(c), &[a], "interned={interned}");
+        }
     }
 
     /// [`RdfDataset::owned_snapshot`] is a single-input union, which trivially

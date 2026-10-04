@@ -194,9 +194,11 @@ def workspace_license(root: Path) -> str:
 # would widen the gate's apparent scope over a surface it never inspects.
 HEADER_SUFFIXES = (".rs", ".py", ".pyi", ".sh", ".mjs", ".js", ".toml", ".yaml", ".yml")
 
-# First-party files that DELIBERATELY declare a different license, with the reason.
-# This register may only SHRINK: an entry whose file no longer declares something
-# else is reported as stale, so an exemption cannot outlive its justification.
+# Files that DELIBERATELY declare a different license, with the reason.
+# Implementation-code exceptions may only shrink. A separately noticed generated
+# DATA projection requires its exact upstream terms, frozen inputs and verified
+# generator before registration. An entry whose file no longer declares the
+# registered license is stale, so no exemption outlives its justification.
 #
 # The alternative -- dropping the whole rule because one file is different -- is how
 # a gate with one awkward case becomes no gate at all.
@@ -215,6 +217,11 @@ DELIBERATE_OTHER_LICENSE: dict[str, str] = {
     "crates/text/src/unicode_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
     "crates/jsonschema/src/ecma/property_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
     "crates/jsonschema/src/ecma/unicode_ranges.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+    # Separately identified WHATWG DATA incorporated into generated source;
+    # the independently written resolver/generator keep the first-party offer.
+    # Its exact input and notice are frozen, and check-generated.sh proves this
+    # file is only the native generator's data projection, not imported code.
+    "crates/lex/src/html/entities.rs": "BSD-3-Clause",
 }
 
 

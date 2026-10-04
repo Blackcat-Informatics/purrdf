@@ -99,7 +99,7 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
 
 | 所需能力 | 通常来自 | 如今在 PurRDF 之内 | 止步于何处 |
 | --- | --- | --- | --- |
-| 带排名的全文检索 | PostgreSQL `tsvector`/`tsquery` | [全文检索](sparql/full-text.md)：`purrdf-text`，一个覆盖 RDF 1.2 字面量的倒排索引，以精确的 `i128` 定点数做 BM25 排名，crate 内没有浮点。 | 是 BM25 排名，不是 Lucene：没有词干提取，没有停用词表，没有查询方言；一个在冻结数据集上一次性构建的内存索引。 |
+| 带排名的全文检索 | PostgreSQL `tsvector`/`tsquery` | [全文检索](sparql/full-text.md)：`purrdf-text`，一个覆盖 RDF 1.2 字面量的倒排索引，以精确的 `i128` 定点数做 BM25 排名，crate 内没有浮点。 | 精确 BM25F、显式词干提取与词典分析，以及独立的汉字检索；没有停用词表或查询方言；一个在冻结数据集上一次性构建的内存索引。 |
 | 空间谓词 | PostGIS | [GeoSPARQL](sparql/geosparql.md)：`purrdf-geo`，GeoSPARQL 1.1，WKT 与 GeoJSON 解析为精确有理数，Simple Features、Egenhofer 与 RCC8 的每一种关系都在精确的 DE-9IM 上判定；没有 GEOS，没有 PROJ。 | 是矢量几何上的拓扑谓词、访问器与可精确计算的度量，不是 PostGIS：没有 CRS 变换，没有椭球大地测量，没有缓冲区，没有凹包，没有叠加集合运算，没有栅格——每个未实现的函数都按名称硬错误（`geof:convexHull` 已实现）。 |
 | 向量相似度 | pgvector | [嵌入最近邻](sparql/embedding-knn.md)：在 PURREMB 嵌入空间上的精确 top-k，binary64 且累加顺序固定。 | 由调用方提供的 `KnnGuard` 限定的精确扫描，三种度量，没有近似索引；PurRDF 不计算嵌入——向量来自由调用方填充的 PURREMB 工件，该工件由 PurRDF 自身写出（`EmbeddingBuilder`、`EmbeddingStreamWriter`；仅限 Rust）并以失败即关闭（fail-closed）的方式打开。 |
 

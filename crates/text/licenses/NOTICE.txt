@@ -12,6 +12,12 @@ This inventory preserves notices for the source material and resolved
 build inputs described below. Platform alternatives and build inputs
 need not occur in every compiled binary. Test data is source-only.
 
+snowball-english-corpus: BSD-3-Clause
+Scope: Complete unmodified English conformance DATA only; the independent prose-derived stemming implementation retains the first-party grant
+Source: https://github.com/snowballstem/snowball-data/tree/a0ec0d0a2839ec885878868de20fcb63209d92b0/english
+Evidence: crates/text/tests/stemming_vectors/PROVENANCE.md
+Notice: third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt
+
 unicode: Unicode-3.0
 Scope: generated and vendored Unicode data; terms apply in addition to the first-party grant
 Source: https://www.unicode.org/Public/17.0.0/ucd/

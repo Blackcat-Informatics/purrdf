@@ -184,6 +184,13 @@ def inventory() -> list[dict]:
     if len(names) != len(set(names)):
         raise ValueError("duplicate inherited-material identifier")
     for entry in entries:
+        if entry.get("separate_archive") not in (None, "purrdf-text-lexicons"):
+            raise ValueError(f"{entry['id']}: unknown separate data archive")
+        if entry.get("separate_archive") and any(
+            not path.startswith("crates/text/lexicons/")
+            for path in entry.get("paths", [])
+        ):
+            raise ValueError(f"{entry['id']}: separate lexicon scope covers other material")
         for key in (
             "id",
             "license",
@@ -273,6 +280,11 @@ def bundle(
     if profile == "python":
         source_roots = [ROOT]
     for entry in inherited:
+        # These data are excluded from Cargo packages and distributed in their
+        # own fully noticed archive. Do not attach their terms to library code
+        # merely because their source checkout sits beneath a crate directory.
+        if entry.get("separate_archive"):
+            continue
         if not any(
             path == base or base in path.parents
             for pattern in entry["paths"]
@@ -455,6 +467,10 @@ def validate_members(path: Path, result: dict[str, bytes]) -> dict[str, bytes]:
         ):
             raise ValueError(
                 f"{path}: acquired XML conformance payload may not be redistributed"
+            )
+        if "lexicons" in pure.parts:
+            raise ValueError(
+                f"{path}: separately distributed lexicon data entered a library package"
             )
     return result
 
@@ -1392,6 +1408,7 @@ def self_test() -> None:
             "package/.stage/notes.txt",
             "package/ROADMAP-private.md",
             "package/vectors/xmlconf/xmltest/case.xml",
+            "package/crates/text/lexicons/artifacts/dictionary.cbor",
             "../escape",
         ):
             path = root / "forbidden.tgz"

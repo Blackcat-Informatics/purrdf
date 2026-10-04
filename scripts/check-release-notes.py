@@ -66,7 +66,7 @@ def release_notes(root: Path, requested: str | None = None) -> tuple[str, bytes]
 
 
 def checksum_bytes(root: Path, version: str) -> bytes:
-    """Hash exactly the current C SDK and its two existing legal receipts."""
+    """Hash exactly the C SDK, its two legal receipts, and the lexicon data bundle."""
     directory = root / "target" / "dist"
     archives = sorted(directory.glob(f"purrdf-capi-{version}-*.tar.gz"))
     if len(archives) != 1:
@@ -78,6 +78,7 @@ def checksum_bytes(root: Path, version: str) -> bytes:
             archive.name.removesuffix(".tar.gz") + ".license-receipt.json"
         ),
         root / "target" / "license-evidence-cargo.json",
+        directory / f"purrdf-text-lexicons-{version}.tar.gz",
     ]
     lines = []
     for path in sorted(paths, key=lambda item: item.name):
@@ -155,9 +156,13 @@ def self_test() -> None:
         receipt.write_bytes(b"actual C receipt fixture")
         cargo = root / "target/license-evidence-cargo.json"
         cargo.write_bytes(b"actual Cargo receipt fixture")
+        lexicons = directory / "purrdf-text-lexicons-3.0.0.tar.gz"
+        lexicons.write_bytes(b"licensed lexicon data fixture")
         expected = b"".join(
             f"{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}\n".encode()
-            for item in sorted([archive, receipt, cargo], key=lambda item: item.name)
+            for item in sorted(
+                [archive, receipt, cargo, lexicons], key=lambda item: item.name
+            )
         )
         assert checksum_bytes(root, "3.0.0") == expected
         archive.write_bytes(b"changed SDK fixture")

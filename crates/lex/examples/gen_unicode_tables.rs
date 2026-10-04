@@ -12,7 +12,7 @@
 //! | Table set | Committed file | What it holds |
 //! |---|---|---|
 //! | `normalization` | `crates/lex/src/unicode_tables.rs` | `Canonical_Combining_Class`, the full decompositions, the primary composites (UAX 15) |
-//! | `text` | `crates/text/src/unicode_tables.rs` | full case folding (`C` + `F`), the UAX 29 segmentation byte |
+//! | `text` | `crates/text/src/unicode_tables.rs` | full case folding (`C` + `F`), UAX 29 segmentation, analysis properties and scripts |
 //! | `idna` | `crates/iri/src/idna_tables.rs` | the RFC 5892 derived property, Joining_Type, Bidi_Class, the Appendix A scripts, the combining marks, NFKC_Casefold |
 //! | `ecma-properties` | `crates/jsonschema/src/ecma/property_tables.rs` | the property names and values an ECMA-262 `\p{…}` escape may spell |
 //! | `ecma-ranges` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | the code point ranges of each of those properties, and simple case folding |
@@ -152,6 +152,8 @@ fn assert_one_version() {
         "ScriptExtensions.txt",
         "Scripts.txt",
         "WordBreakProperty.txt",
+        "GraphemeBreakProperty.txt",
+        "GraphemeBreakTest.txt",
     ] {
         assert_eq!(
             header_version(name),
@@ -160,12 +162,16 @@ fn assert_one_version() {
         );
     }
     let emoji_version = format!("# Version: {}.{}", UNICODE_VERSION.0, UNICODE_VERSION.1);
-    assert!(
-        read("emoji-data.txt")
-            .lines()
-            .any(|line| line.trim() == emoji_version),
-        "emoji-data.txt does not declare {emoji_version:?}"
-    );
+    for name in [
+        "emoji-data.txt",
+        "emoji-test.txt",
+        "emoji-variation-sequences.txt",
+    ] {
+        assert!(
+            read(name).lines().any(|line| line.trim() == emoji_version),
+            "{name} does not declare {emoji_version:?}"
+        );
+    }
 }
 
 /// Everything read from `UnicodeData.txt` for one code point.
@@ -330,6 +336,20 @@ fn emit_list<I: IntoIterator<Item = String>>(out: &mut String, items: I) {
     out.push('\n');
 }
 
+fn grouped_decimal(value: &str) -> String {
+    if value.len() < 5 {
+        return value.to_owned();
+    }
+    let mut result = String::with_capacity(value.len() + value.len() / 3);
+    for (at, c) in value.chars().enumerate() {
+        if at != 0 && (value.len() - at).is_multiple_of(3) {
+            result.push('_');
+        }
+        result.push(c);
+    }
+    result
+}
+
 fn emit_two_stage<T: Copy + std::fmt::Display>(
     out: &mut String,
     name: &str,
@@ -351,7 +371,13 @@ fn emit_two_stage<T: Copy + std::fmt::Display>(
         "pub(crate) static {name}_BLOCKS: [{ty}; {}] = [",
         table.blocks.len()
     );
-    emit_list(out, table.blocks.iter().map(ToString::to_string));
+    emit_list(
+        out,
+        table
+            .blocks
+            .iter()
+            .map(|value| grouped_decimal(&value.to_string())),
+    );
     out.push_str("];\n\n");
 }
 
@@ -671,6 +697,106 @@ const EXTENDED_PICTOGRAPHIC: u8 = 0x20;
 /// The segmentation byte's alphanumeric bit.
 const ALPHANUMERIC: u8 = 0x40;
 
+/// The analysis-property bits, separate from the published segmentation byte.
+const ANALYSIS_NONSPACING: u32 = 1;
+const ANALYSIS_MARK: u32 = 2;
+const ANALYSIS_IGNORABLE: u32 = 4;
+const ANALYSIS_BIDI: u32 = 8;
+/// Whitespace and control/format characters cannot occur inside dictionary terms.
+const ANALYSIS_SEPARATOR: u32 = 1 << 24;
+const ANALYSIS_LETTER: u32 = 1 << 25;
+const ANALYSIS_WHITESPACE: u32 = 1 << 26;
+const ANALYSIS_JOINING: u32 = 1 << 27;
+const ANALYSIS_NEUTRAL_SCRIPT: u32 = 1 << 28;
+const ANALYSIS_EXPLICIT_EXTENSIONS: u32 = 1 << 29;
+/// Script numbers occupy the high bits of the analysis-property word.
+const ANALYSIS_SCRIPT_SHIFT: u32 = 4;
+/// A bit set of supported Script_Extensions occupies the high byte.
+const ANALYSIS_EXTENSIONS_SHIFT: u32 = 8;
+/// Script values routed through the dictionary lattice, in runtime order.
+const ANALYSIS_SCRIPTS: &[&str] = &[
+    "Han", "Hiragana", "Katakana", "Hangul", "Thai", "Lao", "Khmer", "Myanmar", "Latin", "Greek",
+    "Cyrillic", "Hebrew", "Arabic",
+];
+/// Script_Extensions uses the UCD's short property-value aliases.
+const ANALYSIS_SCRIPT_ALIASES: &[&str] = &[
+    "Hani", "Hira", "Kana", "Hang", "Thai", "Laoo", "Khmr", "Mymr", "Latn", "Grek", "Cyrl", "Hebr",
+    "Arab",
+];
+
+fn text_properties(entries: &BTreeMap<u32, Entry>) -> TwoStage<u32> {
+    let mut properties = vec![0u32; CODE_SPACE as usize];
+    for (&point, entry) in entries {
+        if entry.general_category.starts_with('L') {
+            properties[point as usize] |= ANALYSIS_LETTER;
+        }
+        if entry.general_category == "Mn" {
+            properties[point as usize] |= ANALYSIS_NONSPACING;
+        }
+        if matches!(entry.general_category.as_str(), "Mn" | "Mc" | "Me") {
+            properties[point as usize] |= ANALYSIS_MARK;
+        }
+        if matches!(entry.general_category.as_str(), "Cc" | "Cf") {
+            properties[point as usize] |= ANALYSIS_SEPARATOR;
+        }
+    }
+    for (file, property, bit) in [
+        (
+            "DerivedCoreProperties.txt",
+            "Default_Ignorable_Code_Point",
+            ANALYSIS_IGNORABLE,
+        ),
+        ("PropList.txt", "Bidi_Control", ANALYSIS_BIDI),
+        ("PropList.txt", "White_Space", ANALYSIS_SEPARATOR),
+        ("PropList.txt", "White_Space", ANALYSIS_WHITESPACE),
+    ] {
+        for point in binary_property(&read(file), property) {
+            properties[point as usize] |= bit;
+        }
+    }
+    for fields in data_lines(&read("DerivedJoiningType.txt")) {
+        if matches!(fields[1], "R" | "L" | "D" | "C") {
+            let (low, high) = range(fields[0]);
+            for point in low..=high {
+                properties[point as usize] |= ANALYSIS_JOINING;
+            }
+        }
+    }
+    for fields in data_lines(&read("Scripts.txt")) {
+        if matches!(fields[1], "Common" | "Inherited") {
+            let (low, high) = range(fields[0]);
+            for point in low..=high {
+                properties[point as usize] |= ANALYSIS_NEUTRAL_SCRIPT;
+            }
+        }
+        if let Some(script) = ANALYSIS_SCRIPTS.iter().position(|name| *name == fields[1]) {
+            let value = u32::try_from(script + 1).expect("thirteen supported scripts")
+                << ANALYSIS_SCRIPT_SHIFT;
+            let (low, high) = range(fields[0]);
+            for point in low..=high {
+                properties[point as usize] |= value;
+            }
+        }
+    }
+    for fields in data_lines(&read("ScriptExtensions.txt")) {
+        let mut membership = 0u32;
+        for name in fields[1].split_whitespace() {
+            if let Some(script) = ANALYSIS_SCRIPT_ALIASES
+                .iter()
+                .position(|alias| *alias == name)
+            {
+                membership |= 1 << script;
+            }
+        }
+        let (low, high) = range(fields[0]);
+        for point in low..=high {
+            properties[point as usize] |=
+                (membership << ANALYSIS_EXTENSIONS_SHIFT) | ANALYSIS_EXPLICIT_EXTENSIONS;
+        }
+    }
+    two_stage(&properties)
+}
+
 fn text() -> String {
     let entries = unicode_data();
 
@@ -733,7 +859,8 @@ fn text() -> String {
     let mut out = String::new();
     let source = source_line(
         "`UnicodeData.txt`, `DerivedCoreProperties.txt`, `CaseFolding.txt`, \
-         `WordBreakProperty.txt` and `emoji-data.txt`",
+         `WordBreakProperty.txt`, `emoji-data.txt`, `Scripts.txt`, \
+         `ScriptExtensions.txt`, `PropList.txt`, `DerivedJoiningType.txt`, `GraphemeBreakProperty.txt`, `emoji-test.txt` and `emoji-variation-sequences.txt`",
     );
     let mut doc = vec![
         "The full case folding and word-boundary data of `purrdf_text::unicode`,".to_owned(),
@@ -802,9 +929,193 @@ fn text() -> String {
         "u8",
         &segmentation_table,
     );
+    let _ = write!(
+        out,
+        "/// Analysis-property bit: General_Category Mn.\n\
+         pub(crate) const ANALYSIS_NONSPACING: u32 = {ANALYSIS_NONSPACING};\n\
+         /// Analysis-property bit: General_Category Mn, Mc or Me.\n\
+         pub(crate) const ANALYSIS_MARK: u32 = {ANALYSIS_MARK};\n\
+         /// Analysis-property bit: Default_Ignorable_Code_Point.\n\
+         pub(crate) const ANALYSIS_IGNORABLE: u32 = {ANALYSIS_IGNORABLE};\n\
+         /// Analysis-property bit: Bidi_Control.\n\
+         pub(crate) const ANALYSIS_BIDI: u32 = {ANALYSIS_BIDI};\n\
+         /// Analysis-property bit: White_Space or General_Category Cc/Cf.\n\
+         pub(crate) const ANALYSIS_SEPARATOR: u32 = 1 << 24;\n\
+         /// Analysis-property bit: General_Category L.\n\
+         pub(crate) const ANALYSIS_LETTER: u32 = 1 << 25;\n\
+         /// Analysis-property bit: White_Space.\n\
+         pub(crate) const ANALYSIS_WHITESPACE: u32 = 1 << 26;\n\
+         /// Analysis-property bit: Joining_Type R, L, D or C.\n\
+         pub(crate) const ANALYSIS_JOINING: u32 = 1 << 27;\n\
+         /// Analysis-property bit: Common or Inherited Script.\n\
+         pub(crate) const ANALYSIS_NEUTRAL_SCRIPT: u32 = 1 << 28;\n\
+         /// Analysis-property bit: explicit Script_Extensions assignment.\n\
+         pub(crate) const ANALYSIS_EXPLICIT_EXTENSIONS: u32 = 1 << 29;\n\
+         /// Shift of the supported Script value, zero meaning another script.\n\
+         pub(crate) const ANALYSIS_SCRIPT_SHIFT: u32 = {ANALYSIS_SCRIPT_SHIFT};\n\
+         /// Shift of the supported Script_Extensions membership bits.\n\
+         pub(crate) const ANALYSIS_EXTENSIONS_SHIFT: u32 = {ANALYSIS_EXTENSIONS_SHIFT};\n\n"
+    );
+    for (index, script) in ANALYSIS_SCRIPTS.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "/// Analysis-property Script value: {script}.\npub(crate) const SCRIPT_{}: u32 = {};",
+            script.to_uppercase(),
+            index + 1
+        );
+    }
+    emit_two_stage(
+        &mut out,
+        "ANALYSIS",
+        "Analysis properties (marks, ignorables, bidi controls and supported Script values)",
+        "u32",
+        &text_properties(&entries),
+    );
+    emit_grapheme_and_emoji(&mut out);
     out.truncate(out.trim_end().len());
     out.push('\n');
     out
+}
+
+/// UAX 29 extended-grapheme properties and the finite Emoji 17 recognition set.
+/// These are data projections; neither boundary nor recognition code is imported.
+fn emit_grapheme_and_emoji(out: &mut String) {
+    let values = [
+        "Other",
+        "CR",
+        "LF",
+        "Control",
+        "Extend",
+        "ZWJ",
+        "Regional_Indicator",
+        "Prepend",
+        "SpacingMark",
+        "L",
+        "V",
+        "T",
+        "LV",
+        "LVT",
+    ];
+    let mut properties = vec![0u8; CODE_SPACE as usize];
+    for fields in data_lines(&read("GraphemeBreakProperty.txt")) {
+        let value = values
+            .iter()
+            .position(|name| *name == fields[1])
+            .unwrap_or_else(|| panic!("unknown Grapheme_Cluster_Break: {}", fields[1]));
+        let (low, high) = range(fields[0]);
+        for point in low..=high {
+            properties[point as usize] = u8::try_from(value).expect("fourteen grapheme classes");
+        }
+    }
+    for fields in data_lines(&read("DerivedCoreProperties.txt")) {
+        if fields[1] != "InCB" {
+            continue;
+        }
+        let value = match fields[2] {
+            "Consonant" => 0x10,
+            "Linker" => 0x20,
+            "Extend" => 0x30,
+            other => panic!("unknown Indic_Conjunct_Break: {other}"),
+        };
+        let (low, high) = range(fields[0]);
+        for point in low..=high {
+            properties[point as usize] |= value;
+        }
+    }
+    for (value, name) in values.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "/// Grapheme_Cluster_Break={name}.\npub(crate) const GB_{}: u8 = {value};",
+            name.to_uppercase()
+        );
+    }
+    out.push_str(
+        "/// Mask of Grapheme_Cluster_Break.\npub(crate) const GB_MASK: u8 = 0x0F;\n\
+        /// Indic_Conjunct_Break consonant.\npub(crate) const INCB_CONSONANT: u8 = 0x10;\n\
+        /// Indic_Conjunct_Break linker.\npub(crate) const INCB_LINKER: u8 = 0x20;\n\
+        /// Indic_Conjunct_Break extend.\npub(crate) const INCB_EXTEND: u8 = 0x30;\n\
+        /// Mask of Indic_Conjunct_Break.\npub(crate) const INCB_MASK: u8 = 0x30;\n",
+    );
+    emit_two_stage(
+        out,
+        "GRAPHEME",
+        "Extended-grapheme classes and Indic conjunct properties",
+        "u8",
+        &two_stage(&properties),
+    );
+
+    let mut emoji = BTreeMap::<String, u8>::new();
+    for fields in data_lines(&read("emoji-test.txt")) {
+        let flags = match fields[1] {
+            "fully-qualified" => 1,
+            "minimally-qualified" => 2,
+            "unqualified" => 4,
+            "component" => 8,
+            other => panic!("unknown emoji-test status: {other}"),
+        };
+        let text: String = hex_list(fields[0])
+            .into_iter()
+            .map(|point| char::from_u32(point).expect("emoji scalar"))
+            .collect();
+        *emoji.entry(text).or_default() |= flags;
+    }
+    assert_eq!(emoji.len(), 5225, "pinned Emoji 17 test inventory");
+    for fields in data_lines(&read("emoji-variation-sequences.txt")) {
+        let flags = match fields[1] {
+            "text style" => 16,
+            "emoji style" => 32,
+            other => panic!("unknown emoji variation style: {other}"),
+        };
+        let text: String = hex_list(fields[0])
+            .into_iter()
+            .map(|point| char::from_u32(point).expect("variation scalar"))
+            .collect();
+        *emoji.entry(text).or_default() |= flags;
+    }
+    let longest = emoji
+        .keys()
+        .map(|text| text.chars().count())
+        .max()
+        .expect("nonempty emoji inventory");
+    let _ = writeln!(
+        out,
+        "/// Longest recognized emoji atom in Unicode 17.\npub(crate) const MAX_EMOJI_SCALARS: usize = {longest};"
+    );
+    let _ = writeln!(
+        out,
+        "/// Emoji-test statuses and standardized variation sequences, sorted by UTF-8.\npub(crate) static EMOJI_ATOMS: [(&str, u8); {}] = [",
+        emoji.len()
+    );
+    for (text, flags) in emoji {
+        let _ = writeln!(out, "({text:?}, {flags}),");
+    }
+    out.push_str("];\n");
+    let mut digest = purrdf_hash::blake3::Hasher::new();
+    for name in [
+        "UnicodeData.txt",
+        "CaseFolding.txt",
+        "DerivedCoreProperties.txt",
+        "Scripts.txt",
+        "ScriptExtensions.txt",
+        "PropList.txt",
+        "DerivedJoiningType.txt",
+        "WordBreakProperty.txt",
+        "GraphemeBreakProperty.txt",
+        "emoji-data.txt",
+        "emoji-test.txt",
+        "emoji-variation-sequences.txt",
+    ] {
+        let data = read(name);
+        let mut framed = Vec::new();
+        purrdf_hash::frame::frame_le(&mut framed, name.as_bytes());
+        purrdf_hash::frame::frame_le(&mut framed, data.as_bytes());
+        digest.update(&framed);
+    }
+    let _ = writeln!(
+        out,
+        "/// Content identity of all semantic text Unicode input data.\npub(crate) const TEXT_DATA_DIGEST: [u8; 32] = {:?};",
+        digest.finalize().as_bytes()
+    );
 }
 
 // ---------------------------------------------------------------------------

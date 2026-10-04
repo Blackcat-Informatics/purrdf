@@ -1,30 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! **The same ranking, executed on x86-64 and on `wasm32-unknown-unknown`,
-//! compared against the same hand-computed decimals.**
+//! Fixed-point ranking probes for `wasm32-unknown-unknown` integer lowering.
 //!
-//! This crate's headline claim is that a host and a browser scoring the same
-//! corpus with the same needle return the same rows in the same order with the
-//! same score lexicals. Every other test in the suite proves something weaker:
-//! that the ranker is a pure function *of one target*. Run it fifty times on
-//! this machine and it agrees with itself — which cannot distinguish a ranker
-//! that is target-independent from one that merely happens to be self-consistent
-//! wherever it was last compiled.
+//! WebAssembly has no `i128` instructions: the compiler lowers the scoring
+//! arithmetic, integer logarithm and decimal conversion through narrower
+//! operations. These three small cases pin their answers on that target against
+//! the same independently computed expectations used natively. Full linguistic,
+//! dictionary, Unicode, projection and budget conformance runs in native Rust.
 //!
-//! `make wasm` does not close that gap either. It proves the release crates
-//! **build** for wasm32; it cannot prove they **answer** the same way there.
-//!
-//! # What is actually at risk
-//!
-//! BM25 needs a natural logarithm. A libm `ln` may differ by a unit in the last
-//! place between implementations, and that is enough to reverse the order of two
-//! near-tied documents — an answer divergence, not a rounding detail, and one
-//! nothing downstream could detect. [`Fixed::ln`] is therefore an integer series
-//! at a **fixed** iteration count rather than a convergence test, over `i128`
-//! fixed point with no floating-point value anywhere in the crate.
-//!
-//! That is an argument. This file is where it becomes an executed test.
+//! The probes cover the actual ranking and its decimal lexicals, the
+//! fixed-iteration integer logarithm and the fielded-scoring reference vectors.
+//! Release compilation alone cannot check the lowered module's answers.
 //!
 //! # How it runs on both
 //!
@@ -101,8 +88,12 @@ fn corpus_index() -> TextIndex {
     let dataset: Arc<RdfDataset> = builder.freeze().expect("the fixture must validate");
     TextIndex::from_dataset(
         &*dataset,
-        &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-            .expect("the fixture configuration is well formed"),
+        &TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Any,
+            Analyzer::empty_lexicon(),
+        )
+        .expect("the fixture configuration is well formed"),
     )
     .expect("the fixture index must build")
 }
@@ -112,7 +103,9 @@ fn ranked() -> Vec<(String, String)> {
     let index = corpus_index();
     select(
         &index,
-        &Analyzer::new().terms("quick brown"),
+        &Analyzer::empty_lexicon()
+            .terms("quick brown")
+            .expect("valid text analysis"),
         &PartitionFilter::unconstrained(),
         None,
         None,

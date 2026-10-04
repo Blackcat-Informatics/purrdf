@@ -14,6 +14,15 @@ notices = ["LICENSES/Unicode-3.0.txt"]
 provenance = ["crates/iri/unicode/PROVENANCE.md", "LICENSING.md"]
 
 [[material]]
+id = "whatwg-html-references"
+license = "BSD-3-Clause"
+source = "https://github.com/whatwg/html-build/tree/283a3531a61106d07d9a7d9fb3e6f3b9bfd33d70/entities/out"
+scope = "named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant"
+paths = ["crates/lex/data/html/**", "crates/lex/src/html/entities.rs"]
+notices = ["crates/lex/data/html/LICENSE-WHATWG"]
+provenance = ["crates/lex/data/html/PROVENANCE.md", "LICENSING.md"]
+
+[[material]]
 id = "libyaml-emitter"
 license = "MIT"
 source = "https://github.com/dtolnay/unsafe-libyaml/tree/0.2.11"
@@ -201,3 +210,62 @@ scope = "source-only conformance data; original notices remain authoritative"
 paths = ["vectors/shexTest/**"]
 notices = ["LICENSES/shexTest-v2.1.0-package.json", "LICENSES/MIT-permission.txt"]
 provenance = ["vectors/shexTest/README.md"]
+
+[[material]]
+id = "icu-78.3-cjdict"
+license = "Unicode-3.0 AND LicenseRef-ICU-CJK-Data"
+source = "https://github.com/unicode-org/icu/blob/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/cjdict.txt"
+scope = "Separate lexicon DATA archive only: original word data and canonical derived artifact; no implementation code or library-embedded dictionary"
+separate_archive = "purrdf-text-lexicons"
+paths = ["crates/text/lexicons/icu-78.3/cjdict.txt", "crates/text/lexicons/artifacts/cjdict-*.cbor", "crates/text/lexicons/artifacts/cjdict.collisions.json"]
+notices = ["crates/text/lexicons/notices/Unicode-3.0.txt", "crates/text/lexicons/notices/cjdict.txt"]
+provenance = ["crates/text/lexicons/PROVENANCE.md"]
+
+[[material]]
+id = "icu-78.3-thaidict"
+license = "Unicode-3.0"
+source = "https://github.com/unicode-org/icu/blob/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/thaidict.txt"
+scope = "Separate lexicon DATA archive only: original word data and canonical derived artifact; no implementation code or library-embedded dictionary"
+separate_archive = "purrdf-text-lexicons"
+paths = ["crates/text/lexicons/icu-78.3/thaidict.txt", "crates/text/lexicons/artifacts/thaidict-*.cbor", "crates/text/lexicons/artifacts/thaidict.collisions.json"]
+notices = ["crates/text/lexicons/notices/Unicode-3.0.txt", "crates/text/lexicons/notices/thaidict.txt"]
+provenance = ["crates/text/lexicons/PROVENANCE.md"]
+
+[[material]]
+id = "icu-78.3-laodict"
+license = "Unicode-3.0 AND LicenseRef-ICU-Lao-Data"
+source = "https://github.com/unicode-org/icu/blob/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/laodict.txt"
+scope = "Separate lexicon DATA archive only: original word data and canonical derived artifact; no implementation code or library-embedded dictionary"
+separate_archive = "purrdf-text-lexicons"
+paths = ["crates/text/lexicons/icu-78.3/laodict.txt", "crates/text/lexicons/artifacts/laodict-*.cbor", "crates/text/lexicons/artifacts/laodict.collisions.json"]
+notices = ["crates/text/lexicons/notices/Unicode-3.0.txt", "crates/text/lexicons/notices/laodict.txt"]
+provenance = ["crates/text/lexicons/PROVENANCE.md"]
+
+[[material]]
+id = "icu-78.3-khmerdict"
+license = "Unicode-3.0"
+source = "https://github.com/unicode-org/icu/blob/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/khmerdict.txt"
+scope = "Separate lexicon DATA archive only: original word data and canonical derived artifact; no implementation code or library-embedded dictionary"
+separate_archive = "purrdf-text-lexicons"
+paths = ["crates/text/lexicons/icu-78.3/khmerdict.txt", "crates/text/lexicons/artifacts/khmerdict-*.cbor", "crates/text/lexicons/artifacts/khmerdict.collisions.json"]
+notices = ["crates/text/lexicons/notices/Unicode-3.0.txt", "crates/text/lexicons/notices/khmerdict.txt"]
+provenance = ["crates/text/lexicons/PROVENANCE.md"]
+
+[[material]]
+id = "icu-78.3-burmesedict"
+license = "Unicode-3.0 AND LicenseRef-ICU-Burmese-Data"
+source = "https://github.com/unicode-org/icu/blob/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/burmesedict.txt"
+scope = "Separate lexicon DATA archive only: original word data and canonical derived artifact; no implementation code or library-embedded dictionary"
+separate_archive = "purrdf-text-lexicons"
+paths = ["crates/text/lexicons/icu-78.3/burmesedict.txt", "crates/text/lexicons/artifacts/burmesedict-*.cbor", "crates/text/lexicons/artifacts/burmesedict.collisions.json"]
+notices = ["crates/text/lexicons/notices/Unicode-3.0.txt", "crates/text/lexicons/notices/burmesedict.txt"]
+provenance = ["crates/text/lexicons/PROVENANCE.md"]
+
+[[material]]
+id = "snowball-english-corpus"
+license = "BSD-3-Clause"
+source = "https://github.com/snowballstem/snowball-data/tree/a0ec0d0a2839ec885878868de20fcb63209d92b0/english"
+scope = "Complete unmodified English conformance DATA only; the independent prose-derived stemming implementation retains the first-party grant"
+paths = ["crates/text/tests/stemming_vectors/voc.txt", "crates/text/tests/stemming_vectors/output.txt"]
+notices = ["crates/text/tests/stemming_vectors/LICENSES/Snowball-data-BSD-3-Clause.txt"]
+provenance = ["crates/text/tests/stemming_vectors/PROVENANCE.md"]

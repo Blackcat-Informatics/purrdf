@@ -206,7 +206,7 @@ here.
 | Bench | What it measures |
 | --- | --- |
 | `crates/rdf-core/benches/ir_layout.rs` | AoS / SoA / predicate-adjacency IR layout trade-offs (latency, allocations, peak RSS). |
-| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR. |
+| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration (`mut_snapshot_graphs`): removals spread over many graphs, a `DROP` of a one-quad graph beside a large annotated base, and repeated snapshots after a `DROP` of a large graph. |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
@@ -220,6 +220,8 @@ here.
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
 | `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization; nested correlated `FILTER EXISTS` cost by nesting depth. |
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
+| `crates/sparql-eval/benches/graph_constant_membership.rs` | Addressing named graphs by constant over 10,000 graphs: a graph that exists (`GRAPH <g> { ?s ?p ?o }`, one row), a phantom IRI that names no graph (no row), and one membership probe per row of `?s ?p ?o LATERAL { GRAPH ?o { ... } }`, on the frozen dataset, a delta snapshot, a composite view and a pack. |
+| `crates/shapes/benches/graph_membership.rs` | The `LATERAL { GRAPH ?o { ... } }` membership-probe shape over 10,000 named graphs read through the SHACL data view, on a native source and a mutation snapshot. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
 | `crates/shapes/benches/srl_closure.rs` | SPARQL 1.2 RL transitive closure: parse-and-check of the closure program, then `srl::infer` over chains of 16, 64, and 128 `:link` edges, asserting the `n(n + 1)/2` inferred triples. |

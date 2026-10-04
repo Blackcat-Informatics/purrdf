@@ -395,6 +395,12 @@ Evidence: vectors/shexTest/README.md
 Notice: third-party/shex-tests/0-shexTest-v2.1.0-package.json
 Notice: third-party/shex-tests/1-MIT-permission.txt
 
+snowball-english-corpus: BSD-3-Clause
+Scope: Complete unmodified English conformance DATA only; the independent prose-derived stemming implementation retains the first-party grant
+Source: https://github.com/snowballstem/snowball-data/tree/a0ec0d0a2839ec885878868de20fcb63209d92b0/english
+Evidence: crates/text/tests/stemming_vectors/PROVENANCE.md
+Notice: third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt
+
 sparql-cdt: Apache-2.0
 Scope: source-only conformance data; original notices remain authoritative
 Source: https://github.com/w3c/sparql-dev
@@ -526,6 +532,13 @@ Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/wasm-bindgen-shared-0.2.125/LICENSE-APACHE
 Notice: dependencies/wasm-bindgen-shared-0.2.125/LICENSE-MIT
+
+whatwg-html-references: BSD-3-Clause
+Scope: named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant
+Source: https://github.com/whatwg/html-build/tree/283a3531a61106d07d9a7d9fb3e6f3b9bfd33d70/entities/out
+Evidence: crates/lex/data/html/PROVENANCE.md
+Evidence: LICENSING.md
+Notice: third-party/whatwg-html-references/0-LICENSE-WHATWG
 
 windows-link-0.2.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives

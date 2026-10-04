@@ -12,7 +12,12 @@
 //! effective = (base ∪ added) − suppressed
 //! ```
 //!
-//! and [`MutableDataset::freeze`] is the **compaction** pass that re-interns the
+//! A named graph is part of the effective dataset while it holds an effective row,
+//! or while it is a graph the base declared empty that no mutation has emptied
+//! since (removing its last row or [withdrawing its
+//! declaration](MutableDataset::withdraw_graph_declaration)).
+//!
+//! [`MutableDataset::freeze`] is the **compaction** pass that re-interns the
 //! effective set (terms, reifiers, annotations, graph names, locations) into a fresh
 //! frozen [`RdfDataset`] through the existing [`RdfDatasetBuilder`].
 //!
@@ -205,6 +210,18 @@ pub struct MutableDataset {
     /// iterated for order.
     suppressed: FastSet<QuadKey>,
     suppressed_rows: usize,
+    /// The live RDF row count — quads, reifier bindings and annotations, base and
+    /// added — of every base graph a mutation has touched. Seeded from the base on
+    /// first touch ([`RdfDataset::named_graph_row_count`]) and kept exact in O(1) by
+    /// every insert, removal, suppression and un-suppression after it.
+    graph_rows: FastMap<TermId, usize>,
+    /// Base graphs a mutation emptied — removed their last row, or withdrew their
+    /// declaration while they held none — and that hold no row now. Publication
+    /// shares it with each snapshot, which withholds these graphs from named-graph
+    /// enumeration (see [`DeltaDatasetView`]). Kept current by the row counts, so
+    /// publication never scans for it; copied only when it changes after a
+    /// snapshot took it. Probed only; never iterated for an observable order.
+    withdrawn_graphs: Arc<FastSet<TermId>>,
     work: super::view_accounting::WorkCounter,
 }
 
@@ -221,6 +238,8 @@ impl MutableDataset {
             next_added_ord: 0,
             suppressed: FastSet::default(),
             suppressed_rows: 0,
+            graph_rows: FastMap::default(),
+            withdrawn_graphs: Arc::default(),
             work: super::view_accounting::WorkCounter::default(),
         }
     }
@@ -448,15 +467,31 @@ impl MutableDataset {
     /// Insert an effective quad (the four rules, insert side). Returns `true` if the
     /// effective set changed.
     fn insert_key(&mut self, key: QuadKey) -> bool {
+        let rows = self.insert_rows(key);
+        if rows > 0
+            && let Some(MutTermId::Base(graph)) = key.g
+        {
+            let live = self.graph_rows_of(graph);
+            *live += rows;
+            if *live == rows && self.withdrawn_graphs.contains(&graph) {
+                Arc::make_mut(&mut self.withdrawn_graphs).remove(&graph);
+            }
+        }
+        rows > 0
+    }
+
+    /// The insert side of the four rules; the number of RDF rows it made effective.
+    fn insert_rows(&mut self, key: QuadKey) -> usize {
         // Rule 1: inserting a currently-suppressed base quad un-suppresses it (and
         // does NOT also push to `added`).
         if self.suppressed.remove(&key) {
-            self.suppressed_rows -= self.base_occurrences(&key);
-            return true;
+            let occurrences = self.base_occurrences(&key);
+            self.suppressed_rows -= occurrences;
+            return occurrences;
         }
         // Already effective (present in base-and-not-suppressed, or already added)?
         if self.contains_key(&key) {
-            return false;
+            return 0;
         }
         let inserted = self.added.insert(key);
         if inserted {
@@ -466,27 +501,52 @@ impl MutableDataset {
             self.added_ord.insert(key, self.next_added_ord);
             self.next_added_ord += 1;
         }
-        inserted
+        usize::from(inserted)
     }
 
     /// Remove an effective quad (the four rules, remove side). Returns `true` if the
     /// effective set changed.
     fn remove_key(&mut self, key: QuadKey) -> bool {
+        let rows = self.remove_rows(key);
+        if rows > 0
+            && let Some(MutTermId::Base(graph)) = key.g
+        {
+            let live = self.graph_rows_of(graph);
+            *live -= rows;
+            if *live == 0 {
+                Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
+            }
+        }
+        rows > 0
+    }
+
+    /// The remove side of the four rules; the number of RDF rows it took away.
+    fn remove_rows(&mut self, key: QuadKey) -> usize {
         // Rule 2: removing a delta-added quad drops it from `added` (no suppression).
         if self.added.remove(&key) {
             // Drop the matching ordinal too — a later reinsert of the SAME key mints a
             // fresh (later) ordinal, so it replays at its new position, not its stale one.
             self.added_ord.remove(&key);
-            return true;
+            return 1;
         }
         // Rule 3: removing a base quad (not in `added`) creates a suppression — but
         // only if it is actually an effective base quad and not already suppressed.
         let occurrences = self.base_occurrences(&key);
         if occurrences > 0 && self.suppressed.insert(key) {
             self.suppressed_rows += occurrences;
-            return true;
+            return occurrences;
         }
-        false
+        0
+    }
+
+    /// The live row count of the base graph `graph`, seeded from the base on first
+    /// touch. Every mutation in a base graph passes through here, so a graph not yet
+    /// in the map has never been mutated and its base count is its live count.
+    fn graph_rows_of(&mut self, graph: TermId) -> &mut usize {
+        let base = &self.base;
+        self.graph_rows
+            .entry(graph)
+            .or_insert_with(|| base.named_graph_row_count(graph))
     }
 
     /// Whether a [`QuadKey`] is in the effective set: `(base ∪ added) − suppressed`.
@@ -534,6 +594,37 @@ impl MutableDataset {
         let churn = self.added.len() + self.suppressed.len();
         let base = self.base.rdf_row_count();
         churn * 2 > base
+    }
+
+    /// Withdraw the base's declaration of the named graph `graph`, so that it is
+    /// enumerated by a snapshot or a freeze only while it holds a row.
+    ///
+    /// A graph exists while it holds a row. The one exception is a graph the base
+    /// declared empty (a TriG `GRAPH <g> {}`), which is enumerated until a mutation
+    /// empties it: removing a graph's last row does that implicitly, and this call
+    /// does it for a graph that has no row to remove — `DROP GRAPH` / `CLEAR GRAPH`
+    /// of a declared empty graph. A graph that still holds rows is unaffected (it
+    /// stays enumerated while it holds them), rows added afterwards bring the graph
+    /// back, and a graph the base never named is a no-op.
+    pub fn withdraw_graph_declaration(&mut self, graph: &TermValue) {
+        if let Some(id) = self.base.term_id_by_value(graph) {
+            self.withdraw_base_graph(id);
+        }
+    }
+
+    /// [`Self::withdraw_graph_declaration`] for every named graph of the base —
+    /// `DROP NAMED` / `DROP ALL` of a dataset with declared empty graphs.
+    pub fn withdraw_named_graph_declarations(&mut self) {
+        let base = Arc::clone(&self.base);
+        for graph in base.named_graphs() {
+            self.withdraw_base_graph(graph);
+        }
+    }
+
+    fn withdraw_base_graph(&mut self, graph: TermId) {
+        if *self.graph_rows_of(graph) == 0 && !self.withdrawn_graphs.contains(&graph) {
+            Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
+        }
     }
 
     /// The number of quads added on top of the base (delta size).
@@ -596,7 +687,9 @@ impl MutableDataset {
     /// — into dense [`TermId`]s. `MutTermId`/`DeltaTermId` never leak past this point.
     ///
     /// The shared typed importer re-interns surviving RDF rows, retaining the
-    /// statement tables and declaration-only graphs. Suppressed statement rows stay
+    /// statement tables and the base's declared empty graphs that no mutation
+    /// emptied; a named graph left without a row is dropped (see
+    /// [`Self::withdraw_graph_declaration`]). Suppressed statement rows stay
     /// absent. Removing a reifier declaration demotes its surviving annotations to
     /// ordinary quads when no other declaration remains in that graph. Non-RDF
     /// sidecars remain owned by the original base.
@@ -609,7 +702,7 @@ impl MutableDataset {
     /// parsed from a source, so they carry no location.
     pub fn freeze(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
         let view = self.snapshot_view()?;
-        let mut builder = RdfDatasetBuilder::new();
+        let mut builder = self.base.rebuild_builder();
         super::import::DatasetImporter::new(&mut builder, &view).append();
         let mut ordinal = 0;
         for (old, quad) in self.base.quads().enumerate() {
@@ -668,7 +761,7 @@ impl MutableDataset {
             .len()
             .saturating_mul(4 * size_of::<super::QuadIds>());
         limits.check(&stats)?;
-        let mut builder = RdfDatasetBuilder::new();
+        let mut builder = self.base.rebuild_builder();
         self.append_delta(&mut builder);
         let delta = builder.freeze()?;
         // A later view-retention refusal does not undo a completed native freeze.
@@ -693,7 +786,13 @@ impl MutableDataset {
                 g: q.g.map(base_id),
             })
             .collect();
-        let view = DeltaDatasetView::new(Arc::clone(&self.base), delta, suppressed, limits)?;
+        let view = DeltaDatasetView::new(
+            Arc::clone(&self.base),
+            delta,
+            suppressed,
+            Arc::clone(&self.withdrawn_graphs),
+            limits,
+        )?;
         self.work.add(super::view_accounting::ViewWork {
             copied_index_bytes: view.stats().work.copied_index_bytes,
             ..Default::default()
@@ -1067,6 +1166,175 @@ mod tests {
         b.push_reifier(r, triple);
         b.push_annotation(r, conf, score);
         b.freeze().expect("base freezes")
+    }
+
+    /// A base frozen under caller-supplied content addressing: two content-id IRIs
+    /// and a derivation annotation between them.
+    fn content_addressed_base() -> Arc<RdfDataset> {
+        let scheme = crate::ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(
+            scheme,
+            Some("http://example.org/derivedFrom".into()),
+        );
+        let a = b.intern_iri(CONTENT_A);
+        let bb = b.intern_iri(CONTENT_B);
+        let p = b.intern_iri("http://example.org/p");
+        let derived_from = b.intern_iri("http://example.org/derivedFrom");
+        b.push_quad(a, p, bb, None);
+        b.push_annotation(a, derived_from, bb);
+        b.freeze().expect("base freezes")
+    }
+
+    const CONTENT_A: &str =
+        "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CONTENT_B: &str =
+        "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const CONTENT_C: &str =
+        "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    /// The base's content addressing survives `freeze` — after a mutation and for a
+    /// no-op freeze alike — and governs the delta a snapshot freezes: a content-id IRI
+    /// the mutation added is recognized, and the derivation index still resolves.
+    #[test]
+    fn freeze_and_snapshot_keep_the_base_content_addressing() {
+        let base = content_addressed_base();
+        let scheme = base.content_id_scheme().cloned();
+        assert!(
+            scheme.is_some(),
+            "fixture is degenerate — the base is configured"
+        );
+
+        let untouched = MutableDataset::new(Arc::clone(&base));
+        let frozen = untouched.freeze().expect("no-op freeze");
+        assert_eq!(frozen.content_id_scheme(), scheme.as_ref(), "no-op freeze");
+        assert_eq!(frozen.content_ids().count(), 2, "no-op freeze");
+        let a = frozen.term_id_by_iri(CONTENT_A).expect("A survives");
+        let b = frozen.term_id_by_iri(CONTENT_B).expect("B survives");
+        assert_eq!(frozen.predecessors(a), &[b], "no-op freeze");
+
+        let mut mutated = MutableDataset::new(base);
+        ins(
+            &mut mutated,
+            QuadValues {
+                s: TermValue::Iri(CONTENT_C.into()),
+                p: iri_val("p"),
+                o: TermValue::Iri(CONTENT_A.into()),
+                g: None,
+            },
+        );
+        let frozen = mutated.freeze().expect("mutated freeze");
+        assert_eq!(
+            frozen.content_id_scheme(),
+            scheme.as_ref(),
+            "mutated freeze"
+        );
+        assert_eq!(frozen.content_ids().count(), 3, "mutated freeze");
+        let a = frozen.term_id_by_iri(CONTENT_A).expect("A survives");
+        let b = frozen.term_id_by_iri(CONTENT_B).expect("B survives");
+        assert_eq!(frozen.predecessors(a), &[b], "mutated freeze");
+
+        let view = mutated.snapshot_view().expect("snapshot");
+        assert_eq!(
+            view.delta().content_id_scheme(),
+            scheme.as_ref(),
+            "snapshot"
+        );
+        let c = view
+            .delta()
+            .term_id_by_iri(CONTENT_C)
+            .expect("C is a delta term");
+        assert!(
+            view.delta().content_id(c).is_some(),
+            "snapshot recognizes C"
+        );
+    }
+
+    /// A derivation predicate configured on the base but never interned there still
+    /// governs what a mutation adds: `C rdf:reifies <<( x y z )>>` and
+    /// `C derivedFrom A`, inserted through the mutable dataset, freeze into a
+    /// derivation of `C` from `A`. The neighbouring case interns the predicate in the
+    /// base and gives the same answer.
+    #[test]
+    fn a_configured_but_unused_derivation_predicate_survives_freeze() {
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        for interned_in_base in [false, true] {
+            let scheme = crate::ContentIdScheme::new("blake3:").expect("valid scheme");
+            let mut b =
+                RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.into()));
+            let a = b.intern_iri(CONTENT_A);
+            let p = b.intern_iri("http://example.org/p");
+            let object = if interned_in_base {
+                b.intern_iri(DERIVED_FROM)
+            } else {
+                b.intern_iri("http://example.org/o")
+            };
+            b.push_quad(a, p, object, None);
+            let base = b.freeze().expect("base freezes");
+            assert_eq!(
+                base.derivation_predicate().is_some(),
+                interned_in_base,
+                "fixture: the predicate is interned in the base exactly when asked"
+            );
+
+            let mut m = MutableDataset::new(base);
+            let c = TermValue::Iri(CONTENT_C.into());
+            ins(
+                &mut m,
+                QuadValues {
+                    s: c.clone(),
+                    p: TermValue::Iri(RDF_REIFIES.into()),
+                    o: TermValue::Triple {
+                        s: TermBox::new(iri_val("x")),
+                        p: TermBox::new(iri_val("y")),
+                        o: TermBox::new(iri_val("z")),
+                    },
+                    g: None,
+                },
+            );
+            ins(
+                &mut m,
+                QuadValues {
+                    s: c,
+                    p: TermValue::Iri(DERIVED_FROM.into()),
+                    o: TermValue::Iri(CONTENT_A.into()),
+                    g: None,
+                },
+            );
+            let frozen = m.freeze().expect("freeze");
+            let c = frozen.term_id_by_iri(CONTENT_C).expect("C survives");
+            let a = frozen.term_id_by_iri(CONTENT_A).expect("A survives");
+            assert_eq!(
+                frozen.predecessors(c),
+                &[a],
+                "interned_in_base={interned_in_base}"
+            );
+        }
+    }
+
+    /// The neighbouring case: a base with no content addressing freezes and
+    /// snapshots with none, rather than gaining a fabricated scheme.
+    #[test]
+    fn freeze_and_snapshot_of_an_unconfigured_base_stay_unconfigured() {
+        let mut m = MutableDataset::new(base3());
+        ins(
+            &mut m,
+            QuadValues {
+                s: TermValue::Iri(CONTENT_C.into()),
+                p: iri_val("p"),
+                o: iri_val("a"),
+                g: None,
+            },
+        );
+        let frozen = m.freeze().expect("freeze");
+        assert!(frozen.content_id_scheme().is_none());
+        assert_eq!(frozen.content_ids().count(), 0);
+        assert!(
+            m.snapshot_view()
+                .expect("snapshot")
+                .delta()
+                .content_id_scheme()
+                .is_none()
+        );
     }
 
     /// The effective value-quad set as a comparable `BTreeSet` of stringy tuples.
@@ -1593,6 +1861,279 @@ mod tests {
         assert!(!m.should_compact()); // 2 * 2 <= 5 retained RDF rows
         ins(&mut m, q("e3", "p", "o"));
         assert!(m.should_compact()); // 3 * 2 > 5
+    }
+
+    // -- named-graph existence --------------------------------------------------------
+
+    /// A base holding a default-graph quad, a declared EMPTY graph `empty`, a graph
+    /// `one` with a single quad, a graph `two` with two quads, and a graph `stmt`
+    /// whose only row is a reifier binding.
+    fn graph_base() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let p = b.intern_iri("http://example.org/p");
+        let c = b.intern_iri("http://example.org/c");
+        let d = b.intern_iri("http://example.org/d");
+        let empty = b.intern_iri("http://example.org/empty");
+        let one = b.intern_iri("http://example.org/one");
+        let two = b.intern_iri("http://example.org/two");
+        let stmt = b.intern_iri("http://example.org/stmt");
+        let r = b.intern_iri("http://example.org/r");
+        b.push_quad(a, p, c, None);
+        b.declare_named_graph(empty);
+        b.push_quad(a, p, c, Some(one));
+        b.push_quad(a, p, c, Some(two));
+        b.push_quad(a, p, d, Some(two));
+        let triple = b.intern_triple(a, p, c);
+        b.push_reifier_in_graph(r, triple, Some(stmt));
+        b.freeze().expect("graph base freezes")
+    }
+
+    fn in_graph(s: &str, o: &str, g: &str) -> QuadValues {
+        QuadValues::quad(iri_val(s), iri_val("p"), iri_val(o), iri_val(g))
+    }
+
+    fn reifier_in(g: &str) -> QuadValues {
+        QuadValues::quad(
+            iri_val("r"),
+            TermValue::Iri(RDF_REIFIES.to_owned()),
+            TermValue::Triple {
+                s: TermBox::new(iri_val("a")),
+                p: TermBox::new(iri_val("p")),
+                o: TermBox::new(iri_val("c")),
+            },
+            iri_val(g),
+        )
+    }
+
+    /// The local names of every named graph a snapshot and a freeze enumerate,
+    /// asserted equal to each other.
+    fn graph_names(m: &MutableDataset) -> Vec<String> {
+        use crate::DatasetView as _;
+        let local = |v: TermValue| match v {
+            TermValue::Iri(iri) => iri.trim_start_matches("http://example.org/").to_owned(),
+            other => panic!("graph names here are IRIs, not {other:?}"),
+        };
+        let view = m.snapshot_view().expect("snapshot publishes");
+        // Constant `GRAPH <g>` addressing answers membership through
+        // `has_named_graph`; it must agree with the enumeration for every term the
+        // snapshot holds — a withdrawn graph is no graph, a repopulated one is.
+        let enumerated: std::collections::BTreeSet<_> = view.named_graphs().collect();
+        for id in view.term_ids() {
+            assert_eq!(
+                view.has_named_graph(id),
+                enumerated.contains(&id),
+                "has_named_graph({:?}) disagrees with named_graphs",
+                view.term_value(id)
+            );
+        }
+        let mut from_view: Vec<String> = view
+            .named_graphs()
+            .map(|g| local(view.term_value(g)))
+            .collect();
+        from_view.sort();
+        let frozen = m.freeze().expect("freeze");
+        let mut from_freeze: Vec<String> = frozen
+            .named_graphs()
+            .map(|g| local(RdfDataset::term_value(&frozen, g)))
+            .collect();
+        from_freeze.sort();
+        assert_eq!(
+            from_view, from_freeze,
+            "snapshot and freeze enumerate alike"
+        );
+        from_view
+    }
+
+    #[test]
+    fn an_untouched_dataset_enumerates_every_base_graph_including_the_declared_empty_one() {
+        let m = MutableDataset::new(graph_base());
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
+    }
+
+    #[test]
+    fn removing_the_last_quad_of_a_graph_withdraws_the_graph() {
+        let mut m = MutableDataset::new(graph_base());
+        assert!(m.remove(&in_graph("a", "c", "one")));
+        assert_eq!(graph_names(&m), ["empty", "stmt", "two"]);
+    }
+
+    #[test]
+    fn removing_some_but_not_all_quads_of_a_graph_keeps_it() {
+        let mut m = MutableDataset::new(graph_base());
+        assert!(m.remove(&in_graph("a", "c", "two")));
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
+        assert!(m.remove(&in_graph("a", "d", "two")));
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt"]);
+    }
+
+    #[test]
+    fn removing_the_only_reifier_of_a_graph_withdraws_the_graph() {
+        let mut m = MutableDataset::new(graph_base());
+        assert!(m.remove(&reifier_in("stmt")));
+        assert_eq!(graph_names(&m), ["empty", "one", "two"]);
+    }
+
+    #[test]
+    fn a_graph_repopulated_after_losing_its_last_quad_exists() {
+        // Re-inserting the same base quad (un-suppression) and inserting a different
+        // quad (a delta row in a base graph) both bring the graph back.
+        let mut m = MutableDataset::new(graph_base());
+        assert!(m.remove(&in_graph("a", "c", "one")));
+        assert!(ins(&mut m, in_graph("a", "c", "one")));
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
+        assert!(m.remove(&in_graph("a", "c", "one")));
+        assert!(ins(&mut m, in_graph("x", "y", "one")));
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
+    }
+
+    #[test]
+    fn an_unrelated_insert_keeps_the_declared_empty_graph() {
+        let mut m = MutableDataset::new(graph_base());
+        assert!(ins(&mut m, q("x", "p", "y")));
+        assert!(ins(&mut m, in_graph("x", "y", "fresh")));
+        assert_eq!(graph_names(&m), ["empty", "fresh", "one", "stmt", "two"]);
+    }
+
+    #[test]
+    fn a_delta_graph_emptied_again_is_not_enumerated() {
+        let mut m = MutableDataset::new(graph_base());
+        assert!(ins(&mut m, in_graph("x", "y", "fresh")));
+        assert!(m.remove(&in_graph("x", "y", "fresh")));
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
+    }
+
+    #[test]
+    fn emptying_a_declared_empty_graph_after_populating_it_withdraws_it() {
+        // The declared empty graph gains a quad and then loses it: the removal of its
+        // last quad is an operation that leaves it empty, so it is withdrawn.
+        let mut m = MutableDataset::new(graph_base());
+        assert!(ins(&mut m, in_graph("x", "y", "empty")));
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
+        assert!(m.remove(&in_graph("x", "y", "empty")));
+        assert_eq!(graph_names(&m), ["one", "stmt", "two"]);
+    }
+
+    #[test]
+    fn withdrawing_a_declaration_hides_only_an_empty_graph() {
+        let mut m = MutableDataset::new(graph_base());
+        // A graph that still holds rows is unaffected by a withdrawal.
+        m.withdraw_graph_declaration(&iri_val("two"));
+        // A graph the dataset never knew is a no-op, not an error.
+        m.withdraw_graph_declaration(&iri_val("never"));
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
+        m.withdraw_graph_declaration(&iri_val("empty"));
+        assert_eq!(graph_names(&m), ["one", "stmt", "two"]);
+        // Populating it again brings it back.
+        assert!(ins(&mut m, in_graph("x", "y", "empty")));
+        assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
+    }
+
+    #[test]
+    fn a_graph_is_emptied_only_when_its_quads_reifiers_and_annotations_are_all_gone() {
+        // `mix` holds a plain quad, a reifier binding and that reifier's annotation.
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let p = b.intern_iri("http://example.org/p");
+        let c = b.intern_iri("http://example.org/c");
+        let r = b.intern_iri("http://example.org/r");
+        let mix = b.intern_iri("http://example.org/mix");
+        b.push_quad(a, p, c, Some(mix));
+        let triple = b.intern_triple(a, p, c);
+        b.push_reifier_in_graph(r, triple, Some(mix));
+        b.push_annotation_in_graph(r, p, c, Some(mix));
+        let base = b.freeze().expect("mixed base freezes");
+        let annotation = in_graph("r", "c", "mix");
+        let mut m = MutableDataset::new(base);
+        assert!(m.remove(&in_graph("a", "c", "mix")));
+        assert_eq!(graph_names(&m), ["mix"], "a reifier and annotation remain");
+        assert!(m.remove(&reifier_in("mix")));
+        assert_eq!(graph_names(&m), ["mix"], "the (demoted) annotation remains");
+        assert!(m.remove(&annotation));
+        assert!(graph_names(&m).is_empty(), "every row is gone");
+        // Order does not matter: the annotation first, then the reifier.
+        let mut m = MutableDataset::new(m.base().clone());
+        assert!(m.remove(&annotation));
+        assert!(m.remove(&in_graph("a", "c", "mix")));
+        assert_eq!(graph_names(&m), ["mix"], "the reifier remains");
+        assert!(m.remove(&reifier_in("mix")));
+        assert!(graph_names(&m).is_empty(), "every row is gone");
+    }
+
+    #[test]
+    fn withdrawing_every_declaration_keeps_only_populated_graphs() {
+        let mut m = MutableDataset::new(graph_base());
+        m.withdraw_named_graph_declarations();
+        assert_eq!(graph_names(&m), ["one", "stmt", "two"]);
+        // The default graph is not a named graph and is untouched.
+        assert_eq!(m.freeze().expect("freeze").quad_count(), 4);
+    }
+
+    // Named-graph existence against a full-scan oracle: random inserts, removals and
+    // withdrawals over a base with quads, reifier bindings, annotations and a declared
+    // empty graph. A graph is enumerated iff it holds an effective row, or it is a base
+    // graph the model has not seen emptied since its last row (or withdrawn while
+    // empty).
+    prop_test! {
+        #[test]
+        fn property_graph_enumeration_matches_a_full_scan(
+            ops in prop::collection::vec((0u8..3, 0u8..4, 0u8..4), 0..40)
+        ) {
+            const GRAPHS: [&str; 4] = ["empty", "one", "two", "stmt"];
+            let base = graph_base();
+            let base_graphs: std::collections::BTreeSet<String> = GRAPHS
+                .iter()
+                .map(|g| (*g).to_owned())
+                .collect();
+            let mut m = MutableDataset::new(base);
+            let mut emptied = std::collections::BTreeSet::<String>::new();
+            let local = |v: &TermValue| match v {
+                TermValue::Iri(iri) => iri.trim_start_matches("http://example.org/").to_owned(),
+                other => panic!("graph names here are IRIs, not {other:?}"),
+            };
+            for (kind, row, graph) in ops {
+                let g = GRAPHS[usize::from(graph)];
+                let quad = match row {
+                    0 => in_graph("a", "c", g),
+                    1 => in_graph("a", "d", g),
+                    2 => reifier_in(g),
+                    // In `stmt` this row is an annotation of the base reifier `r`.
+                    _ => in_graph("r", "c", g),
+                };
+                let holds = |m: &MutableDataset| {
+                    m.effective_value_quads()
+                        .iter()
+                        .any(|q| q.g.as_ref().map(local).as_deref() == Some(g))
+                };
+                match kind {
+                    0 => {
+                        if ins(&mut m, quad) {
+                            emptied.remove(g);
+                        }
+                    }
+                    1 => {
+                        if m.remove(&quad) && !holds(&m) {
+                            emptied.insert(g.to_owned());
+                        }
+                    }
+                    _ => {
+                        m.withdraw_graph_declaration(&iri_val(g));
+                        if !holds(&m) {
+                            emptied.insert(g.to_owned());
+                        }
+                    }
+                }
+                let mut expected: std::collections::BTreeSet<String> = m
+                    .effective_value_quads()
+                    .iter()
+                    .filter_map(|q| q.g.as_ref().map(local))
+                    .collect();
+                expected.extend(base_graphs.difference(&emptied).cloned());
+                let actual: std::collections::BTreeSet<String> =
+                    graph_names(&m).into_iter().collect();
+                prop_assert_eq!(actual, expected);
+            }
+        }
     }
 
     // -- differential property test --------------------------------------------------

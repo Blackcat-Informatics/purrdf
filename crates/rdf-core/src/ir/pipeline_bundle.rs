@@ -844,6 +844,19 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
             .annotation_quads_in_graph(g)
             .filter(|q| self.keeps(q.g))
     }
+
+    /// Membership in the quads-derived [`named_graphs`](DatasetView::named_graphs)
+    /// this view takes from the trait: `graph` is a kept graph slot and the wrapped
+    /// view holds a quad in it, asked through its graph-narrowed probe rather than a
+    /// scan of every quad.
+    fn has_named_graph(&self, graph: Self::Id) -> bool {
+        self.keeps(Some(graph))
+            && self
+                .0
+                .quads_for_pattern(None, None, None, GraphMatch::Named(graph))
+                .next()
+                .is_some()
+    }
 }
 
 /// The pipeline carrier: the frozen hot graph plus its out-of-band material and a
@@ -2850,6 +2863,31 @@ mod residue_graph_seam_tests {
             2,
             "the blank-named graph's reifier and annotation rows are residue rows"
         );
+    }
+
+    /// The residue's graph membership agrees with its quads-derived enumeration: the
+    /// kept blank graph is one, the dropped IRI graph and a term in no graph slot are
+    /// not, and a declared-empty blank graph — no kept quad — is not either.
+    #[test]
+    fn residue_graph_membership_matches_its_enumeration() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let named = b.intern_iri("http://example.org/named");
+        let blank = b.intern_blank(BLANK_GRAPH, BlankScope::DEFAULT);
+        let empty = b.intern_blank("empty", BlankScope::DEFAULT);
+        for graph in [None, Some(named), Some(blank)] {
+            b.push_quad(s, p, o, graph);
+        }
+        b.declare_named_graph(empty);
+        let dataset = b.freeze().expect("flat fixture freezes");
+        let residue = ResidueView(&*dataset);
+        let graphs: Vec<_> = residue.named_graphs().collect();
+        assert_eq!(graphs, [blank]);
+        for id in [s, p, o, named, blank, empty] {
+            assert_eq!(residue.has_named_graph(id), graphs.contains(&id), "{id:?}");
+        }
     }
 
     /// The law over a NON-paged carrier, where every graph flavour lives in one

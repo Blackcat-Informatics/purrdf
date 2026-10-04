@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location("test_shards", ROOT / "scripts/test-shards.py")
 SHARDS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SHARDS)
+TEST_EXAMPLES = ("graphql_oracle_fixture", "typescript_oracle_fixture", "text_relevance")
 
 
 def wiring_problems(make: str, workflow: str) -> list[str]:
@@ -32,7 +33,7 @@ def wiring_problems(make: str, workflow: str) -> list[str]:
         "cargo test --workspace --exclude purrdf-python --locked --lib --bins",
         "cargo test --workspace --locked --doc",
         "cargo build --workspace --locked --examples --profile test",
-        "cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture",
+        "cargo test --workspace --locked " + " ".join(f"--example {name}" for name in TEST_EXAMPLES),
         *(f"cargo test --workspace --locked --test '{pattern}'" for pattern in SHARDS.PATTERNS),
     ):
         if command not in live:
@@ -54,7 +55,7 @@ def target_problems(metadata: dict) -> list[str]:
             continue
         for target in package["targets"]:
             kinds = target["kind"]
-            if target.get("test") and ("bench" in kinds or ("example" in kinds and target["name"] not in {"graphql_oracle_fixture", "typescript_oracle_fixture"})):
+            if target.get("test") and ("bench" in kinds or ("example" in kinds and target["name"] not in TEST_EXAMPLES)):
                 errors.append(f"{package['name']}::{target['name']} enables tests in {kinds}; extend the shards")
             if "test" in kinds:
                 matches = [pattern for pattern in SHARDS.PATTERNS if fnmatch.fnmatchcase(target["name"], pattern)]
@@ -77,10 +78,16 @@ def self_test() -> None:
     assert wiring_problems(make.replace("--workspace", "-p purrdf"), ci)
     assert wiring_problems(make, ci.replace("fail-fast: false", "fail-fast: true"))
     assert wiring_problems(make.replace("'[a-d]*'", "'[b-d]*'"), ci)
+    for name in TEST_EXAMPLES:
+        assert wiring_problems(make.replace(f" --example {name}", ""), ci)
     fixture = {"workspace_members": ["x"], "packages": [{"id": "x", "name": "x", "targets": [{"name": "example", "kind": ["example"], "test": True}]}]}
     assert target_problems(fixture)
     fixture["packages"][0]["targets"][0]["test"] = False
     assert not target_problems(fixture)
+    fixture["packages"][0]["targets"][0]["test"] = True
+    for name in TEST_EXAMPLES:
+        fixture["packages"][0]["targets"][0]["name"] = name
+        assert not target_problems(fixture)
     print("OK: workspace shard wiring, all ASCII boundaries and unsupported-target refusals")
 
 

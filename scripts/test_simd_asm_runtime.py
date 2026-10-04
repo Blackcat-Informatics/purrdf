@@ -5,6 +5,7 @@
 import argparse
 import contextlib
 import dataclasses
+import fcntl
 import io
 import json
 import os
@@ -55,24 +56,140 @@ class EvidenceTests(unittest.TestCase):
         self.fresh = False
         self.flags = self.config.rustflags()
         self.asm = self.gate._X86_PACKED
+        self.graph_artifacts = None
+        self.executions = []
         self.runner.execute = self.execute
 
-    def execute(self, cmd, env, lease):
+    def execute(self, cmd, env, lease, graph=0):
         self.context_root = Path(env["CARGO_TARGET_DIR"]).parent
+        self.executions.append((graph, self.context_root, lease))
         folder = self.context_root / "build" / self.config.triple / "release" / "deps"
         folder.mkdir(parents=True, exist_ok=True)
-        self.path = folder / "demo-1111111111111111.s"
-        if not self.fresh:
-            self.path.write_text(self.asm)
-        artifact = dict(reason="compiler-artifact", package_id="demo", fresh=self.fresh,
-                        target=dict(kind=["lib"], name="demo"), features=[],
-                        filenames=[str(folder / "libdemo-1111111111111111.rlib")])
-        line = f"Running `rustc --crate-name demo --target {self.config.triple} {self.flags}`"
-        return subprocess.CompletedProcess(cmd, 0, json.dumps(artifact), "" if self.fresh else line)
+        specs = self.graph_artifacts[graph] if self.graph_artifacts else [dict()]
+        artifacts, lines = [], []
+        for spec in specs:
+            unit = spec.get("unit", "demo-1111111111111111")
+            self.path = folder / (unit + ".s")
+            fresh = spec.get("fresh", self.fresh)
+            if not fresh:
+                self.path.write_text(spec.get("asm", self.asm))
+                lines.append(f"Running `rustc --crate-name demo --target {self.config.triple} {self.flags}`")
+            artifacts.append(dict(reason="compiler-artifact", package_id="demo", fresh=fresh,
+                                  target=dict(kind=["lib"], name="demo"), features=spec.get("features", []),
+                                  filenames=[str(folder / ("lib" + unit + ".rlib"))]))
+        return subprocess.CompletedProcess(cmd, 0, "\n".join(map(json.dumps, artifacts)), "\n".join(lines))
 
     def run_config(self):
         with patch.object(self.gate, "host_triple", return_value=self.config.triple), contextlib.redirect_stdout(io.StringIO()):
             return self.runner.configuration(self.config, self.manifest, self.gate.manifest_keep(self.manifest)(self.config))
+
+    def two_graphs(self):
+        commands = self.gate.build_commands(self.config, self.manifest.packages, ("demo-rlib",))
+        return patch.object(self.gate, "build_commands", return_value=commands)
+
+    def require_single_copy(self):
+        measure = dataclasses.replace(self.manifest.sites[0].measures[0], single_copy=True)
+        self.manifest = dataclasses.replace(self.manifest, sites=(dataclasses.replace(self.manifest.sites[0], measures=(measure,)),))
+
+    def test_cross_graph_reuse_retains_one_copy_in_each_graph(self):
+        self.require_single_copy()
+        self.graph_artifacts = [[dict()], [dict(fresh=True)]]
+        with self.two_graphs():
+            cold = self.run_config()
+            self.assertEqual([f.graph for f in cold], [0, 1])
+            self.assertEqual(cold[0].unit, cold[1].unit)
+            self.assertEqual({execution[1:] for execution in self.executions}, {(self.context_root, self.executions[0][2])})
+            self.assertEqual(self.runner.timings[self.config.name]["rustc_invocations"], 1)
+            self.assertEqual(self.runner.timings[self.config.name]["fresh_artifacts"], 1)
+            self.assertEqual(self.runner.timings[self.config.name]["parsed_units"], 1)
+            self.assertEqual(self.runner.timings[self.config.name]["reused_units"], 1)
+            self.graph_artifacts = [[dict(fresh=True)], [dict(fresh=True)]]
+            self.assertEqual(cold, self.run_config())
+            self.assertEqual(self.runner.timings[self.config.name]["rustc_invocations"], 0)
+            self.assertEqual(self.runner.timings[self.config.name]["reused_units"], 2)
+
+    def test_reused_dependency_and_second_copy_in_later_graph_fail(self):
+        self.require_single_copy()
+        self.graph_artifacts = [[dict()], [dict(fresh=True), dict(unit="demo-2222222222222222")]]
+        with self.two_graphs(), self.assertRaisesRegex(self.gate.GateError, "found 2 in graph 1"):
+            self.run_config()
+
+    def test_feature_distinct_units_are_not_deduplicated(self):
+        self.graph_artifacts = [[dict()], [dict(fresh=True), dict(unit="demo-2222222222222222", features=["extra"])]]
+        with self.two_graphs():
+            functions = self.run_config()
+            self.assertEqual([f.graph for f in functions], [0, 1, 1])
+            self.assertNotEqual(functions[1].unit, functions[2].unit)
+            self.assertEqual(self.runner.timings[self.config.name]["parsed_units"], 1)
+            self.require_single_copy()
+            with self.assertRaisesRegex(self.gate.GateError, "found 2 in graph 1"):
+                self.run_config()
+
+    def test_complete_command_set_and_environment_have_separate_contexts(self):
+        self.run_config()
+        first = self.context_root
+        self.graph_artifacts = [[dict()], [dict(fresh=True)]]
+        with self.two_graphs():
+            self.run_config()
+            second = self.context_root
+            self.assertNotEqual(first, second)
+            with patch.dict(os.environ, {"CARGO_PROFILE_RELEASE_DEBUG": "1"}):
+                self.run_config()
+                self.assertNotEqual(second, self.context_root)
+
+    def test_fresh_generation_is_shared_across_graphs_and_promoted(self):
+        self.graph_artifacts = [[dict()], [dict(fresh=True)]]
+        with self.two_graphs():
+            self.run_config()
+            first = self.context_root
+            self.runner.nonce = "a" * 32
+            self.executions.clear()
+            self.run_config()
+            promoted = self.context_root
+            self.assertNotEqual(first, promoted)
+            self.assertEqual({execution[1] for execution in self.executions}, {promoted})
+            pointers = list((self.root / "generations").glob("*.json"))
+            self.assertEqual(len(pointers), 1)
+            self.assertEqual(runtime.read_json(pointers[0]), "a" * 32)
+            self.runner.nonce = ""
+            self.graph_artifacts = [[dict(fresh=True)], [dict(fresh=True)]]
+            self.assertEqual([f.graph for f in self.run_config()], [0, 1])
+            self.assertEqual(self.context_root, promoted)
+            self.assertEqual(self.runner.timings[self.config.name]["rustc_invocations"], 0)
+
+    def test_configuration_lease_covers_both_builds_and_verdict(self):
+        self.graph_artifacts = [[dict()], [dict(fresh=True)]]
+        execute = self.runner.execute
+        evaluate = self.gate.evaluate_config
+
+        def require_lease(root):
+            with (root / "lease.lock").open("a+") as contender:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        def leased_execute(cmd, env, lease, graph):
+            require_lease(Path(env["CARGO_TARGET_DIR"]).parent)
+            return execute(cmd, env, lease, graph)
+
+        def leased_evaluate(*args):
+            require_lease(self.context_root)
+            return evaluate(*args)
+
+        with self.two_graphs(), patch.object(self.runner, "execute", side_effect=leased_execute), \
+                patch.object(self.gate, "evaluate_config", side_effect=leased_evaluate) as verdict:
+            self.run_config()
+            verdict.assert_called_once()
+
+    def test_graph_logs_are_distinct_and_preserve_each_invocation(self):
+        with self.runner.context({"logs": "fixture"}) as (root, _, lease):
+            env = {**os.environ, "CARGO_TARGET_DIR": str(root / "target")}
+            for graph in range(2):
+                cmd = [sys.executable, "-c", f"import sys; print('graph {graph}'); print('log {graph}', file=sys.stderr)"]
+                proc = runtime.Runner.execute(self.runner, cmd, env, lease, graph)
+                self.assertEqual(proc.returncode, 0)
+            for graph in range(2):
+                self.assertEqual((root / f"cargo.graph-{graph}.stdout.jsonl").read_text(), f"graph {graph}\n")
+                self.assertEqual((root / f"cargo.graph-{graph}.stderr.log").read_text(), f"log {graph}\n")
 
     def test_warm_run_rechecks_evidence_without_compiling_or_parsing(self):
         cold = self.run_config()
@@ -164,6 +281,9 @@ class EvidenceTests(unittest.TestCase):
 
     def test_cancellation_stops_owned_process_and_releases_lease(self):
         results = []
+        unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+        self.addCleanup(unrelated.wait)
+        self.addCleanup(unrelated.terminate)
         with self.runner.context({"process": "fixture"}) as (root, _, lease):
             thread = threading.Thread(target=lambda: results.append(runtime.Runner.execute(
                 self.runner, [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -178,6 +298,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertLess(results[0].returncode, 0)
             self.assertFalse(self.runner.children)
+            self.assertIsNone(unrelated.poll())
         with self.runner.context({"process": "fixture"}):
             pass
 
@@ -249,6 +370,53 @@ def run_tests(gate):
 
 class LiveEvidenceTests(unittest.TestCase):
     """Explicit opt-in: compile a tiny crate through the installed Cargo path."""
+
+    def test_real_cargo_reuses_common_dependencies_and_keeps_feature_units_distinct(self):
+        gate = loaded_gate()
+        for extra_feature in (False, True):
+            with self.subTest(extra_feature=extra_feature), tempfile.TemporaryDirectory(prefix="purrdf-asm-graphs-") as temporary:
+                root = Path(temporary)
+                (root / "Cargo.toml").write_text('[workspace]\nmembers=["demo", "wrapper"]\nresolver="3"\n')
+                (root / "Cargo.lock").write_text('version=4\n[[package]]\nname="demo"\nversion="0.1.0"\n'
+                                               '[[package]]\nname="wrapper"\nversion="0.1.0"\ndependencies=["demo"]\n')
+                for package in ("demo", "wrapper"):
+                    (root / package / "src").mkdir(parents=True)
+                (root / "demo/Cargo.toml").write_text('[package]\nname="demo"\nversion="0.1.0"\nedition="2024"\n'
+                                                    '[features]\nextra=[]\n')
+                (root / "demo/src/lib.rs").write_text('pub mod kernel { #[inline(never)] pub fn dot(x: u64) -> u64 {\n'
+                                                    '#[cfg(feature="extra")] { x.wrapping_add(2) }\n'
+                                                    '#[cfg(not(feature="extra"))] { x.wrapping_add(1) } } }\n')
+                features = ', features=["extra"]' if extra_feature else ""
+                (root / "wrapper/Cargo.toml").write_text('[package]\nname="wrapper"\nversion="0.1.0"\nedition="2024"\n'
+                                                       '[lib]\ncrate-type=["cdylib", "rlib"]\n[dependencies]\n'
+                                                       'demo={path="../demo"' + features + '}\n')
+                (root / "wrapper/src/lib.rs").write_text('pub fn call(x: u64) -> u64 { demo::kernel::dot(x) }\n')
+                data = gate._manifest_dict()
+                data["build"]["rlib_packages"] = ["wrapper"]
+                data["site"][0]["measure"][0]["single_copy"] = True
+                manifest = gate.load_manifest(data)
+                config = gate.CONFIG_BY_NAME["x86_64"]
+                options = argparse.Namespace(jobs=1, fresh=False, probe=None)
+                with patch.object(gate, "REPO_ROOT", root):
+                    runner = runtime.Runner(gate, options, 1)
+                    first = runner.configuration(config, manifest, gate.manifest_keep(manifest)(config))
+                    self.assertEqual([f.graph for f in first], [0, 1])
+                    self.assertEqual(first[0].unit == first[1].unit, not extra_feature)
+                    self.assertEqual(first[0].instructions == first[1].instructions, not extra_feature)
+                    stats = runner.timings[config.name]
+                    self.assertEqual(stats["rustc_invocations"], 3 if extra_feature else 2)
+                    self.assertEqual(stats["fresh_artifacts"], 0 if extra_feature else 1)
+                    context_root = next(parent for parent in Path(first[0].unit).parents
+                                        if (parent / "cargo.graph-0.stderr.log").is_file())
+                    second_log = (context_root / "cargo.graph-1.stderr.log").read_text()
+                    demo_invocations = [line for line in second_log.splitlines() if gate._RUNNING.match(line) and "--crate-name demo " in line]
+                    self.assertEqual(len(demo_invocations), 1 if extra_feature else 0)
+                    self.assertTrue((context_root / "cargo.graph-0.stdout.jsonl").is_file())
+                    self.assertTrue((context_root / "cargo.graph-1.stdout.jsonl").is_file())
+                    self.assertEqual(first, runner.configuration(config, manifest, gate.manifest_keep(manifest)(config)))
+                    self.assertEqual(runner.timings[config.name]["rustc_invocations"], 0)
+                    self.assertEqual(runner.timings[config.name]["parsed_units"], 0)
+                    self.assertEqual(runner.timings[config.name]["reused_units"], 3)
 
     def test_real_cargo_freshness_source_edit_and_missing_assembly(self):
         gate = loaded_gate()

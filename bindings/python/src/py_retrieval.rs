@@ -48,6 +48,7 @@
 //!             "https://example.org/stratum/lexical",
 //!             "https://example.org/note",
 //!             "any",
+//!             {"lexicon": "empty"},
 //!         )
 //!     },
 //!     weights={"https://example.org/stratum/lexical": retrieval.SCALE},
@@ -168,9 +169,16 @@
 //!
 //! # What a producer may name, and what a host has to tell it
 //!
-//! A `text_producers` entry may be written as a fourth element beside the three
-//! it already carries — `(stratum, predicate, graph, domains)` — where `domains`
-//! is `None` or a list of domain-tag IRIs. A vector producer carries the same
+//! A `text_producers` entry requires `(stratum, predicate, graph, analyzer)`.
+//! The analyzer mapping requires `lexicon`: `"empty"`, `"baseline"` (with all five
+//! artifact byte strings), or `"dictionary"` (with weighted `entries`). Optional
+//! `projection="han"` selects independent Han-character statistics; lexical is
+//! the default projection. `max_token_scalars`, `accent`, `stemming`, `input_mode`,
+//! `code_length`, `edit_distance` and the three `substring_*` limits configure
+//! that same immutable law. `accent` accepts its declared preset or a list drawn
+//! independently from `latin`, `greek`, `cyrillic`, `arabic` and `hebrew`; an empty
+//! list preserves every accent. A fifth `domains` element is `None` or a list of
+//! domain-tag IRIs. A vector producer carries the same
 //! `domains` position, read by the same rules below. It is the second promise a producer
 //! makes about its own rows, beside its duplicate policy, and like that one it
 //! is host-supplied configuration read at registration rather than anything the
@@ -205,10 +213,9 @@
 //! scores, and `"exclusion_bases"` on the answer reports the basis each stream
 //! fused under.
 //!
-//! `None` — or an omitted fourth element — is `Unrestricted`: "this producer may
+//! `None` — or an omitted fifth element — is `Unrestricted`: "this producer may
 //! name anything", the honest value for a host that does not know how its
-//! indexes partition, and exactly the behaviour this binding had before the
-//! parameter existed. An **empty list** is refused by name: a promise to name
+//! indexes partition. An **empty list** is refused by name: a promise to name
 //! nothing is not a narrow producer, it is a producer that should not be
 //! registered, and a consumer holding it to that declaration row by row would
 //! refuse its first row.
@@ -236,8 +243,8 @@
 //!
 //! # What only the host can say about the index behind a producer
 //!
-//! A fifth element may follow the four above — `(stratum, predicate, graph,
-//! domains, (generation, incompleteness))` — and it is the one part of a producer
+//! A sixth element may follow the five above — `(stratum, predicate, graph,
+//! analyzer, domains, (generation, incompleteness))` — and it is the one part of a producer
 //! that nothing crossing this boundary can express. Two facts can change an
 //! answer while every input the engine sees stays identical: WHICH version of the
 //! host's index answered, and whether that index was WHOLE. A corpus read out of
@@ -402,7 +409,11 @@ use crate::retrieval::{
     ScoreExactness, ScoreInterval, SearchResult, Statistics, Term, ToleratedDepth, TopK,
     UnservedReason,
 };
-use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
+use crate::text::{
+    AccentFold, AccentScripts, Analyzer, AnalyzerProfile, GraphSelector, HanCharacterIndex,
+    InputMode, Segmentation, Stemming, SubstringLimits, TextIndex, TextIndexConfig,
+    TextSearchRelation,
+};
 use crate::{RdfDataset, TermValue, parse_dataset};
 use purrdf_core::DistanceMetric;
 use purrdf_sparql_eval::{
@@ -507,6 +518,10 @@ enum ProducerKind {
         predicate: String,
         /// Which graphs the index reads.
         graph: GraphSpec,
+        /// Explicit analysis law, resolved from caller-owned artifact bytes.
+        analyzer: Analyzer,
+        /// Select independent Han character statistics.
+        han: bool,
         /// What this producer's own search promises about the rows it can name,
         /// on both axes, as the host declared them.
         ///
@@ -771,7 +786,7 @@ fn build_dataset(call: &Call) -> Result<Arc<RdfDataset>, String> {
 ///
 /// Every declaration is the relation's own `ranked_declaration`, so the
 /// capability recorded in the registry is the one the relation can honestly make:
-/// an index that resolves to more than one partition refuses to claim a ranked
+/// an index that resolves to more than one scoring partition refuses to claim a ranked
 /// order, and that refusal arrives here as a `ValueError` rather than as a
 /// ranking that is not one. Nothing is edited into a declaration after the
 /// relation hands it out — not its exclusion basis, not its fidelity — so a
@@ -805,16 +820,25 @@ fn build_registry(
                 ProducerKind::Text {
                     predicate,
                     graph,
+                    analyzer,
+                    han,
                     fidelity,
                 } => {
                     let config = TextIndexConfig::new(
                         vec![TermValue::iri(predicate.clone())],
                         graph.selector(),
+                        analyzer.clone(),
                     )
                     .map_err(|e| format!("{subject}: {e}"))?;
-                    let index = TextIndex::from_dataset(data, &config)
-                        .map_err(|e| format!("{subject}: {e}"))?;
-                    let relation = TextSearchRelation::new(Arc::new(index));
+                    let relation = if *han {
+                        HanCharacterIndex::from_dataset(data, &config)
+                            .map_err(|e| format!("{subject}: {e}"))?
+                            .relation()
+                    } else {
+                        let index = TextIndex::from_dataset(data, &config)
+                            .map_err(|e| format!("{subject}: {e}"))?;
+                        TextSearchRelation::new(Arc::new(index))
+                    };
                     let declaration = relation
                         .ranked_declaration(
                             stratum,
@@ -1323,36 +1347,186 @@ fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<Retriev
     Ok(RetrievalRequest::bounded(terms, TopK::new(top_k)))
 }
 
-/// Collect the `text_producers` dict into the declarations one call registers:
-/// `producer_iri -> (stratum_iri, predicate_iri, graph)`, or
-/// `producer_iri -> (stratum_iri, predicate_iri, graph, domains)`, or the same
-/// four followed by one `(generation, incompleteness)` attestation, and then a
-/// `(completeness, order)` fidelity.
-///
-/// The fourth element is the producer's candidate-domain declaration: `None`
-/// for the unrestricted promise, or a list of domain-tag IRIs. Omitting it
-/// entirely is the same declaration as `None` — the widest promise, which
-/// licenses a consumer to skip nothing — so a host that never heard of domains
-/// keeps exactly the reading it had.
-///
-/// # The attestation is the FIFTH position, and that is not an accident
-///
-/// A `domains` value and an attestation are both sequences, so on a four-element
-/// value the two are genuinely ambiguous: `("a", "b")` is a well-formed
-/// two-tag restriction AND a well-formed attestation, and nothing in either value
-/// says which the host meant. Guessing between them is the silent-wrong reading
-/// this whole surface exists to refuse — one guess registers a producer whose
-/// rows cannot back a restriction it never made, the other reports a domain tag
-/// back to an operator as an index generation. So the position is fixed: a spec
-/// that attests writes its `domains` position explicitly, and `None` there
-/// restricts nothing. The shape refusal spells every accepted width.
-///
-/// # Errors
-///
-/// `TypeError` naming the accepted shapes when the value is not a sequence of
-/// three to six positions, or when the fifth is not a two-member sequence;
-/// `TypeError` naming the field when an attestation member is neither `str` nor
-/// `None`, or when a mandatory position is not a string.
+fn read_accent_fold(subject: &str, value: &Bound<'_, PyAny>) -> PyResult<AccentFold> {
+    use crate::text::unicode::AccentScript;
+    if value.is_instance_of::<PyString>() {
+        return match spec_string(subject, "accent", value)?.as_str() {
+            "preserve" => Ok(AccentFold::Preserve),
+            "latin-greek-cyrillic" => Ok(AccentFold::LatinGreekCyrillic),
+            "latin-greek-cyrillic-arabic-hebrew" => Ok(AccentFold::LatinGreekCyrillicArabicHebrew),
+            _ => Err(PyValueError::new_err(format!(
+                "{subject}: unsupported accent preset"
+            ))),
+        };
+    }
+    let names = value.cast::<PyList>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{subject}: accent must be a declared preset or a list of script names"
+        ))
+    })?;
+    let mut scripts = AccentScripts::default();
+    for name in names {
+        let name = spec_string(subject, "accent script", &name)?;
+        let script = match name.as_str() {
+            "latin" => AccentScript::Latin,
+            "greek" => AccentScript::Greek,
+            "cyrillic" => AccentScript::Cyrillic,
+            "hebrew" => AccentScript::Hebrew,
+            "arabic" => AccentScript::Arabic,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "{subject}: unsupported accent script {name:?}"
+                )));
+            }
+        };
+        scripts = scripts.with(script);
+    }
+    Ok(AccentFold::Selected(scripts))
+}
+
+/// Read a fully explicit dictionary selection and optional declared analysis parameters.
+fn read_text_analyzer(subject: &str, value: &Bound<'_, PyAny>) -> PyResult<(Analyzer, bool)> {
+    let options = value
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("{subject}: analyzer must be a dictionary")))?;
+    for (key, _) in options {
+        let key: String = key.extract()?;
+        if !matches!(
+            key.as_str(),
+            "lexicon"
+                | "artifacts"
+                | "entries"
+                | "max_token_scalars"
+                | "accent"
+                | "stemming"
+                | "input_mode"
+                | "code_length"
+                | "edit_distance"
+                | "projection"
+                | "substring_posting_operations"
+                | "substring_candidate_spans"
+                | "substring_verification_bytes"
+        ) {
+            return Err(PyValueError::new_err(format!(
+                "{subject}: unknown analyzer field {key:?}"
+            )));
+        }
+    }
+    let string = |key: &str, default: Option<&str>| -> PyResult<String> {
+        match options.get_item(key)? {
+            Some(value) => spec_string(subject, key, &value),
+            None => default.map(str::to_owned).ok_or_else(|| {
+                PyValueError::new_err(format!("{subject}: analyzer requires {key}"))
+            }),
+        }
+    };
+    let number = |key: &str, default: usize| -> PyResult<usize> {
+        options
+            .get_item(key)?
+            .map_or(Ok(default), |value| value.extract::<usize>())
+    };
+    let invalid =
+        |error: crate::text::TextError| PyValueError::new_err(format!("{subject}: {error}"));
+    let standard = AnalyzerProfile::standard();
+    let mut profile =
+        AnalyzerProfile::new(number("max_token_scalars", standard.max_token_scalars())?)
+            .map_err(invalid)?;
+    let accent = options
+        .get_item("accent")?
+        .map_or(Ok(standard.accent_fold()), |value| {
+            read_accent_fold(subject, &value)
+        })?;
+    profile = profile.with_accent_fold(accent);
+    profile = profile.with_stemming(match string("stemming", Some("none"))?.as_str() {
+        "none" => Stemming::None,
+        "english" => Stemming::English,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "{subject}: unsupported stemming law"
+            )));
+        }
+    });
+    profile = profile.with_input_mode(match string("input_mode", Some("plain"))?.as_str() {
+        "plain" => InputMode::Plain,
+        "html-text" => InputMode::HtmlText,
+        "html-attribute" => InputMode::HtmlAttribute,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "{subject}: unsupported input mode"
+            )));
+        }
+    });
+    profile = profile
+        .with_phonetics(
+            number("code_length", standard.code_length())?,
+            number("edit_distance", standard.edit_distance())?,
+        )
+        .map_err(invalid)?;
+    let limit = |key: &str, default: u64| -> PyResult<u64> {
+        options
+            .get_item(key)?
+            .map_or(Ok(default), |value| value.extract::<u64>())
+    };
+    let limits = SubstringLimits::STANDARD;
+    profile = profile.with_substring_limits(SubstringLimits {
+        posting_operations: limit("substring_posting_operations", limits.posting_operations)?,
+        candidate_spans: limit("substring_candidate_spans", limits.candidate_spans)?,
+        verification_bytes: limit("substring_verification_bytes", limits.verification_bytes)?,
+    });
+    let lexicon = string("lexicon", None)?;
+    let entries = options.get_item("entries")?;
+    if entries.is_some() && lexicon != "dictionary" {
+        return Err(PyValueError::new_err(format!(
+            "{subject}: entries require lexicon='dictionary'"
+        )));
+    }
+    profile = profile.with_segmentation(match lexicon.as_str() {
+        "empty" => Segmentation::EmptyLexicon,
+        "baseline" => Segmentation::Baseline,
+        "dictionary" => {
+            let entries: Vec<(String, u32)> = entries
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "{subject}: dictionary lexicon requires weighted entries"
+                    ))
+                })?
+                .extract()?;
+            Segmentation::Dictionary(Arc::new(
+                crate::text::segment::Dictionary::with_costs(entries).map_err(invalid)?,
+            ))
+        }
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "{subject}: lexicon must be empty, baseline or dictionary"
+            )));
+        }
+    });
+    let mut artifacts = Vec::new();
+    if let Some(values) = options.get_item("artifacts")? {
+        for value in values.extract::<Vec<Bound<'_, PyAny>>>()? {
+            let bytes = value.cast::<PyBytes>().map_err(|_| {
+                PyTypeError::new_err(format!("{subject}: artifacts must contain bytes"))
+            })?;
+            artifacts.push(bytes.as_bytes().to_vec());
+        }
+    }
+    let borrowed: Vec<_> = artifacts.iter().map(Vec::as_slice).collect();
+    let analyzer = Analyzer::resolve(profile, &borrowed).map_err(invalid)?;
+    let han = match string("projection", Some("lexical"))?.as_str() {
+        "lexical" => false,
+        "han" => true,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "{subject}: projection must be lexical or han"
+            )));
+        }
+    };
+    Ok((analyzer, han))
+}
+
+/// Text declarations contain `(stratum, predicate, graph, analyzer)` followed by
+/// optional domains, attestation and fidelity at fixed positions 5, 6 and 7.
+/// Analyzer dictionaries must select `lexicon`; baseline data is supplied as bytes.
 fn collect_text_producers(
     producers: &Bound<'_, PyDict>,
     declared: &mut Vec<Producer>,
@@ -1361,67 +1535,46 @@ fn collect_text_producers(
         let producer: String = key
             .extract()
             .map_err(|_| PyTypeError::new_err("text producer keys must be IRI strings"))?;
+        let subject = format!("text producer <{producer}>");
         let shape = || {
             PyTypeError::new_err(format!(
-                "text producer <{producer}>: the value is (stratum, predicate, graph), \
-                 (stratum, predicate, graph, domains), (stratum, predicate, graph, domains, \
-                 (generation, incompleteness)), or (stratum, predicate, graph, domains, \
-                 (generation, incompleteness), (completeness, order)) — an attestation is the \
-                 fifth position, because a fourth-position sequence is already a `domains` \
-                 list and guessing between the two would report one back as the other; and a \
-                 fidelity is the sixth, because it speaks about the producer's search rather \
-                 than about the index the attestation names"
+                "{subject}: expected (stratum, predicate, graph, analyzer[, domains[, attestation[, fidelity]]]); analyzer must explicitly select a lexicon"
             ))
         };
         let mut fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| shape())?;
-        // Read off the tail first, deepest position first: the three mandatory
-        // fields are destructured as an array, which consumes the vector, so every
-        // optional position has to leave before that happens.
-        let fidelity = match fields.len() {
-            3..=5 => None,
-            6 => Some(fields.remove(5)),
-            _ => return Err(shape()),
+        if !(4..=7).contains(&fields.len()) {
+            return Err(shape());
+        }
+        let fidelity = if fields.len() == 7 {
+            Some(fields.remove(6))
+        } else {
+            None
         };
-        let attestation = match fields.len() {
-            3 | 4 => Attestation::UNDECLARED,
-            5 => {
-                let trailing = fields.remove(4);
-                // A fifth position that is not even SHAPED like an attestation
-                // reports the accepted widths rather than a diagnostic about a
-                // position the caller may never have meant to write; one that is
-                // shaped like an attestation but carries the wrong member types
-                // keeps its own precise diagnostic, which `Attestation::read`
-                // raises.
-                Attestation::read(&format!("text producer <{producer}>"), &trailing)?
-                    .ok_or_else(shape)?
-            }
-            _ => return Err(shape()),
+        let attestation = if fields.len() == 6 {
+            Attestation::read(&subject, &fields.remove(5))?.ok_or_else(shape)?
+        } else {
+            Attestation::UNDECLARED
         };
-        let domains = match fields.len() {
-            3 => None,
-            4 => Some(fields.remove(3)),
-            _ => return Err(shape()),
+        let domains = if fields.len() == 5 {
+            Some(fields.remove(4))
+        } else {
+            None
         };
-        let [stratum, predicate, graph] =
-            <[Bound<'_, PyAny>; 3]>::try_from(fields).map_err(|_| shape())?;
-        let subject = format!("text producer <{producer}>");
+        let [stratum, predicate, graph, analyzer] =
+            <[Bound<'_, PyAny>; 4]>::try_from(fields).map_err(|_| shape())?;
         let domains = domains
             .map(|value| read_domains(&subject, &value))
             .transpose()?
             .flatten();
         let fidelity = match fidelity {
             Some(value) if !value.is_none() => {
-                // A sixth position that is not even SHAPED like a fidelity
-                // reports the accepted widths rather than a diagnostic about a
-                // position the caller may never have meant to write; one that is
-                // shaped like a fidelity but carries the wrong member types keeps
-                // its own precise diagnostic, which `read_fidelity` raises.
                 read_fidelity(&subject, &value)?.ok_or_else(shape)?
             }
             _ => RankFidelity::EXACT,
         };
         let graph = GraphSpec::parse(&producer, &spec_string(&subject, "graph", &graph)?)
             .map_err(PyValueError::new_err)?;
+        let (analyzer, han) = read_text_analyzer(&subject, &analyzer)?;
         declared.push(Producer {
             stratum: spec_string(&subject, "stratum", &stratum)?,
             domains,
@@ -1429,6 +1582,8 @@ fn collect_text_producers(
             kind: ProducerKind::Text {
                 predicate: spec_string(&subject, "predicate", &predicate)?,
                 graph,
+                analyzer,
+                han,
                 fidelity,
             },
             iri: producer,
@@ -3002,7 +3157,7 @@ fn compile<'py>(
 /// the `top_k` later stopped still reports both facts.
 ///
 /// Either axis may be the HOST's word rather than the relation's: a
-/// `text_producers` value may carry a fifth `(generation, incompleteness)`
+/// `text_producers` value may carry a sixth `(generation, incompleteness)`
 /// position, each member a `str` or `None`, recorded verbatim. It is the only way
 /// an incompleteness reaches this answer at all, because the shipped text
 /// relation indexes the document it was handed and has no way to know what was

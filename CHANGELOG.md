@@ -95,6 +95,54 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   blank node was refused as a `validator-class` syntax violation. Cycles
   among blank nodes terminate, and a blank node on no path to the SHACL class
   registers nothing.
+- **SPARQL Update graph existence:** a named graph that an Update empties is
+  gone afterwards. This covers `DROP`/`CLEAR` of a graph, `NAMED` or `ALL`, the
+  source of a `MOVE`, and a `DELETE` that removes the graph's last quad,
+  reifier binding or annotation. The graph is no longer enumerated by
+  `GRAPH ?g` later in the same request or over the result. It is no longer
+  kept in the frozen dataset, so serializers stop writing it, for example as
+  `<g> {}` in TriG. Before this fix, every graph of the input stayed listed
+  after its quads were deleted, and graphs the input declared empty survived
+  `DROP ALL`. A graph the input declared empty (TriG `GRAPH <g> {}`) that no
+  operation touches is still kept, so a no-op or unrelated update writes the
+  declaration back unchanged. `CREATE GRAPH` still registers nothing, and
+  dropping a missing graph still succeeds. The new
+  `MutableDataset::withdraw_graph_declaration` and
+  `MutableDataset::withdraw_named_graph_declarations` remove an input
+  declaration directly.
+
+- **SPARQL string functions:** `SUBSTR` follows XPath `fn:substring` for a
+  start at or below zero (`SUBSTR("12345", 0, 3)` is `"12"`, not `"123"`),
+  computes its bounds without overflow across the whole integer range, treats a
+  supplied but unbound length as an error rather than an omitted one, and keeps
+  the source's base direction as well as its language tag. `CONTAINS`,
+  `STRSTARTS` and `STRENDS` now apply SPARQL argument compatibility — an
+  incompatible pair such as `CONTAINS("abc", "b"@en)` is an error, not `true`
+  — and, with `STRBEFORE` and `STRAFTER`, treat two RDF 1.2 directional
+  strings as compatible only when their language and base direction both
+  match; `STRBEFORE` and `STRAFTER` keep the base direction of their result.
+  `UCASE`, `LCASE` and `REPLACE` keep the base direction of a directional
+  input as well as its language tag. A `REGEX` or `REPLACE` flags argument
+  that is supplied but unbound, or is not a simple literal, is an error
+  instead of being read as no flags; omitted flags still mean none. A
+  language-tagged `REGEX` or `REPLACE` pattern, or `REPLACE` replacement, is
+  an error, as their signatures require simple literals; the text they search
+  may still be any string. `STRLANGDIR`, like `STRLANG`, refuses a lexical
+  form that is already tagged instead of silently replacing its language and
+  direction.
+- **SPARQL simple-literal arguments:** the hash built-ins (`MD5`, `SHA1`,
+  `SHA256`, `SHA384`, `SHA512` and the SHA-3 family) take only a simple
+  literal or `xsd:string`, as SPARQL 1.1 §17.4.6 requires; a language-tagged
+  or directional string is an error instead of being hashed on its text.
+  Plain and `xsd:string` inputs keep the same digests. The same rule now
+  holds for the language and direction of `STRLANG` and `STRLANGDIR`, both
+  arguments of `LANGMATCHES`, the label of `BNODE` and the string form of
+  `IRI`/`URI`, which also no longer resolves a non-string literal such as
+  `IRI(1)` against the base.
+- **SPARQL `LANGMATCHES`:** an empty language tag or range now gives `false`,
+  and `"*"` matches only a non-empty tag, as SPARQL requires.
+  `FILTER langMatches(lang(?v), "*")` no longer keeps untagged literals, and
+  its negation now keeps them (the W3C `q-langMatches-3` and `-4` results).
 
 ## [3.0.1] - 2026-10-02
 

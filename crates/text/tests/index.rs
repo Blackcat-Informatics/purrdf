@@ -378,12 +378,10 @@ fn untagged_literals_do_not_collide_with_a_real_language_tag() {
     assert_eq!(index.document_frequency(&empty_tag, "untagged"), 0);
 }
 
-/// A subject whose only literal analyzes to nothing is not a document.
-///
-/// This is the invariant that keeps every retained partition's average document
-/// length non-zero, which the BM25 denominator depends on.
+/// Auxiliary substring evidence retains a punctuation-only document, while
+/// lexical statistics count only documents with lexical terms.
 #[test]
-fn a_document_with_no_analyzable_tokens_is_excluded() {
+fn a_document_without_lexical_terms_retains_auxiliary_evidence() {
     let mut builder = RdfDatasetBuilder::new();
     let punctuation_only = builder.intern_iri("https://example.org/quiet");
     let real = builder.intern_iri(S);
@@ -395,19 +393,34 @@ fn a_document_with_no_analyzable_tokens_is_excluded() {
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let index = index_of(&dataset, &[NOTE]);
-    assert_eq!(
-        subjects(&index),
-        vec![TermValue::iri(S)],
-        "the punctuation-only subject must not be a document"
-    );
-    let average = index
+    let mut expected = vec![
+        TermValue::iri(S),
+        TermValue::iri("https://example.org/quiet"),
+    ];
+    expected.sort();
+    assert_eq!(subjects(&index), expected);
+    let statistics = index
         .partition_stats(&plain())
-        .expect("the default partition exists")
-        .average_document_length();
-    assert!(
-        average > purrdf_text::Fixed::ZERO,
-        "every retained partition must have a non-zero average document length"
+        .expect("the default partition exists");
+    assert_eq!(statistics.document_count(), 1);
+    assert_eq!(statistics.total_tokens(), 2);
+    assert_eq!(
+        statistics.average_document_length(),
+        purrdf_text::Fixed::from_integer(2).unwrap()
     );
+    let evidence = index
+        .surface_index()
+        .substring("!!!")
+        .expect("selective punctuation fragment");
+    assert_eq!(evidence.len(), 1);
+    let document = index
+        .document(evidence[0].term.documents()[0])
+        .expect("retained document");
+    assert_eq!(
+        document.subject(),
+        &TermValue::iri("https://example.org/quiet")
+    );
+    assert_eq!(document.length(), 0);
 }
 
 // ── statistics ───────────────────────────────────────────────────────────────
@@ -572,6 +585,7 @@ fn a_non_iri_predicate_is_a_config_error() {
     let error = TextIndexConfig::new(
         vec![TermValue::simple_literal("not a predicate")],
         GraphSelector::Any,
+        Analyzer::empty_lexicon(),
     )
     .expect_err("a literal cannot be a predicate");
     assert!(matches!(error, TextError::Config(_)), "got {error:?}");
@@ -580,8 +594,12 @@ fn a_non_iri_predicate_is_a_config_error() {
     // refusal must not be firing on an IRI. A refusal that is never checked
     // against the input it is supposed to admit looks identical to one that
     // rejects everything.
-    TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("an IRI predicate is exactly what this configuration takes");
+    TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        Analyzer::empty_lexicon(),
+    )
+    .expect("an IRI predicate is exactly what this configuration takes");
 
     // Including IRIs whose spelling is unusual — a refusal keyed on shape
     // rather than on term kind would reject these.
@@ -590,8 +608,12 @@ fn a_non_iri_predicate_is_a_config_error() {
         "https://example.org/a#b",
         "tag:x,2026:y",
     ] {
-        TextIndexConfig::new(vec![TermValue::iri(iri)], GraphSelector::Any)
-            .unwrap_or_else(|error| panic!("{iri} is an IRI and must be accepted: {error}"));
+        TextIndexConfig::new(
+            vec![TermValue::iri(iri)],
+            GraphSelector::Any,
+            Analyzer::empty_lexicon(),
+        )
+        .unwrap_or_else(|error| panic!("{iri} is an IRI and must be accepted: {error}"));
     }
 }
 
@@ -599,7 +621,7 @@ fn a_non_iri_predicate_is_a_config_error() {
 /// back on and an empty one is refused rather than guessed at.
 #[test]
 fn an_empty_predicate_set_is_a_config_error() {
-    let error = TextIndexConfig::new(Vec::new(), GraphSelector::Any)
+    let error = TextIndexConfig::new(Vec::new(), GraphSelector::Any, Analyzer::empty_lexicon())
         .expect_err("an empty predicate set has no fallback");
     assert!(matches!(error, TextError::Config(_)), "got {error:?}");
 }
@@ -615,6 +637,7 @@ fn a_duplicate_predicate_is_a_config_error() {
             TermValue::iri(NOTE),
         ],
         GraphSelector::Any,
+        Analyzer::empty_lexicon(),
     )
     .expect_err("a repeated predicate is refused");
     assert!(matches!(error, TextError::Config(_)), "got {error:?}");
@@ -626,6 +649,7 @@ fn a_duplicate_predicate_is_a_config_error() {
     let config = TextIndexConfig::new(
         vec![TermValue::iri(NOTE), TermValue::iri(LABEL)],
         GraphSelector::Any,
+        Analyzer::empty_lexicon(),
     )
     .expect("two distinct predicates are a valid configuration");
     assert_eq!(config.predicates().len(), 2);
@@ -746,7 +770,9 @@ fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation()
     assert!(
         select(
             &index,
-            &Analyzer::new().terms("anything at all"),
+            &Analyzer::empty_lexicon()
+                .terms("anything at all")
+                .expect("valid text analysis"),
             &PartitionFilter::unconstrained(),
             None,
             None,
@@ -757,9 +783,16 @@ fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation()
     );
     assert_eq!(index.document_frequency(&plain(), "anything"), 0);
     assert!(
-        rank_partition(&index, &plain(), &Analyzer::new().terms("anything"), None)
-            .expect("ranking a partition the index does not hold is an empty answer")
-            .is_empty(),
+        rank_partition(
+            &index,
+            &plain(),
+            &Analyzer::empty_lexicon()
+                .terms("anything")
+                .expect("valid text analysis"),
+            None
+        )
+        .expect("ranking a partition the index does not hold is an empty answer")
+        .is_empty(),
         "naming a partition an empty index does not hold yields no rows"
     );
 
@@ -795,7 +828,9 @@ fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation()
     assert_eq!(
         select(
             &landed,
-            &Analyzer::new().terms("anything at all"),
+            &Analyzer::empty_lexicon()
+                .terms("anything at all")
+                .expect("valid text analysis"),
             &PartitionFilter::unconstrained(),
             None,
             None,
@@ -1147,6 +1182,7 @@ fn a_named_graph_selector_restricts_the_walk() {
         &TextIndexConfig::new(
             vec![TermValue::iri(NOTE)],
             GraphSelector::Named(TermValue::iri(GRAPH)),
+            Analyzer::empty_lexicon(),
         )
         .expect("a named-graph configuration is well formed"),
     )
@@ -1170,6 +1206,7 @@ fn a_named_graph_selector_restricts_the_walk() {
         &TextIndexConfig::new(
             vec![TermValue::iri(NOTE)],
             GraphSelector::Named(TermValue::iri("https://example.org/absent")),
+            Analyzer::empty_lexicon(),
         )
         .expect("a named-graph configuration is well formed"),
     )
@@ -1187,8 +1224,12 @@ fn a_named_graph_selector_restricts_the_walk() {
     // no term at all.
     let default = TextIndex::from_dataset(
         &*dataset,
-        &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Default)
-            .expect("a default-graph configuration is well formed"),
+        &TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Default,
+            Analyzer::empty_lexicon(),
+        )
+        .expect("a default-graph configuration is well formed"),
     )
     .expect("the default graph needs no term to be present");
     assert_eq!(default.document_count(), 1);
