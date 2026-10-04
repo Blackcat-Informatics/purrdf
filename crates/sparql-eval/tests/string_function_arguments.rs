@@ -13,8 +13,14 @@
 //!   second argument goes with anything, two tagged arguments need the same language
 //!   and the same direction, and a tagged second argument never goes with an untagged
 //!   first one. An incompatible pair is an error, not `false`.
-//! * `REGEX`'s flags, when supplied, are a simple literal; a supplied flags argument
-//!   that is unbound or not a simple literal is an error, never "no flags".
+//! * `REGEX`'s and `REPLACE`'s flags, when supplied, are a simple literal; a supplied
+//!   flags argument that is unbound or not a simple literal is an error, never "no
+//!   flags". Their pattern (and `REPLACE`'s replacement) is a simple literal too; the
+//!   text they search may be any string.
+//! * A string a built-in derives from a string argument keeps its language tag and
+//!   base direction (`UCASE`, `LCASE`, `REPLACE`, `SUBSTR`, `STRBEFORE`, `STRAFTER`,
+//!   and `CONCAT` when every argument shares them), and `STRLANGDIR`, like `STRLANG`,
+//!   refuses a lexical form that already carries a tag.
 //!
 //! Every refusal is paired with a neighbouring call that must still answer.
 
@@ -346,4 +352,147 @@ fn regex_supplied_flags_must_be_a_bound_simple_literal() {
     // An unbound flags cell in the same position.
     let query = "SELECT (REGEX(\"abc\", ?p, ?f) AS ?y) WHERE { VALUES (?p ?f) { (\"b\" UNDEF) } }";
     assert_eq!(select_over(&empty_dataset(), query), None, "{query}");
+}
+
+// ---------------------------------------------------------------------------
+// facets of the result
+// ---------------------------------------------------------------------------
+
+fn tagged(lexical: &str, language: &str, direction: Option<RdfTextDirection>) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lexical.to_owned(),
+        datatype: format!(
+            "{RDF}{}",
+            if direction.is_some() {
+                "dirLangString"
+            } else {
+                "langString"
+            }
+        ),
+        language: Some(language.to_owned()),
+        direction,
+    }
+}
+
+#[test]
+fn string_producers_keep_the_language_tag_and_base_direction() {
+    let rtl = Some(RdfTextDirection::Rtl);
+    let ltr = Some(RdfTextDirection::Ltr);
+    for (expression, expected) in [
+        (r#"UCASE("abc"@en--rtl)"#, tagged("ABC", "en", rtl)),
+        (r#"LCASE("ABC"@ar--ltr)"#, tagged("abc", "ar", ltr)),
+        (r#"UCASE("abc"@en)"#, tagged("ABC", "en", None)),
+        (r#"UCASE("abc")"#, string("ABC")),
+        (
+            r#"REPLACE("abc"@en--rtl, "b", "x")"#,
+            tagged("axc", "en", rtl),
+        ),
+        (r#"REPLACE("abc"@en, "b", "x")"#, tagged("axc", "en", None)),
+        (r#"REPLACE("abc", "b", "x")"#, string("axc")),
+        (
+            r#"CONCAT("ab"@en--rtl, "c"@en--rtl)"#,
+            tagged("abc", "en", rtl),
+        ),
+        (r#"CONCAT("ab"@en--rtl, "c"@en--ltr)"#, string("abc")),
+        (r#"CONCAT("ab"@en--rtl, "c"@en)"#, string("abc")),
+        (r#"SUBSTR("abc"@en--ltr, 2)"#, tagged("bc", "en", ltr)),
+        (
+            r#"STRLANGDIR("abc", "en", "rtl")"#,
+            tagged("abc", "en", rtl),
+        ),
+        // ENCODE_FOR_URI returns a simple literal by definition (§17.4.3.11).
+        (r#"ENCODE_FOR_URI("a b"@en--rtl)"#, string("a%20b")),
+    ] {
+        assert_eq!(select(expression), Some(expected), "{expression}");
+    }
+}
+
+/// `STRLANGDIR`, like `STRLANG`, takes a lexical form that carries no tag: re-tagging an
+/// already tagged string would silently discard its language and direction.
+#[test]
+fn strlangdir_refuses_a_tagged_lexical_form() {
+    for expression in [
+        r#"STRLANGDIR("abc"@fr, "en", "rtl")"#,
+        r#"STRLANGDIR("abc"@fr--ltr, "en", "rtl")"#,
+        r#"STRLANG("abc"@fr, "en")"#,
+    ] {
+        assert_eq!(select(expression), None, "{expression}");
+    }
+    let xsd_string = format!(r#"STRLANGDIR("abc"^^<{XSD}string>, "en", "rtl")"#);
+    assert_eq!(
+        select(&xsd_string),
+        Some(tagged("abc", "en", Some(RdfTextDirection::Rtl)))
+    );
+}
+
+#[test]
+fn replace_supplied_flags_must_be_a_bound_simple_literal() {
+    for expression in [
+        r#"REPLACE("abc", "B", "x", ?unbound)"#,
+        r#"REPLACE("abc", "b", "x", ?unbound)"#,
+        r#"REPLACE("abc", "b", "x", 1/0)"#,
+        r#"REPLACE("abc", "b", "x", 1)"#,
+        r#"REPLACE("abc", "B", "x", "i"@en)"#,
+    ] {
+        assert_eq!(select(expression), None, "{expression}");
+    }
+    for (expression, expected) in [
+        (r#"REPLACE("abc", "B", "x")"#, "abc"),
+        (r#"REPLACE("abc", "B", "x", "")"#, "abc"),
+        (r#"REPLACE("abc", "B", "x", "i")"#, "axc"),
+    ] {
+        assert_eq!(select(expression), Some(string(expected)), "{expression}");
+    }
+    for (flags, expected) in [
+        (r#""i""#, Some(string("axc"))),
+        ("1", None),
+        ("UNDEF", None),
+    ] {
+        let query = format!(
+            "SELECT (REPLACE(\"abc\", ?p, \"x\", ?f) AS ?y) \
+             WHERE {{ VALUES (?p ?f) {{ (\"B\" {flags}) }} }}"
+        );
+        assert_eq!(select_over(&empty_dataset(), &query), expected, "{query}");
+    }
+}
+
+#[test]
+fn regex_and_replace_patterns_are_simple_literals() {
+    // The refusals: a tagged pattern or replacement.
+    for expression in [
+        r#"REGEX("abc", "b"@en)"#,
+        r#"REGEX("abc"@en, "b"@en)"#,
+        r#"REGEX("abc", "b"@en--rtl)"#,
+        r#"REPLACE("abc", "b"@en, "x")"#,
+        r#"REPLACE("abc"@en, "b"@en, "x")"#,
+        r#"REPLACE("abc", "b", "x"@en)"#,
+        r#"REPLACE("abc", "b", "x"@en--ltr)"#,
+    ] {
+        assert_eq!(select(expression), None, "{expression}");
+    }
+    // The neighbours: a plain or xsd:string pattern against tagged text.
+    for (expression, expected) in [
+        (r#"REGEX("abc"@en, "b")"#.to_owned(), boolean(true)),
+        (r#"REGEX("abc"@en--rtl, "b")"#.to_owned(), boolean(true)),
+        (
+            format!(r#"REGEX("abc"@en, "b"^^<{XSD}string>)"#),
+            boolean(true),
+        ),
+        (
+            r#"REPLACE("abc"@en--rtl, "b", "x")"#.to_owned(),
+            tagged("axc", "en", Some(RdfTextDirection::Rtl)),
+        ),
+        (
+            format!(r#"REPLACE("abc", "b"^^<{XSD}string>, "x"^^<{XSD}string>)"#),
+            string("axc"),
+        ),
+    ] {
+        assert_eq!(select(&expression), Some(expected), "{expression}");
+    }
+    // The same over values bound per row.
+    for (pattern, expected) in [(r#""b""#, Some(boolean(true))), (r#""b"@en"#, None)] {
+        let query =
+            format!("SELECT (REGEX(\"abc\"@en, ?p) AS ?y) WHERE {{ VALUES ?p {{ {pattern} }} }}");
+        assert_eq!(select_over(&empty_dataset(), &query), expected, "{query}");
+    }
 }

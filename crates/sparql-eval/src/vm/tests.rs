@@ -263,7 +263,8 @@ impl Walker {
                         .string_arg(Some(flags), row, schema, ctx)?
                         .and_then(|(f, lang, _)| lang.is_none().then_some(f)),
                 };
-                let (Some((text, ..)), Some((pattern, ..)), Some(flags)) = (text, pattern, flags)
+                let (Some((text, ..)), Some((pattern, None, _)), Some(flags)) =
+                    (text, pattern, flags)
                 else {
                     return Ok(None);
                 };
@@ -720,7 +721,7 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
     }
     *budget -= 1;
     let sub = |choices: &mut Choices, budget: &mut usize| generate(choices, budget);
-    match choices.next(38) {
+    match choices.next(39) {
         0..=3 => leaf(choices),
         4 => {
             let (a, b) = (sub(choices, budget), sub(choices, budget));
@@ -868,6 +869,33 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
                 Function::StrAfter
             },
             vec![sub(choices, budget), sub(choices, budget)],
+        ),
+        36 => {
+            // A pattern, replacement and flags that are constants (linked once) or
+            // computed: tagged, unbound, an error or not a string in some rows.
+            let constant_or_computed = |choices: &mut Choices, budget: &mut usize, text: &str| {
+                if choices.next(2) == 0 {
+                    Expression::Literal(Literal::new_simple(text))
+                } else {
+                    sub(choices, budget)
+                }
+            };
+            let text = sub(choices, budget);
+            let pattern = constant_or_computed(choices, budget, "a");
+            let replacement = constant_or_computed(choices, budget, "x");
+            let mut args = vec![text, pattern, replacement];
+            if choices.next(2) == 0 {
+                args.push(constant_or_computed(choices, budget, "i"));
+            }
+            call(Function::Replace, args)
+        }
+        37 => call(
+            if choices.next(2) == 0 {
+                Function::UCase
+            } else {
+                Function::LCase
+            },
+            vec![sub(choices, budget)],
         ),
         _ => call(Function::IsLiteral, vec![sub(choices, budget)]),
     }

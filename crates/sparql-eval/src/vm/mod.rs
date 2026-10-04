@@ -594,13 +594,15 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 Op::Regex { slot, flags } => {
                     // Omitted flags are no flags. Supplied flags are a simple literal
                     // (§17.4.3.14); unbound, an error, any other term or a tagged
-                    // string is an error, never "no flags".
+                    // string is an error, never "no flags". The stack holds the
+                    // operands text, pattern, flags, so they pop in reverse.
                     let flags = if flags {
                         pop_str(stack, &program.strs)?.filter(|f| f.1.is_none())
                     } else {
                         Some(std::borrow::Cow::Borrowed(&NO_FLAGS))
                     };
-                    let pattern = pop_str(stack, &program.strs)?;
+                    // The pattern is a simple literal too; the text may be any string.
+                    let pattern = pop_str(stack, &program.strs)?.filter(|p| p.1.is_none());
                     let text = pop_str(stack, &program.strs)?;
                     let value = match (text, pattern, flags) {
                         (Some(text), Some(pattern), Some(flags)) => {

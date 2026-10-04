@@ -4792,14 +4792,14 @@ fn string_arg_value_owned(
 }
 
 /// Apply a pure string transform to a single string argument, preserving its
-/// language tag.
+/// language tag and base direction.
 fn map_string<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
     f: impl Fn(&str) -> String,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match string_arg(vals, 0) {
-        Some((s, lang)) => Ok(make_string(ctx, f(&s), lang)?),
+    match string_arg3(vals, 0) {
+        Some((s, lang, dir)) => Ok(make_string_dir(ctx, f(&s), lang, dir)?),
         None => Ok(None),
     }
 }
@@ -4997,6 +4997,11 @@ fn eval_str_before_after<D: DatasetView + Sync>(
 
 /// `REPLACE(str, pattern, replacement[, flags])` via the regex engine.
 ///
+/// The text is any string literal, and the result keeps its language tag and base
+/// direction. The pattern, the replacement and the flags are simple literals
+/// (§17.4.3.15): a tagged one is an error, and so is a supplied flags argument that
+/// is unbound, an error or not a string — only an omitted one means no flags.
+///
 /// `linked` is the pattern the call's constant pattern and flags compiled to at link
 /// time; without one the pattern is compiled (or found) in the per-query cache.
 fn eval_replace<D: DatasetView + Sync>(
@@ -5004,19 +5009,25 @@ fn eval_replace<D: DatasetView + Sync>(
     vals: &[Option<TermValue>],
     linked: Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some((s, lang)) = string_arg(vals, 0) else {
+    let Some((s, lang, dir)) = string_arg3(vals, 0) else {
         return Ok(None);
     };
-    let (Some((pattern, _)), Some((replacement, _))) = (string_arg(vals, 1), string_arg(vals, 2))
+    let (Some(pattern), Some(replacement)) = (plain_string_arg(vals, 1), plain_string_arg(vals, 2))
     else {
         return Ok(None);
     };
+    let flags = match vals.get(3) {
+        None => String::new(),
+        Some(_) => {
+            let Some(flags) = plain_string_arg(vals, 3) else {
+                return Ok(None);
+            };
+            flags
+        }
+    };
     let compiled = match linked {
         Some(compiled) => compiled.clone(),
-        None => {
-            let flags = string_arg(vals, 3).map_or_default(|(f, _)| f);
-            cached_regex(ctx, &pattern, &flags)
-        }
+        None => cached_regex(ctx, &pattern, &flags),
     };
     let Some(compiled) = compiled else {
         return Ok(None);
@@ -5029,7 +5040,7 @@ fn eval_replace<D: DatasetView + Sync>(
         Ok(replaced) => replaced.into_owned(),
         Err(_) => return Ok(None),
     };
-    make_string(ctx, replaced, lang)
+    make_string_dir(ctx, replaced, lang, dir)
 }
 
 /// The compiled pattern for `(pattern, flags)`, from the per-query cache.
@@ -5170,8 +5181,10 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some((lex, _)), Some((lang, _)), Some((dir, _))) = (
-        string_arg(vals, 0),
+    // Like `STRLANG`, the lexical form must carry no tag of its own: re-tagging an
+    // already tagged string would silently discard its language and direction.
+    let (Some(lex), Some((lang, _)), Some((dir, _))) = (
+        plain_string_arg(vals, 0),
         string_arg(vals, 1),
         string_arg(vals, 2),
     ) else {
@@ -6118,8 +6131,8 @@ mod tests {
 
     /// The **three-argument** `REPLACE(text, pattern, replacement)` arity — no
     /// flags argument at all. Every other REPLACE test supplies a PRESENT final
-    /// `lit("")`, so only this shape exercises `eval_replace`'s
-    /// `string_arg(vals, 3)`-absent `unwrap_or_default()` path, and the XPath
+    /// `lit("")`, so only this shape exercises `eval_replace`'s omitted-flags
+    /// path (no fourth value at all, which reads as no flags), and the XPath
     /// replacement syntax (`$2` here) must still resolve there.
     #[test]
     fn replace_three_argument_call_defaults_flags_to_empty() {

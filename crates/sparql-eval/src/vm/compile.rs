@@ -44,7 +44,6 @@ use purrdf_sparql_algebra::{
 
 use crate::DetHashMap;
 
-use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
 use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 use purrdf_xsd::datatype::XSD_STRING;
 
@@ -721,15 +720,12 @@ fn constant_string_arg(expr: Option<&Expression>) -> Option<String> {
     }
 }
 
-/// `REPLACE`'s pattern and flags, when both are string literals (or the flags are
-/// absent): the lexical forms its string-argument reading takes from them.
+/// `REPLACE`'s pattern and flags, when both are simple literals (or the flags are
+/// absent): the lexical forms its string-argument reading takes from them. A tagged
+/// pattern or flags argument is an error the call reports per row, so it links none.
 fn replace_constant(args: &[Expression]) -> Option<(String, String)> {
     let string_literal = |expr: &Expression| match expr {
-        Expression::Literal(lit)
-            if lit.datatype().as_str() == XSD_STRING
-                || lit.datatype().as_str() == RDF_LANG_STRING
-                || lit.datatype().as_str() == RDF_DIR_LANG_STRING =>
-        {
+        Expression::Literal(lit) if lit.datatype().as_str() == XSD_STRING => {
             Some(lit.value().to_owned())
         }
         _ => None,

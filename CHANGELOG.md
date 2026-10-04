@@ -20,8 +20,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   — and, with `STRBEFORE` and `STRAFTER`, treat two RDF 1.2 directional
   strings as compatible only when their language and base direction both
   match; `STRBEFORE` and `STRAFTER` keep the base direction of their result.
-  A `REGEX` flags argument that is supplied but unbound, or is not a simple
-  literal, is an error instead of being read as no flags.
+  `UCASE`, `LCASE` and `REPLACE` keep the base direction of a directional
+  input as well as its language tag. A `REGEX` or `REPLACE` flags argument
+  that is supplied but unbound, or is not a simple literal, is an error
+  instead of being read as no flags; omitted flags still mean none. A
+  language-tagged `REGEX` or `REPLACE` pattern, or `REPLACE` replacement, is
+  an error, as their signatures require simple literals; the text they search
+  may still be any string. `STRLANGDIR`, like `STRLANG`, refuses a lexical
+  form that is already tagged instead of silently replacing its language and
+  direction.
 
 ## [3.0.1] - 2026-10-02
 
