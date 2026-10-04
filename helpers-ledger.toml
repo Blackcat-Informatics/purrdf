@@ -596,6 +596,23 @@ fingerprints = ["rule:hex-digit-radix"]
 names = ['^(hex4|read_hex4|read_code_unit|parse_unicode_escape|escaped_char|unescape_iri|uchar_expanded|decode_uchar|decode_char_ref|hex_scalar)$']
 
 [[job]]
+id = "html-character-reference"
+summary = "Exactly-once HTML character-reference resolution in text and attribute contexts, with complete named data, numeric recovery, typed diagnostics and original UTF-8 scalar contributors"
+home = "purrdf_lex::html::resolve"
+entry_points = ["purrdf_lex::html::resolve_strict", "purrdf_lex::html::Mode", "purrdf_lex::html::Decoded", "purrdf_lex::html::Diagnostic", "purrdf_lex::html::ErrorKind"]
+spec = "WHATWG HTML Standard character-reference submachine at a5e15011a00ddefd648c29e4d27734f3e7ff821f; named data and numeric recovery provenance in crates/lex/data/html/PROVENANCE.md; no document parsing or recursive decoding"
+vectors = ["crates/lex/data/html/entities.json", "crates/lex/data/html/numeric-recovery.json"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^((resolve|decode|unescape)_html(_references)?|html_(resolve|decode|unescape))$']
+
+[[job]]
 id = "grammar-ws"
 summary = "The WS terminal every grammar reader skips and trims: SPACE, TAB, LINE FEED and CARRIAGE RETURN, never FORM FEED"
 home = "purrdf_lex::terminals::skip_ws"

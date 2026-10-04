@@ -19,6 +19,8 @@
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TextError {
+    /// Explicit phonetic-domain or pronunciation refusal.
+    Phonetic(crate::phonetic::PhoneticRefusal),
     /// The caller's configuration is not usable as written — an absent
     /// property-function IRI (PurRDF mints none, so there is nothing to fall
     /// back to), an empty set of indexed predicates, or a predicate that is not
@@ -78,6 +80,7 @@ purrdf_lex::constructors! {
 impl core::fmt::Display for TextError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Phonetic(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
             Self::SourceRead(msg) => write!(f, "text-index source read error: {msg}"),
@@ -88,6 +91,10 @@ impl core::fmt::Display for TextError {
 }
 
 impl std::error::Error for TextError {}
+
+purrdf_lex::variant_from!(TextError {
+    Phonetic(crate::phonetic::PhoneticRefusal),
+});
 
 impl From<TextError> for purrdf_sparql_eval::EvalError {
     /// Reduce a text-index failure to the evaluator's own channel.
@@ -109,6 +116,7 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
     ///   dataset, so neither borrows those labels.
     fn from(err: TextError) -> Self {
         match err {
+            TextError::Phonetic(refusal) => Self::data(refusal.to_string()),
             TextError::Config(msg) => Self::config(msg),
             TextError::Data(msg) => Self::data(msg),
             TextError::SourceRead(msg) => Self::SourceRead(msg),
@@ -161,6 +169,9 @@ mod tests {
         ] {
             let rendered = err.to_string();
             let detail = match &err {
+                TextError::Phonetic(_) => {
+                    unreachable!("test uses string diagnostic variants")
+                }
                 TextError::Config(m)
                 | TextError::SourceRead(m)
                 | TextError::Data(m)

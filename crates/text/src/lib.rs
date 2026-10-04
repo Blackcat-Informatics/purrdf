@@ -70,9 +70,13 @@ mod analysis;
 mod error;
 mod fixed;
 mod index;
+/// Native Double Metaphone and bounded scalar edit distance.
+pub mod phonetic;
 mod ranking;
 mod relation;
 mod score;
+/// Independently implemented English stemming over the declared Latin domain.
+pub mod stem;
 mod term_bytes;
 pub mod unicode;
 mod unicode_tables;

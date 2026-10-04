@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+statement = "First-party scalar implementation independently derived from the English Snowball 3.1.0 prose specification. No upstream implementation code is incorporated. The unchanged BSD-3-Clause corpus supplies independent answers, with one explicitly tested no-Latin profile divergence."
+
+[module]
+paths = ["../../src/stem.rs"]
+
+[[sources]]
+kind = "spec"
+id = "https://snowballstem.org/algorithms/english/stemmer.html"
+sections = ["Definition of the English stemmer", "Exceptional forms in the English stemmer"]
+
+[[oracles]]
+kind = "official-corpus"
+path_or_id = "https://github.com/snowballstem/snowball-data/tree/a0ec0d0a2839ec885878868de20fcb63209d92b0/english"
