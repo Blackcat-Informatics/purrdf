@@ -456,9 +456,11 @@ fn split_tz(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(String, Option<i
     if let Some(body) = s.strip_suffix('Z') {
         return Ok((body.to_string(), Some(0)));
     }
-    // A tz sign is the last '+' or '-' AND must look like "±hh:mm" (len 6).
-    if s.len() >= 6 {
-        let tail = &s[s.len() - 6..];
+    // A tz sign is the last '+' or '-' AND must look like "±hh:mm" (len 6). The
+    // split is checked, so an offset inside a multi-byte character is no
+    // timezone and the body's own parse refuses the lexical. Past that split,
+    // the ASCII sign and ':' make every field slice below a char boundary.
+    if let Some((body, tail)) = s.len().checked_sub(6).and_then(|at| s.split_at_checked(at)) {
         let sign = tail.as_bytes()[0];
         if (sign == b'+' || sign == b'-') && tail.as_bytes()[3] == b':' {
             // `i32::from_str` also takes a sign, so "+-1:00" would read an hour
@@ -486,7 +488,7 @@ fn split_tz(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(String, Option<i
             if off.abs() > MAX_TZ_MIN {
                 return Err(XsdError::invalid(dt, lexical, "timezone exceeds ±14:00"));
             }
-            return Ok((s[..s.len() - 6].to_string(), Some(off)));
+            return Ok((body.to_string(), Some(off)));
         }
     }
     Ok((s.to_string(), None))
@@ -3473,6 +3475,66 @@ mod tests {
             "00:00:00Z",
         ] {
             assert!(parse_time(lexical).is_ok(), "{lexical}");
+        }
+    }
+
+    /// The timezone suffix is read off the last six bytes; when that offset falls
+    /// inside a multi-byte character the lexical is refused, not a panic. The
+    /// neighbouring ASCII forms with and without a timezone still parse.
+    #[test]
+    fn a_timezone_offset_inside_a_multibyte_character_is_refused_not_a_panic() {
+        let refused = |result: Result<(), XsdError>, lexical: &str| {
+            assert!(
+                matches!(result, Err(XsdError::InvalidLexical { .. })),
+                "{lexical}: {result:?}"
+            );
+        };
+        for lexical in [
+            "xé12345",
+            "2001-01-01€12345",
+            "2001-01-01é1234",
+            "2001-01-01+é:00",
+        ] {
+            refused(parse_date(lexical).map(drop), lexical);
+        }
+        for lexical in ["01:00:00é12345", "01:00:00€12345"] {
+            refused(parse_time(lexical).map(drop), lexical);
+        }
+        for lexical in ["2001-01-01T01:00:00é12345", "2001-01-01T01:00:00€12345"] {
+            refused(parse_datetime(lexical).map(drop), lexical);
+        }
+        for (datatype, lexical) in [
+            (XsdDatatype::GYear, "2001é12345"),
+            (XsdDatatype::GYearMonth, "2001-01€12345"),
+            (XsdDatatype::GMonth, "--01é1234"),
+            (XsdDatatype::GDay, "---01€12345"),
+            (XsdDatatype::GMonthDay, "--01-01é12345"),
+        ] {
+            refused(parse_gregorian(datatype, lexical).map(drop), lexical);
+        }
+        // The neighbouring valid forms still parse, with the timezone they spell.
+        for (lexical, tz) in [
+            ("2001-01-01+05:00", Some(300)),
+            ("2001-01-01-14:00", Some(-840)),
+            ("2001-01-01Z", Some(0)),
+            ("2001-01-01", None),
+        ] {
+            assert_eq!(parse_date(lexical).map(|date| date.tz), Ok(tz), "{lexical}");
+        }
+        for lexical in ["01:00:00+05:00", "01:00:00Z", "01:00:00"] {
+            assert!(parse_time(lexical).is_ok(), "{lexical}");
+        }
+        for lexical in ["2001-01-01T01:00:00+05:00", "2001-01-01T01:00:00"] {
+            assert!(parse_datetime(lexical).is_ok(), "{lexical}");
+        }
+        for (datatype, lexical) in [
+            (XsdDatatype::GYear, "2001+05:00"),
+            (XsdDatatype::GYearMonth, "2001-01"),
+            (XsdDatatype::GMonth, "--01Z"),
+            (XsdDatatype::GDay, "---01-05:00"),
+            (XsdDatatype::GMonthDay, "--01-01"),
+        ] {
+            assert!(parse_gregorian(datatype, lexical).is_ok(), "{lexical}");
         }
     }
 
