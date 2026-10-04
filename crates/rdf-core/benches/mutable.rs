@@ -260,9 +260,9 @@ fn build_graph_base() -> Arc<RdfDataset> {
 /// Snapshot publication and `GRAPH ?g` enumeration after removals spread over many
 /// named graphs: the first `REMOVES` base quads, which empties `REMOVES / (BASE_QUADS
 /// / GRAPHS)` graphs whole and leaves the rest partly populated, plus the withdrawal of
-/// half the declared empty graphs. Publication probes each graph the mutation touched
-/// for a surviving row, so this measures that probe against the enumeration it gates.
-/// Report-only.
+/// half the declared empty graphs. The mutation keeps each touched graph's live row
+/// count, so publication shares the set of emptied graphs instead of probing the
+/// base; this lane and the two below measure that it stays so. Report-only.
 fn bench_snapshot_graphs(c: &mut Bench) {
     let base = build_graph_base();
     let mut cow = MutableDataset::new(Arc::clone(&base));
@@ -278,16 +278,92 @@ fn bench_snapshot_graphs(c: &mut Bench) {
         cow.withdraw_graph_declaration(&iri(&format!("empty{n}")));
     }
 
+    let annotated = annotated_after_small_drop();
+    let dropped = after_large_drop();
+
     let mut group = c.benchmark_group("mut_snapshot_graphs");
-    group.bench_function("snapshot_and_enumerate", |b| {
-        b.iter(|| {
-            let view = cow
-                .snapshot_view()
-                .expect("mutated bench fixture publishes");
-            std::hint::black_box(view.named_graphs().count())
+    for (name, mutation) in [
+        ("snapshot_and_enumerate", &cow),
+        ("annotated_base_small_drop", &annotated),
+        ("large_drop_repeated", &dropped),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let view = mutation
+                    .snapshot_view()
+                    .expect("mutated bench fixture publishes");
+                std::hint::black_box(view.named_graphs().count())
+            });
         });
-    });
+    }
     group.finish();
+}
+
+/// Statements in the annotated base: each a reified, annotated triple in `other`.
+const STATEMENTS: u32 = 100_000;
+/// Quads in the large graph a DROP removes.
+const LARGE_GRAPH: u32 = 100_000;
+
+/// Lane (i): a base of `STATEMENTS` reified and annotated statements in the graph
+/// `other`, plus a one-quad graph `small`, after `DROP GRAPH small` (its quad
+/// removed and its declaration withdrawn). A snapshot's graph enumeration must cost
+/// nothing proportional to the untouched statement tables.
+fn annotated_after_small_drop() -> MutableDataset {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    let note = b.intern_iri("http://example.org/note");
+    let other = b.intern_iri("http://example.org/other");
+    let small = b.intern_iri("http://example.org/small");
+    for n in 0..STATEMENTS {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let o = b.intern_iri(&format!("http://example.org/o{n}"));
+        let r = b.intern_iri(&format!("http://example.org/r{n}"));
+        b.push_quad(s, p, o, Some(other));
+        let triple = b.intern_triple(s, p, o);
+        b.push_reifier_in_graph(r, triple, Some(other));
+        b.push_annotation_in_graph(r, note, o, Some(other));
+    }
+    let s = b.intern_iri("http://example.org/s0");
+    let o = b.intern_iri("http://example.org/o0");
+    b.push_quad(s, p, o, Some(small));
+    let mut cow = MutableDataset::new(b.freeze().expect("annotated base freezes"));
+    cow.remove(&QuadValues::quad(
+        iri("s0"),
+        iri("p"),
+        iri("o0"),
+        iri("small"),
+    ));
+    cow.withdraw_graph_declaration(&iri("small"));
+    cow
+}
+
+/// Lane (ii): a base whose graph `big` holds `LARGE_GRAPH` quads, after `DROP GRAPH
+/// big` removed every one of them. Repeated snapshots must not re-walk the dropped
+/// run.
+fn after_large_drop() -> MutableDataset {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    let big = b.intern_iri("http://example.org/big");
+    let other = b.intern_iri("http://example.org/other");
+    for n in 0..LARGE_GRAPH {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let o = b.intern_iri(&format!("http://example.org/o{n}"));
+        b.push_quad(s, p, o, Some(big));
+    }
+    let s = b.intern_iri("http://example.org/s0");
+    let o = b.intern_iri("http://example.org/o0");
+    b.push_quad(s, p, o, Some(other));
+    let mut cow = MutableDataset::new(b.freeze().expect("large base freezes"));
+    for n in 0..LARGE_GRAPH {
+        cow.remove(&QuadValues::quad(
+            iri(&format!("s{n}")),
+            iri("p"),
+            iri(&format!("o{n}")),
+            iri("big"),
+        ));
+    }
+    cow.withdraw_graph_declaration(&iri("big"));
+    cow
 }
 
 /// Print the relative head-to-head context once: how many quads each store holds, so

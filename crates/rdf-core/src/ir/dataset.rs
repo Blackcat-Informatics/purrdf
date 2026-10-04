@@ -355,6 +355,11 @@ pub struct RdfDataset {
     /// dataset-local `TermId`s (C0.8: never serialized, never read by a
     /// writer).
     predecessor_index: OnceLock<PredecessorIndex>,
+    /// Lazy count of statement rows (reifier bindings plus annotations) per named
+    /// graph, backing [`RdfDataset::named_graph_row_count`]. DERIVED,
+    /// NON-SERIALIZED: a pure function of the frozen statement tables, built by
+    /// one pass on first use and read only by dataset-local `TermId`s.
+    statement_graph_rows: OnceLock<HashMap<TermId, usize, FastHasher>>,
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
@@ -822,6 +827,7 @@ impl RdfDataset {
             content_scheme,
             derivation_predicate,
             predecessor_index: OnceLock::new(),
+            statement_graph_rows: OnceLock::new(),
         }
     }
 
@@ -831,9 +837,36 @@ impl RdfDataset {
         self.named_graphs.iter().copied()
     }
 
-    /// Whether `graph` is one of [`Self::named_graphs`] (a binary search).
-    pub(crate) fn has_named_graph(&self, graph: TermId) -> bool {
-        self.named_graphs.binary_search(&graph).is_ok()
+    /// The number of RDF rows in the named graph `graph`: its quads, reifier
+    /// bindings and annotations. The quads are counted by the bounds of the graph's
+    /// run in the graph-leading index; the statement rows come from a per-graph
+    /// histogram of the statement tables, built by one pass on first use (and never
+    /// when the dataset has no statement rows).
+    pub(crate) fn named_graph_row_count(&self, graph: TermId) -> usize {
+        let g = GraphMatch::Named(graph);
+        let plan = Self::probe_plan(false, false, false, g);
+        let (_, lo, hi) = self.candidate_run(&plan, None, None, None, g);
+        let statements = if self.reifiers.is_empty() && self.annotations.is_empty() {
+            0
+        } else {
+            self.statement_graph_rows
+                .get_or_init(|| {
+                    let mut rows: HashMap<TermId, usize, FastHasher> = HashMap::default();
+                    let graphs = self
+                        .reifiers
+                        .iter()
+                        .map(|&(_, _, g)| g)
+                        .chain(self.annotations.iter().map(|&(_, _, _, g)| g));
+                    for graph in graphs.flatten() {
+                        *rows.entry(graph).or_default() += 1;
+                    }
+                    rows
+                })
+                .get(&graph)
+                .copied()
+                .unwrap_or(0)
+        };
+        hi - lo + statements
     }
 
     /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
@@ -1899,6 +1932,7 @@ impl RdfDataset {
             content_scheme: self.content_scheme.clone(),
             derivation_predicate: self.derivation_predicate,
             predecessor_index: OnceLock::new(),
+            statement_graph_rows: OnceLock::new(),
         }
     }
 

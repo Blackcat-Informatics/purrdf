@@ -210,11 +210,18 @@ pub struct MutableDataset {
     /// iterated for order.
     suppressed: FastSet<QuadKey>,
     suppressed_rows: usize,
-    /// Base terms naming a graph the mutation removed a row from or whose
-    /// declaration it withdrew. Publication withholds each one that holds no row
-    /// from named-graph enumeration (see [`DeltaDatasetView`]). Probed and filtered
-    /// only; never iterated for an observable order.
-    emptied_graphs: FastSet<TermId>,
+    /// The live RDF row count — quads, reifier bindings and annotations, base and
+    /// added — of every base graph a mutation has touched. Seeded from the base on
+    /// first touch ([`RdfDataset::named_graph_row_count`]) and kept exact in O(1) by
+    /// every insert, removal, suppression and un-suppression after it.
+    graph_rows: FastMap<TermId, usize>,
+    /// Base graphs a mutation emptied — removed their last row, or withdrew their
+    /// declaration while they held none — and that hold no row now. Publication
+    /// shares it with each snapshot, which withholds these graphs from named-graph
+    /// enumeration (see [`DeltaDatasetView`]). Kept current by the row counts, so
+    /// publication never scans for it; copied only when it changes after a
+    /// snapshot took it. Probed only; never iterated for an observable order.
+    withdrawn_graphs: Arc<FastSet<TermId>>,
     work: super::view_accounting::WorkCounter,
 }
 
@@ -231,7 +238,8 @@ impl MutableDataset {
             next_added_ord: 0,
             suppressed: FastSet::default(),
             suppressed_rows: 0,
-            emptied_graphs: FastSet::default(),
+            graph_rows: FastMap::default(),
+            withdrawn_graphs: Arc::default(),
             work: super::view_accounting::WorkCounter::default(),
         }
     }
@@ -459,15 +467,31 @@ impl MutableDataset {
     /// Insert an effective quad (the four rules, insert side). Returns `true` if the
     /// effective set changed.
     fn insert_key(&mut self, key: QuadKey) -> bool {
+        let rows = self.insert_rows(key);
+        if rows > 0
+            && let Some(MutTermId::Base(graph)) = key.g
+        {
+            let live = self.graph_rows_of(graph);
+            *live += rows;
+            if *live == rows && self.withdrawn_graphs.contains(&graph) {
+                Arc::make_mut(&mut self.withdrawn_graphs).remove(&graph);
+            }
+        }
+        rows > 0
+    }
+
+    /// The insert side of the four rules; the number of RDF rows it made effective.
+    fn insert_rows(&mut self, key: QuadKey) -> usize {
         // Rule 1: inserting a currently-suppressed base quad un-suppresses it (and
         // does NOT also push to `added`).
         if self.suppressed.remove(&key) {
-            self.suppressed_rows -= self.base_occurrences(&key);
-            return true;
+            let occurrences = self.base_occurrences(&key);
+            self.suppressed_rows -= occurrences;
+            return occurrences;
         }
         // Already effective (present in base-and-not-suppressed, or already added)?
         if self.contains_key(&key) {
-            return false;
+            return 0;
         }
         let inserted = self.added.insert(key);
         if inserted {
@@ -477,36 +501,52 @@ impl MutableDataset {
             self.added_ord.insert(key, self.next_added_ord);
             self.next_added_ord += 1;
         }
-        inserted
+        usize::from(inserted)
     }
 
     /// Remove an effective quad (the four rules, remove side). Returns `true` if the
     /// effective set changed.
     fn remove_key(&mut self, key: QuadKey) -> bool {
-        let removed = self.remove_row(key);
-        // A removal may leave a base graph without a row; publication decides.
-        if removed && let Some(MutTermId::Base(graph)) = key.g {
-            self.emptied_graphs.insert(graph);
+        let rows = self.remove_rows(key);
+        if rows > 0
+            && let Some(MutTermId::Base(graph)) = key.g
+        {
+            let live = self.graph_rows_of(graph);
+            *live -= rows;
+            if *live == 0 {
+                Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
+            }
         }
-        removed
+        rows > 0
     }
 
-    fn remove_row(&mut self, key: QuadKey) -> bool {
+    /// The remove side of the four rules; the number of RDF rows it took away.
+    fn remove_rows(&mut self, key: QuadKey) -> usize {
         // Rule 2: removing a delta-added quad drops it from `added` (no suppression).
         if self.added.remove(&key) {
             // Drop the matching ordinal too — a later reinsert of the SAME key mints a
             // fresh (later) ordinal, so it replays at its new position, not its stale one.
             self.added_ord.remove(&key);
-            return true;
+            return 1;
         }
         // Rule 3: removing a base quad (not in `added`) creates a suppression — but
         // only if it is actually an effective base quad and not already suppressed.
         let occurrences = self.base_occurrences(&key);
         if occurrences > 0 && self.suppressed.insert(key) {
             self.suppressed_rows += occurrences;
-            return true;
+            return occurrences;
         }
-        false
+        0
+    }
+
+    /// The live row count of the base graph `graph`, seeded from the base on first
+    /// touch. Every mutation in a base graph passes through here, so a graph not yet
+    /// in the map has never been mutated and its base count is its live count.
+    fn graph_rows_of(&mut self, graph: TermId) -> &mut usize {
+        let base = &self.base;
+        self.graph_rows
+            .entry(graph)
+            .or_insert_with(|| base.named_graph_row_count(graph))
     }
 
     /// Whether a [`QuadKey`] is in the effective set: `(base ∪ added) − suppressed`.
@@ -568,14 +608,23 @@ impl MutableDataset {
     /// back, and a graph the base never named is a no-op.
     pub fn withdraw_graph_declaration(&mut self, graph: &TermValue) {
         if let Some(id) = self.base.term_id_by_value(graph) {
-            self.emptied_graphs.insert(id);
+            self.withdraw_base_graph(id);
         }
     }
 
     /// [`Self::withdraw_graph_declaration`] for every named graph of the base —
     /// `DROP NAMED` / `DROP ALL` of a dataset with declared empty graphs.
     pub fn withdraw_named_graph_declarations(&mut self) {
-        self.emptied_graphs.extend(self.base.named_graphs());
+        let base = Arc::clone(&self.base);
+        for graph in base.named_graphs() {
+            self.withdraw_base_graph(graph);
+        }
+    }
+
+    fn withdraw_base_graph(&mut self, graph: TermId) {
+        if *self.graph_rows_of(graph) == 0 && !self.withdrawn_graphs.contains(&graph) {
+            Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
+        }
     }
 
     /// The number of quads added on top of the base (delta size).
@@ -741,7 +790,7 @@ impl MutableDataset {
             Arc::clone(&self.base),
             delta,
             suppressed,
-            &self.emptied_graphs,
+            Arc::clone(&self.withdrawn_graphs),
             limits,
         )?;
         self.work.add(super::view_accounting::ViewWork {
@@ -1837,6 +1886,73 @@ mod tests {
         assert_eq!(graph_names(&m), ["one", "stmt", "two"]);
         // The default graph is not a named graph and is untouched.
         assert_eq!(m.freeze().expect("freeze").quad_count(), 4);
+    }
+
+    // Named-graph existence against a full-scan oracle: random inserts, removals and
+    // withdrawals over a base with quads, reifier bindings, annotations and a declared
+    // empty graph. A graph is enumerated iff it holds an effective row, or it is a base
+    // graph the model has not seen emptied since its last row (or withdrawn while
+    // empty).
+    prop_test! {
+        #[test]
+        fn property_graph_enumeration_matches_a_full_scan(
+            ops in prop::collection::vec((0u8..3, 0u8..4, 0u8..4), 0..40)
+        ) {
+            const GRAPHS: [&str; 4] = ["empty", "one", "two", "stmt"];
+            let base = graph_base();
+            let base_graphs: std::collections::BTreeSet<String> = GRAPHS
+                .iter()
+                .map(|g| (*g).to_owned())
+                .collect();
+            let mut m = MutableDataset::new(base);
+            let mut emptied = std::collections::BTreeSet::<String>::new();
+            let local = |v: &TermValue| match v {
+                TermValue::Iri(iri) => iri.trim_start_matches("http://example.org/").to_owned(),
+                other => panic!("graph names here are IRIs, not {other:?}"),
+            };
+            for (kind, row, graph) in ops {
+                let g = GRAPHS[usize::from(graph)];
+                let quad = match row {
+                    0 => in_graph("a", "c", g),
+                    1 => in_graph("a", "d", g),
+                    2 => reifier_in(g),
+                    // In `stmt` this row is an annotation of the base reifier `r`.
+                    _ => in_graph("r", "c", g),
+                };
+                let holds = |m: &MutableDataset| {
+                    m.effective_value_quads()
+                        .iter()
+                        .any(|q| q.g.as_ref().map(local).as_deref() == Some(g))
+                };
+                match kind {
+                    0 => {
+                        if ins(&mut m, quad) {
+                            emptied.remove(g);
+                        }
+                    }
+                    1 => {
+                        if m.remove(&quad) && !holds(&m) {
+                            emptied.insert(g.to_owned());
+                        }
+                    }
+                    _ => {
+                        m.withdraw_graph_declaration(&iri_val(g));
+                        if !holds(&m) {
+                            emptied.insert(g.to_owned());
+                        }
+                    }
+                }
+                let mut expected: std::collections::BTreeSet<String> = m
+                    .effective_value_quads()
+                    .iter()
+                    .filter_map(|q| q.g.as_ref().map(local))
+                    .collect();
+                expected.extend(base_graphs.difference(&emptied).cloned());
+                let actual: std::collections::BTreeSet<String> =
+                    graph_names(&m).into_iter().collect();
+                prop_assert_eq!(actual, expected);
+            }
+        }
     }
 
     // -- differential property test --------------------------------------------------
