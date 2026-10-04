@@ -4334,8 +4334,10 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
 /// Numeric→numeric casts are value-space, not lexical-space (SPARQL 1.1 §17.1 / the
 /// XPath casting rules): `xsd:decimal("5.355e1"^^xsd:double)` is the decimal value
 /// `53.55`, NOT a re-parse of the scientific-notation lexical (which is not a valid
-/// `xsd:decimal` lexical). The direct lexical parse handles same-representation casts
-/// (and string/boolean/temporal targets); when it fails, a numeric-or-boolean source is
+/// `xsd:decimal` lexical). Calendar→calendar casts preserve the parsed value's
+/// components and timezone through [`purrdf_xsd::temporal::cast_calendar`]. The
+/// direct lexical parse handles string constructors and other same-representation
+/// casts; when it fails, a numeric-or-boolean source is
 /// cast by VALUE through [`cast_numeric_value`] (this also covers `xsd:boolean` as
 /// EITHER the source or the target of a numeric cast, per XPath's boolean/numeric
 /// casting rules).
@@ -4369,13 +4371,42 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     if !cast_source_admitted(source, target) {
         return Ok(None);
     }
-    if let ValueCast::Cast(cast) = cast_temporal_or_binary(source, target) {
-        return cast.map(|value| xsd_to_term(ctx, &value)).transpose();
-    }
-    let lexical = match source {
-        TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
+    let (lexical, source_datatype) = match source {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            ..
+        } => (lexical_form.clone(), XsdDatatype::from_iri(datatype)),
         _ => return Ok(None),
     };
+    // Calendar constructors cast a parsed source value, never its spelling.
+    // Parsing the declared source first also refuses ill-typed calendar literals.
+    if target.is_calendar() {
+        let Some(source_datatype) = source_datatype else {
+            return Ok(None);
+        };
+        if source_datatype.is_calendar() {
+            let Some(value) = parse_xsd10(&lexical, source_datatype)
+                .ok()
+                .and_then(|value| {
+                    purrdf_xsd::temporal::cast_calendar(&value, target)
+                        .ok()
+                        .flatten()
+                })
+            else {
+                return Ok(None);
+            };
+            return Ok(Some(xsd_to_term(ctx, &value)?));
+        }
+        // Numeric, boolean, duration and binary values cannot become calendar
+        // values just because their lexical form also spells a calendar value.
+        if source_datatype != XsdDatatype::String {
+            return Ok(None);
+        }
+    }
+    if let ValueCast::Cast(cast) = cast_duration_or_binary(source, target) {
+        return cast.map(|value| xsd_to_term(ctx, &value)).transpose();
+    }
     // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
     if let Ok(value) = parse_xsd10(&lexical, target) {
         return Ok(Some(xsd_to_term(ctx, &value)?));
@@ -4387,38 +4418,36 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     Ok(Some(xsd_to_term(ctx, &value)?))
 }
 
-/// What [`cast_temporal_or_binary`] decided.
+/// What [`cast_duration_or_binary`] decided.
 enum ValueCast {
-    /// The source is not a date/time, duration, Gregorian or binary literal.
+    /// The source is not a calendar, duration or binary literal.
     NotApplicable,
     /// The cast's value, or `None` for a cast error.
     Cast(Option<XsdValue>),
 }
 
-/// The cast of a date/time, duration, Gregorian or binary literal, by VALUE (XPath
-/// F&O 3.1 §19.1–§19.3), or [`ValueCast::NotApplicable`] when `source` is not one —
-/// the caller's lexical and numeric paths then decide.
+/// The cast of a calendar, duration or binary literal to a target other than a
+/// calendar type or `xsd:string`, by VALUE (XPath F&O 3.1 §19.1–§19.3), or
+/// [`ValueCast::NotApplicable`] when `source` is not one — the caller's lexical and
+/// numeric paths then decide. Calendar targets are
+/// [`purrdf_xsd::temporal::cast_calendar`]'s, decided before this runs.
 ///
-/// Such a source is never re-parsed by its lexical form under the target: the two
-/// value spaces can share a spelling that means different values (`"abcd"` is both
-/// base64Binary and hexBinary, for three bytes and two), or a spelling the table
-/// forbids (`"2020"^^xsd:hexBinary` is not a gYear). Instead, `Cast(Some(v))` is the
-/// target value the table allows, and `Cast(None)` is a cast error: an ill-typed
-/// source, or a pair the table marks `N`.
+/// Such a source is never re-parsed by its lexical form under the target: the value
+/// spaces share spellings that mean different values (`"abcd"` is both
+/// base64Binary and hexBinary, for three bytes and two) or that the table forbids
+/// (`"2020"^^xsd:gYear` is not hexBinary). Instead, `Cast(Some(v))` is the target
+/// value the table allows, and `Cast(None)` is a cast error: an ill-typed source,
+/// or a pair the table marks `N`.
 ///
-/// * `xsd:dateTime` to `xsd:date`, `xsd:time` and the five Gregorian types keeps
-///   the components the target has, and the timezone.
-/// * `xsd:date` to `xsd:dateTime` is midnight of that date, with its timezone; to
-///   the Gregorian types it keeps their components and the timezone.
 /// * `xsd:duration` and its two subtypes cast among themselves, a subtype keeping
 ///   only its own component (months, or seconds).
 /// * `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes.
 /// * A value casts to its own datatype unchanged; every other pair is refused.
-fn cast_temporal_or_binary(source: &TermValue, target: XsdDatatype) -> ValueCast {
+fn cast_duration_or_binary(source: &TermValue, target: XsdDatatype) -> ValueCast {
     value_cast(source, target).map_or(ValueCast::NotApplicable, ValueCast::Cast)
 }
 
-/// [`cast_temporal_or_binary`] with `None` for a source it does not apply to.
+/// [`cast_duration_or_binary`] with `None` for a source it does not apply to.
 #[allow(
     clippy::option_option,
     reason = "the outer layer is \"not this family\", the inner one the cast error; the \
@@ -4435,25 +4464,16 @@ fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue
         return None;
     };
     let from = XsdDatatype::from_iri(datatype)?;
-    let is_temporal = |dt: XsdDatatype| {
-        matches!(
-            dt,
-            T::Date
-                | T::Time
-                | T::DateTime
-                | T::Duration
+    let in_family = from.is_calendar()
+        || matches!(
+            from,
+            T::Duration
                 | T::DayTimeDuration
                 | T::YearMonthDuration
-                | T::GYear
-                | T::GMonth
-                | T::GDay
-                | T::GYearMonth
-                | T::GMonthDay
                 | T::HexBinary
                 | T::Base64Binary
-        )
-    };
-    if !is_temporal(from) || target == T::String {
+        );
+    if !in_family || target == T::String || target.is_calendar() {
         return None;
     }
     let Some(value) = xsd_of(source) else {
@@ -4462,40 +4482,7 @@ fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue
     if from == target {
         return Some(Some(value));
     }
-    let reparse = |lexical: String| parse_xsd10(&lexical, target).ok();
-    let gregorian = |year: &str, month: u8, day: u8, tz: &str| -> Option<String> {
-        Some(match target {
-            T::GYear => format!("{year}{tz}"),
-            T::GYearMonth => format!("{year}-{month:02}{tz}"),
-            T::GMonth => format!("--{month:02}{tz}"),
-            T::GMonthDay => format!("--{month:02}-{day:02}{tz}"),
-            T::GDay => format!("---{day:02}{tz}"),
-            _ => return None,
-        })
-    };
     Some(match &value {
-        XsdValue::DateTime(dt) => {
-            let lexical = dt.canonical_lexical();
-            let (date, rest) = lexical.split_once('T')?;
-            let time_len = rest
-                .find(|c: char| !(c.is_ascii_digit() || c == ':' || c == '.'))
-                .unwrap_or(rest.len());
-            let (time, tz) = rest.split_at(time_len);
-            let (year, month, day, _) = split_canonical_date(date)?;
-            match target {
-                T::Date => reparse(format!("{date}{tz}")),
-                T::Time => reparse(format!("{time}{tz}")),
-                _ => gregorian(year, month, day, tz).and_then(reparse),
-            }
-        }
-        XsdValue::Date(d) => {
-            let lexical = d.canonical_lexical();
-            let (year, month, day, tz) = split_canonical_date(&lexical)?;
-            match target {
-                T::DateTime => reparse(format!("{year}-{month:02}-{day:02}T00:00:00{tz}")),
-                _ => gregorian(year, month, day, tz).and_then(reparse),
-            }
-        }
         XsdValue::Duration(dur) => {
             let zero = || match purrdf_xsd::parse("0", T::Decimal) {
                 Ok(XsdValue::Decimal(zero)) => Some(zero),
@@ -4519,18 +4506,6 @@ fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue
         }
         _ => None,
     })
-}
-
-/// Split a canonical `xsd:date` lexical form — or the date half of a canonical
-/// `xsd:dateTime` — into its signed year digits, month, day and whatever follows
-/// (the timezone, if any). `None` for text that is not one.
-fn split_canonical_date(lexical: &str) -> Option<(&str, u8, u8, &str)> {
-    let digits_from = usize::from(lexical.starts_with('-'));
-    let year_len = digits_from + lexical[digits_from..].find('-')?;
-    let (year, rest) = lexical.split_at(year_len);
-    let month = rest.get(1..3)?.parse().ok()?;
-    let day = rest.get(4..6)?.parse().ok()?;
-    Some((year, month, day, rest.get(6..)?))
 }
 
 /// Whether the casting table (SPARQL §17.5, over XPath F&O §19.1 "Casting from
@@ -7956,6 +7931,91 @@ mod tests {
         }
     }
 
+    #[test]
+    fn calendar_constructor_casts_use_values_and_refuse_invalid_sources() {
+        use XsdDatatype as D;
+        let ds = empty_ds();
+        for (source, lexical, target, expected) in [
+            (
+                D::DateTime,
+                "2026-10-04T12:00:00Z",
+                D::Date,
+                Some("2026-10-04Z"),
+            ),
+            (
+                D::Date,
+                "2026-10-04",
+                D::DateTime,
+                Some("2026-10-04T00:00:00"),
+            ),
+            (
+                D::Date,
+                "2026-10-04+05:30",
+                D::DateTime,
+                Some("2026-10-04T00:00:00+05:30"),
+            ),
+            (
+                D::DateTime,
+                "2024-12-31T24:00:00-05:00",
+                D::Date,
+                Some("2025-01-01-05:00"),
+            ),
+            (
+                D::DateTime,
+                "2026-10-04T12:00:00.125Z",
+                D::Time,
+                Some("12:00:00.125Z"),
+            ),
+            (D::Date, "2026-10-04Z", D::GMonthDay, Some("--10-04Z")),
+            (D::String, "2026-10-04Z", D::Date, Some("2026-10-04Z")),
+            (D::Integer, "2026", D::GYear, None),
+            (D::Boolean, "1", D::GYear, None),
+            (D::HexBinary, "2026", D::GYear, None),
+            (D::Time, "12:00:00Z", D::Date, None),
+            (D::Date, "2026-10-04Z", D::Time, None),
+            (D::GYearMonth, "2026-10Z", D::Date, None),
+            (D::DateTime, "2026-10-04Z", D::Date, None),
+            (D::Date, "2026-10-04T12:00:00Z", D::DateTime, None),
+        ] {
+            let expr = Expression::FunctionCall(
+                Function::Custom(NamedNode::new_unchecked(target.iri())),
+                vec![typed_lit(lexical, source.iri())].into(),
+            );
+            assert_eq!(
+                lex_and_dt(&ds, &expr),
+                expected.map(|value| (value.to_owned(), target.iri().to_owned())),
+                "{source:?} {lexical} → {target:?}"
+            );
+        }
+        let unsupported = Expression::FunctionCall(
+            Function::Custom(NamedNode::new_unchecked(D::Date.iri())),
+            vec![typed_lit(
+                "2026-10-04Z",
+                "http://example.org/custom-calendar",
+            )]
+            .into(),
+        );
+        assert_eq!(lex_and_dt(&ds, &unsupported), None);
+    }
+
+    #[test]
+    fn date_constructor_of_now_keeps_the_fixed_context_date() {
+        let ds = empty_ds();
+        let mut ctx = EvalCtx::new(&ds).with_now(XsdValue::DateTime(
+            purrdf_xsd::datetime_from_unix_seconds(0),
+        ));
+        let expr = Expression::FunctionCall(
+            Function::Custom(NamedNode::new_unchecked(XsdDatatype::Date.iri())),
+            vec![Expression::FunctionCall(Function::Now, vec![].into())].into(),
+        );
+        let term = eval_expr(&expr, &[], &VarSchema::default(), &mut ctx)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            value_of(&ctx, term).unwrap(),
+            typed("1970-01-01Z", XsdDatatype::Date.iri())
+        );
+    }
     #[test]
     fn xsd_float_double_cast_pins_xsd_1_0_positive_infinity() {
         // The operand-mapping rules pin XSD 1.0: `INF` casts, but the XSD 1.1
