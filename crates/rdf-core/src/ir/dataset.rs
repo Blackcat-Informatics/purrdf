@@ -831,6 +831,14 @@ impl RdfDataset {
         self.named_graphs.iter().copied()
     }
 
+    /// Whether `graph` names a named graph of this dataset, quad-bearing or
+    /// explicitly declared empty: exactly whether [`named_graphs`](Self::named_graphs)
+    /// yields it, answered by a binary search of the sorted set.
+    #[must_use]
+    pub fn has_named_graph(&self, graph: TermId) -> bool {
+        self.named_graphs.binary_search(&graph).is_ok()
+    }
+
     /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
     /// This allocates owned strings at the explicit owned-model boundary
     /// used by serializers, the C-ABI (`purrdf-capi`
@@ -1791,17 +1799,10 @@ impl RdfDataset {
             if ds.content_id_scheme() != Some(&winner) {
                 continue;
             }
-            if let Some(id) = ds.derivation_predicate() {
-                let iri = match ds.resolve(id) {
-                    TermRef::Iri(iri) => iri.to_owned(),
-                    other => unreachable!(
-                        "the frozen derivation-predicate TermId must resolve to an IRI, got \
-                         {other:?}"
-                    ),
-                };
-                if !predicates.contains(&iri) {
-                    predicates.push(iri);
-                }
+            if let Some(iri) = ds.derivation_predicate_iri()
+                && !predicates.contains(&iri)
+            {
+                predicates.push(iri);
             }
         }
         let derivation_predicate = match predicates.as_slice() {
@@ -1970,6 +1971,33 @@ impl RdfDataset {
     #[must_use]
     pub fn content_id_scheme(&self) -> Option<&ContentIdScheme> {
         self.content_scheme.as_ref()
+    }
+
+    /// A fresh builder carrying this dataset's caller-supplied configuration — its
+    /// content-id scheme and derivation predicate — for a rebuild of this identity
+    /// space; a plain builder when it has none.
+    ///
+    /// The derivation predicate travels only as far as the frozen dataset kept it:
+    /// one configured but never interned froze to `None` and is not reinstated.
+    pub(crate) fn rebuild_builder(&self) -> super::builder::RdfDatasetBuilder {
+        match self.content_id_scheme() {
+            Some(scheme) => super::builder::RdfDatasetBuilder::with_content_addressing(
+                scheme.clone(),
+                self.derivation_predicate_iri(),
+            ),
+            None => super::builder::RdfDatasetBuilder::new(),
+        }
+    }
+
+    /// The frozen derivation predicate's IRI, the form a builder is configured with.
+    fn derivation_predicate_iri(&self) -> Option<String> {
+        self.derivation_predicate()
+            .map(|id| match self.resolve(id) {
+                TermRef::Iri(iri) => iri.to_owned(),
+                other => unreachable!(
+                    "the frozen derivation-predicate TermId must resolve to an IRI, got {other:?}"
+                ),
+            })
     }
 
     /// The decoded [`Blake3ContentId`] of a content-addressed term, or `None` if

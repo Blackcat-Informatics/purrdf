@@ -609,7 +609,7 @@ impl MutableDataset {
     /// parsed from a source, so they carry no location.
     pub fn freeze(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
         let view = self.snapshot_view()?;
-        let mut builder = RdfDatasetBuilder::new();
+        let mut builder = self.base.rebuild_builder();
         super::import::DatasetImporter::new(&mut builder, &view).append();
         let mut ordinal = 0;
         for (old, quad) in self.base.quads().enumerate() {
@@ -668,7 +668,7 @@ impl MutableDataset {
             .len()
             .saturating_mul(4 * size_of::<super::QuadIds>());
         limits.check(&stats)?;
-        let mut builder = RdfDatasetBuilder::new();
+        let mut builder = self.base.rebuild_builder();
         self.append_delta(&mut builder);
         let delta = builder.freeze()?;
         // A later view-retention refusal does not undo a completed native freeze.
@@ -1067,6 +1067,113 @@ mod tests {
         b.push_reifier(r, triple);
         b.push_annotation(r, conf, score);
         b.freeze().expect("base freezes")
+    }
+
+    /// A base frozen under caller-supplied content addressing: two content-id IRIs
+    /// and a derivation annotation between them.
+    fn content_addressed_base() -> Arc<RdfDataset> {
+        let scheme = crate::ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(
+            scheme,
+            Some("http://example.org/derivedFrom".into()),
+        );
+        let a = b.intern_iri(CONTENT_A);
+        let bb = b.intern_iri(CONTENT_B);
+        let p = b.intern_iri("http://example.org/p");
+        let derived_from = b.intern_iri("http://example.org/derivedFrom");
+        b.push_quad(a, p, bb, None);
+        b.push_annotation(a, derived_from, bb);
+        b.freeze().expect("base freezes")
+    }
+
+    const CONTENT_A: &str =
+        "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CONTENT_B: &str =
+        "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const CONTENT_C: &str =
+        "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    /// The base's content addressing survives `freeze` — after a mutation and for a
+    /// no-op freeze alike — and governs the delta a snapshot freezes: a content-id IRI
+    /// the mutation added is recognized, and the derivation index still resolves.
+    #[test]
+    fn freeze_and_snapshot_keep_the_base_content_addressing() {
+        let base = content_addressed_base();
+        let scheme = base.content_id_scheme().cloned();
+        assert!(
+            scheme.is_some(),
+            "fixture is degenerate — the base is configured"
+        );
+
+        let untouched = MutableDataset::new(Arc::clone(&base));
+        let frozen = untouched.freeze().expect("no-op freeze");
+        assert_eq!(frozen.content_id_scheme(), scheme.as_ref(), "no-op freeze");
+        assert_eq!(frozen.content_ids().count(), 2, "no-op freeze");
+        let a = frozen.term_id_by_iri(CONTENT_A).expect("A survives");
+        let b = frozen.term_id_by_iri(CONTENT_B).expect("B survives");
+        assert_eq!(frozen.predecessors(a), &[b], "no-op freeze");
+
+        let mut mutated = MutableDataset::new(base);
+        ins(
+            &mut mutated,
+            QuadValues {
+                s: TermValue::Iri(CONTENT_C.into()),
+                p: iri_val("p"),
+                o: TermValue::Iri(CONTENT_A.into()),
+                g: None,
+            },
+        );
+        let frozen = mutated.freeze().expect("mutated freeze");
+        assert_eq!(
+            frozen.content_id_scheme(),
+            scheme.as_ref(),
+            "mutated freeze"
+        );
+        assert_eq!(frozen.content_ids().count(), 3, "mutated freeze");
+        let a = frozen.term_id_by_iri(CONTENT_A).expect("A survives");
+        let b = frozen.term_id_by_iri(CONTENT_B).expect("B survives");
+        assert_eq!(frozen.predecessors(a), &[b], "mutated freeze");
+
+        let view = mutated.snapshot_view().expect("snapshot");
+        assert_eq!(
+            view.delta().content_id_scheme(),
+            scheme.as_ref(),
+            "snapshot"
+        );
+        let c = view
+            .delta()
+            .term_id_by_iri(CONTENT_C)
+            .expect("C is a delta term");
+        assert!(
+            view.delta().content_id(c).is_some(),
+            "snapshot recognizes C"
+        );
+    }
+
+    /// The neighbouring case: a base with no content addressing freezes and
+    /// snapshots with none, rather than gaining a fabricated scheme.
+    #[test]
+    fn freeze_and_snapshot_of_an_unconfigured_base_stay_unconfigured() {
+        let mut m = MutableDataset::new(base3());
+        ins(
+            &mut m,
+            QuadValues {
+                s: TermValue::Iri(CONTENT_C.into()),
+                p: iri_val("p"),
+                o: iri_val("a"),
+                g: None,
+            },
+        );
+        let frozen = m.freeze().expect("freeze");
+        assert!(frozen.content_id_scheme().is_none());
+        assert_eq!(frozen.content_ids().count(), 0);
+        assert!(
+            m.snapshot_view()
+                .expect("snapshot")
+                .delta()
+                .content_id_scheme()
+                .is_none()
+        );
     }
 
     /// The effective value-quad set as a comparable `BTreeSet` of stringy tuples.
