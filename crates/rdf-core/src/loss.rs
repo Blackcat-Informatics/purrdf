@@ -768,6 +768,8 @@ const SYNTAX_CODECS: &[&str] = &[
     "gts",
     "owl-rdf12",
     "hextuples",
+    "trix",
+    "pack",
 ];
 
 /// Projection codecs: lossy targets that select a semantic subset of the
@@ -800,7 +802,8 @@ pub fn canonical_codec_name(name: &str) -> &'static str {
 /// Panics on unknown codec name.
 pub fn supports_quads(name: &str) -> bool {
     match canonical_codec_name(name) {
-        "nquads" | "trig" | "jsonld" | "jsonld-star" | "yaml-ld-star" | "gts" | "hextuples" => true,
+        "nquads" | "trig" | "jsonld" | "jsonld-star" | "yaml-ld-star" | "gts" | "hextuples"
+        | "trix" | "pack" => true,
         "turtle" | "ntriples" | "rdfxml" | "owl-rdf12" => false,
         // Projection codecs do not carry named graphs.
         "owl-dl" | "owl-el" | "datalog" | "n3" | "nemo" | "gufo" | "canonical-rdf12" => false,
@@ -814,8 +817,8 @@ pub fn supports_quads(name: &str) -> bool {
 pub fn supports_stars(name: &str) -> bool {
     match canonical_codec_name(name) {
         "turtle" | "ntriples" | "nquads" | "trig" | "jsonld-star" | "yaml-ld-star" | "gts"
-        | "owl-rdf12" => true,
-        "jsonld" | "rdfxml" | "hextuples" => false,
+        | "owl-rdf12" | "pack" => true,
+        "jsonld" | "rdfxml" | "hextuples" | "trix" => false,
         // Projection codecs do not carry star syntax.
         "owl-dl" | "owl-el" | "datalog" | "n3" | "nemo" | "gufo" | "canonical-rdf12" => false,
         _ => unreachable!(),
@@ -848,7 +851,8 @@ const NAMED_GRAPH_DROPPED_NOTE: &str = "The target syntax has no named-graph con
      survives. The quads are NOT folded into the default graph.";
 
 /// `true` when the syntax codec can write a named graph that holds no row: TriG's
-/// `<g> { }` and the JSON-LD family's `{"@id": g, "@graph": []}`. N-Quads names a graph
+/// `<g> { }`, the JSON-LD family's `{"@id": g, "@graph": []}`, TriX's empty
+/// `<graph>` element and a PACK's zero-row named partition. N-Quads names a graph
 /// only on a row, the single-graph syntaxes have no graph construct, and the frozen GTS
 /// payload has no declarations slot.
 ///
@@ -856,7 +860,7 @@ const NAMED_GRAPH_DROPPED_NOTE: &str = "The target syntax has no named-graph con
 fn carries_empty_named_graphs(name: &str) -> bool {
     matches!(
         canonical_codec_name(name),
-        "trig" | "jsonld" | "jsonld-star" | "yaml-ld-star"
+        "trig" | "jsonld" | "jsonld-star" | "yaml-ld-star" | "trix" | "pack"
     )
 }
 
@@ -983,6 +987,11 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
                 "hextuples" => entry(
                     "rdf12-star-unrepresentable",
                     "HexTuples has no triple-term (RDF-1.2 quoted triple) column; reifying \
+                     triples and their annotations are dropped.",
+                ),
+                "trix" => entry(
+                    "rdf12-star-unrepresentable",
+                    "TriX has no triple-term (RDF-1.2 quoted triple) element; reifying \
                      triples and their annotations are dropped.",
                 ),
                 "jsonld" => entry(

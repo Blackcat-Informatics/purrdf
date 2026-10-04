@@ -97,7 +97,7 @@ pub(crate) struct FormatDescriptor {
     /// `@context.@base`), i.e. whether its serializer can relativize.
     pub emits_base: bool,
     /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` for formats
-    /// that carry no loss-ledger codec identity (TriX).
+    /// that carry no loss-ledger codec identity (none today).
     pub loss_codec_name: Option<&'static str>,
 }
 
@@ -202,7 +202,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         tokenizer_carries_spans: false,
         admits_relative_iri: false,
         emits_base: false,
-        loss_codec_name: None,
+        loss_codec_name: Some("trix"),
     },
     FormatDescriptor {
         format: NativeRdfFormat::HexTuples,
@@ -373,7 +373,7 @@ impl NativeRdfFormat {
     }
 
     /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` when this format
-    /// carries no loss-ledger codec identity (TriX).
+    /// carries no loss-ledger codec identity (none today).
     pub fn loss_codec_name(self) -> Option<&'static str> {
         descriptor(self).loss_codec_name
     }

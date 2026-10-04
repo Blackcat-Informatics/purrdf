@@ -640,12 +640,12 @@ mod tests {
                 None => unnamed.push(format),
             }
         }
-        // Exactly TriX carries no loss codec name, so no format silently escapes the
+        // Every format carries a loss codec name, so no format silently escapes the
         // consistency check.
         assert_eq!(
             unnamed,
-            vec![NativeRdfFormat::TriX],
-            "only TriX may lack a loss codec name"
+            Vec::new(),
+            "every format must carry a loss codec name"
         );
     }
 

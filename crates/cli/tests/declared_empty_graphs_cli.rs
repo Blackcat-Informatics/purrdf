@@ -134,6 +134,36 @@ fn targets_without_an_empty_graph_spelling_report_each_dropped_graph() {
 }
 
 #[test]
+fn trix_and_pack_sources_name_themselves_on_each_dropped_graph() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let source = write_file(dir, "in.trig", DECLARED_TRIG);
+    for (codec, extension) in [("trix", "trix"), ("pack", "pack")] {
+        // Both carriers keep the declared empty graphs, so writing them records nothing.
+        let carrier = path(dir, &format!("carrier.{extension}"));
+        let (_, written) = convert(&[&source, &carrier, "--to", codec]);
+        assert_eq!(
+            written.matches(LOSS_CODE).count(),
+            0,
+            "{codec} carries empty graphs; got:\n{written}"
+        );
+        // Converting the carrier to N-Quads drops each one, recorded as the registered,
+        // intentional loss of that source codec.
+        let output = path(dir, &format!("from-{codec}.nq"));
+        let (_, ledger) = convert(&[&carrier, &output, "--from", codec, "--to", "nquads"]);
+        let registered = format!(
+            "{LOSS_CODE},\n      \"from\": \"{codec}\",\n      \"to\": \"nquads\",\n      \
+             \"intentional\": true"
+        );
+        assert_eq!(
+            ledger.matches(&registered).count(),
+            2,
+            "{codec} -> nquads: got:\n{ledger}"
+        );
+    }
+}
+
+#[test]
 fn targets_that_spell_empty_graphs_and_datasets_without_them_report_nothing_new() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
