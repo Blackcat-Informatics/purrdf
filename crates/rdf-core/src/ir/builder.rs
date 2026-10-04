@@ -1463,6 +1463,11 @@ impl RdfDatasetBuilder {
         &self.quads
     }
 
+    /// Borrow the accumulated named graph declarations (validation reads these).
+    pub(crate) fn declared_graph_rows(&self) -> &[TermId] {
+        &self.declared_graphs
+    }
+
     /// Borrow the accumulated reifier bindings (validation reads these).
     pub(crate) fn reifier_rows(&self) -> &[(TermId, TermId, Option<TermId>)] {
         &self.reifiers
