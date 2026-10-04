@@ -2772,6 +2772,18 @@ impl AsyncJob {
         self.inner.error.borrow().as_ref().map(JobError::rendered)
     }
 
+    /// The job's failure's typed presentation as its JSON record — a SPARQL parse
+    /// failure's `sparql-parse-*` identity and typed parameters — or `undefined` when the
+    /// failure carries none (or the job did not fail, or has not finished).
+    #[wasm_bindgen(getter, js_name = errorPresentation)]
+    pub fn error_presentation(&self) -> Option<String> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .and_then(JobError::presentation_json)
+    }
+
     /// The effect the job is suspended on, once; `undefined` when there is none.
     #[wasm_bindgen(js_name = takeEffect)]
     pub fn take_effect(&self) -> Option<AsyncEffect> {
