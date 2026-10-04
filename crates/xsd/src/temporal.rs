@@ -39,7 +39,7 @@ use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
 use crate::numeric::{Decimal, align_decimals, decimal_div_raw, decimal_mul_raw, parse_decimal};
-use crate::value::XsdError;
+use crate::value::{XsdError, XsdValue};
 
 /// Maximum timezone offset magnitude in minutes (±14:00).
 const MAX_TZ_MIN: i32 = 14 * 60;
@@ -333,6 +333,86 @@ impl Gregorian {
     pub fn datatype(&self) -> XsdDatatype {
         self.datatype
     }
+}
+
+/// Cast a calendar value under XPath F&O 3.1 §19.1.4.
+///
+/// The timezone is preserved, including its absence. A date gains midnight;
+/// a dateTime loses the fields absent from the target. Partial dates and times
+/// cannot supply missing calendar fields, so only their identity casts succeed.
+/// Returns `None` for an unsupported pair and a typed error if a normalized
+/// end-of-day date exceeds the supported year range.
+///
+/// <https://www.w3.org/TR/xpath-functions-31/#casting-to-datetimes>
+pub fn cast_calendar(source: &XsdValue, target: XsdDatatype) -> Result<Option<XsdValue>, XsdError> {
+    if !target.is_calendar() {
+        return Ok(None);
+    }
+    if source.datatype() == target {
+        return Ok(Some(source.clone()));
+    }
+    let (year, month, day, tz) = match source {
+        XsdValue::DateTime(value) => {
+            if target == XsdDatatype::Time {
+                return Ok(Some(XsdValue::Time(Time {
+                    hour: value.hour % 24,
+                    minute: value.minute,
+                    second: value.second,
+                    tz: value.tz,
+                })));
+            }
+            let (year, month, day) = if value.hour == 24 {
+                let (year, month, day) =
+                    civil_from_days(days_from_civil(value.year, value.month, value.day) + 1);
+                (year, month, day)
+            } else {
+                (i128::from(value.year), value.month, value.day)
+            };
+            (year, month, day, value.tz)
+        }
+        XsdValue::Date(value) => {
+            if target == XsdDatatype::DateTime {
+                return Ok(Some(XsdValue::DateTime(DateTime {
+                    year: value.year,
+                    month: value.month,
+                    day: value.day,
+                    hour: 0,
+                    minute: 0,
+                    second: Decimal::from_parts(0, 0),
+                    tz: value.tz,
+                })));
+            }
+            (i128::from(value.year), value.month, value.day, value.tz)
+        }
+        _ => return Ok(None),
+    };
+    let narrow_year = || {
+        i64::try_from(year)
+            .map_err(|_| arith_overflow(target, "end-of-day calendar cast year overflow"))
+    };
+    if target == XsdDatatype::Date {
+        return Ok(Some(XsdValue::Date(Date {
+            year: narrow_year()?,
+            month,
+            day,
+            tz,
+        })));
+    }
+    let (year, month, day) = match target {
+        XsdDatatype::GYearMonth => (Some(narrow_year()?), Some(month), None),
+        XsdDatatype::GYear => (Some(narrow_year()?), None, None),
+        XsdDatatype::GMonthDay => (None, Some(month), Some(day)),
+        XsdDatatype::GDay => (None, None, Some(day)),
+        XsdDatatype::GMonth => (None, Some(month), None),
+        _ => return Ok(None),
+    };
+    Ok(Some(XsdValue::Gregorian(Gregorian {
+        year,
+        month,
+        day,
+        tz,
+        datatype: target,
+    })))
 }
 
 // ── Proleptic Gregorian calendar (Howard Hinnant's algorithm) ────────────────────
@@ -3533,6 +3613,126 @@ impl Gregorian {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn calendar_casts_cover_the_defined_pairs_and_refuse_missing_fields() {
+        use XsdDatatype as D;
+        let sources = [
+            (D::DateTime, "2024-02-29T13:14:15.125-05:30"),
+            (D::Date, "2024-02-29-05:30"),
+            (D::Time, "13:14:15.125-05:30"),
+            (D::GYearMonth, "2024-02-05:30"),
+            (D::GYear, "2024-05:30"),
+            (D::GMonthDay, "--02-29-05:30"),
+            (D::GDay, "---29-05:30"),
+            (D::GMonth, "--02-05:30"),
+        ];
+        let conversions = [
+            (D::Date, D::DateTime, "2024-02-29T00:00:00-05:30"),
+            (D::DateTime, D::Date, "2024-02-29-05:30"),
+            (D::DateTime, D::Time, "13:14:15.125-05:30"),
+            (D::DateTime, D::GYearMonth, "2024-02-05:30"),
+            (D::DateTime, D::GYear, "2024-05:30"),
+            (D::DateTime, D::GMonthDay, "--02-29-05:30"),
+            (D::DateTime, D::GDay, "---29-05:30"),
+            (D::DateTime, D::GMonth, "--02-05:30"),
+            (D::Date, D::GYearMonth, "2024-02-05:30"),
+            (D::Date, D::GYear, "2024-05:30"),
+            (D::Date, D::GMonthDay, "--02-29-05:30"),
+            (D::Date, D::GDay, "---29-05:30"),
+            (D::Date, D::GMonth, "--02-05:30"),
+        ];
+        for (source_type, lexical) in sources {
+            let source = crate::parse(lexical, source_type).expect("calendar source");
+            for (target, _) in sources {
+                let expected = if source_type == target {
+                    Some(lexical)
+                } else {
+                    conversions.iter().find_map(|&(from, to, answer)| {
+                        (from == source_type && to == target).then_some(answer)
+                    })
+                };
+                let actual = cast_calendar(&source, target).expect("bounded cast");
+                assert_eq!(
+                    actual.as_ref().map(XsdValue::canonical_lexical).as_deref(),
+                    expected,
+                    "{source_type:?} → {target:?}"
+                );
+                if let Some(actual) = actual {
+                    assert_eq!(actual.datatype(), target);
+                    assert!(crate::parse(&actual.canonical_lexical(), target).is_ok());
+                }
+            }
+            assert!(cast_calendar(&source, D::String).unwrap().is_none());
+        }
+        let number = crate::parse("42", D::Integer).unwrap();
+        assert!(cast_calendar(&number, D::Date).unwrap().is_none());
+    }
+
+    #[test]
+    fn calendar_casts_keep_local_dates_timezones_and_normalize_end_of_day() {
+        use XsdDatatype as D;
+        for timezone in ["", "Z", "+14:00", "-14:00"] {
+            let date = format!("2026-01-01{timezone}");
+            let datetime =
+                crate::parse(&format!("2026-01-01T00:30:00{timezone}"), D::DateTime).unwrap();
+            assert_eq!(
+                cast_calendar(&datetime, D::Date)
+                    .unwrap()
+                    .unwrap()
+                    .canonical_lexical(),
+                date
+            );
+            let date = crate::parse(&date, D::Date).unwrap();
+            assert_eq!(
+                cast_calendar(&date, D::DateTime)
+                    .unwrap()
+                    .unwrap()
+                    .canonical_lexical(),
+                format!("2026-01-01T00:00:00{timezone}")
+            );
+        }
+        for (lexical, expected) in [
+            ("2024-02-28T24:00:00Z", "2024-02-29Z"),
+            ("2024-02-29T24:00:00Z", "2024-03-01Z"),
+            ("2023-12-31T24:00:00-05:30", "2024-01-01-05:30"),
+            ("-0001-12-31T24:00:00Z", "0000-01-01Z"),
+        ] {
+            let source = crate::parse(lexical, D::DateTime).unwrap();
+            assert_eq!(
+                cast_calendar(&source, D::Date)
+                    .unwrap()
+                    .unwrap()
+                    .canonical_lexical(),
+                expected
+            );
+            assert_eq!(
+                cast_calendar(&source, D::Time)
+                    .unwrap()
+                    .unwrap()
+                    .canonical_lexical(),
+                if lexical.ends_with('Z') {
+                    "00:00:00Z"
+                } else {
+                    "00:00:00-05:30"
+                }
+            );
+        }
+        let source = crate::parse("9223372036854775807-12-31T24:00:00Z", D::DateTime).unwrap();
+        for target in [D::Date, D::GYear, D::GYearMonth] {
+            assert!(matches!(
+                cast_calendar(&source, target),
+                Err(XsdError::OutOfRange { .. })
+            ));
+        }
+        assert_eq!(
+            cast_calendar(&source, D::GMonthDay)
+                .unwrap()
+                .unwrap()
+                .canonical_lexical(),
+            "--01-01Z"
+        );
+    }
+
     #[test]
     fn a_duration_tag_join_keeps_a_subtype_only_when_both_sides_declare_it() {
         use super::{XsdDatatype as D, duration_result_datatype as join};

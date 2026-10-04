@@ -332,6 +332,23 @@ impl XsdDatatype {
         self.is_integer_family() || matches!(self, Self::Decimal | Self::Float | Self::Double)
     }
 
+    /// Whether this datatype belongs to the date/time casting family in
+    /// XPath F&O 3.1 §19.1.4, including the Gregorian partial dates.
+    #[must_use]
+    pub const fn is_calendar(self) -> bool {
+        matches!(
+            self,
+            Self::DateTime
+                | Self::Date
+                | Self::Time
+                | Self::GYearMonth
+                | Self::GYear
+                | Self::GMonthDay
+                | Self::GDay
+                | Self::GMonth
+        )
+    }
+
     /// The inclusive `(min, max)` integer bounds for this datatype, or `None` if it is
     /// not an integer-family datatype.
     ///
