@@ -4384,10 +4384,21 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
 /// - to `xsd:double`/`xsd:float`: a float widens exactly; a double narrows by one
 ///   round-to-nearest-even (overflowing to an infinity, underflowing to a signed
 ///   zero); an integer or decimal is rounded once, straight to the target precision;
-///   a boolean is `1` or `0`. F&O 3.1 §19.1.2.1 words the double-to-float narrowing
-///   as truncating the binary mantissa; this cast uses the IEEE 754 conversion
-///   (round to nearest, ties to even) instead, the same rounding every other source
-///   gets on its way to a float.
+///   a boolean is `1` or `0`.
+///
+///   **Deliberate deviation:** F&O 3.1 §19.1.2.1 words the double-to-float narrowing
+///   as truncating the binary mantissa. This cast rounds to nearest, ties to even
+///   (the IEEE 754 conversion) instead, because: the result is within half an ulp
+///   and unbiased, where truncation is up to a whole ulp off and always toward zero;
+///   it is XSD 1.1's `floatingPointRound`, which the lexical path and the
+///   decimal/integer-to-float casts already use, so a double and the same number
+///   written as a string cast to the same float; it agrees with common SPARQL and
+///   XPath engines; and the F&O text is defective in the float subnormal band,
+///   where it flushes every value below the smallest normal exponent to zero.
+///   The values separating the rules: `1.0000000894069671630859375` gives
+///   `1.0000001E0` (truncation `1.0E0`), and `3.4028235677973366e38`, halfway
+///   between the largest float and 2^128, gives `INF` (truncation the largest
+///   float).
 /// - to `xsd:decimal`: an integer or decimal is exact; a float or double is the
 ///   decimal closest to its binary value ([`purrdf_xsd::Decimal::from_f64_closest`]),
 ///   and `NaN`, the infinities and magnitudes past the decimal range are errors.
@@ -4400,6 +4411,11 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
 ///
 /// Returns `None` when the source has no numeric/boolean value, the target is not
 /// numeric/boolean, or the cast is an error.
+///
+/// Every rounding above is proven against an exact rational oracle (integer arithmetic
+/// on the source's exact value, never a float) over seeded draws and the hard cases —
+/// ties, their neighbours, the subnormal band, the largest finite values and the `i128`
+/// extremes — in `cast_rounding_tests`.
 fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
     match target {
         XsdDatatype::Double => Some(XsdValue::Double(match source {
@@ -5643,6 +5659,9 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
     );
     (uuid, bytes)
 }
+
+#[cfg(test)]
+mod cast_rounding_tests;
 
 #[cfg(test)]
 mod tests {

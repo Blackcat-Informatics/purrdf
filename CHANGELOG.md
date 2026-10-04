@@ -94,9 +94,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the XPath casting rules SPARQL 1.1 §17.5 adopts. `xsd:double("0.1"^^xsd:float)`
   is now `1.0000000149011612E-1`, the float's value, and
   `xsd:integer("16777217"^^xsd:float)` is now `16777216`. A double cast to
-  `xsd:float` rounds the double's value once. A float or double cast to
-  `xsd:decimal` gives the decimal closest to its binary value, with ties
-  rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
+  `xsd:float` rounds the double's value to the nearest float, ties to even.
+  This deliberately differs from F&O 3.1 §19.1.2.1, whose text truncates the
+  mantissa. Rounding is more accurate (within half an ulp, unbiased), matches
+  XSD 1.1 `floatingPointRound` as the string, decimal and integer casts already
+  do, and agrees with common engines. The F&O rule also flushes the float
+  subnormal band to zero, which is a defect in its text. A double exactly halfway
+  between the largest float and 2^128 now gives `INF`:
+  `xsd:float("3.4028235677973366e38"^^xsd:double)` was `3.4028235E38`.
+  `xsd:float("1e-40"^^xsd:double)` gives the nearest subnormal, `1.0E-40`.
+  A float or double cast to `xsd:decimal` gives the decimal closest to its
+  binary value, with ties rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
   `0.100000001490116119` instead of `0.1`. Casts from strings still parse the
   string.
 - **SPARQL numeric-to-string casts:** `xsd:string` of a float or double uses

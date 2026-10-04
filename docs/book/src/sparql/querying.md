@@ -123,6 +123,63 @@ Anything outside this surface — and every malformed query — is a typed
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
+## Numeric casts
+
+An XSD constructor function such as `xsd:double(?x)` follows the casting rules
+of XPath and XQuery Functions and Operators 3.1 §19, which SPARQL 1.1 §17.5
+adopts. When the argument is a numeric or boolean literal, the cast converts its
+value. It does not read the literal's digits again as the new type. The float
+written `0.1` is `0.100000001490116119384765625`, so
+`xsd:double("0.1"^^xsd:float)` is `1.0000000149011612E-1`. A string argument is
+parsed as text: `xsd:double("0.1")` is `1.0E-1`.
+
+| From | To | Result |
+|---|---|---|
+| float | double | the same value, exactly |
+| double | float | the nearest float, ties to even (see below) |
+| integer, decimal | float, double | the nearest value, rounded once |
+| float, double | decimal | the nearest decimal with at most 18 fractional digits, ties toward zero; `NaN`, `INF` and values of 2^127 or more are errors |
+| float, double, decimal | integer types | the fractional part discarded; `NaN`, `INF` and values outside the target type are errors |
+| boolean | numeric | `1` or `0` |
+| numeric | boolean | `false` for zero and `NaN`, otherwise `true` |
+
+Casting a float or double to `xsd:string` uses plain notation for magnitudes
+from 0.000001 up to, but not including, 1000000 (`"0.1"`, `"123456.5"`, `"100"`).
+Other values use scientific notation with one digit after the point at least
+(`"1.0E7"`, `"1.0E-7"`). The special values are `"NaN"`, `"INF"`, `"-INF"` and
+`"-0"`. The digits are the fewest that read back as the same value, at the
+source's own precision, so `xsd:string("0.1"^^xsd:float)` is `"0.1"`. `STR`
+does not cast: it returns a literal's lexical form unchanged.
+
+### Double to float: round to nearest
+
+PurRDF deliberately differs from the text of F&O 3.1 §19.1.2.1 here. That text
+narrows a double to a float by truncating the binary mantissa. PurRDF rounds to
+the nearest float, with ties going to the even value, as IEEE 754 does. The
+reasons:
+
+- **Accuracy.** The result is never more than half a unit in the last place
+  from the double, and the error is unbiased. Truncation can be almost a whole
+  unit off, always toward zero.
+- **One rounding everywhere.** XSD 1.1 maps a lexical form to a float with this rounding
+  (`floatingPointRound`), and PurRDF already uses it for strings, decimals and
+  integers. Under truncation, a double would become a different float from the
+  same number written as a string.
+- **Agreement with common engines.** Common SPARQL and XPath engines round.
+- **The text is defective for very small values.** Its rule sends every result
+  below the smallest normal exponent to zero, even when a float subnormal is
+  much closer. `xsd:float("1e-40"^^xsd:double)` is `1.0E-40` here, not zero.
+
+Two values show where the rules differ:
+
+| Expression | PurRDF (round to nearest) | F&O 3.1 text (truncation) |
+|---|---|---|
+| `xsd:float("1.0000000894069671630859375"^^xsd:double)` | `1.0000001E0` | `1.0E0` |
+| `xsd:float("3.4028235677973366e38"^^xsd:double)` | `INF` | `3.4028235E38` |
+
+The second double lies exactly halfway between the largest float and the next
+power of two, so rounding to even gives `INF`.
+
 ## SPARQL 1.2 temporal arithmetic and adjustment
 
 `+`, `-`, `*`, `/`, and unary `-` extend past the numeric tower to

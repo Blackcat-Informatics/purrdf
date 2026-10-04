@@ -914,6 +914,14 @@ criterion = "c"
 anchor = "purrdf_geo::exact::Int"
 reason = "The geometry kernel's integers are binary 64-bit limbs with an inline small-vector, whose adds, multiplies and shifts are the pinned site geo.exact-limbs; base-10^9 limbs would put a division by 10^9 into every carry of the predicates' inner loops."
 
+[[job.variant]]
+symbol = "purrdf_testkit::exact::Natural::mul_small"
+file = "crates/testkit/src/exact.rs"
+detector = "forbidden"
+criterion = "layering"
+anchor = "purrdf_testkit::exact::Natural"
+reason = "The exact rational oracle checks purrdf-xsd's own conversions, so it must not share their arithmetic, and purrdf-testkit may depend on no first-party crate but purrdf-hash (layers.toml): its unbounded integer is a deliberately separate, schoolbook implementation."
+
 [[job]]
 id = "calendar"
 summary = "The proleptic Gregorian calendar: leap years, month lengths, and day numbers to and from civil dates"
@@ -1523,6 +1531,16 @@ enforced = true
 constants = []
 fingerprints = []
 names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
+
+[[distinct]]
+members = [
+    "purrdf_testkit::exact::Natural::is_odd",
+    "purrdf_xsd::bigint::BigInt::is_odd",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_testkit::exact::Natural"
+reason = "The exact rational oracle that checks purrdf-xsd's numeric conversions may depend on no first-party crate but purrdf-hash (layers.toml) and must not share the arithmetic it checks, so its natural number keeps its own lowest-bit test."
 
 [[distinct]]
 members = [

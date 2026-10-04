@@ -106,6 +106,42 @@ fn a_double_cast_to_float_rounds_the_doubles_value_once() {
     );
 }
 
+/// The values that separate round-to-nearest from the mantissa truncation F&O 3.1
+/// §19.1.2.1 words the narrowing as: PurRDF rounds, deliberately.
+#[test]
+fn a_double_cast_to_float_rounds_to_nearest_not_by_truncation() {
+    // `1 + 1.5 × 2^-24` is above the halfway point between `1` and `1 + 2^-23`:
+    // rounding gives `1 + 2^-23`, truncation would give `1`.
+    check(
+        r#"xsd:float("1.0000000894069671630859375"^^xsd:double)"#,
+        typed("1.0000001E0", "float"),
+    );
+    // Exactly halfway between the largest float and 2^128: ties to even overflow to
+    // INF, where truncation would give the largest float.
+    check(
+        r#"xsd:float("3.4028235677973366e38"^^xsd:double)"#,
+        typed("INF", "float"),
+    );
+    check(
+        r#"xsd:float("-3.4028235677973366e38"^^xsd:double)"#,
+        typed("-INF", "float"),
+    );
+    // Just below the halfway point stays finite.
+    check(
+        r#"xsd:float("3.4028235677973362e38"^^xsd:double)"#,
+        typed("3.4028235E38", "float"),
+    );
+    // The float subnormal band: the nearest subnormal, not a flush to zero.
+    check(
+        r#"xsd:float("1e-40"^^xsd:double)"#,
+        typed("1.0E-40", "float"),
+    );
+    check(
+        r#"xsd:float("1.401298464324817e-45"^^xsd:double)"#,
+        typed(&canonical_float(f32::from_bits(1)), "float"),
+    );
+}
+
 #[test]
 fn exact_sources_cast_to_float_and_double_round_once() {
     check(
