@@ -5606,25 +5606,18 @@ mod tests {
         ));
     }
 
-    /// The reachable overflow boundary `decimal_div_raw` guards with a typed
-    /// `Err` rather than a wrapping/truncating `i128` multiply: scaling
-    /// `86400` (one day, in seconds) up by `10^36` to align a divisor with 18
-    /// fractional digits overflows `i128` (`86400 × 10^36 ≈ 8.64 × 10^40 >
-    /// i128::MAX ≈ 1.7 × 10^38`). Documented here so the boundary is pinned,
-    /// not discovered — it is a different case from the dead `shift_exp < 0`
-    /// arm removed alongside this test, which was unreachable, not merely
-    /// untested.
+    /// A quotient whose scale-18 intermediate overflows `i128` but whose value is
+    /// representable is answered exactly: one day over one attosecond is
+    /// `86400 × 10^18`, although `86400 × 10^36` (the dividend scaled to align an
+    /// 18-digit divisor) is past `i128`. The 256-bit intermediate of
+    /// `decimal_div_raw` forms it; only a quotient whose integer part exceeds
+    /// `i128` is refused, as `numeric`'s division tests pin.
     #[test]
-    fn decimal_div_scale_overflow_is_out_of_range() {
+    fn decimal_div_past_the_scaled_intermediate_is_exact() {
         let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
         let attosecond = ymd(XsdDatatype::DayTimeDuration, "PT0.000000000000000001S");
-        assert!(matches!(
-            divide_durations(&one_day, &attosecond),
-            Err(XsdError::OutOfRange {
-                datatype: XsdDatatype::Decimal,
-                ..
-            })
-        ));
+        let ratio = divide_durations(&one_day, &attosecond).expect("representable");
+        assert_eq!(ratio.canonical_lexical(), "86400000000000000000000");
     }
 
     #[test]

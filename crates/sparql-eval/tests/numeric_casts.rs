@@ -11,6 +11,10 @@
 //! numeric value cast to `xsd:string` is written by the cast-to-string rule: plain
 //! decimal notation for magnitudes in `[0.000001, 1000000)`, scientific notation with a
 //! mandatory digit after the point outside it, and a float at single precision.
+//!
+//! `xsd:decimal` division (`op:numeric-divide`, F&O 3.1 §4.2.3) is checked here too:
+//! every quotient the value space can hold is answered, exactly or truncated at the
+//! finest representable scale.
 
 use std::sync::Arc;
 
@@ -374,5 +378,61 @@ fn str_of_a_numeric_literal_is_its_lexical_form_unchanged() {
     check(
         r#"STR("+007"^^xsd:integer)"#,
         Some(("+007".to_owned(), format!("{XSD}string"))),
+    );
+}
+
+/// `xsd:decimal` division answers every quotient the value space can hold: exactly when
+/// it is representable, truncated toward zero at the finest representable scale (at
+/// most 18 fractional digits) otherwise, and an error only when the integer part
+/// itself is past the 128-bit mantissa. Each refusal sits beside a valid neighbour.
+#[test]
+fn decimal_division_answers_every_representable_quotient() {
+    let min = i128::MIN;
+    let max = i128::MAX;
+    // A dividend of 10^21 used to overflow the scaled intermediate.
+    check(
+        r#"("1000000000000000000000"^^xsd:decimal / 2)"#,
+        typed("500000000000000000000", "decimal"),
+    );
+    check(
+        r#"("100000000000000000000"^^xsd:decimal / 2)"#,
+        typed("50000000000000000000", "decimal"),
+    );
+    check(
+        &format!(r#"("{min}"^^xsd:decimal / 2)"#),
+        typed(&(min / 2).to_string(), "decimal"),
+    );
+    // MAX / 2 = …863.5 has no representable mantissa at scale 1: truncated at scale 0.
+    check(
+        &format!(r#"("{max}"^^xsd:decimal / 2)"#),
+        typed(&(max / 2).to_string(), "decimal"),
+    );
+    check("(1 / 3)", typed("0.333333333333333333", "decimal"));
+    check("(-2 / 3.0)", typed("-0.666666666666666666", "decimal"));
+    // The largest quotient that still fits, next to the first that does not.
+    let fits = max / 10;
+    check(
+        &format!(r#"("{fits}"^^xsd:decimal / 0.1)"#),
+        typed(&(fits * 10).to_string(), "decimal"),
+    );
+    check(&format!(r#"("{max}"^^xsd:decimal / 0.1)"#), None);
+    check(
+        &format!(r#"("{min}"^^xsd:integer / 1)"#),
+        typed(&min.to_string(), "decimal"),
+    );
+    check(&format!(r#"("{min}"^^xsd:integer / -1)"#), None);
+    check("(1 / 0.0)", None);
+    // 2^127 has no mantissa: negating or taking the absolute value of the smallest
+    // decimal is out of range, while one above it is not.
+    check(&format!(r#"ABS("{min}"^^xsd:decimal)"#), None);
+    check(&format!(r#"(-"{min}"^^xsd:decimal)"#), None);
+    let next = min + 1;
+    check(
+        &format!(r#"ABS("{next}"^^xsd:decimal)"#),
+        typed(&max.to_string(), "decimal"),
+    );
+    check(
+        &format!(r#"(-"{next}"^^xsd:decimal)"#),
+        typed(&max.to_string(), "decimal"),
     );
 }

@@ -122,6 +122,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   binary value, with ties rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
   `0.100000001490116119` instead of `0.1`. Casts from strings still parse the
   string.
+- **XSD decimal division:** dividing decimals or integers no longer fails
+  when an intermediate value overflows but the result fits. Previously any
+  dividend of about 10^21 or more was refused:
+  `"1000000000000000000000"^^xsd:decimal / 2` is now `500000000000000000000`
+  instead of an error, and the smallest and largest 128-bit decimals can be
+  halved. The result is exact when it fits in 18 fractional digits and a
+  128-bit mantissa. Otherwise it is truncated toward zero at the finest scale
+  that fits, so `1 / 3` is still `0.333333333333333333`. Division is refused
+  only when the integer part of the result is too large, as with
+  `i128::MAX / 0.1`. Dividing two `xsd:dayTimeDuration`s follows the same
+  rule, so one day divided by one attosecond is now `86400000000000000000000`
+  instead of an error. Negating the smallest decimal, or taking its absolute
+  value, is still refused: the result is 2^127, which does not fit.
 - **XSD decimals:** the decimal lexical form of the smallest 128-bit integer,
   `-170141183460469231731687303715884105728` (also with up to 18 fractional
   digits), now parses. It was refused as out of range although its value is

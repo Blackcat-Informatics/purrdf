@@ -1255,14 +1255,16 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 }
 
 /// Exact decimal long division, producing up to `MAX_DECIMAL_SCALE` (18) fractional
-/// digits by truncation toward zero.
+/// digits by truncation toward zero — the precision rule for `op:numeric-divide` on
+/// decimals, which XPath F&O 3.1 §4.2.3 leaves implementation-defined.
 ///
-/// Algorithm: scale the dividend mantissa up by `10^target_scale` to capture enough
-/// fractional precision, then integer-divide by the divisor mantissa. The result
-/// mantissa is `(dividend_m × 10^shift) / divisor_m` at scale `target_scale`.
-///
-/// The shift factor is chosen as `MAX_DECIMAL_SCALE + divisor.scale()` minus the
-/// dividend scale so that the final result lands at exactly scale `MAX_DECIMAL_SCALE`.
+/// The quotient is `trunc(dividend × 10^S / divisor)` at the finest scale
+/// `S ≤ 18` whose mantissa fits the `i128` the value space holds: the exact quotient
+/// whenever it is representable (`10^21 / 2` is `5 × 10^20`, although its scale-18
+/// mantissa would not fit), otherwise the quotient truncated toward zero at that
+/// scale. The intermediate `dividend_m × 10^shift` is formed in 256 bits
+/// ([`crate::wide::mul_div`]), so it never overflows; only a quotient whose integer
+/// part exceeds `i128` is refused, with [`XsdError::OutOfRange`] (`err:FOAR0002`).
 fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdError> {
     decimal_div_raw(dividend, divisor).map(XsdValue::Decimal)
 }
@@ -1291,51 +1293,54 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
             datatype: XsdDatatype::Decimal,
         });
     }
-    // We want: result = dividend / divisor at scale MAX_DECIMAL_SCALE.
-    // dividend = dm × 10^(-ds), divisor = vm × 10^(-vs).
-    // result mantissa at scale S = dm × 10^(S + vs - ds) / vm
-    // where S = MAX_DECIMAL_SCALE.
+    // dividend = dm × 10^-ds and divisor = vm × 10^-vs, so the quotient's mantissa at
+    // scale S is trunc(dm × 10^(S + vs - ds) / vm). The result is that mantissa at the
+    // finest scale S ≤ MAX_DECIMAL_SCALE whose mantissa fits the i128 the value space
+    // holds: the exact quotient whenever it is representable, else the quotient
+    // truncated toward zero at that scale (XPath F&O 3.1 §4.2.3 leaves the precision of
+    // a decimal quotient implementation-defined; this crate truncates, as documented on
+    // `decimal_div`). Only a quotient whose integer part alone exceeds i128 is an
+    // overflow (`err:FOAR0002`).
     let dm = dividend.mantissa();
     let vm = divisor.mantissa();
-    // Combined scale shift: (MAX_DECIMAL_SCALE + vs) - ds.
-    // vs and ds are both ≤ 18, and MAX_DECIMAL_SCALE = 18, so the net exponent
-    // is in [-18, 36]. We must keep the dividend mantissa from overflowing i128.
-    let target_scale = MAX_DECIMAL_SCALE;
     let vs = i32::from(divisor.scale());
     let ds = i32::from(dividend.scale());
-    let shift_exp: i32 = i32::from(target_scale) + vs - ds;
-    // Scale dm up by 10^shift_exp. `shift_exp` is NEVER negative: both `vs` and
-    // `ds` are bounded by the crate-wide `scale <= MAX_DECIMAL_SCALE` (= 18)
-    // invariant (documented on `Decimal::cmp_exact` above, `debug_assert!`ed
-    // there, enforced at parse time by `parse_decimal`, and re-clamped by
-    // `decimal_mul_raw`), so `shift_exp = MAX_DECIMAL_SCALE + vs - ds >= 18 + 0
-    // - 18 = 0` for every reachable input. A scale-down arm here would be dead
-    // code; `unreachable!()` (not `debug_assert!`, which compiles out under
-    // `[profile.release]` and would ship a silent truncation) keeps that proof
-    // load-bearing in every build profile rather than merely in debug builds.
-    let Ok(shift) = u32::try_from(shift_exp) else {
-        unreachable!("decimal scale invariant (scale <= 18) keeps shift_exp non-negative")
+    let negative = (dm < 0) != (vm < 0);
+    let fits = |magnitude: u128| {
+        if negative {
+            0_i128.checked_sub_unsigned(magnitude)
+        } else {
+            i128::try_from(magnitude).ok()
+        }
     };
-    // Max shift is 18 + 18 - 0 = 36. 10^36 ≈ 10^36, and i128::MAX ≈ 1.70×10^38,
-    // so we can represent 10^36. dm itself can be up to i128::MAX / 10 (from
-    // multiplication), but in the typical case |dm| ≤ 10^18. If the scale-up
-    // overflows, return OutOfRange.
-    let factor = 10i128.pow(shift);
-    let scaled_dm: i128 = dm.checked_mul(factor).ok_or_else(|| XsdError::OutOfRange {
+    let (numerator, denominator) = (dm.unsigned_abs(), vm.unsigned_abs());
+    for scale in (0..=MAX_DECIMAL_SCALE).rev() {
+        let shift = i32::from(scale) + vs - ds;
+        let magnitude = if shift >= 0 {
+            // shift ≤ 18 + 18 = 36, and 10^36 < 2^128.
+            crate::wide::mul_div(numerator, 10_u128.pow(shift.unsigned_abs()), denominator)
+        } else {
+            // ⌊⌊n / 10^k⌋ / d⌋ = ⌊n / (10^k · d)⌋ for positive integers; k ≤ 18.
+            Some(numerator / 10_u128.pow(shift.unsigned_abs()) / denominator)
+        };
+        if let Some(mantissa) = magnitude.and_then(fits) {
+            return Ok(Decimal::from_parts(mantissa, scale));
+        }
+    }
+    Err(XsdError::OutOfRange {
         datatype: XsdDatatype::Decimal,
         lexical: String::new(),
-        reason: "decimal division intermediate overflow",
-    })?;
-    Ok(Decimal::from_parts(scaled_dm / vm, target_scale))
+        reason: "decimal quotient exceeds the i128 mantissa at every scale",
+    })
 }
 
 /// `op:numeric-divide` for an integer `SUM` fold's running total (`dividend`)
 /// once it has grown past `i128` (see [`crate::bigint::BigInt`]'s module docs
 /// for why that can happen), divided by the folded row `count`. This is
-/// `AVG`'s finish for exactly that case — mirrors `decimal_div_raw`'s
-/// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape exactly (same target
-/// scale, same truncate-toward-zero), just computed over an
-/// arbitrary-precision dividend instead of an `i128` one.
+/// `AVG`'s finish for exactly that case — `decimal_div_raw`'s
+/// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape (same target scale, same
+/// truncate-toward-zero) computed over an arbitrary-precision dividend instead
+/// of an `i128` one, without `decimal_div_raw`'s descent to a coarser scale.
 ///
 /// `None` when the resulting MANTISSA does not fit `i128` — `xsd:decimal`'s
 /// [`Decimal`] representation is deliberately `i128`-mantissa-bounded (this
@@ -1442,10 +1447,10 @@ pub fn numeric_unary_minus(a: &XsdValue) -> Result<XsdValue, XsdError> {
                 reason: "integer unary minus overflow (i128::MIN has no positive counterpart)",
             }),
         XsdValue::Decimal(d) => {
-            // Decimal negation: negate the mantissa. No overflow: i128::MIN has no
-            // positive counterpart, but parse_decimal rejects values that would place
-            // the mantissa at i128::MIN (it parses the magnitude separately as unsigned).
-            // Defensive check retained for safety.
+            // Decimal negation negates the mantissa. A mantissa of i128::MIN (a
+            // decimal parse_decimal accepts) has no positive counterpart at its scale or
+            // any other — 2^127 / 10^s is never a multiple of a coarser decimal unit —
+            // so its negation is out of range (`err:FOAR0002`), not rounded.
             d.mantissa()
                 .checked_neg()
                 .map(|m| XsdValue::Decimal(Decimal::from_parts(m, d.scale())))
@@ -3042,6 +3047,154 @@ mod tests {
             MAX_DECIMAL_SCALE,
         );
         Some(decimal.canonical_lexical())
+    }
+
+    /// The decimal quotient the division rule defines, from the exact rational
+    /// `dividend / divisor` with integer arithmetic only
+    /// ([`purrdf_testkit::exact`]): truncated toward zero at the finest scale `S ≤ 18`
+    /// whose mantissa fits an `i128`, as `(mantissa, S)`; `None` when none does.
+    fn decimal_quotient_oracle(dividend: Decimal, divisor: Decimal) -> Option<(i128, u8)> {
+        use purrdf_testkit::exact::{Natural, Rational};
+        let negative = (dividend.mantissa < 0) != (divisor.mantissa < 0);
+        (0..=MAX_DECIMAL_SCALE).rev().find_map(|scale| {
+            // dividend / divisor × 10^S = dm · 10^(vs + S) / (vm · 10^ds).
+            let numerator = Natural::from_u128(dividend.mantissa.unsigned_abs())
+                .mul_pow10(u32::from(divisor.scale) + u32::from(scale));
+            let denominator = Natural::from_u128(divisor.mantissa.unsigned_abs())
+                .mul_pow10(u32::from(dividend.scale));
+            Rational::new(negative, numerator, denominator)
+                .truncate_toward_zero()
+                .map(|mantissa| (mantissa, scale))
+        })
+    }
+
+    /// Hold `numeric_div` on two decimals to the oracle: the same value, or the
+    /// typed overflow when no representable quotient exists.
+    fn assert_decimal_quotient(dividend: Decimal, divisor: Decimal) {
+        let got = numeric_div(&XsdValue::Decimal(dividend), &XsdValue::Decimal(divisor));
+        match decimal_quotient_oracle(dividend, divisor) {
+            Some((mantissa, scale)) => {
+                let Ok(XsdValue::Decimal(quotient)) = got else {
+                    panic!("{dividend:?} / {divisor:?}: {got:?}, expected {mantissa}e-{scale}");
+                };
+                assert_eq!(
+                    quotient.cmp_exact(&Decimal::from_parts(mantissa, scale)),
+                    Ordering::Equal,
+                    "{dividend:?} / {divisor:?} = {quotient:?}, expected {mantissa}e-{scale}"
+                );
+            }
+            None => assert!(
+                matches!(got, Err(XsdError::OutOfRange { .. })),
+                "{dividend:?} / {divisor:?} overflows, got {got:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn decimal_division_matches_the_exact_oracle() {
+        let mut state = 0xD1F1_DE5A_u64;
+        let mut next = || purrdf_testkit::rng::splitmix64_next(&mut state);
+        let int = |next: &mut dyn FnMut() -> u64| {
+            let width = 1 + (next() % 127) as u32;
+            let raw = (u128::from(next()) << 64) | u128::from(next());
+            let magnitude = (raw >> (128 - width)) as i128;
+            if next() & 1 == 1 {
+                -magnitude
+            } else {
+                magnitude
+            }
+        };
+        let scale = |next: &mut dyn FnMut() -> u64| (next() % 19) as u8;
+        let mut cases = 0_usize;
+        let extremes = [
+            i128::MIN,
+            i128::MIN + 1,
+            i128::MAX,
+            i128::MAX - 1,
+            -1,
+            1,
+            2,
+            3,
+            7,
+            10,
+            -10,
+            1_000_000_000_000_000_000_000,
+            100_000_000_000_000_000_000,
+        ];
+        // Every extreme over every extreme, at a spread of scales — the overflow
+        // boundary (MAX / 0.1, MIN / -1) and the exact large quotients (10^21 / 2,
+        // MIN / 2) among them.
+        for &dm in &extremes {
+            for &vm in &extremes {
+                for (ds, vs) in [(0, 0), (0, 1), (1, 0), (0, 18), (18, 0), (18, 18), (5, 9)] {
+                    assert_decimal_quotient(
+                        Decimal::from_parts(dm, ds),
+                        Decimal::from_parts(vm, vs),
+                    );
+                    cases += 1;
+                }
+            }
+        }
+        for _ in 0..30_000 {
+            let (dm, vm) = (int(&mut next), int(&mut next));
+            if vm == 0 {
+                continue;
+            }
+            let (ds, vs) = (scale(&mut next), scale(&mut next));
+            assert_decimal_quotient(Decimal::from_parts(dm, ds), Decimal::from_parts(vm, vs));
+            cases += 1;
+        }
+        // Exact quotients: dividend = quotient × divisor, whenever that product fits.
+        for _ in 0..20_000 {
+            let (q, vm) = (int(&mut next) >> 40, int(&mut next) >> 40);
+            let Some(dm) = q.checked_mul(vm).filter(|_| vm != 0) else {
+                continue;
+            };
+            let (ds, vs) = (scale(&mut next), scale(&mut next));
+            assert_decimal_quotient(Decimal::from_parts(dm, ds), Decimal::from_parts(vm, vs));
+            cases += 1;
+        }
+        // Near the overflow boundary: large dividends over small divisors.
+        for _ in 0..10_000 {
+            let dm =
+                (i128::MAX - (int(&mut next) >> 64).abs()) * if next() & 1 == 1 { -1 } else { 1 };
+            let vm = int(&mut next) >> 100;
+            if vm == 0 {
+                continue;
+            }
+            let (ds, vs) = (scale(&mut next), scale(&mut next));
+            assert_decimal_quotient(Decimal::from_parts(dm, ds), Decimal::from_parts(vm, vs));
+            cases += 1;
+        }
+        assert!(cases > 50_000, "{cases}");
+    }
+
+    #[test]
+    fn decimal_negation_and_abs_of_the_smallest_mantissa_are_typed_overflows() {
+        let min = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 0));
+        assert!(matches!(
+            numeric_unary_minus(&min),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            numeric_abs(&min),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        let scaled = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 18));
+        assert!(matches!(
+            numeric_abs(&scaled),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        // One above it negates and takes its absolute value.
+        let next = XsdValue::Decimal(Decimal::from_parts(i128::MIN + 1, 0));
+        let Ok(XsdValue::Decimal(abs)) = numeric_abs(&next) else {
+            panic!("abs of i128::MIN + 1");
+        };
+        assert_eq!(abs.mantissa(), i128::MAX);
+        let Ok(XsdValue::Decimal(negated)) = numeric_unary_minus(&next) else {
+            panic!("negation of i128::MIN + 1");
+        };
+        assert_eq!(negated.mantissa(), i128::MAX);
     }
 
     #[test]
