@@ -450,6 +450,39 @@ test("serializeWithLoss reports the named-graph rows a single-graph syntax drops
   lossless.free();
 });
 
+// A graph the document declares with no row (`<g> { }`) owns nothing a row count can
+// see, so a target that cannot write an empty graph would drop it silently.
+// `emptyNamedGraphsDropped` is that count; the neighbouring dataset reports 0.
+test("serializeWithLoss counts the declared empty graphs a target cannot write", () => {
+  const declared = Dataset.parse(
+    "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n" +
+      "<https://example.org/g1> { <https://example.org/s> <https://example.org/p> <https://example.org/o2> . }\n" +
+      "<https://example.org/empty> { }\n" +
+      "_:bg { }\n",
+    "trig",
+  );
+  for (const format of ["nquads", "hextuples", "turtle", "ntriples"]) {
+    const loss = declared.serializeWithLoss(format);
+    assert.equal(loss.emptyNamedGraphsDropped, 2, format);
+    assert.equal(loss.namedGraphRowsDropped, format === "nquads" || format === "hextuples" ? 0 : 1, format);
+    assert.ok(!loss.text.includes("https://example.org/empty"), format);
+    loss.free();
+  }
+  for (const format of ["trig", "trix", "jsonld", "yamlld"]) {
+    const loss = declared.serializeWithLoss(format);
+    assert.equal(loss.emptyNamedGraphsDropped, 0, format);
+    assert.ok(loss.text.includes("https://example.org/empty"), format);
+    loss.free();
+  }
+
+  const plain = Dataset.parse(TRIG, "trig");
+  for (const format of ["nquads", "hextuples", "turtle", "trig"]) {
+    const loss = plain.serializeWithLoss(format);
+    assert.equal(loss.emptyNamedGraphsDropped, 0, format);
+    loss.free();
+  }
+});
+
 // The `SILENT` forms are the query author's own opt-out, and SPARQL 1.1 (Federated
 // Query §3.2 for SERVICE, Update §3.1.4 for LOAD) requires them to succeed with nothing
 // fetched when the invocation fails — including on this lane, which has no source to

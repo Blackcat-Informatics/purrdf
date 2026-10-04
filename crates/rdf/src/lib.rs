@@ -151,8 +151,8 @@ pub use native_codecs::{
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,
-    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads, flat_rdf_quads,
-    flat_rdf_quads_from_dataset,
+    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads,
+    flat_dataset_from_quads_declaring, flat_rdf_quads, flat_rdf_quads_from_dataset,
 };
 pub use projections::{
     CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CSVW_TERMS_PROFILE,

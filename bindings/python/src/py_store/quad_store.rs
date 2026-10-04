@@ -714,7 +714,7 @@ impl PyQuadStore {
     fn dump_with_loss(&self, py: Python<'_>, format: PyRdfFormat) -> PyResult<PySerializeLoss> {
         let native = format.to_native();
         py.detach(|| {
-            dump_quads_with_loss(&self.collect_all_quads(), native)
+            dump_quads_with_loss(&self.collect_all_quads(), &self.declared_graphs(), native)
                 .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
         })
     }
@@ -779,6 +779,20 @@ impl PyQuadStore {
     }
 
     /// Every quad in the store, graph names intact (for the dataset-format dump path).
+    /// Every named graph the store carries as a declaration — one a loaded document
+    /// declared without rows, say — in the owned model the quads use, so a dump writes
+    /// it where the target can spell an empty graph and counts it where it cannot.
+    pub(super) fn declared_graphs(&self) -> Vec<RdfTerm> {
+        self.inner
+            .declared_named_graphs()
+            .map(|graph| {
+                graph
+                    .to_rdf_term()
+                    .expect("a declared graph name has an owned form")
+            })
+            .collect()
+    }
+
     pub(super) fn collect_all_quads(&self) -> Vec<RdfQuad> {
         self.inner
             .quads_for_pattern(None, None, None, GraphMatchValue::Any)

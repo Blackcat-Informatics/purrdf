@@ -205,6 +205,10 @@ pub struct MutableDataset {
     /// iterated for order.
     suppressed: FastSet<QuadKey>,
     suppressed_rows: usize,
+    /// Named graphs declared on top of the base, in declaration order, deduplicated:
+    /// each survives [`freeze`](Self::freeze) and every snapshot as a declared graph
+    /// whether or not it owns a quad.
+    declared_graphs: Vec<TermValue>,
     work: super::view_accounting::WorkCounter,
 }
 
@@ -221,8 +225,52 @@ impl MutableDataset {
             next_added_ord: 0,
             suppressed: FastSet::default(),
             suppressed_rows: 0,
+            declared_graphs: Vec::new(),
             work: super::view_accounting::WorkCounter::default(),
         }
+    }
+
+    /// Declare that the named graph `graph` exists, even if it never owns a quad —
+    /// the mutable twin of
+    /// [`RdfDatasetBuilder::declare_named_graph`]. The declaration survives
+    /// [`freeze`](Self::freeze) and [`snapshot_view`](Self::snapshot_view), where the
+    /// graph is listed among [`crate::DatasetView::named_graphs`]. Returns `false` when the
+    /// graph was already declared here or by the base.
+    ///
+    /// # Errors
+    ///
+    /// `rdf-ir-graph-name-invalid` when `graph` is neither an IRI nor a blank node,
+    /// and the shared IRI diagnostic code when it is a relative IRI.
+    pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, crate::RdfDiagnostic> {
+        if !matches!(graph, TermValue::Iri(_) | TermValue::Blank { .. }) {
+            return Err(crate::RdfDiagnostic::error(
+                "rdf-ir-graph-name-invalid",
+                "a declared named graph must be an IRI or blank node",
+            ));
+        }
+        check_value_absolute(&graph).map_err(|error| {
+            crate::RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
+        })?;
+        if self.declared_graphs.contains(&graph) || self.base_declares(&graph) {
+            return Ok(false);
+        }
+        self.declared_graphs.push(graph);
+        Ok(true)
+    }
+
+    /// Every named graph this dataset carries as a declaration — the base's named
+    /// graphs, then each graph declared since — whether or not it owns a quad now.
+    pub fn declared_named_graphs(&self) -> impl Iterator<Item = TermValue> + '_ {
+        self.base
+            .named_graphs()
+            .map(|id| self.base_value(id))
+            .chain(self.declared_graphs.iter().cloned())
+    }
+
+    fn base_declares(&self, graph: &TermValue) -> bool {
+        self.base
+            .term_id_by_value(graph)
+            .is_some_and(|id| self.base.named_graphs().any(|g| g == id))
     }
 
     /// The shared frozen base this dataset branched from.
@@ -766,6 +814,12 @@ impl MutableDataset {
                 builder.push_quad(s, p, o, g);
             }
         }
+        // Declarations last, so a delta that declares nothing interns exactly as it
+        // always did.
+        for graph in &self.declared_graphs {
+            let id = builder.intern_value(graph);
+            builder.declare_named_graph(id);
+        }
     }
 }
 
@@ -1044,6 +1098,53 @@ mod tests {
     /// path has its own cases at the end of this module.
     fn ins(m: &mut MutableDataset, quad: QuadValues) -> bool {
         m.insert(quad).expect("fixture IRIs are absolute")
+    }
+
+    /// A graph declared on the mutable layer survives a freeze and a snapshot as a
+    /// declared graph, IRI- and blank-named alike; a redeclaration and a non-graph
+    /// term are answered, and a dataset that declares nothing freezes as before.
+    #[test]
+    fn declared_named_graphs_survive_freeze_and_snapshot() {
+        let empty_base = RdfDatasetBuilder::new().freeze().expect("empty base");
+        let mut m = MutableDataset::new(Arc::clone(&empty_base));
+        ins(&mut m, q("s", "p", "o"));
+        let plain = m.freeze().expect("freezes");
+        assert_eq!(plain.named_graphs().count(), 0);
+
+        let blank = TermValue::Blank {
+            label: "bg".to_owned(),
+            scope: crate::BlankScope::DEFAULT,
+        };
+        assert_eq!(m.declare_named_graph(iri_val("g")), Ok(true));
+        assert_eq!(m.declare_named_graph(blank.clone()), Ok(true));
+        assert_eq!(m.declare_named_graph(iri_val("g")), Ok(false));
+        let literal = TermValue::Literal {
+            lexical_form: "x".to_owned(),
+            datatype: purrdf_xsd::datatype::XSD_STRING.to_owned(),
+            language: None,
+            direction: None,
+        };
+        assert_eq!(
+            m.declare_named_graph(literal).map_err(|e| e.code),
+            Err("rdf-ir-graph-name-invalid".into())
+        );
+        assert_eq!(m.declared_named_graphs().count(), 2);
+
+        let frozen = m.freeze().expect("freezes");
+        let names: std::collections::BTreeSet<TermValue> = frozen
+            .named_graphs()
+            .map(|g| frozen.term_value(g))
+            .collect();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from([iri_val("g"), blank])
+        );
+        let view = m.snapshot_view().expect("snapshots");
+        assert_eq!(crate::DatasetView::named_graphs(&view).count(), 2);
+
+        // A branch off the frozen result keeps the declarations as base declarations.
+        let branch = MutableDataset::new(frozen);
+        assert_eq!(branch.declared_named_graphs().count(), 2);
     }
 
     /// A base with three quads: (a,p,b), (a,p,c), (b,p,c) — and one reifier+annotation.

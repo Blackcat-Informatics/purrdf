@@ -110,7 +110,7 @@ executes that example against the generated shared library and committed header.
 `purrdf_error_presentation_json(error)` returns a borrowed, nullable UTF-8 JSON
 record with stable diagnostic message identities, named typed parameters and
 exact logical anchors. It remains valid until `purrdf_error_free(error)`. This
-accessor is included in the unshipped ABI 0.8.0 surface; existing status and
+accessor is included in the ABI 0.8.0 surface; existing status and
 English-message functions retain their signatures.
 
 - **No unwinding across the boundary.** Every function runs inside
@@ -119,7 +119,7 @@ English-message functions retain their signatures.
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.8.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.9.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -185,6 +185,13 @@ English-message functions retain their signatures.
   would have two shippable libraries answering `purrdf_abi_version` identically
   while offering different surfaces, and telling a host they agree right before it
   fails to resolve a symbol is the one thing this number exists to prevent.
+  `0.8.0` → `0.9.0` adds one symbol and changes nothing else:
+  `purrdf_serialize_empty_named_graphs_dropped(dataset, media_type, out_count,
+  out_error)`, the number of declared empty named graphs a whole-dataset
+  `purrdf_serialize` to that target drops (N-Quads, HexTuples and the single-graph
+  syntaxes cannot write a graph that holds no row). `purrdf_serialize` keeps its
+  prototype. It bumps because `0.8.0` is the ABI of the released `3.0.x` libraries,
+  which do not export the symbol.
 
 ## Shapes-graph tools
 

@@ -99,6 +99,7 @@ const lossText: string = serializeLoss.text;
 const lossStatementRows: number = serializeLoss.statementRowsDropped;
 const lossDirectional: number = serializeLoss.directionalLiteralsDropped;
 const lossNamedGraphRows: number = serializeLoss.namedGraphRowsDropped;
+const lossEmptyNamedGraphs: number = serializeLoss.emptyNamedGraphsDropped;
 const configured: string = matched.serializeConfigured(
   "jsonld",
   JSON.stringify({ version: 1, mode: "derived" }),
@@ -484,6 +485,7 @@ void lossText;
 void lossStatementRows;
 void lossDirectional;
 void lossNamedGraphRows;
+void lossEmptyNamedGraphs;
 void same;
 void projectionLedger;
 void curatedProfile;
