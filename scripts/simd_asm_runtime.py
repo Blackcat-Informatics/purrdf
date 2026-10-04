@@ -104,10 +104,10 @@ class Runner:
                     with contextlib.suppress(ProcessLookupError):
                         os.killpg(child.pid, signal.SIGTERM)
 
-    def execute(self, cmd, env, lease):
+    def execute(self, cmd, env, lease, graph=0):
         directory = Path(env["CARGO_TARGET_DIR"]).parent
-        stdout_path = directory / "cargo.stdout.jsonl"
-        stderr_path = directory / "cargo.stderr.log"
+        stdout_path = directory / f"cargo.graph-{graph}.stdout.jsonl"
+        stderr_path = directory / f"cargo.graph-{graph}.stderr.log"
         with self.lock:
             if self.stopped.is_set():
                 raise self.gate.GateError("assembly run cancelled")
@@ -159,36 +159,39 @@ class Runner:
         parser_key = digest(Path(gate.__file__).read_bytes() + Path(__file__).read_bytes())
         selectors = [(m.crate, m.symbol) for s in manifest.sites for m in s.measures if config.name in m.configs]
         print(f"== {config.name}: {self.cargo_jobs} Cargo jobs", flush=True)
-        for graph, cmd in enumerate(gate.build_commands(config, manifest.packages, manifest.rlib_packages)):
-            identity = dict(schema=SCHEMA, compiler=self.compiler, config=dataclasses.asdict(config),
-                            command=cmd, fresh="",
-                            environment={k: v for k, v in env.items() if k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_", "RUST", "CC", "AR", "CFLAGS", "CXXFLAGS"))})
-            # A fresh generation becomes the default for subsequent runs too.
-            # Publishing its pointer atomically is safe: consumers serialize on
-            # that generation's lease, including while its first build runs.
-            generation_path = self.root / "generations" / (digest(encoded(identity)) + ".json")
-            if self.nonce:
-                atomic_json(generation_path, self.nonce)
-            generation = read_json(generation_path)
-            if generation is not None:
-                if not isinstance(generation, str) or len(generation) != 32 or any(c not in "0123456789abcdef" for c in generation):
-                    raise gate.GateError("invalid assembly generation pointer; rerun with --fresh")
-                identity["fresh"] = generation
-            waiting = time.monotonic()
-            with self.context(identity) as (root, key, lease):
-                stats["lock_seconds"] += time.monotonic() - waiting
-                child_env = dict(env, CARGO_TARGET_DIR=str(root / "target"), CARGO_BUILD_BUILD_DIR=str(root / "build"))
-                if self.stage:
-                    child_env.update(STAGE_CARGO_ASM_CONTEXT=key, STAGE_CARGO_ASM_LEASE_FD=str(lease))
+        commands = gate.build_commands(config, manifest.packages, manifest.rlib_packages)
+        identity = dict(schema=SCHEMA, compiler=self.compiler, config=dataclasses.asdict(config),
+                        commands=commands, fresh="",
+                        environment={k: v for k, v in env.items() if k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_", "RUST", "CC", "AR", "CFLAGS", "CXXFLAGS"))})
+        # Sequential graphs reuse Cargo's compatible units, but every graph still
+        # supplies its own membership and logs. One lease protects their shared
+        # artifacts and receipts until the entire configuration is judged.
+        # A fresh generation becomes the default for subsequent runs too.
+        generation_path = self.root / "generations" / (digest(encoded(identity)) + ".json")
+        if self.nonce:
+            atomic_json(generation_path, self.nonce)
+        generation = read_json(generation_path)
+        if generation is not None:
+            if not isinstance(generation, str) or len(generation) != 32 or any(c not in "0123456789abcdef" for c in generation):
+                raise gate.GateError("invalid assembly generation pointer; rerun with --fresh")
+            identity["fresh"] = generation
+        waiting = time.monotonic()
+        with self.context(identity) as (root, key, lease):
+            stats["lock_seconds"] += time.monotonic() - waiting
+            child_env = dict(env, CARGO_TARGET_DIR=str(root / "target"), CARGO_BUILD_BUILD_DIR=str(root / "build"))
+            if self.stage:
+                child_env.update(STAGE_CARGO_ASM_CONTEXT=key, STAGE_CARGO_ASM_LEASE_FD=str(lease))
+            for graph, cmd in enumerate(commands):
                 actual_cmd = [*cmd, "--jobs", str(self.cargo_jobs), "--timings",
                               "--config", f'build.target-dir={json.dumps(str(root / "target"))}',
                               "--config", f'build.build-dir={json.dumps(str(root / "build"))}']
-                print(f"== {config.name} graph {graph}: {root / 'cargo.stderr.log'}", flush=True)
+                log_path = root / f"cargo.graph-{graph}.stderr.log"
+                print(f"== {config.name} graph {graph}: {log_path}", flush=True)
                 t = time.monotonic()
-                proc = self.execute(actual_cmd, child_env, lease)
+                proc = self.execute(actual_cmd, child_env, lease, graph)
                 stats["build_seconds"] += time.monotonic() - t
                 if proc.returncode:
-                    raise gate.GateError(f"{config.name}: build failed; log: {root / 'cargo.stderr.log'}\n{gate.failure_tail(proc.stderr)}")
+                    raise gate.GateError(f"{config.name}: build failed; log: {log_path}\n{gate.failure_tail(proc.stderr)}")
                 problems = gate.verify_command_lines(proc.stderr, config)
                 if problems:
                     raise gate.GateError("\n".join(problems))
@@ -207,18 +210,19 @@ class Runner:
                     receipt_path = root / "evidence" / (digest(str(path).encode()) + ".json")
                     receipt = read_json(receipt_path)
                     name = artifact["target"]["name"].replace("-", "_")
-                    commands = [line for line in lines if f"--crate-name {name} " in line]
+                    invocations = [line for line in lines if f"--crate-name {name} " in line]
                     if artifact.get("fresh"):
                         stats["fresh_artifacts"] += 1
                         if not isinstance(receipt, dict) or receipt.get("assembly") != asm_hash or receipt.get("context") != key:
                             raise gate.GateError(f"{config.name}: missing/changed assembly provenance for {path}; rerun with --fresh")
-                        commands = receipt.get("commands", [])
-                    if not commands or gate.verify_command_lines("\n".join(commands), config):
+                        invocations = receipt.get("commands", [])
+                    if not invocations or gate.verify_command_lines("\n".join(invocations), config):
                         raise gate.GateError(f"{config.name}: no verified compiler invocation for {path}; rerun with --fresh")
-                    atomic_json(receipt_path, dict(context=key, assembly=asm_hash, commands=commands))
-                    # Separate Cargo graphs have private directories. Deduplicate only
-                    # the identical logical unit across graphs sharing this context.
-                    unit = (artifact["package_id"], name, tuple(artifact.get("features", [])), path.name, asm_hash)
+                    atomic_json(receipt_path, dict(context=key, assembly=asm_hash, commands=invocations))
+                    # Cargo may repeat an artifact message within one graph. A
+                    # reused unit belongs to every graph reporting it: dropping
+                    # that membership would hide a second copy in a later graph.
+                    unit = (graph, artifact["package_id"], name, tuple(artifact.get("features", [])), str(path), asm_hash)
                     if unit in seen:
                         continue
                     seen.add(unit)
@@ -242,10 +246,10 @@ class Runner:
                         stats["parsed_units"] += 1
                     functions.extend(parsed)
                 stats["analysis_seconds"] += time.monotonic() - t
-        if not self.options.probe:
-            problems = [p for r in gate.evaluate_config(manifest, config, functions) for p in r.problems]
-            if problems:
-                raise gate.GateError("\n".join(problems))
+            if not self.options.probe:
+                problems = [p for r in gate.evaluate_config(manifest, config, functions) for p in r.problems]
+                if problems:
+                    raise gate.GateError("\n".join(problems))
         stats["seconds"] = time.monotonic() - start
         self.timings[config.name] = stats
         print(f"== {config.name}: " + json.dumps(stats, sort_keys=True), flush=True)

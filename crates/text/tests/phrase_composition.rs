@@ -81,8 +81,12 @@ fn corpus() -> (Arc<RdfDataset>, Arc<TextIndex>) {
     let dataset = builder.freeze().expect("the fixture must validate");
     let index = TextIndex::from_dataset(
         &*dataset,
-        &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-            .expect("the fixture configuration is well formed"),
+        &TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Any,
+            purrdf_text::Analyzer::empty_lexicon(),
+        )
+        .expect("the fixture configuration is well formed"),
     )
     .expect("the fixture indexes");
     (dataset, Arc::new(index))

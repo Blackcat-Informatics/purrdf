@@ -203,8 +203,12 @@ fn partitioned_corpus() -> Arc<RdfDataset> {
 
 /// The configuration every measurement here builds under.
 fn configuration() -> TextIndexConfig {
-    TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("one IRI predicate is a well-formed configuration")
+    TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        Analyzer::empty_lexicon(),
+    )
+    .expect("one IRI predicate is a well-formed configuration")
 }
 
 fn benchmark(criterion: &mut Bench) {
@@ -215,7 +219,9 @@ fn benchmark(criterion: &mut Bench) {
     // A common term, a middling one and a rare one, so the three candidate lists
     // the ranker unions differ in length by orders of magnitude and the three
     // inverse document frequencies are genuinely far apart.
-    let query = Analyzer::new().terms("term0000 term0512 term0800");
+    let query = Analyzer::empty_lexicon()
+        .terms("term0000 term0512 term0800")
+        .expect("valid text analysis");
     let partition = PartitionKey::new(None, None);
     let filter = PartitionFilter::unconstrained();
 

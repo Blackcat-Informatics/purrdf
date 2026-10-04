@@ -74,6 +74,8 @@ use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
 use std::cmp::Ordering;
 
+use crate::SurfaceIndex;
+
 use purrdf_core::{DatasetView, FastMap, RdfTextDirection, TermValue};
 
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
@@ -83,7 +85,7 @@ use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, R
 use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
-const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v2");
+const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v3");
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`].
 const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v1");
 
@@ -105,6 +107,13 @@ const PRESENT: u8 = 0x01;
 
 pub use purrdf_core::GraphSelector;
 
+/// Which independent corpus statistics and query projection the index uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexProjection {
+    Lexical,
+    Han,
+}
+
 /// The caller's complete, dataset-independent statement of what to index.
 ///
 /// There is no [`Default`] implementation and there never will be one: a default
@@ -115,6 +124,10 @@ pub struct TextIndexConfig {
     predicates: Vec<TermValue>,
     /// Which graph the index is drawn from.
     graph: GraphSelector,
+    /// Independent lexical or Han-character corpus law.
+    projection: IndexProjection,
+    /// The immutable analysis law used on both sides of retrieval.
+    analyzer: Analyzer,
 }
 
 impl TextIndexConfig {
@@ -131,7 +144,11 @@ impl TextIndexConfig {
     /// looking like it indexed something), if any predicate is repeated (a
     /// repeat is a caller mistake, and silently deduplicating it would hide the
     /// mistake), or if a [`GraphSelector::Named`] does not hold an IRI.
-    pub fn new(predicates: Vec<TermValue>, graph: GraphSelector) -> Result<Self, TextError> {
+    pub fn new(
+        predicates: Vec<TermValue>,
+        graph: GraphSelector,
+        analyzer: Analyzer,
+    ) -> Result<Self, TextError> {
         if predicates.is_empty() {
             return Err(TextError::config(
                 "no indexed predicates supplied; PurRDF mints no vocabulary, so there is no \
@@ -167,7 +184,29 @@ impl TextIndexConfig {
             }
         }
 
-        Ok(Self { predicates, graph })
+        Ok(Self {
+            predicates,
+            graph,
+            projection: IndexProjection::Lexical,
+            analyzer,
+        })
+    }
+
+    pub(crate) fn for_han(mut self) -> Self {
+        self.projection = IndexProjection::Han;
+        self
+    }
+
+    /// Select the immutable analyzer before building the index.
+    #[must_use]
+    pub fn with_analyzer(mut self, analyzer: Analyzer) -> Self {
+        self.analyzer = analyzer;
+        self
+    }
+
+    /// The complete analysis law this configuration binds.
+    pub const fn analyzer(&self) -> &Analyzer {
+        &self.analyzer
     }
 
     /// The indexed predicates, in sorted order.
@@ -314,7 +353,7 @@ impl PartitionKey {
 /// One partition's corpus statistics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PartitionStats {
-    /// How many documents this partition retains.
+    /// How many documents contain terms in this independent scoring projection.
     document_count: u64,
     /// The total number of analyzed tokens across those documents.
     total_tokens: u64,
@@ -323,7 +362,7 @@ pub struct PartitionStats {
 }
 
 impl PartitionStats {
-    /// How many documents this partition retains.
+    /// How many documents contain terms in this independent scoring projection.
     pub const fn document_count(&self) -> u64 {
         self.document_count
     }
@@ -335,17 +374,9 @@ impl PartitionStats {
 
     /// The average document length, in tokens.
     ///
-    /// Guaranteed strictly positive for every partition an index retains: a
-    /// document that analyzes to zero tokens is not retained at all (see
-    /// [`TextIndex`]), so neither the numerator nor the denominator of this
-    /// quotient can be zero. BM25 divides by this value, and the guarantee is
-    /// what makes that division safe without a special case that would have to
-    /// invent a score.
-    ///
-    /// The guarantee is over *retained* partitions, and that is the whole of it:
-    /// an index holding no documents holds no partitions either, so there is no
-    /// `PartitionStats` to read a zero out of. An empty corpus cannot reach this
-    /// divisor rather than reaching it with a zero.
+    /// Positive when the partition contains lexical documents; zero for a
+    /// partition retained solely for auxiliary surface retrieval. Such documents
+    /// contribute neither population nor tokens to this independent ranking law.
     pub const fn average_document_length(&self) -> Fixed {
         self.average_document_length
     }
@@ -365,7 +396,7 @@ pub struct Document {
     /// The language tag shared by the document's literals, `None` when they are
     /// untagged.
     language: Option<String>,
-    /// How many analyzed tokens the document holds. Never zero.
+    /// How many tokens this scoring projection holds; zero for auxiliary-only documents.
     length: u64,
     /// Analyzed token counts by selected predicate ordinal.
     predicate_lengths: Vec<(u32, u64)>,
@@ -389,7 +420,7 @@ impl Document {
         self.language.as_deref()
     }
 
-    /// How many analyzed tokens this document holds. Never zero.
+    /// How many tokens this scoring projection holds; zero for auxiliary-only documents.
     pub const fn length(&self) -> u64 {
         self.length
     }
@@ -435,18 +466,12 @@ struct TermEntry {
 
 /// A built, immutable inverted index over one dataset's literals.
 ///
-/// # The zero-token invariant
+/// # Auxiliary-only documents
 ///
-/// A `(graph, subject, language)` key whose literals analyze to **no** tokens is
-/// not a document and is not retained. A subject whose only literal is `"---"`
-/// contributes nothing a query could ever match, so keeping it would add a row
-/// to `N` and a zero to the length sum — dragging every partition's average
-/// document length toward zero and, in a partition made entirely of such
-/// subjects, driving it *to* zero and putting a division by zero in the BM25
-/// denominator. Excluding them is what makes
-/// [`PartitionStats::average_document_length`] non-zero for every retained
-/// partition, which is a property later stages are entitled to rely on.
-///
+/// Documents with surface or substring projections remain addressable even when
+/// their scoring projection has no terms. They have length zero and do not enter
+/// the BM25 population or length totals. An auxiliary-only partition has zero
+/// scoring population and cannot contribute a posting to lexical retrieval.
 /// # The empty index
 ///
 /// An index holding no documents is well formed and needs no special case
@@ -499,6 +524,10 @@ pub struct TextIndex {
     partitions: Vec<(PartitionKey, PartitionStats)>,
     /// The term dictionary, sorted by term text.
     terms: Vec<TermEntry>,
+    /// Distinct pre-stem words and bounded punctuation-bearing spans.
+    surface: SurfaceIndex,
+    /// Source-aligned Han unigram and bigram occurrences for the independent producer.
+    pub(crate) han_occurrences: Vec<crate::character::HanOccurrence>,
     /// The digest of everything that can change an answer.
     fingerprint: [u8; FINGERPRINT_BYTES],
     /// The digest of the source rows walked.
@@ -577,7 +606,7 @@ impl TextIndex {
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         Self::assemble(
             config.clone(),
-            &documents,
+            documents,
             &dictionary,
             source_fingerprint,
             coverage,
@@ -603,7 +632,7 @@ impl TextIndex {
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         Self::assemble(
             config.clone(),
-            &documents,
+            documents,
             &dictionary,
             source_fingerprint,
             coverage,
@@ -622,6 +651,7 @@ impl TextIndex {
         self.ranking = profile;
         self.rebuild_field_statistics()?;
         self.fingerprint = self.compute_fingerprint();
+        self.surface.bind_generation(self.fingerprint);
         Ok(self)
     }
 
@@ -630,28 +660,32 @@ impl TextIndex {
         &self.ranking
     }
 
-    /// Tokenization identity, independent of ranking and predicate routing.
-    /// Includes the complete Unicode table versions.
-    ///
-    /// It opens with no registered hash domain: [`crate::ANALYZER_PROFILE_ID`] is
-    /// the first field absorbed, and already names the preimage family. The
-    /// fingerprint is its own kind, compared only against another analyzer
-    /// fingerprint, and it is a published identity, so opening it under a
-    /// `Domain` now would change every recorded value.
+    /// Complete tokenization and surface-retrieval identity, independent of
+    /// corpus, ranking and predicate routing.
     pub fn analyzer_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
-        let mut digest = Digest::bare();
-        digest.text(crate::ANALYZER_PROFILE_ID);
-        for version in [
-            self.unicode.core,
-            self.unicode.normalization,
-            self.unicode.case_folding,
-            self.unicode.segmentation,
-        ] {
-            digest.number(version.major);
-            digest.number(version.minor);
-            digest.number(version.patch);
+        self.analyzer().fingerprint()
+    }
+
+    /// Analyze a query under the same projection law used to build this index.
+    ///
+    /// # Errors
+    /// Propagates configured analyzer input and encoding refusals.
+    pub fn query_terms(&self, input: &str) -> Result<Vec<String>, TextError> {
+        match self.config.projection {
+            IndexProjection::Lexical => self.analyzer().terms(input),
+            IndexProjection::Han => crate::character::query_terms(self.analyzer(), input),
         }
-        digest.finish()
+    }
+
+    /// The exact analyzer every query relation uses.
+    pub const fn analyzer(&self) -> &Analyzer {
+        self.config.analyzer()
+    }
+
+    /// Substring and phonetic retrieval over distinct surface terms, including
+    /// sorted document membership and inspectable exact match evidence.
+    pub const fn surface_index(&self) -> &SurfaceIndex {
+        &self.surface
     }
 
     /// Exact field token totals for a partition, in ranking field order.
@@ -901,7 +935,7 @@ impl TextIndex {
     }
 
     /// How many analyzed tokens the document `id` names holds, or `None` if
-    /// there is no such document. Never `Some(0)`.
+    /// there is no such document. Auxiliary-only documents have length zero.
     pub fn document_length(&self, id: u32) -> Option<u64> {
         self.documents.get(id as usize).map(Document::length)
     }
@@ -1040,7 +1074,7 @@ impl TextIndex {
     /// index: partitions, statistics, postings and the fingerprint.
     fn assemble(
         config: TextIndexConfig,
-        documents: &[AnalyzedDocument],
+        documents: Vec<AnalyzedDocument>,
         dictionary: &[String],
         source_fingerprint: [u8; FINGERPRINT_BYTES],
         coverage: SourceCoverage,
@@ -1054,7 +1088,7 @@ impl TextIndex {
             )));
         }
 
-        let (partitions, partition_of) = build_partitions(documents)?;
+        let (partitions, partition_of) = build_partitions(&documents)?;
         let table: Vec<Document> = documents
             .iter()
             .map(|document| Document {
@@ -1066,8 +1100,27 @@ impl TextIndex {
                 partition: partition_of[&document.key],
             })
             .collect();
-        let terms = build_terms(documents, dictionary, &table);
+        let terms = build_terms(&documents, dictionary, &table);
         let subject_order = build_subject_order(&table);
+        let mut analyses = Vec::new();
+        let mut han_occurrences = Vec::new();
+        for (id, document) in documents.into_iter().enumerate() {
+            for (literal, analysis) in document.analyses {
+                if config.projection == IndexProjection::Han {
+                    han_occurrences.extend(
+                        crate::character::index_projections(&analysis)
+                            .into_iter()
+                            .map(|projection| crate::character::HanOccurrence {
+                                document: id as u32,
+                                literal,
+                                projection,
+                            }),
+                    );
+                }
+                analyses.push((id as u32, literal, analysis));
+            }
+        }
+        let surface = SurfaceIndex::from_analyses(config.analyzer.clone(), analyses)?;
 
         let mut index = Self {
             config,
@@ -1080,12 +1133,15 @@ impl TextIndex {
             subject_order,
             partitions,
             terms,
+            surface,
+            han_occurrences,
             fingerprint: [0; FINGERPRINT_BYTES],
             source_fingerprint,
             coverage,
         };
         index.rebuild_field_statistics()?;
         index.fingerprint = index.compute_fingerprint();
+        index.surface.bind_generation(index.fingerprint);
         Ok(index)
     }
 
@@ -1093,7 +1149,19 @@ impl TextIndex {
     fn compute_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
         let mut digest = Digest::new(INDEX_DIGEST_DOMAIN);
         digest.text(crate::ANALYZER_PROFILE_ID);
+        digest.text(match self.config.projection {
+            IndexProjection::Lexical => "lexical",
+            IndexProjection::Han => crate::character::PROFILE_ID,
+        });
+        for byte in self.analyzer_fingerprint() {
+            digest.tag(byte);
+        }
         for byte in self.ranking.fingerprint() {
+            digest.tag(byte);
+        }
+        // Alignment evidence distinguishes original spellings even when their
+        // normalized terms coincide. The generation binds those source rows.
+        for byte in self.source_fingerprint {
             digest.tag(byte);
         }
 
@@ -1119,6 +1187,17 @@ impl TextIndex {
             digest.number(version.major);
             digest.number(version.minor);
             digest.number(version.patch);
+        }
+
+        for terms in [self.surface.words(), self.surface.spans()] {
+            digest.count(terms.len());
+            for term in terms {
+                digest.text(term.text());
+                digest.count(term.documents().len());
+                for &document in term.documents() {
+                    digest.number(u64::from(document));
+                }
+            }
         }
 
         digest.count(self.documents.len());
@@ -1258,6 +1337,8 @@ struct AnalyzedDocument {
     tokens: Vec<(u32, u32, u32)>,
     /// Token counts by predicate ordinal, before field routing.
     predicate_lengths: Vec<(u32, u64)>,
+    /// Once-computed, source-aligned projections and source row identities.
+    analyses: Vec<([u8; 32], crate::analysis::Analysis)>,
 }
 
 /// Read every configured predicate's literal rows out of both RDF 1.2 layers,
@@ -1461,7 +1542,7 @@ fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, Te
 // Building: analysis
 // ---------------------------------------------------------------------------
 
-/// Group `rows` into documents, analyze each one, drop the empty ones, and sort
+/// Group `rows` into documents, analyze each once, retain searchable projections, and sort
 /// what is left into id order.
 ///
 /// Returns the documents and the term dictionary in **intern** order; the
@@ -1480,8 +1561,7 @@ fn analyze_rows(
         groups.entry(key).or_default().push(index as u32);
     }
 
-    let analyzer = Analyzer::new();
-    let mut scratch = String::new();
+    let analyzer = config.analyzer();
     let mut ordinals: FastMap<String, u32> = FastMap::default();
     let mut dictionary: Vec<String> = Vec::new();
     let mut documents: Vec<AnalyzedDocument> = Vec::with_capacity(groups.len());
@@ -1500,71 +1580,74 @@ fn analyze_rows(
 
         let mut tokens: Vec<(u32, u32, u32)> = Vec::new();
         let mut predicate_lengths: Vec<(u32, u64)> = Vec::new();
-        // Positions run consecutively across the whole concatenation rather than
-        // restarting per literal, so a phrase can span two of a document's
-        // literals exactly as it would span two sentences of one literal.
+        let mut analyses = Vec::new();
+        // Ordinals belong only to this index's declared projection. Auxiliary
+        // terms never advance lexical phrase positions or document lengths.
         let mut position: u32 = 0;
-        let mut failure: Option<TextError> = None;
         for index in indices {
+            let row = &rows[index as usize];
             let predicate = config
                 .predicates
-                .binary_search(&rows[index as usize].predicate)
-                .expect("walk selected configured predicates");
-            analyzer.analyze_each(&rows[index as usize].lexical_form, &mut scratch, |token| {
-                if failure.is_some() {
-                    return;
+                .binary_search(&row.predicate)
+                .expect("walk selected configured predicates") as u32;
+            let analysis = analyzer.projections(&row.lexical_form)?;
+            let character;
+            let projections = match config.projection {
+                IndexProjection::Lexical => &analysis.lexical,
+                IndexProjection::Han => {
+                    character = crate::character::index_projections(&analysis);
+                    &character
                 }
-                let ordinal = match ordinals.get(token.text.as_ref()) {
+            };
+            for projection in projections {
+                let ordinal = match ordinals.get(&projection.text) {
                     Some(&ordinal) => ordinal,
                     None => {
-                        let ordinal = dictionary.len() as u32;
-                        dictionary.push(token.text.as_ref().to_owned());
-                        ordinals.insert(token.text.into_owned(), ordinal);
+                        let ordinal = u32::try_from(dictionary.len()).map_err(|_| {
+                            TextError::data("term dictionary exceeds the u32 ordinal space")
+                        })?;
+                        dictionary.push(projection.text.clone());
+                        ordinals.insert(projection.text.clone(), ordinal);
                         ordinal
                     }
                 };
-                tokens.push((ordinal, position, predicate as u32));
+                tokens.push((ordinal, position, predicate));
                 let length = match predicate_lengths.last_mut() {
-                    Some((prior, length)) if *prior == predicate as u32 => {
+                    Some((prior, length)) if *prior == predicate => {
                         *length += 1;
                         *length
                     }
                     _ => {
-                        predicate_lengths.push((predicate as u32, 1));
+                        predicate_lengths.push((predicate, 1));
                         1
                     }
                 };
                 if length > FIELD_LENGTH_MAX {
-                    failure = Some(TextError::data(
+                    return Err(TextError::data(
                         "a predicate holds more than 2^24 analyzed tokens in one document",
                     ));
-                    return;
                 }
-                match position.checked_add(1) {
-                    Some(next) => position = next,
-                    None => {
-                        failure = Some(TextError::data(
-                            "a document holds more than u32::MAX tokens, which exceeds the \
-                             position space the index addresses"
-                                .to_owned(),
-                        ));
-                    }
-                }
-            });
-            if let Some(failure) = failure {
-                return Err(failure);
+                position = position.checked_add(1).ok_or_else(|| {
+                    TextError::data("document exceeds the u32 token position space")
+                })?;
             }
+            analyses.push((digest_rows(std::slice::from_ref(row)), analysis));
         }
-
-        // A key whose literals analyze to nothing is not a document. See
-        // `TextIndex`'s documentation for why this invariant is load-bearing.
-        if tokens.is_empty() {
+        // Retain auxiliary-only documents without admitting them into the
+        // independent lexical or Han scoring population.
+        if tokens.is_empty()
+            && analyses
+                .iter()
+                .all(|(_, analysis)| analysis.surface.is_empty() && analysis.spans.is_empty())
+        {
             continue;
         }
+
         documents.push(AnalyzedDocument {
             key,
             tokens,
             predicate_lengths,
+            analyses,
         });
     }
 
@@ -1589,7 +1672,7 @@ fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, Text
             language: document.key.language.clone(),
         };
         let entry = totals.entry(key).or_insert((0, 0));
-        entry.0 += 1;
+        entry.0 += u64::from(!document.tokens.is_empty());
         entry.1 += document.tokens.len() as u64;
     }
 
@@ -1605,7 +1688,11 @@ fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, Text
             PartitionStats {
                 document_count,
                 total_tokens,
-                average_document_length: exact_average(total_tokens, document_count)?,
+                average_document_length: if document_count == 0 {
+                    Fixed::ZERO
+                } else {
+                    exact_average(total_tokens, document_count)?
+                },
             },
         ));
         index_of.insert(key, index as u32);
@@ -1867,6 +1954,7 @@ mod tests {
                 TermValue::iri("https://example.org/a"),
             ],
             GraphSelector::Any,
+            crate::Analyzer::empty_lexicon(),
         )
         .expect("two distinct IRIs are a valid configuration");
         assert_eq!(
@@ -1885,6 +1973,7 @@ mod tests {
         let error = TextIndexConfig::new(
             vec![TermValue::iri("https://example.org/p")],
             GraphSelector::Named(TermValue::simple_literal("g")),
+            crate::Analyzer::empty_lexicon(),
         )
         .expect_err("a literal cannot name a graph");
         assert!(matches!(error, TextError::Config(_)), "got {error:?}");

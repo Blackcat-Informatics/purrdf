@@ -274,7 +274,7 @@ test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|
 		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
 		doc) set -x; cargo test --workspace --locked --doc \
 			&& cargo build --workspace --locked --examples --profile test \
-			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture ;; \
+			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance ;; \
 		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
 		integration-2) set -x; cargo test --workspace --locked --test '[e-o]*' ;; \
 		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \

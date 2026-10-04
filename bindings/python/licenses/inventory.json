@@ -796,6 +796,22 @@
       "source": "https://github.com/shexSpec/shexTest/tree/8772d2d32c94bfba21a30c09915dfc7662e1539f"
     },
     {
+      "id": "snowball-english-corpus",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt"
+      ],
+      "paths": [
+        "crates/text/tests/stemming_vectors/voc.txt",
+        "crates/text/tests/stemming_vectors/output.txt"
+      ],
+      "provenance": [
+        "crates/text/tests/stemming_vectors/PROVENANCE.md"
+      ],
+      "scope": "Complete unmodified English conformance DATA only; the independent prose-derived stemming implementation retains the first-party grant",
+      "source": "https://github.com/snowballstem/snowball-data/tree/a0ec0d0a2839ec885878868de20fcb63209d92b0/english"
+    },
+    {
       "id": "sparql-cdt",
       "license": "Apache-2.0",
       "notices": [
@@ -1067,6 +1083,23 @@
       "source_checksum": "23939e44bb9a5d7576fa2b563dc2e136628f1224e88a8deed09e04858b77871f"
     },
     {
+      "id": "whatwg-html-references",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/whatwg-html-references/0-LICENSE-WHATWG"
+      ],
+      "paths": [
+        "crates/lex/data/html/**",
+        "crates/lex/src/html/entities.rs"
+      ],
+      "provenance": [
+        "crates/lex/data/html/PROVENANCE.md",
+        "LICENSING.md"
+      ],
+      "scope": "named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant",
+      "source": "https://github.com/whatwg/html-build/tree/283a3531a61106d07d9a7d9fb3e6f3b9bfd33d70/entities/out"
+    },
+    {
       "id": "windows-link-0.2.1",
       "license": "MIT OR Apache-2.0",
       "notices": [
@@ -1139,7 +1172,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "0f19709e7cbb62c28c075f0a5b07d58d9fd6d84349fc783c48af7d55d8c61c5f",
+    "NOTICE.txt": "fab174c524a710689d5962c15275509c6c49aa6214bf5cf49faee9e5fea7b05d",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -1299,6 +1332,7 @@
     "third-party/shacl12/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
     "third-party/shex-tests/0-shexTest-v2.1.0-package.json": "02890e50cedec0c80de6d1fd7a0ec84115c683a6eeb9594bbb7c32125a1b0d6f",
     "third-party/shex-tests/1-MIT-permission.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt": "359c9dc0eadeec2a4376cefd12cab1cb7cdedc3b064fac3075c04e916de05a19",
     "third-party/sparql-cdt/0-LICENSE": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
     "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
     "third-party/w3c-owl2-rl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
@@ -1321,6 +1355,7 @@
     "third-party/w3c-sparql12/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
     "third-party/w3c-sparql12/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
     "third-party/w3c-sparql12/4-LicenseRef-W3C-Test-Suite.txt": "13819bd3f7e3d2ea60ec7e602c4aa7bfe294fb6280949bf51d9a8d9bdc65639e",
+    "third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864",
     "third-party/wycheproof/0-LICENSE": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
     "third-party/yaml-tests/0-LICENSE": "c9562189164244554a69ab3f29d2d93ed9492c165723aaaa5fffc932cdbbfc85"
   },

@@ -1,0 +1,103 @@
+{
+  "format": "purrdf-lexicon-bundle/v1",
+  "icu_revision": "21d1eb0f306e1141c10931e914dfc038c06121da",
+  "law": "unicode17-caseless-transparent-egc-lattice-unknown-cost-count-longest/v2",
+  "normalization_collisions": "minimum-cost; all raw variants recorded",
+  "artifacts": [
+    {
+      "name": "cjdict",
+      "source": "icu-78.3/cjdict.txt",
+      "source_url": "https://raw.githubusercontent.com/unicode-org/icu/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/cjdict.txt",
+      "source_blake3": "60ea19715de4cf376fa12eebee460a97207d9b6309306510ef13197a0be396f4",
+      "source_entries": 315964,
+      "canonical_entries": 315956,
+      "collapsed_entries": 8,
+      "collision_groups": 8,
+      "collisions": "cjdict.collisions.json",
+      "artifact": "cjdict-64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f.cbor",
+      "artifact_bytes": 4833368,
+      "physical_blake3": "64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f",
+      "semantic_blake3": "0f5fc50773275510ae3fc653dc7fc7ad198833c87c6a5598df965295ac087843",
+      "notices": [
+        "../notices/Unicode-3.0.txt",
+        "../notices/cjdict.txt"
+      ]
+    },
+    {
+      "name": "thaidict",
+      "source": "icu-78.3/thaidict.txt",
+      "source_url": "https://raw.githubusercontent.com/unicode-org/icu/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/thaidict.txt",
+      "source_blake3": "8113b6b1b477c6cb1173797518f7d2181554487bb19e1598daa7253682bc79c4",
+      "source_entries": 26383,
+      "canonical_entries": 26383,
+      "collapsed_entries": 0,
+      "collision_groups": 0,
+      "collisions": "thaidict.collisions.json",
+      "artifact": "thaidict-193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0.cbor",
+      "artifact_bytes": 620428,
+      "physical_blake3": "193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0",
+      "semantic_blake3": "7423cb1ad97155d97d02786e6149f06a410f087bd2f8d9426e43399a308f2d23",
+      "notices": [
+        "../notices/Unicode-3.0.txt",
+        "../notices/thaidict.txt"
+      ]
+    },
+    {
+      "name": "laodict",
+      "source": "icu-78.3/laodict.txt",
+      "source_url": "https://raw.githubusercontent.com/unicode-org/icu/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/laodict.txt",
+      "source_blake3": "e65706e1ad89850d7b528d741e1d9c4fdec54e97f218c8f48eae5268397914e0",
+      "source_entries": 30550,
+      "canonical_entries": 30505,
+      "collapsed_entries": 45,
+      "collision_groups": 45,
+      "collisions": "laodict.collisions.json",
+      "artifact": "laodict-6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f.cbor",
+      "artifact_bytes": 824965,
+      "physical_blake3": "6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f",
+      "semantic_blake3": "5b198555c03a475e92c2055ee464442737641bdcd76388fa86e827926462be00",
+      "notices": [
+        "../notices/Unicode-3.0.txt",
+        "../notices/laodict.txt"
+      ]
+    },
+    {
+      "name": "khmerdict",
+      "source": "icu-78.3/khmerdict.txt",
+      "source_url": "https://raw.githubusercontent.com/unicode-org/icu/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/khmerdict.txt",
+      "source_blake3": "04c9f04f22cdb9a00b4ea894a648d12785d2ba5da33e01ba94a2dc7d39eb9ea0",
+      "source_entries": 81028,
+      "canonical_entries": 81025,
+      "collapsed_entries": 3,
+      "collision_groups": 3,
+      "collisions": "khmerdict.collisions.json",
+      "artifact": "khmerdict-90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b.cbor",
+      "artifact_bytes": 2430900,
+      "physical_blake3": "90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b",
+      "semantic_blake3": "5b33b92dd59d4e9e2de3365b74145052aea9209877117440600c51ca8e09dd8e",
+      "notices": [
+        "../notices/Unicode-3.0.txt",
+        "../notices/khmerdict.txt"
+      ]
+    },
+    {
+      "name": "burmesedict",
+      "source": "icu-78.3/burmesedict.txt",
+      "source_url": "https://raw.githubusercontent.com/unicode-org/icu/21d1eb0f306e1141c10931e914dfc038c06121da/icu4c/source/data/brkitr/dictionaries/burmesedict.txt",
+      "source_blake3": "b16d32cb5639395cc6a13b40269fe078465ce97eefa1af61425111ec32b3099e",
+      "source_entries": 41120,
+      "canonical_entries": 41120,
+      "collapsed_entries": 0,
+      "collision_groups": 0,
+      "collisions": "burmesedict.collisions.json",
+      "artifact": "burmesedict-f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a.cbor",
+      "artifact_bytes": 1362430,
+      "physical_blake3": "f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a",
+      "semantic_blake3": "67086b19e01d7b41d508f44854ef71252b59d6bb3cdacf8b43e8b5d1363fd778",
+      "notices": [
+        "../notices/Unicode-3.0.txt",
+        "../notices/burmesedict.txt"
+      ]
+    }
+  ]
+}

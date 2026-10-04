@@ -66,6 +66,13 @@ purrdf-alloc-probe = { workspace = true }
 # the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 
+# The host-side relevance evaluator validates externally supplied corpora and
+# graded judgments. Execute its input and metric tests in the workspace gate;
+# Cargo otherwise compiles examples without running their tests.
+[[example]]
+name = "text_relevance"
+test = true
+
 # The one test in this crate that must EXECUTE on wasm32-unknown-unknown rather
 # than merely compile for it. A fused score is a sum of truncated reciprocals and
 # the whole ordering claim rests on those being the same value everywhere; "the

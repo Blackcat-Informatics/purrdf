@@ -1,0 +1,114 @@
+[
+  {
+    "canonical": "不",
+    "cost": 55,
+    "sources": [
+      {
+        "word": "不",
+        "cost": 55
+      },
+      {
+        "word": "不",
+        "cost": 93
+      }
+    ]
+  },
+  {
+    "canonical": "兀",
+    "cost": 100,
+    "sources": [
+      {
+        "word": "兀",
+        "cost": 100
+      },
+      {
+        "word": "兀",
+        "cost": 109
+      }
+    ]
+  },
+  {
+    "canonical": "嗀",
+    "cost": 107,
+    "sources": [
+      {
+        "word": "嗀",
+        "cost": 109
+      },
+      {
+        "word": "嗀",
+        "cost": 107
+      }
+    ]
+  },
+  {
+    "canonical": "盧",
+    "cost": 94,
+    "sources": [
+      {
+        "word": "盧",
+        "cost": 94
+      },
+      {
+        "word": "盧",
+        "cost": 109
+      }
+    ]
+  },
+  {
+    "canonical": "練",
+    "cost": 91,
+    "sources": [
+      {
+        "word": "練",
+        "cost": 91
+      },
+      {
+        "word": "練",
+        "cost": 113
+      }
+    ]
+  },
+  {
+    "canonical": "老",
+    "cost": 67,
+    "sources": [
+      {
+        "word": "老",
+        "cost": 67
+      },
+      {
+        "word": "老",
+        "cost": 110
+      }
+    ]
+  },
+  {
+    "canonical": "蘭",
+    "cost": 84,
+    "sources": [
+      {
+        "word": "蘭",
+        "cost": 84
+      },
+      {
+        "word": "蘭",
+        "cost": 118
+      }
+    ]
+  },
+  {
+    "canonical": "識",
+    "cost": 91,
+    "sources": [
+      {
+        "word": "識",
+        "cost": 91
+      },
+      {
+        "word": "識",
+        "cost": 109
+      }
+    ]
+  }
+]

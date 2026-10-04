@@ -242,8 +242,12 @@ fn dataset_with(subjects: Subjects, added: Option<Side>) -> Arc<RdfDataset> {
 /// graph — so exactly one partition, which is the condition
 /// `TextSearchRelation::ranked_declaration` requires.
 fn index(dataset: &RdfDataset, side: Side) -> Arc<TextIndex> {
-    let config = TextIndexConfig::new(vec![TermValue::iri(side.predicate())], GraphSelector::Any)
-        .expect("the fixture configuration is well formed");
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri(side.predicate())],
+        GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .expect("the fixture configuration is well formed");
     Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))
 }
 

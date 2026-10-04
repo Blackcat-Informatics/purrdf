@@ -1,0 +1,44 @@
+[
+  {
+    "canonical": "ម្ហ៊ិះ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ម្ហ៊ិះ",
+        "cost": 1
+      },
+      {
+        "word": "ម្ហ៊‍ិះ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "ហ៊ឹះ",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "ហ៊ឹះ",
+        "cost": 1
+      },
+      {
+        "word": "ហ‍៊ឹះ",
+        "cost": 1
+      }
+    ]
+  },
+  {
+    "canonical": "អ៊ីកអ៊ាក",
+    "cost": 1,
+    "sources": [
+      {
+        "word": "អ៊ីកអ៊ាក",
+        "cost": 1
+      },
+      {
+        "word": "អ៊‌ីកអ៊ាក",
+        "cost": 1
+      }
+    ]
+  }
+]

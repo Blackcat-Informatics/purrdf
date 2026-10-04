@@ -175,8 +175,12 @@ fn dataset() -> Arc<RdfDataset> {
 /// partition, which is the condition `TextSearchRelation::ranked_declaration`
 /// requires before it will claim a ranked order.
 fn text_index(data: &RdfDataset) -> TextIndex {
-    let config = TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("one IRI predicate is a well-formed configuration");
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .expect("one IRI predicate is a well-formed configuration");
     TextIndex::from_dataset(data, &config).expect("the index builds over the fixture dataset")
 }
 
@@ -359,8 +363,12 @@ fn sample_index() -> TextIndex {
         builder.push_quad(document, note, literal, None);
     }
     let data = builder.freeze().expect("the sample dataset is valid");
-    let config = TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("one IRI predicate is a well-formed configuration");
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .expect("one IRI predicate is a well-formed configuration");
     TextIndex::from_dataset(&*data, &config).expect("the sample index builds")
 }
 

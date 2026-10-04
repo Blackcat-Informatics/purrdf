@@ -26,3 +26,10 @@ Evidence: crates/iri/unicode/PROVENANCE.md
 Evidence: LICENSING.md
 Notice: third-party/unicode/0-Unicode-3.0.txt
 
+whatwg-html-references: BSD-3-Clause
+Scope: named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant
+Source: https://github.com/whatwg/html-build/tree/283a3531a61106d07d9a7d9fb3e6f3b9bfd33d70/entities/out
+Evidence: crates/lex/data/html/PROVENANCE.md
+Evidence: LICENSING.md
+Notice: third-party/whatwg-html-references/0-LICENSE-WHATWG
+

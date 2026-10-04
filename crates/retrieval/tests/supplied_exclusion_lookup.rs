@@ -2497,9 +2497,12 @@ mod text_relation {
         let shared = DomainTag::parse(&ex("domain/shared")).expect("the fixture tag is an IRI");
         let mut registry = PropertyFunctionRegistry::new();
         let observed = sides().map(|(stratum, predicate, producer, _)| {
-            let config =
-                TextIndexConfig::new(vec![TermValue::iri(predicate.clone())], GraphSelector::Any)
-                    .expect("the fixture configuration is well formed");
+            let config = TextIndexConfig::new(
+                vec![TermValue::iri(predicate.clone())],
+                GraphSelector::Any,
+                purrdf_text::Analyzer::empty_lexicon(),
+            )
+            .expect("the fixture configuration is well formed");
             let index =
                 Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture indexes"));
             let relation = TextSearchRelation::new(index);

@@ -63,6 +63,18 @@ From `https://www.unicode.org/Public/17.0.0/idna/`:
 
 - `IdnaTestV2.txt`
 
+Added 2026-10-04, verbatim Unicode 17 data for extended grapheme boundaries
+and finite emoji recognition:
+
+- `auxiliary/GraphemeBreakProperty.txt` — SHA-256
+  `d6b51d1d2ae5c33b451b7ed994b48f1f4dc62b2272a5831e7fd418514a6bae89`
+- `auxiliary/GraphemeBreakTest.txt` — SHA-256
+  `e2d134d2c52919bace503ebb6a551c1855fe1a1faec18478c78fff254a1793ec`
+- `emoji/emoji-variation-sequences.txt` — SHA-256
+  `bb3d09ef03f206012c7532dd52dc0a21c9efddba0135ea4cf0d9201b8b9bba7e`
+- `https://www.unicode.org/Public/17.0.0/emoji/emoji-test.txt` — SHA-256
+  `1d8a944f88d7952f7ef7c5167fef3c67995bcae24543949710231b03a201acda`
+
 ## `16.0.0/` — Unicode 16.0.0
 
 From `https://www.unicode.org/Public/16.0.0/ucd/`:

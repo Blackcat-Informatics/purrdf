@@ -54,6 +54,9 @@
 
 use crate::unicode_tables as tables;
 
+mod aligned;
+pub use aligned::{TaggedScalar, compose_tagged, decompose_tagged};
+
 /// The Unicode version every generated Unicode table in the workspace comes
 /// from. The tables of `purrdf-iri`, `purrdf-text` and `purrdf-jsonschema`
 /// assert at compile time that they were generated from this version.
@@ -324,14 +327,7 @@ impl Held {
     /// (§3.11) over one run of non-starters — and hand each to `next`.
     fn release_ordered<N: Stage>(&mut self, next: &mut N) {
         let run = self.as_mut_slice();
-        // Insertion sort: stable, allocation-free, and the runs are short.
-        for i in 1..run.len() {
-            let mut j = i;
-            while j > 0 && run[j - 1].0 > run[j].0 {
-                run.swap(j - 1, j);
-                j -= 1;
-            }
-        }
+        canonical_order(run, |entry| entry.0);
         for &(_, c) in run.iter() {
             next.push(c);
         }
@@ -384,50 +380,7 @@ impl<const COMPAT: bool, N: Stage> Decompose<COMPAT, N> {
 impl<const COMPAT: bool, N: Stage> Stage for Decompose<COMPAT, N> {
     #[inline]
     fn push(&mut self, c: char) {
-        if c < '\u{A0}' {
-            self.emit(c);
-            return;
-        }
-        let point = c as u32;
-        if (S_BASE..S_BASE + S_COUNT).contains(&point) {
-            let index = point - S_BASE;
-            for part in [
-                L_BASE + index / N_COUNT,
-                V_BASE + (index % N_COUNT) / T_COUNT,
-                T_BASE + index % T_COUNT,
-            ] {
-                if part != T_BASE
-                    && let Some(jamo) = char::from_u32(part)
-                {
-                    self.emit(jamo);
-                }
-            }
-            return;
-        }
-        let record = lookup_two_stage(
-            &tables::DECOMPOSITION_INDEX,
-            &tables::DECOMPOSITION_BLOCKS,
-            c,
-        );
-        if record == 0 {
-            self.emit(c);
-            return;
-        }
-        let (canonical_start, canonical_len, compat_start, compat_len) =
-            tables::DECOMPOSITION_RECORDS[usize::from(record)];
-        let (start, len) = if COMPAT {
-            (compat_start, compat_len)
-        } else {
-            (canonical_start, canonical_len)
-        };
-        if len == 0 {
-            self.emit(c);
-            return;
-        }
-        let start = usize::from(start);
-        for &part in &tables::DECOMPOSITION_CHARS[start..start + usize::from(len)] {
-            self.emit(part);
-        }
+        decompose_scalar::<COMPAT>(c, |part| self.emit(part));
     }
 
     fn push_ascii(&mut self, ascii: &str, lowercase: bool) {
@@ -438,6 +391,72 @@ impl<const COMPAT: bool, N: Stage> Stage for Decompose<COMPAT, N> {
     fn flush(&mut self) {
         self.held.release_ordered(&mut self.next);
         self.next.flush();
+    }
+}
+
+/// The one full decomposition lookup, shared by plain and annotated streams.
+#[inline]
+fn decompose_scalar<const COMPAT: bool>(c: char, mut emit: impl FnMut(char)) {
+    if c < '\u{A0}' {
+        emit(c);
+        return;
+    }
+    let point = c as u32;
+    if (S_BASE..S_BASE + S_COUNT).contains(&point) {
+        let index = point - S_BASE;
+        for part in [
+            L_BASE + index / N_COUNT,
+            V_BASE + (index % N_COUNT) / T_COUNT,
+            T_BASE + index % T_COUNT,
+        ] {
+            if part != T_BASE
+                && let Some(jamo) = char::from_u32(part)
+            {
+                emit(jamo);
+            }
+        }
+        return;
+    }
+    let record = lookup_two_stage(
+        &tables::DECOMPOSITION_INDEX,
+        &tables::DECOMPOSITION_BLOCKS,
+        c,
+    );
+    if record == 0 {
+        emit(c);
+        return;
+    }
+    let (canonical_start, canonical_len, compat_start, compat_len) =
+        tables::DECOMPOSITION_RECORDS[usize::from(record)];
+    let (start, len) = if COMPAT {
+        (compat_start, compat_len)
+    } else {
+        (canonical_start, canonical_len)
+    };
+    if len == 0 {
+        emit(c);
+        return;
+    }
+    let start = usize::from(start);
+    for &part in &tables::DECOMPOSITION_CHARS[start..start + usize::from(len)] {
+        emit(part);
+    }
+}
+
+/// Stable canonical ordering; ordinary short runs stay allocation-free while
+/// an adversarially long combining sequence avoids quadratic insertion work.
+#[inline]
+fn canonical_order<T>(run: &mut [T], class: impl Fn(&T) -> u8) {
+    if run.len() > Held::INLINE {
+        run.sort_by_key(class);
+        return;
+    }
+    for i in 1..run.len() {
+        let mut j = i;
+        while j > 0 && class(&run[j - 1]) > class(&run[j]) {
+            run.swap(j - 1, j);
+            j -= 1;
+        }
     }
 }
 
@@ -473,6 +492,22 @@ fn may_compose_second(c: char, class: u8) -> bool {
     (V_BASE..V_BASE + V_COUNT).contains(&point)
         || (T_BASE + 1..T_BASE + T_COUNT).contains(&point)
         || (point >= 0x300 && tables::COMPOSING_STARTERS.binary_search(&c).is_ok())
+}
+
+/// The one composition/blocking decision for either metadata representation.
+#[inline]
+fn unblocked_composite(
+    first: char,
+    second: char,
+    class: u8,
+    last_class: u8,
+    pending: bool,
+) -> Option<char> {
+    if (pending && last_class >= class) || !may_compose_second(second, class) {
+        None
+    } else {
+        compose_pair(first, second)
+    }
 }
 
 /// The canonical composition algorithm (§3.11) over decomposed, canonically
@@ -528,10 +563,8 @@ impl<N: Stage> Stage for Compose<N> {
         // `c` is blocked from the starter when some character between them
         // has class 0 or a class not below its own. The pending characters are
         // non-starters in canonical order, so the last has the greatest class.
-        let blocked = !self.pending.is_empty() && self.last_class >= class;
-        if !blocked
-            && may_compose_second(c, class)
-            && let Some(composite) = compose_pair(starter, c)
+        if let Some(composite) =
+            unblocked_composite(starter, c, class, self.last_class, !self.pending.is_empty())
         {
             self.starter = Some(composite);
             return;
