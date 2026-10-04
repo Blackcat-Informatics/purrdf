@@ -832,6 +832,11 @@ impl DatasetView for ClassMembershipView {
     fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
         self.base.named_graphs()
     }
+
+    #[inline]
+    fn has_named_graph(&self, graph: TermId) -> bool {
+        self.base.has_named_graph(graph)
+    }
 }
 
 fn build_index(

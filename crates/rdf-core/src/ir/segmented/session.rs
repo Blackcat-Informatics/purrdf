@@ -306,6 +306,34 @@ pub struct SegmentedSession {
 }
 
 impl SegmentedSession {
+    /// The named graph record at `index`, ascending; `None` once a read fault has
+    /// latched (the fault is recorded, as every read records one).
+    fn named_graph_at(&self, index: u64) -> Option<GlobalTermId> {
+        let per_block = (u64::from(self.header.block_bytes) - 9) / 8;
+        let block = self
+            .block(self.header.graphs.first + index / per_block)
+            .ok()?;
+        let records = match fixed_records(&block.encoded, format::GRAPHS, 8) {
+            Ok(data) => data,
+            Err(error) => {
+                let _ = self.fail::<()>(error);
+                return None;
+            }
+        };
+        let offset = usize::try_from(index % per_block).ok()?.checked_mul(8)?;
+        match records
+            .get(offset..offset + 8)
+            .ok_or(SegmentedError::Corrupt("missing named graph ordinal"))
+            .and_then(|bytes| Reader::at(bytes, 0).id())
+        {
+            Ok(id) => Some(id),
+            Err(error) => {
+                let _ = self.fail::<()>(error);
+                None
+            }
+        }
+    }
+
     /// Qualify a compact term ID for external storage or a later session attachment.
     ///
     /// # Errors
@@ -1304,31 +1332,27 @@ impl DatasetView for SegmentedSession {
         self.stream(2, (None, None, None, graph))
     }
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
-        let per_block = (u64::from(self.header.block_bytes) - 9) / 8;
-        (0..self.header.graphs.rows).map_while(move |index| {
-            let block = self
-                .block(self.header.graphs.first + index / per_block)
-                .ok()?;
-            let records = match fixed_records(&block.encoded, format::GRAPHS, 8) {
-                Ok(data) => data,
-                Err(error) => {
-                    let _ = self.fail::<()>(error);
-                    return None;
-                }
+        (0..self.header.graphs.rows).map_while(move |index| self.named_graph_at(index))
+    }
+
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): a binary search of
+    /// the graph records, which the image stores strictly ascending (checked when it
+    /// is opened), so a probe reads `O(log n)` records rather than every block. A
+    /// read fault latches as it does for enumeration and answers `false`.
+    fn has_named_graph(&self, graph: Self::Id) -> bool {
+        let (mut low, mut high) = (0, self.header.graphs.rows);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let Some(id) = self.named_graph_at(middle) else {
+                return false;
             };
-            let offset = usize::try_from(index % per_block).ok()?.checked_mul(8)?;
-            match records
-                .get(offset..offset + 8)
-                .ok_or(SegmentedError::Corrupt("missing named graph ordinal"))
-                .and_then(|bytes| Reader::at(bytes, 0).id())
-            {
-                Ok(id) => Some(id),
-                Err(error) => {
-                    let _ = self.fail::<()>(error);
-                    None
-                }
+            match id.cmp(&graph) {
+                std::cmp::Ordering::Less => low = middle + 1,
+                std::cmp::Ordering::Greater => high = middle,
+                std::cmp::Ordering::Equal => return true,
             }
-        })
+        }
+        false
     }
 }
 impl FallibleDatasetView for SegmentedSession {
