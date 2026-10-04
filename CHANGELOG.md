@@ -10,6 +10,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
+  with a non-ASCII character where the timezone suffix would be, such as
+  `"2001-01-01€12345"`, is rejected as an invalid lexical form instead of
+  panicking. SPARQL casts, typed-literal ordering, D-entailment and SHACL
+  validation over such literals no longer abort.
 - **SHACL Core:** `sh:datatype` now rejects ill-formed literals of every XSD
   datatype PurRDF models, not only the numeric and boolean types. This covers
   `xsd:dateTime`, `xsd:date`, `xsd:time`, `xsd:dateTimeStamp` (which also
