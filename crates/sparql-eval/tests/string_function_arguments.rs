@@ -24,7 +24,7 @@
 //!
 //! Every refusal is paired with a neighbouring call that must still answer.
 
-use purrdf_core::term_fixture::{empty_dataset, one_quad};
+use purrdf_core::term_fixture::{build_page, empty_dataset, one_quad};
 use purrdf_core::{RdfDataset, RdfTextDirection, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
@@ -661,5 +661,116 @@ fn simple_literal_arguments_refuse_tagged_strings() {
         let query =
             format!("SELECT (LANGMATCHES(?t, \"*\") AS ?y) WHERE {{ VALUES ?t {{ {tag} }} }}");
         assert_eq!(select_over(&empty_dataset(), &query), expected, "{query}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LANGMATCHES over empty tags and ranges
+// ---------------------------------------------------------------------------
+
+/// `LANGMATCHES` is false when the tag, the range or both are empty, and `"*"` matches
+/// only a non-empty tag (SPARQL 1.1 §17.4.3.13, SPARQL 1.2 §17.4.3.11).
+#[test]
+fn langmatches_is_false_for_an_empty_tag_or_range() {
+    for (expression, expected) in [
+        (r#"LANGMATCHES("", "*")"#, false),
+        (r#"LANGMATCHES("", "")"#, false),
+        (r#"LANGMATCHES("en", "")"#, false),
+        (r#"LANGMATCHES("", "en")"#, false),
+        (r#"LANGMATCHES(LANG("abc"), "*")"#, false),
+        (
+            r#"LANGMATCHES(LANG("abc"^^<http://www.w3.org/2001/XMLSchema#string>), "*")"#,
+            false,
+        ),
+        (r#"!LANGMATCHES(LANG("abc"), "*")"#, true),
+        // The neighbours: a non-empty tag still matches `*`, a prefix and its case.
+        (r#"LANGMATCHES(LANG("abc"@en), "*")"#, true),
+        (r#"LANGMATCHES(LANG("abc"@ar--rtl), "*")"#, true),
+        (r#"LANGMATCHES("en-US", "en")"#, true),
+        (r#"LANGMATCHES("EN-us", "en-US")"#, true),
+        (r#"LANGMATCHES("en-gb", "EN")"#, true),
+        (r#"LANGMATCHES("en", "*")"#, true),
+        (r#"LANGMATCHES("english", "en")"#, false),
+    ] {
+        assert_eq!(select(expression), Some(boolean(expected)), "{expression}");
+    }
+    // A LANG over a non-literal is an error, and so is the call over it.
+    assert_eq!(
+        select("LANGMATCHES(LANG(<http://example.org/abc>), \"*\")"),
+        None
+    );
+}
+
+/// The data of the W3C `sparql10/expr-builtin` `q-langMatches-*` tests
+/// (`data-langMatches.ttl`).
+fn lang_matches_data() -> std::sync::Arc<RdfDataset> {
+    let ex = |local: &str| TermValue::iri(format!("http://example.org/#{local}"));
+    build_page(&[
+        (ex("x"), ex("p1"), TermValue::simple_literal("abc")),
+        (ex("x"), ex("p2"), TermValue::iri("http://example.org/abc")),
+        (ex("x"), ex("p3"), TermValue::lang_literal("abc", "en")),
+        (ex("x"), ex("p4"), TermValue::lang_literal("abc", "en-gb")),
+        (ex("x"), ex("p5"), TermValue::lang_literal("abc", "fr")),
+    ])
+}
+
+/// Every `?p` local name `query` binds over [`lang_matches_data`], sorted.
+fn lang_matches_rows(filter: &str) -> Vec<String> {
+    let query =
+        format!("PREFIX : <http://example.org/#> SELECT ?p {{ :x ?p ?v . FILTER {filter} . }}");
+    let result = NativeSparqlEngine::new()
+        .query_with_options_view(
+            &*lang_matches_data(),
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap_or_else(|e| panic!("evaluate `{query}`: {e}"));
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("expected solutions for `{query}`");
+    };
+    let mut names: Vec<String> = rows
+        .into_iter()
+        .map(|row| match &row[0] {
+            Some(TermValue::Iri(iri)) => iri.trim_start_matches("http://example.org/#").to_owned(),
+            other => panic!("expected an IRI, got {other:?}"),
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// The W3C `q-langMatches-1` .. `-4` queries and their expected results
+/// (`result-langMatches-*.ttl`). `-3` keeps the three tagged literals and not the
+/// simple one, whose `LANG` is empty; `-4` negates it, so the simple literal is the
+/// one row (the IRI's `LANG` is an error, which drops its row from both).
+#[test]
+fn w3c_lang_matches_queries_answer_their_expected_rows() {
+    for (name, filter, expected) in [
+        (
+            "q-langMatches-1",
+            r#"langMatches(lang(?v), "en-GB")"#,
+            &["p4"][..],
+        ),
+        (
+            "q-langMatches-2",
+            r#"langMatches(lang(?v), "en")"#,
+            &["p3", "p4"][..],
+        ),
+        (
+            "q-langMatches-3",
+            r#"langMatches(lang(?v), "*")"#,
+            &["p3", "p4", "p5"][..],
+        ),
+        (
+            "q-langMatches-4",
+            r#"(! langMatches(lang(?v), "*"))"#,
+            &["p1"][..],
+        ),
+    ] {
+        assert_eq!(lang_matches_rows(filter), expected, "{name}");
     }
 }

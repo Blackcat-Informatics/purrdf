@@ -823,7 +823,12 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
             Function::LangMatches,
             vec![
                 call(Function::Lang, vec![sub(choices, budget)]),
-                Expression::Literal(Literal::new_simple("*")),
+                // `*`, and the empty range that matches nothing.
+                Expression::Literal(Literal::new_simple(if choices.next(3) == 0 {
+                    ""
+                } else {
+                    "*"
+                })),
             ],
         ),
         24 => call(

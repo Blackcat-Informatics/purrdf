@@ -4623,7 +4623,9 @@ pub(crate) fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
 }
 
 /// RFC 4647 basic filtering as `LANGMATCHES` applies it: `range` is `*`, or equals
-/// `tag` ASCII-case-insensitively, or is a `-`-terminated prefix of it.
+/// `tag` ASCII-case-insensitively, or is a `-`-terminated prefix of it. An empty
+/// `tag` or `range` matches nothing, so `*` matches only a non-empty tag (SPARQL 1.1
+/// §17.4.3.13, SPARQL 1.2 §17.4.3.11): `LANGMATCHES(LANG("abc"), "*")` is false.
 ///
 /// Compares bytes with `eq_ignore_ascii_case` instead of building three lowercased
 /// `String`s per row: `to_ascii_lowercase` only folds `A-Z`, which is exactly the
@@ -4631,6 +4633,9 @@ pub(crate) fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
 /// untouched, so the answer is identical with zero allocations.
 pub(crate) fn lang_matches(tag: &str, range: &str) -> bool {
     let (t, r) = (tag.as_bytes(), range.as_bytes());
+    if t.is_empty() || r.is_empty() {
+        return false;
+    }
     range == "*"
         || t.eq_ignore_ascii_case(r)
         || (t.len() > r.len() && t[r.len()] == b'-' && t[..r.len()].eq_ignore_ascii_case(r))
@@ -5916,7 +5921,9 @@ mod tests {
         fn reference(tag: &str, range: &str) -> bool {
             let tag = purrdf_iri::langtag::identity_fold(tag);
             let range = purrdf_iri::langtag::identity_fold(range);
-            range == "*" || tag == range || tag.starts_with(&(range + "-"))
+            !tag.is_empty()
+                && !range.is_empty()
+                && (range == "*" || tag == range || tag.starts_with(&(range + "-")))
         }
         let cases: &[(&str, &str, bool)] = &[
             // exact
@@ -5938,13 +5945,13 @@ mod tests {
             ("Ünd", "ünd", false),
             ("ünd-x", "ünd", true),
             ("ündx", "ünd", false),
-            // range "*" matches any tag, including the empty one (the live path's rule)
+            // range "*" matches any non-empty tag, and not the empty one
             ("en", "*", true),
-            ("", "*", true),
-            // empty tag / empty range
-            ("", "", true),
+            ("", "*", false),
+            // an empty tag or range matches nothing
+            ("", "", false),
             ("en", "", false),
-            ("-en", "", true),
+            ("-en", "", false),
             ("", "en", false),
             // tag shorter than range never matches by prefix
             ("e", "en", false),
@@ -5975,7 +5982,8 @@ mod tests {
         assert_eq!(ebv(&ds, &lm("EN", "en")), Some(true));
         assert_eq!(ebv(&ds, &lm("english", "en")), Some(false));
         assert_eq!(ebv(&ds, &lm("de", "*")), Some(true));
-        assert_eq!(ebv(&ds, &lm("", "*")), Some(true));
+        assert_eq!(ebv(&ds, &lm("", "*")), Some(false));
+        assert_eq!(ebv(&ds, &lm("", "")), Some(false));
         assert_eq!(ebv(&ds, &lm("", "en")), Some(false));
         assert_eq!(ebv(&ds, &lm("ünd-x", "ünd")), Some(true));
     }

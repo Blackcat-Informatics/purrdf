@@ -38,6 +38,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   arguments of `LANGMATCHES`, the label of `BNODE` and the string form of
   `IRI`/`URI`, which also no longer resolves a non-string literal such as
   `IRI(1)` against the base.
+- **SPARQL `LANGMATCHES`:** an empty language tag or range now gives `false`,
+  and `"*"` matches only a non-empty tag, as SPARQL requires.
+  `FILTER langMatches(lang(?v), "*")` no longer keeps untagged literals, and
+  its negation now keeps them (the W3C `q-langMatches-3` and `-4` results).
 
 ## [3.0.1] - 2026-10-02
 
