@@ -1463,6 +1463,11 @@ impl RdfDatasetBuilder {
         &self.quads
     }
 
+    /// Borrow the accumulated named graph declarations (validation reads these).
+    pub(crate) fn declared_graph_rows(&self) -> &[TermId] {
+        &self.declared_graphs
+    }
+
     /// Borrow the accumulated reifier bindings (validation reads these).
     pub(crate) fn reifier_rows(&self) -> &[(TermId, TermId, Option<TermId>)] {
         &self.reifiers
@@ -1491,7 +1496,10 @@ impl RdfDatasetBuilder {
         // via a lookup-only probe (never interns): terms are frozen from this
         // point on, so an IRI that was configured but never actually interned
         // resolves to `None` — "no derivations present", not an error.
-        let derivation_predicate = derivation_predicate.and_then(|iri| interner.lookup_iri(&iri));
+        let derivation_predicate_iri = derivation_predicate.map(String::into_boxed_str);
+        let derivation_predicate = derivation_predicate_iri
+            .as_deref()
+            .and_then(|iri| interner.lookup_iri(iri));
 
         // Deterministic, reproducible frozen order: sort by id tuples. Terms keep
         // their interning (allocation) order, which is itself deterministic for a
@@ -1585,6 +1593,7 @@ impl RdfDatasetBuilder {
             interner.content_ids,
             interner.content_scheme,
             derivation_predicate,
+            derivation_predicate_iri,
         )
     }
 }

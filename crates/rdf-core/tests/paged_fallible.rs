@@ -709,6 +709,14 @@ fn named_graphs_is_empty_after_a_sticky_failure() {
         "named_graphs must yield nothing once the view has failed, even though the \
          answer is metadata that would otherwise cost no page"
     );
+    // The graph's id, resolved on the dataset both views share an id space with.
+    let graph = DatasetView::term_id_by_value(&paged, &TermValue::iri("http://example.org/gA"))
+        .unwrap()
+        .expect("the graph name is a term of the dataset");
+    assert!(
+        !failed.has_named_graph(graph),
+        "has_named_graph must answer no once the view has failed, like named_graphs"
+    );
 
     // The positive neighbour: a FRESH view at the SAME limits that never attempts a
     // pattern read never fails, and named_graphs still returns the full set — the
@@ -725,6 +733,10 @@ fn named_graphs_is_empty_after_a_sticky_failure() {
         DatasetView::named_graphs(&healthy).count(),
         1,
         "a healthy view must still see the one named graph, at zero page cost"
+    );
+    assert!(
+        healthy.has_named_graph(graph),
+        "a healthy view must still report the named graph's membership"
     );
     assert!(
         matches!(

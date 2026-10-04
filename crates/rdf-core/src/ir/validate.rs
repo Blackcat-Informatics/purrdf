@@ -18,7 +18,8 @@
 //!   language tag the BCP 47 grammar does not accept. The refusal keeps its
 //!   originating diagnostic code, so a malformed tag reports `langtag-*`.
 //! - **ID-reference validity:** every `TermId` referenced by any quad / reifier /
-//!   annotation is `< term_count()`.
+//!   annotation / named graph declaration is `< term_count()`, and a declared named
+//!   graph obeys the graph-name rule above.
 //! - **Triple-term acyclicity (C0.3):** the `Triple{s,p,o}` nesting graph is acyclic
 //!   and bounded by `MAX_TERM_NESTING_DEPTH`: no chain holds more than 16 triple terms,
 //!   whatever order they were interned in; a triple term MUST NOT (transitively)
@@ -50,7 +51,16 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     //    depth-bounded.
     validate_triple_terms(builder, term_count)?;
 
-    // 2. Quad positional + id-reference validity.
+    // 2. Every declared named graph names an in-range IRI or blank node, exactly as
+    //    a quad's graph slot must: `RdfDataset::named_graphs` reports it as a graph.
+    for (i, &graph) in builder.declared_graph_rows().iter().enumerate() {
+        check_id_in_range(graph, term_count, || {
+            format!("named graph declaration #{i}")
+        })?;
+        require_graph_name(builder, graph, || format!("named graph declaration #{i}"))?;
+    }
+
+    // 3. Quad positional + id-reference validity.
     for (i, q) in builder.quad_rows().iter().enumerate() {
         check_id_in_range(q.s, term_count, || quad_ref_ctx(i, "subject"))?;
         check_id_in_range(q.p, term_count, || quad_ref_ctx(i, "predicate"))?;
@@ -71,7 +81,7 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
         }
     }
 
-    // 3. Reifier id-reference validity; the reified target MUST be a triple term.
+    // 4. Reifier id-reference validity; the reified target MUST be a triple term.
     for (i, (reifier, triple, graph)) in builder.reifier_rows().iter().enumerate() {
         check_id_in_range(*reifier, term_count, || format!("reifier #{i} resource"))?;
         check_id_in_range(*triple, term_count, || format!("reifier #{i} target"))?;
@@ -82,6 +92,7 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
             ASSERTED_SUBJECT,
         )?;
         if let Some(g) = graph {
+            check_id_in_range(*g, term_count, || format!("reifier #{i} graph"))?;
             require_graph_name(builder, *g, || format!("reifier #{i} graph"))?;
         }
         if !matches!(builder.term(*triple), InternedTerm::Triple { .. }) {
@@ -95,7 +106,7 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
         }
     }
 
-    // 4. Annotation id-reference validity + predicate-is-IRI.
+    // 5. Annotation id-reference validity + predicate-is-IRI.
     for (i, (reifier, p, o, graph)) in builder.annotation_rows().iter().enumerate() {
         check_id_in_range(*reifier, term_count, || format!("annotation #{i} reifier"))?;
         check_id_in_range(*p, term_count, || format!("annotation #{i} predicate"))?;
@@ -108,6 +119,7 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
             ASSERTED_SUBJECT,
         )?;
         if let Some(g) = graph {
+            check_id_in_range(*g, term_count, || format!("annotation #{i} graph"))?;
             require_graph_name(builder, *g, || format!("annotation #{i} graph"))?;
         }
     }
@@ -504,6 +516,84 @@ mod tests {
         b.push_quad(s, p, o, Some(g_lit));
         let err = b.freeze().expect_err("literal graph name must fail");
         assert_eq!(err.code, "rdf-ir-graph-name-invalid");
+    }
+
+    /// A declared named graph is held to the graph-name rules a quad's graph is: an
+    /// id this builder never minted, and a literal or triple term, fail freeze with
+    /// the diagnostic a quad's graph slot reports. The neighbouring declared-empty
+    /// IRI and blank graphs still freeze, and still enumerate.
+    #[test]
+    fn freeze_checks_declared_named_graphs() {
+        let mut b = RdfDatasetBuilder::new();
+        let _ = iri(&mut b, "s");
+        let bogus = TermId::from_index((b.term_count() + 5) as u32);
+        b.declare_named_graph(bogus);
+        let err = b
+            .freeze()
+            .expect_err("an out-of-range declared graph must fail");
+        assert_eq!(err.code, "rdf-ir-term-out-of-range");
+
+        let mut b = RdfDatasetBuilder::new();
+        let g_lit = b.intern_literal(RdfLiteral::simple("graph"));
+        b.declare_named_graph(g_lit);
+        let err = b.freeze().expect_err("a literal declared graph must fail");
+        assert_eq!(err.code, "rdf-ir-graph-name-invalid");
+
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let triple = b.intern_triple(s, p, o);
+        b.declare_named_graph(triple);
+        let err = b
+            .freeze()
+            .expect_err("a triple-term declared graph must fail");
+        assert_eq!(err.code, "rdf-ir-graph-name-invalid");
+
+        let mut b = RdfDatasetBuilder::new();
+        let g = iri(&mut b, "g");
+        let blank = b.intern_blank("b", crate::BlankScope::DEFAULT);
+        b.declare_named_graph(g);
+        b.declare_named_graph(blank);
+        let ds = b
+            .freeze()
+            .expect("declared-empty IRI and blank graphs freeze");
+        assert_eq!(ds.named_graphs().count(), 2);
+    }
+
+    /// A reifier or annotation row whose graph slot names an id this builder never
+    /// minted fails freeze with the out-of-range diagnostic, as a quad's does, rather
+    /// than panicking in the graph-name check. The neighbouring in-range graph freezes.
+    #[test]
+    fn freeze_range_checks_statement_layer_graphs() {
+        fn layered(
+            graph: impl FnOnce(&RdfDatasetBuilder, TermId) -> TermId,
+            annotation: bool,
+        ) -> Result<std::sync::Arc<crate::RdfDataset>, RdfDiagnostic> {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+            let r = iri(&mut b, "r");
+            let triple = b.intern_triple(s, p, o);
+            let g = iri(&mut b, "g");
+            let g = graph(&b, g);
+            if annotation {
+                b.push_annotation_in_graph(r, p, o, Some(g));
+            } else {
+                b.push_reifier_in_graph(r, triple, Some(g));
+            }
+            b.freeze()
+        }
+        let forged = |b: &RdfDatasetBuilder, _| TermId::from_index((b.term_count() + 5) as u32);
+        for annotation in [false, true] {
+            let err = layered(forged, annotation)
+                .expect_err("an out-of-range statement-layer graph must fail");
+            assert_eq!(
+                err.code, "rdf-ir-term-out-of-range",
+                "annotation={annotation}"
+            );
+            assert!(
+                layered(|_, g| g, annotation).is_ok(),
+                "an in-range statement-layer graph freezes (annotation={annotation})"
+            );
+        }
     }
 
     #[test]

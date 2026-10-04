@@ -10,6 +10,7 @@
 //! `named_graphs()`, a later `GRAPH ?g` query over it, and `GRAPH ?g` evaluated
 //! inside the same request (which reads the request's snapshot).
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -99,8 +100,41 @@ fn graphs_after(update: &str) -> Vec<String> {
         "SELECT ?g WHERE { GRAPH ex:log { ex:log ex:saw ?g } }",
     );
     assert_eq!(frozen, seen, "`GRAPH ?g` inside the request agrees");
+
+    // The constant form inside the same request: `GRAPH ex:n { BIND(1 AS ?x) }`
+    // answers for exactly the IRI-named graphs `GRAPH ?g` enumerates there.
+    let mut constant = fixture();
+    let mut text = format!("PREFIX ex: <{EX}>\n{update}");
+    for candidate in CANDIDATES {
+        write!(
+            text,
+            " ;\nINSERT {{ GRAPH ex:log {{ ex:log ex:hit ex:{candidate} }} }} \
+             WHERE {{ GRAPH ex:{candidate} {{ BIND(1 AS ?x) }} }}"
+        )
+        .expect("writing to a String cannot fail");
+    }
+    engine
+        .update(&mut constant, request(&text))
+        .expect("update");
+    let hits = select_names(
+        &engine,
+        &constant,
+        "SELECT ?g WHERE { GRAPH ex:log { ex:log ex:hit ?g } }",
+    );
+    let expected: Vec<String> = frozen
+        .iter()
+        .filter(|name| CANDIDATES.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    assert_eq!(
+        hits, expected,
+        "constant `GRAPH <g>` inside the request agrees"
+    );
     frozen
 }
+
+/// The IRI-named graphs any case here can leave behind, each probed by constant.
+const CANDIDATES: [&str; 6] = ["g", "h", "k", "m", "new", "missing"];
 
 fn default_quads_after(update: &str) -> usize {
     let engine = NativeSparqlEngine::new();
