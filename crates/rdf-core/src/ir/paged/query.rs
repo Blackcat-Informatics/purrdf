@@ -952,6 +952,18 @@ impl DatasetView for PagedQueryView<'_> {
             .copied()
             .take(if live { usize::MAX } else { 0 })
     }
+
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): a binary search of
+    /// the same graph-index keys, behind the same sticky-failure gate.
+    fn has_named_graph(&self, graph: GlobalTermId) -> bool {
+        !self.failed()
+            && self
+                .dataset
+                .graph_index()
+                .keys()
+                .binary_search(&graph)
+                .is_ok()
+    }
 }
 
 #[cfg(test)]

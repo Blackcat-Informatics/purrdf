@@ -122,3 +122,52 @@ fn a_graph_emptied_by_delete_is_neither_enumerated_nor_written() {
     );
     assert!(body.contains("<http://example.org/e> {}"), "{body}");
 }
+
+#[test]
+fn a_graph_emptied_by_delete_is_not_addressed_by_constant() {
+    // The constant form agrees with the variable form: once `g1` loses its only quad,
+    // `GRAPH <g1> { BIND(1 AS ?x) }` later in the same request matches nothing and
+    // `GRAPH ?g` does not bind `g1`. The neighbours still match: a declared empty
+    // graph no operation touched, a populated graph, and a graph repopulated after
+    // DROP.
+    let document = "@prefix ex: <http://example.org/> .\n\
+        GRAPH ex:g1 { ex:a ex:b ex:c }\n\
+        GRAPH ex:g2 { ex:a ex:b ex:c }\n\
+        GRAPH ex:e {}\n";
+    let probe = |graph: &str, label: &str| {
+        format!(
+            "INSERT {{ <http://example.org/r> <http://example.org/p> \"{label}\" }} \
+             WHERE {{ GRAPH <http://example.org/{graph}> {{ BIND(1 AS ?x) }} }}"
+        )
+    };
+    let delete = "DELETE DATA { GRAPH <http://example.org/g1> { \
+        <http://example.org/a> <http://example.org/b> <http://example.org/c> } }";
+    let body = update_trig(
+        document,
+        &format!(
+            "{delete} ; {} ; {} ; {} ; \
+             INSERT {{ <http://example.org/r> <http://example.org/saw> ?g }} \
+             WHERE {{ GRAPH ?g {{ BIND(1 AS ?x) }} }}",
+            probe("g1", "const-hit"),
+            probe("e", "empty-hit"),
+            probe("g2", "g2-hit"),
+        ),
+    );
+    assert!(!body.contains("const-hit"), "{body}");
+    assert!(
+        !body.contains("<http://example.org/saw> <http://example.org/g1>"),
+        "{body}"
+    );
+    for kept in ["empty-hit", "g2-hit"] {
+        assert!(body.contains(kept), "{kept}: {body}");
+    }
+    let body = update_trig(
+        document,
+        &format!(
+            "DROP GRAPH <http://example.org/g1> ; INSERT DATA {{ GRAPH <http://example.org/g1> {{ \
+             <http://example.org/x> <http://example.org/y> <http://example.org/z> }} }} ; {}",
+            probe("g1", "repopulated-hit")
+        ),
+    );
+    assert!(body.contains("repopulated-hit"), "{body}");
+}

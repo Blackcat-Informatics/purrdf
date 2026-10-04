@@ -74,7 +74,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`, `golden`), the workspace root and Rust-source walks for tests and generators (`paths`), seeded test draws over `purrdf_hash::mix` (`rng`), an exact rational oracle that rounds an integer, a decimal or a float's binary value to `f64`, `f32` or a fixed decimal scale with integer arithmetic only (`exact`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property), and the micro-benchmark harness every bench target runs on (`purrdf_testkit::bench`, `bench_group!`/`bench_main!`: warm-up, flat sampling, median with MAD and a seeded bootstrap interval, throughput, saved baselines compared with a bootstrapped change, a fixed-schema `estimates.json` per benchmark, natively and on wasm32); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
 | `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality), the digest, base16 and BLAKE3 throughput bench and the table hasher's latency bench, on testkit's runner and bench harness, natively and on wasm32; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
-| `helper-census` (`crates/helper-census`) | The structural helper census: normalises every function body in shipping code and in every test, bench and example target (local names renamed, literals abstracted, borrow, deref and value-adapter forms such as `&x`, `x.as_str()` and `x.clone()` dropped, bodies from 20 tokens up with small ones keeping their literals) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml` (`publish = false`, host tool) |
+| `helper-census` (`crates/helper-census`) | The structural helper census: normalises every function body in shipping code and in every test, bench and example target (local names renamed, literals abstracted, borrow, deref and value-adapter forms such as `&x`, `x.as_str()` and `x.clone()` dropped, bodies from 20 tokens up with small ones keeping their literals) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml`; also hosts the non-Rust ratchet (`--non-rust-ratchet`, see [Hard constraints](#2-hard-constraints-violating-these-fails-ci-or-review)) (`publish = false`, host tool) |
 
 ### Where each job lives
 
@@ -211,6 +211,42 @@ makes it removable).
   with `scripts/check-no-features.py`. PurRDF is a carrier; optionality changes
   semantics per consumer, which is forbidden. Do not add any other feature,
   optional dependency, or feature-gated behavior.
+* **Tooling and tests are Rust.** Checks, generators, gates and tests are written
+  in Rust (`helper-census`, an xtask, a Rust test). Python and JavaScript remain
+  only where a language surface itself must be exercised. The non-Rust ratchet,
+  `helper-census --non-rust-ratchet` (`crates/helper-census/src/non_rust.rs`),
+  compares a TARGET tree with a BASE tree, both read from git with no rename or
+  copy detection (a path is its identity; a moved or copied file is a new path)
+  and with line counts read from the blobs themselves (a `binary` or `-diff`
+  attribute hides nothing). BASE is the merge-base of the target with the
+  integration branch, so deleting a legacy file and re-adding it grown later on
+  the same branch is still compared with the integration branch's copy.
+  * **Non-Rust code** is a file whose extension is `.py`, `.pyw`, `.pyi`, `.mjs`,
+    `.js`, `.cjs`, `.ts`, `.mts`, `.cts`, `.tsx` or `.jsx`, or any other file
+    whose first line is a shebang naming `python`/`python3` (any version), `node`,
+    `deno` or `bun`. In a shell script (`.sh`, `.bash`, … or a shell shebang) the
+    lines of each heredoc fed to one of those runtimes (`python3 - <<'PY'` …
+    `PY`) are non-Rust lines of that script.
+  1. **Explain.** Every path with non-Rust code that is in TARGET but not in BASE
+     carries within its first 40 lines a `# Why not Rust: <reason>` or
+     `// Why not Rust: <reason>` comment (any case) whose trimmed reason has at
+     least 30 characters, stating concretely why the job cannot be done in Rust.
+     Exempt: `vectors/` (frozen vendor corpora), `generated/` (generator output),
+     and a file holding only whitespace.
+  2. **Ratchet.** A path that exists in BASE under `scripts/`,
+     `bindings/python/tests/`, `crates/*/tests/`, `crates/rdf-wasm/js/tests/` or
+     `crates/rdf-wasm/js/bench/` may not hold more non-Rust lines in TARGET than
+     in BASE (removing it is fine). The shipped surfaces are not ratcheted:
+     `crates/rdf-wasm/js/index.mjs`, `index.d.ts` and `src/`, the
+     `docs/playground/` app, and the Python package under
+     `bindings/python/python/`.
+
+  It runs in three places: the pre-commit hook and the pre-merge-commit hook that
+  hands over to it (`make hooks`; the staged index), `make check` (the working
+  tree, tracked and untracked unignored files) and CI's `workspace` job (the pull
+  request's merge commit, or a push to `main` against the previous `main`). The
+  integration branch defaults to `origin/main`; set `PURRDF_RATCHET_BASE` to name
+  another.
 * **Kernel ring-fence.** `purrdf-core` must never depend on PyO3.
   `purrdf-hash` (the `root` of `layers.toml`) has **zero runtime
   dependencies**. The ring-fenced crates — the rows of `layers.toml` that carry
@@ -308,7 +344,7 @@ makes it removable).
 
 ```bash
 make check      # the full local gate: fmt, clippy, build, tests, hygiene
-make hooks      # install the pre-commit hook: rustfmt + the fast hygiene gates, on the staged snapshot
+make hooks      # install the pre-commit + pre-merge-commit hooks: rustfmt, the non-Rust ratchet + the fast hygiene gates, on the staged index
 make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
 make bench      # purrdf_testkit::bench benchmarks (report-only; not a gate)

@@ -104,7 +104,14 @@ impl std::fmt::Display for PackDigest {
 /// term is transferred once, without an intermediate owned term tree. The
 /// source view is independent of the claimed certificate being checked.
 fn reconstruct<D: DatasetView>(view: &D) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
-    let mut builder = RdfDatasetBuilder::new();
+    reconstruct_into(view, RdfDatasetBuilder::new())
+}
+
+/// [`reconstruct`] into a caller-configured `builder`.
+fn reconstruct_into<D: DatasetView>(
+    view: &D,
+    mut builder: RdfDatasetBuilder,
+) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
     DatasetImporter::try_new(&mut builder, view)
         .and_then(|mut importer| importer.try_append())
         .map_err(|error| RdfDiagnostic::error("source-read", error.to_string()))?;
@@ -146,6 +153,16 @@ fn reconstruct<D: DatasetView>(view: &D) -> Result<RdfDatasetBuilder, RdfDiagnos
 /// an untrusted or hand-assembled view fails closed rather than panicking.
 pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     reconstruct(view)?.freeze()
+}
+
+/// [`dataset_from_view`] into a caller-configured `builder`: a view that knows the
+/// configuration its sources were frozen under (a delta snapshot, a composite)
+/// materializes under it rather than under none.
+pub(crate) fn dataset_from_view_into<D: DatasetView>(
+    view: &D,
+    builder: RdfDatasetBuilder,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    reconstruct_into(view, builder)?.freeze()
 }
 
 /// Open a succinct dataset pack and restore its complete RDF 1.2 value into a
