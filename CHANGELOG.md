@@ -132,7 +132,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   query, a `SELECT` expression may read only group keys, aggregate results and
   earlier `SELECT` targets outside an aggregate. Grouping by an expression does
   not make its variables keys, so `SELECT ((?a + ?b) AS ?s) … GROUP BY
-  (?a + ?b)` is refused (the W3C `agg08` and `agg11` tests). One case was
+  (?a + ?b)` is refused (the W3C `agg08` and `agg11` tests). A variable the
+  `WHERE` clause never binds, such as a SHACL-SPARQL pre-bound `$this`, is
+  still accepted. One case was
   refused wrongly before: a non-empty collection may now stand alone as a
   triple, as in `{ ( ?x ) }`, as the grammar allows for blank-node property
   lists (the W3C `syntax-lists-03`, `-04`, `-05` and `syntax-forms-02` tests).
