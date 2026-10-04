@@ -1013,11 +1013,11 @@ err Syntax at=47
 == crates/sparql-conformance/suite/w3c-sparql11/syntax-query/syn-bad-pname-09.rq query
 err Syntax at=49
 == crates/sparql-conformance/suite/w3c-sparql11/syntax-query/syn-bad-pname-10.rq query
-err Syntax at=51
+err Syntax at=48
 == crates/sparql-conformance/suite/w3c-sparql11/syntax-query/syn-bad-pname-11.rq query
-err Syntax at=51
+err Syntax at=48
 == crates/sparql-conformance/suite/w3c-sparql11/syntax-query/syn-bad-pname-12.rq query
-err Syntax at=54
+err Syntax at=51
 == crates/sparql-conformance/suite/w3c-sparql11/syntax-query/syn-bad-pname-13.rq query
 err Syntax at=48
 == crates/sparql-conformance/suite/w3c-sparql11/syntax-query/syn-bad-values-too-few.rq query

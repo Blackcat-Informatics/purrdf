@@ -1477,14 +1477,23 @@ impl<'a> Parser<'a, '_> {
     /// binding decides the graph per solution row.
     fn parse_construct_quads(&mut self) -> Result<Vec<QuadPattern>> {
         let mut quads = Vec::new();
+        // Whether a `.` may come next: once, straight after a graph block (a triples
+        // run reads its own separating dots).
+        let mut dot_ok = false;
         loop {
             if self.at(&Token::RBrace) {
                 break;
             }
             // The optional `.` separating a graph block from what follows it.
-            if self.eat(&Token::Dot) {
+            if self.at(&Token::Dot) {
+                if !dot_ok {
+                    return Err(stray_dot(self.span()));
+                }
+                self.pos += 1;
+                dot_ok = false;
                 continue;
             }
+            dot_ok = true;
             if self.peek_kw("GRAPH") || self.at(&Token::LBrace) {
                 // `GRAPH` is optional in this production: a bare nested `{ … }`
                 // block is the default graph, spelled as a block.
@@ -1506,6 +1515,7 @@ impl<'a> Parser<'a, '_> {
             // failure of that property would be a hang rather than an error.
             let before = self.pos;
             let triples = self.parse_triples_template()?;
+            dot_ok = false;
             if self.pos == before {
                 return Err(ParseError::syntax(
                     "expected a template statement, a GRAPH block, or `}`",
@@ -1876,18 +1886,39 @@ impl<'a> Parser<'a, '_> {
     fn parse_quad_pattern_block(&mut self, is_delete: bool) -> Result<Vec<QuadPattern>> {
         let mut quads = Vec::new();
         self.expect(&Token::LBrace)?;
+        // `Quads ::= TriplesTemplate? ( QuadsNotTriples '.'? TriplesTemplate? )*`: a
+        // `.` comes once after a `GRAPH` block, or separates two triples.
+        let mut dot_ok = false;
         loop {
             if self.at(&Token::RBrace) {
                 break;
             } else if self.eat_kw("GRAPH") {
                 let graph = self.parse_var_or_iri_name()?;
                 self.collect_quad_group(Some(&graph), is_delete, &mut quads)?;
-            } else if self.eat(&Token::Dot) {
-                // statement separator between triple blocks
+                dot_ok = true;
+            } else if self.at(&Token::Dot) {
+                if !dot_ok {
+                    return Err(stray_dot(self.span()));
+                }
+                self.pos += 1;
+                dot_ok = false;
             } else {
                 let mut triples = Vec::new();
                 self.parse_template_triple(&mut triples)?;
-                self.eat(&Token::Dot);
+                dot_ok = false;
+                // `TriplesTemplate ::= TriplesSameSubject ( '.' TriplesTemplate? )?`:
+                // with no `.`, the template ends here. A `LATERAL` is left to
+                // `parse_template_triple`, which refuses it by name.
+                if !self.eat(&Token::Dot)
+                    && !(self.at(&Token::RBrace)
+                        || self.peek_kw("GRAPH")
+                        || self.peek_kw("LATERAL"))
+                {
+                    return Err(ParseError::syntax(
+                        format!("expected '.' between triples, found {:?}", self.peek()),
+                        self.span(),
+                    ));
+                }
                 for triple in triples {
                     if is_delete {
                         reject_blank_in_triple_pattern(&triple, self.span())?;
@@ -1928,10 +1959,13 @@ impl<'a> Parser<'a, '_> {
             ));
         }
         let mut sink = BlockSink::new(TripleContext::Template);
-        let (subject, standalone_ok) = if self.at(&Token::LBracket) {
-            (self.parse_graph_node(&mut sink)?, true)
-        } else if self.at(&Token::LParen) {
-            (self.parse_graph_node(&mut sink)?, false)
+        // `TriplesSameSubject ::= VarOrTerm PropertyListNotEmpty | TriplesNode
+        // PropertyList`: a blank-node property list or a non-empty collection (the
+        // two `TriplesNode` forms) may stand alone, its own triples already emitted;
+        // `()` is the `NIL` term, a `VarOrTerm`.
+        let (subject, standalone_ok) = if self.at(&Token::LBracket) || self.at(&Token::LParen) {
+            let triples_node = !self.at_nil();
+            (self.parse_graph_node(&mut sink)?, triples_node)
         } else if self.at(&Token::TripleOpen) {
             let node = self.parse_graph_node(&mut sink)?;
             let standalone = !matches!(node, TermPattern::Triple(_));
@@ -2084,7 +2118,12 @@ impl<'a> Parser<'a, '_> {
                 if self.property_fn_after_group().is_some() {
                     (SubjectArgs::Args(self.parse_prop_fn_arg_list()?), false)
                 } else {
-                    (SubjectArgs::Term(self.parse_graph_node(&mut sink)?), false)
+                    // `()` is the `NIL` term, a `VarOrTerm`, never a collection.
+                    let collection = !self.at_nil();
+                    (
+                        SubjectArgs::Term(self.parse_graph_node(&mut sink)?),
+                        collection,
+                    )
                 }
             } else if self.at(&Token::TripleOpen) {
                 // A reifying triple `<< s p o >>` emits its own reifier triples, so
@@ -2097,15 +2136,28 @@ impl<'a> Parser<'a, '_> {
             } else {
                 (SubjectArgs::Term(self.parse_term_pattern()?), false)
             };
-            // A standalone `[ … ] .` needs no following predicate-object list (its
-            // triples are already emitted); any other subject requires one. A
-            // collection always heads a predicate-object list (it is never standalone).
+            // A standalone `[ … ] .` or `( … ) .` needs no following predicate-object
+            // list (its triples are already emitted): `TriplesSameSubjectPath ::=
+            // VarOrTerm PropertyListPathNotEmpty | TriplesNodePath PropertyListPath`,
+            // and both `TriplesNodePath` forms take the possibly-empty list. Any other
+            // subject requires one.
             let standalone = standalone_capable
                 && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.block_boundary());
             if !standalone {
                 self.parse_predicate_object_list(subject, &mut sink)?;
             }
             if !self.eat(&Token::Dot) {
+                // `TriplesBlock ::= TriplesSameSubjectPath ( '.' TriplesBlock? )?`: with
+                // no `.`, the block ends here, so what follows must close the group or
+                // start a non-triples element. Anything else is a second triple with no
+                // `.` between the two (the W3C `syn-bad-02` negative syntax test), never
+                // the start of another block.
+                if !(self.at(&Token::RBrace) || self.block_boundary()) {
+                    return Err(ParseError::syntax(
+                        format!("expected '.' between triples, found {:?}", self.peek()),
+                        self.span(),
+                    ));
+                }
                 break;
             }
             // After a `.`, stop if the block ends (`}` or a keyword/brace).
@@ -2313,6 +2365,13 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// True when the next token starts a non-triples element of a group.
+    /// Whether the cursor is at `NIL ::= '(' WS* ')'` — the `rdf:nil` term, which the
+    /// lexer hands over as its two brackets — rather than a `Collection ::= '('
+    /// GraphNode+ ')'`.
+    fn at_nil(&self) -> bool {
+        self.at(&Token::LParen) && self.peek2() == Some(&Token::RParen)
+    }
+
     fn block_boundary(&self) -> bool {
         self.at(&Token::LBrace)
             || self.peek_kw("OPTIONAL")
@@ -2395,8 +2454,12 @@ impl<'a> Parser<'a, '_> {
                 signed(s),
                 NamedNode::new_unchecked(XSD_DOUBLE),
             )),
-            Some(Token::Word(w)) if sign.is_none() && (w == "true" || w == "false") => {
-                Ok(Literal::new_typed(w, NamedNode::new_unchecked(XSD_BOOLEAN)))
+            Some(Token::Word(w)) if sign.is_none() && boolean_keyword(w).is_some() => {
+                let lexical = boolean_keyword(w).expect("checked by the guard");
+                Ok(Literal::new_typed(
+                    lexical,
+                    NamedNode::new_unchecked(XSD_BOOLEAN),
+                ))
             }
             Some(Token::StringLit(s) | Token::LongStringLit(s)) if sign.is_none() => {
                 if let Some(Token::LangTag(_)) = self.peek() {
@@ -2519,8 +2582,8 @@ impl<'a> Parser<'a, '_> {
     ///
     /// Used by `GROUP BY`'s condition loop, by `HAVING`'s `Constraint+` list (both
     /// to decide whether the first, mandatory constraint is bare, and whether a
-    /// subsequent one begins) and by `ORDER BY`'s `OrderCondition ::= ... |
-    /// (Constraint | Var)` alternative. The bracketed form (`Token::LParen`) is
+    /// subsequent one begins), by `FILTER`'s single `Constraint`, and by `ORDER
+    /// BY`'s `OrderCondition ::= ... | (Constraint | Var)` alternative. The bracketed form (`Token::LParen`) is
     /// recognized separately at each call site, so this deliberately excludes a
     /// bare `Var` or literal (neither is a call).
     fn at_bare_constraint(&self) -> bool {
@@ -3795,6 +3858,44 @@ fn repeated_bound_clause(kw: &str, at: usize) -> ParseError {
             "repeated {kw} clause: LimitOffsetClauses allows at most one LIMIT \
              and at most one OFFSET, in either order"
         ),
+        at,
+    )
+}
+
+/// The refusal for a `GROUP BY` or `ORDER BY` keyword pair with no condition after
+/// it: `GroupClause ::= 'GROUP' 'BY' GroupCondition+` and `OrderClause ::= 'ORDER'
+/// 'BY' OrderCondition+` each require at least one. `clause` names the keywords,
+/// `condition` the production that must follow, and `at` is the byte offset where
+/// the first condition was expected.
+fn empty_modifier_clause(clause: &str, condition: &str, at: usize) -> ParseError {
+    ParseError::syntax(format!("{clause} needs at least one {condition}"), at)
+}
+
+/// The `xsd:boolean` lexical form a `BooleanLiteral` keyword spells, or `None` when
+/// `w` is not one.
+///
+/// SPARQL keywords match case-insensitively — the grammar's one exception is `a`
+/// (SPARQL 1.1 §19.3, carried into SPARQL 1.2) — so `TRUE`, `True` and `fAlSe` are
+/// the boolean literals too, as the W3C `case-insensitive-booleans` test requires.
+/// The literal is always written in its lower-case canonical form, the only spelling
+/// in the `xsd:boolean` lexical space (`"TRUE"^^xsd:boolean` would be ill-typed).
+pub(crate) fn boolean_keyword(w: &str) -> Option<&'static str> {
+    if w.eq_ignore_ascii_case("true") {
+        Some("true")
+    } else if w.eq_ignore_ascii_case("false") {
+        Some("false")
+    } else {
+        None
+    }
+}
+
+/// The refusal for a `.` the grammar has no place for: a `.` separates two triples,
+/// or follows a non-triples element (a group graph pattern element, a `GRAPH`
+/// block) once — never a group's first token or a second `.` in a row.
+fn stray_dot(at: usize) -> ParseError {
+    ParseError::syntax(
+        "unexpected '.': a '.' separates triples or follows a group graph pattern \
+         element, once",
         at,
     )
 }
@@ -6127,6 +6228,199 @@ mod tests {
             panic!("expected a literal binding, got {:?}", bindings[3][0]);
         };
         assert_eq!(l3.value(), "false");
+    }
+
+    /// `BooleanLiteral` is a keyword, so it matches case-insensitively (SPARQL 1.1
+    /// §19.3) in every literal position, and is written in its canonical lower-case
+    /// lexical form; `a` stays the one case-sensitive keyword.
+    #[test]
+    fn boolean_literals_match_case_insensitively_in_every_position() {
+        let xsd_boolean = |l: &Literal, value: &str| {
+            assert_eq!(l.value(), value);
+            assert_eq!(l.datatype().as_str(), XSD_BOOLEAN);
+        };
+        let Query::Select { pattern, .. } = parse("SELECT (TRUE AS ?t) (False AS ?f) {}") else {
+            panic!("expected SELECT");
+        };
+        let rendered = format!("{pattern:?}");
+        assert!(
+            rendered.contains("\"true\"") && rendered.contains("\"false\""),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("TRUE") && !rendered.contains("False"),
+            "{rendered}"
+        );
+        let where_pat = unproject(select_pattern("SELECT * WHERE { ?s ?p FALSE }"));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        let TermPattern::Literal(l) = &patterns[0].object else {
+            panic!("expected a literal object, got {:?}", patterns[0].object);
+        };
+        xsd_boolean(l, "false");
+        let GraphPattern::Values { bindings, .. } =
+            unproject(select_pattern("SELECT ?x WHERE { VALUES ?x { tRuE } }"))
+        else {
+            panic!("expected VALUES");
+        };
+        let Some(GroundTerm::Literal(l)) = &bindings[0][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[0][0]);
+        };
+        xsd_boolean(l, "true");
+        assert!(try_parse("SELECT * WHERE { ?s A ?o }").is_err());
+        assert!(try_parse("SELECT * WHERE { ?s a ?o }").is_ok());
+    }
+
+    /// Dots and `FILTER` constraints follow the group grammar: a `.` separates two
+    /// triples or follows a non-triples element once, two triples need a `.` between
+    /// them, and a `FILTER` takes a `Constraint`. The same `.` rules hold in a
+    /// `CONSTRUCT` template and an update's quad data. Each refusal sits beside a
+    /// neighbour that still parses.
+    #[test]
+    fn dots_and_filter_constraints_follow_the_group_grammar() {
+        for refused in [
+            "SELECT * WHERE { . }",
+            "SELECT * WHERE { . . }",
+            "SELECT * WHERE { . ?s ?p ?o }",
+            "SELECT * WHERE { . FILTER(?x) }",
+            "SELECT * WHERE { ?s ?p ?o . . }",
+            "SELECT * WHERE { <http://a> <http://b> <http://c> <http://d> <http://e> <http://f> . }",
+            "SELECT * WHERE { OPTIONAL { ?s ?p ?o } . . }",
+            "SELECT * WHERE { ?s ?p ?o FILTER ?x }",
+            "SELECT * WHERE { ?s ?p ?o FILTER true }",
+            "SELECT * WHERE { ?s ?p ?o FILTER 1 }",
+            "CONSTRUCT { . } WHERE { }",
+            "CONSTRUCT { <http://a> <http://b> <http://c> <http://a> <http://b> <http://d> } WHERE { }",
+            "CONSTRUCT WHERE { ?s ?p ?o ?s ?p ?o }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        for accepted in [
+            "SELECT * WHERE { }",
+            "SELECT * WHERE { ?s ?p ?o . }",
+            "SELECT * WHERE { ?s ?p ?o . ?s ?q ?r }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(?o) . }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(?o) . ?s ?q ?r . }",
+            "SELECT * WHERE { OPTIONAL { ?s ?p ?o } . ?s ?q ?r }",
+            "SELECT * WHERE { { ?s ?p ?o } . { ?s ?q ?r } }",
+            "SELECT * WHERE { BIND(1 AS ?x) . VALUES ?y { 1 } . }",
+            "SELECT * WHERE { ?s ?p ?o FILTER bound(?s) FILTER NOT EXISTS { ?s ?q ?o } }",
+            "SELECT * WHERE { ?s ?p ?o FILTER <http://example.org/f>(?o) }",
+            "CONSTRUCT { <http://a> <http://b> <http://c> . <http://a> <http://b> <http://d> . } WHERE { }",
+            "CONSTRUCT { GRAPH <http://g> { <http://a> <http://b> <http://c> } . <http://a> <http://b> <http://d> } WHERE { }",
+            "CONSTRUCT WHERE { ?s ?p ?o . ?s ?q ?r }",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+        let update = |text: &str| SparqlParser::new().parse_update(text);
+        for refused in [
+            "INSERT DATA { . }",
+            "INSERT DATA { <http://a> <http://b> <http://c> <http://a> <http://b> <http://d> }",
+            "INSERT DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> } . . }",
+            "INSERT { ?s ?p 2 ?s ?p 3 } WHERE { ?s ?p ?o }",
+        ] {
+            assert!(update(refused).is_err(), "{refused}");
+        }
+        for accepted in [
+            "INSERT DATA { <http://a> <http://b> <http://c> . }",
+            "INSERT DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> } . <http://a> <http://b> <http://c> }",
+            "INSERT DATA { <http://a> <http://b> <http://c> GRAPH <http://g> { <http://a> <http://b> <http://c> } }",
+            "DELETE WHERE { ?s ?p ?o . }",
+            "INSERT { ?s ?p 2 . ?s ?p 3 } WHERE { ?s ?p ?o }",
+        ] {
+            assert!(update(accepted).is_ok(), "{accepted}");
+        }
+    }
+
+    /// In an aggregate query a `SELECT` expression reads, outside an aggregate, only
+    /// group keys, aggregate results and earlier `SELECT` targets; grouping by an
+    /// expression does not make its variables keys (the W3C `agg08`/`agg11` tests).
+    #[test]
+    fn an_aggregate_projection_expression_reads_only_group_keys() {
+        for refused in [
+            "SELECT ((?a + ?b) AS ?s) (COUNT(?a) AS ?c) WHERE { ?x ?a ?b } GROUP BY (?a + ?b)",
+            "SELECT ((?a + ?b) AS ?s) (COUNT(?a) AS ?c) WHERE { ?x ?a ?b } GROUP BY (?x)",
+            "SELECT (STR(?o) AS ?t) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (BOUND(?o) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        for accepted in [
+            "SELECT ?k (COUNT(?a) AS ?c) WHERE { ?x ?a ?b } GROUP BY ((?a + ?b) AS ?k)",
+            "SELECT (STR(?s) AS ?t) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT ?s (COUNT(?o) + 1 AS ?n) (?n * 2 AS ?m) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (SUM(?o) / COUNT(?o) AS ?avg) WHERE { ?s ?p ?o }",
+            "SELECT ?s (EXISTS { ?s ?q ?z } AS ?e) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (STR(?o) AS ?t) WHERE { ?s ?p ?o }",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+    }
+
+    /// A collection is a `TriplesNode`, so like a blank-node property list it may
+    /// stand alone with an empty `PropertyList` (`TriplesSameSubject ::= VarOrTerm
+    /// PropertyListNotEmpty | TriplesNode PropertyList`), emitting only its own list
+    /// triples — the W3C `syntax-lists-03`/`-04`/`-05` and `syntax-forms-02` tests. A
+    /// plain term or `()` (the `NIL` term) still needs a predicate-object list.
+    #[test]
+    fn a_collection_subject_may_stand_alone() {
+        for accepted in [
+            "SELECT * WHERE { ( ?z ) }",
+            "SELECT * WHERE { ( [] [] ) }",
+            "SELECT * WHERE { ( 1 2\n) }",
+            "SELECT * WHERE { ( ?x ) . ?x ?p ?o }",
+            "SELECT * WHERE { ( ?x ) FILTER(bound(?x)) }",
+            "SELECT * WHERE { ( ?x ) <http://example.org/p> ?o }",
+            "CONSTRUCT { ( 1 2 ) } WHERE { }",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+        for refused in [
+            "SELECT * WHERE { ?z }",
+            "SELECT * WHERE { () }",
+            "SELECT * WHERE { ( ?z ) ?p }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        // The standalone collection is exactly its cons cells: two per member.
+        let where_pat = unproject(select_pattern("SELECT * WHERE { ( ?z ) }"));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        assert_eq!(patterns.len(), 2, "{patterns:?}");
+        let update = SparqlParser::new().parse_update("INSERT DATA { ( 1 ) }");
+        assert!(update.is_ok(), "{update:?}");
+    }
+
+    /// `GROUP BY` and `ORDER BY` require at least one condition (`GroupCondition+`,
+    /// `OrderCondition+`), and a `HAVING` condition is a `Constraint` — never a bare
+    /// variable or literal. Each refusal sits beside a neighbour that still parses.
+    #[test]
+    fn solution_modifier_clauses_require_their_conditions() {
+        for refused in [
+            "SELECT * WHERE { ?s ?p ?o } GROUP BY",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY LIMIT 1",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY HAVING (true)",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING ?s",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING 1",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING TRUE",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        for accepted in [
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT ?k WHERE { ?s ?p ?o } GROUP BY (STR(?s) AS ?k)",
+            "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o } GROUP BY STR(?s) ORDER BY ?n",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY ?s",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY DESC(?o)",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY (?o + 1) LIMIT 1",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING (true)",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING COUNT(?o) bound(?s)",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
     }
 
     /// A triple pattern's object is the same ground-literal grammar too: a

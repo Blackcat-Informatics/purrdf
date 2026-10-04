@@ -39,8 +39,8 @@ use purrdf_hash::fixed::FixedState;
 use super::{
     ExistsScopeBasis, Modifiers, Parser, PendingExistsScopeCheck, ScopeConstruct, SelectPosition,
     VarScope, aggregate_function, builtin_function, collect_vars, compute_lateral_left_scope,
-    expect_arity, find_scope_conflict, join, repeated_bound_clause, split_trailing_filter,
-    visible_variables,
+    empty_modifier_clause, expect_arity, find_scope_conflict, join, repeated_bound_clause,
+    split_trailing_filter, stray_dot, visible_variables,
 };
 
 /// The refusal of an aggregate written where an expression may hold none.
@@ -53,6 +53,28 @@ const AGGREGATE_HERE: &str = "aggregate in this position";
 /// One aggregate call lifted out of an expression: the synthetic variable the call is
 /// replaced by, and the aggregation it stands for.
 type Lifted = (Variable, AggregateExpression);
+
+/// The first variable `expr` reads, outside any `EXISTS` body, that is not in
+/// `readable` — the grouping constraint's witness for a SELECT expression of an
+/// aggregate query — or `None` when every variable it reads is readable.
+fn first_projection_read<'e>(
+    expr: &'e Expression,
+    readable: &std::collections::HashSet<&Variable, FixedState>,
+) -> Option<&'e Variable> {
+    use crate::walk::NodeRef;
+    let mut pending = vec![NodeRef::Expr(expr)];
+    while let Some(node) = pending.pop() {
+        if let NodeRef::Expr(Expression::Variable(v) | Expression::Bound(v)) = node
+            && !readable.contains(v)
+        {
+            return Some(v);
+        }
+        if !matches!(node, NodeRef::Expr(Expression::Exists(_))) {
+            node.for_each_child(|child| pending.push(child));
+        }
+    }
+    None
+}
 
 /// How much of the expression grammar an activation reads.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -402,6 +424,10 @@ struct GroupState {
     intro: bool,
     /// The `UNION` chain being read: its pattern, its scope and its `intro`.
     union: Option<GroupValue>,
+    /// Whether a `.` may come next: only straight after a `GraphPatternNotTriples`
+    /// element, once (`GroupGraphPatternSub ::= TriplesBlock? ( GraphPatternNotTriples
+    /// '.'? TriplesBlock? )*`). A triples block reads its own separating dots.
+    dot_ok: bool,
 }
 
 impl GroupState {
@@ -413,6 +439,7 @@ impl GroupState {
             open_bgp: None,
             intro: false,
             union: None,
+            dot_ok: false,
         }
     }
 }
@@ -710,7 +737,7 @@ impl Parser<'_, '_> {
             Some(Token::TripleOpen) => self.triple_term_expr(),
             Some(Token::Word(w)) => {
                 let w = *w;
-                if w == "true" || w == "false" {
+                if super::boolean_keyword(w).is_some() {
                     // No sign precedes a bare boolean word here: a leading `+`/`-` is read
                     // as a prefix operator before a primary is reached, so `parse_literal`
                     // observes none and takes its boolean arm.
@@ -1399,13 +1426,26 @@ impl Parser<'_, '_> {
 
     /// A constraint (§ Constraint: a bracketted expression, a built-in call or a
     /// function call), with no aggregate allowed in it.
-    fn constraint(&mut self) -> Step {
+    ///
+    /// A bare variable or literal (`FILTER ?x`, `FILTER true`) is not a `Constraint`
+    /// and is refused rather than read as a primary expression (the W3C
+    /// `filter-missing-parens` negative syntax test).
+    fn constraint(&mut self) -> Result<Step> {
         if self.at(&Token::LParen) {
             self.pos += 1;
             self.machine.ctl.push(Ctl::Constraint);
-            self.activate(Reach::Full, Sink::Refuse(AGGREGATE_OUTSIDE))
+            Ok(self.activate(Reach::Full, Sink::Refuse(AGGREGATE_OUTSIDE)))
+        } else if self.at_bare_constraint() {
+            Ok(self.activate(Reach::Primary, Sink::Refuse(AGGREGATE_HERE)))
         } else {
-            self.activate(Reach::Primary, Sink::Refuse(AGGREGATE_HERE))
+            Err(ParseError::syntax(
+                format!(
+                    "FILTER expects a Constraint (a bracketed expression, a built-in call \
+                     or a function call), found {:?}",
+                    self.peek()
+                ),
+                self.span(),
+            ))
         }
     }
 
@@ -1529,7 +1569,7 @@ impl Parser<'_, '_> {
             } else if self.eat_kw("FILTER") {
                 self.machine.groups.push(group);
                 self.machine.ctl.push(Ctl::Element(Element::Filter));
-                return Ok(self.constraint());
+                return self.constraint();
             } else if self.eat_kw("BIND") {
                 self.expect(&Token::LParen)?;
                 self.machine.groups.push(group);
@@ -1549,9 +1589,17 @@ impl Parser<'_, '_> {
                 self.note_exists_scope(&values);
                 group.g = join(group.g, values);
                 group.intro = true;
+                group.dot_ok = true;
                 continue;
-            } else if self.eat(&Token::Dot) {
-                // statement separator between blocks
+            } else if self.at(&Token::Dot) {
+                // The one optional separator after a `GraphPatternNotTriples` element; a
+                // dot anywhere else (`{ . }`, `{ . ?s ?p ?o }`, a second dot) is not in
+                // the grammar.
+                if !group.dot_ok {
+                    return Err(stray_dot(self.span()));
+                }
+                self.pos += 1;
+                group.dot_ok = false;
                 continue;
             } else {
                 // A triples block (BGP / path patterns).
@@ -1566,6 +1614,7 @@ impl Parser<'_, '_> {
                 collect_vars(&block, &mut group.scope);
                 self.note_exists_scope(&block);
                 group.g = join(group.g, block);
+                group.dot_ok = false;
                 continue;
             };
             self.machine.groups.push(group);
@@ -1802,6 +1851,7 @@ impl Parser<'_, '_> {
                 group.intro = true;
             }
         }
+        group.dot_ok = true;
         self.machine.groups.push(group);
         Ok(Step::Elements)
     }
@@ -2194,6 +2244,29 @@ impl Parser<'_, '_> {
                         ));
                     }
                 }
+                // The same constraint inside a `(expr AS ?v)`: outside an aggregate, an
+                // expression may read only group keys, aggregate results and the
+                // targets of earlier SELECT expressions. Grouping BY an expression
+                // does not make the variables in it keys, so `SELECT ((?a + ?b) AS ?s)
+                // … GROUP BY (?a + ?b)` is refused (vendored W3C `aggregates/agg08`,
+                // `agg11`). An `EXISTS` body is not read: a variable that occurs only
+                // there is local to it.
+                let mut readable: std::collections::HashSet<&Variable, FixedState> = group_vars;
+                readable.extend(aggregates.iter().map(|(v, _)| v));
+                for (target, expr) in &select_exprs {
+                    if let Some(var) = first_projection_read(expr, &readable) {
+                        return Err(ParseError::syntax(
+                            format!(
+                                "SELECT expression for ?{} reads ?{}, which is neither a \
+                                 GROUP BY key nor confined to an aggregate",
+                                target.as_str(),
+                                var.as_str()
+                            ),
+                            self.span(),
+                        ));
+                    }
+                    readable.insert(target);
+                }
             }
         }
 
@@ -2324,6 +2397,17 @@ impl Parser<'_, '_> {
         });
         if self.eat_kw("GROUP") {
             self.expect_kw("BY")?;
+            // `GroupClause ::= 'GROUP' 'BY' GroupCondition+`: at least one condition.
+            if !(matches!(self.peek(), Some(Token::Variable(_)))
+                || self.at(&Token::LParen)
+                || self.at_bare_constraint())
+            {
+                return Err(empty_modifier_clause(
+                    "GROUP BY",
+                    "GroupCondition",
+                    self.span(),
+                ));
+            }
             return self.group_by();
         }
         self.having_clause()
@@ -2366,7 +2450,7 @@ impl Parser<'_, '_> {
     /// An optional `HAVING Constraint+` clause.
     fn having_clause(&mut self) -> Result<Step> {
         if self.eat_kw("HAVING") {
-            return Ok(self.having_constraint());
+            return self.having_constraint();
         }
         self.order_clause()
     }
@@ -2376,16 +2460,28 @@ impl Parser<'_, '_> {
     /// the query's aggregation — `HAVING (COUNT(?x) > 1)` needs that lift for the
     /// bracketed form, and a bare aggregate `BuiltInCall` (e.g. `HAVING COUNT(?x)`,
     /// unusual but grammar-legal) needs the same treatment.
-    fn having_constraint(&mut self) -> Step {
+    ///
+    /// A bare variable or literal (`HAVING ?x`, `HAVING 1`, `HAVING true`) is not a
+    /// `Constraint` and is refused rather than read as a primary expression.
+    fn having_constraint(&mut self) -> Result<Step> {
         if self.at(&Token::LParen) {
             self.pos += 1;
             self.machine
                 .ctl
                 .push(Ctl::Modifiers(ModStage::HavingBracketed));
-            self.activate(Reach::Full, Sink::Lift)
-        } else {
+            Ok(self.activate(Reach::Full, Sink::Lift))
+        } else if self.at_bare_constraint() {
             self.machine.ctl.push(Ctl::Modifiers(ModStage::HavingBare));
-            self.activate(Reach::Primary, Sink::Lift)
+            Ok(self.activate(Reach::Primary, Sink::Lift))
+        } else {
+            Err(ParseError::syntax(
+                format!(
+                    "HAVING expects a Constraint (a bracketed expression, a built-in call \
+                     or a function call), found {:?}",
+                    self.peek()
+                ),
+                self.span(),
+            ))
         }
     }
 
@@ -2395,7 +2491,7 @@ impl Parser<'_, '_> {
         // nodes. Each `cN` is itself a `Constraint` — bracketed (`Token::LParen`) or bare
         // (`Self::at_bare_constraint`).
         if self.at(&Token::LParen) || self.at_bare_constraint() {
-            return Ok(self.having_constraint());
+            return self.having_constraint();
         }
         self.order_clause()
     }
@@ -2404,6 +2500,14 @@ impl Parser<'_, '_> {
     fn order_clause(&mut self) -> Result<Step> {
         if self.eat_kw("ORDER") {
             self.expect_kw("BY")?;
+            // `OrderClause ::= 'ORDER' 'BY' OrderCondition+`: at least one condition.
+            if !(self.peek_kw("ASC") || self.peek_kw("DESC") || self.order_key_ahead()) {
+                return Err(empty_modifier_clause(
+                    "ORDER BY",
+                    "OrderCondition",
+                    self.span(),
+                ));
+            }
             return self.order_keys();
         }
         self.bound_clauses()
