@@ -17,9 +17,12 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-text` is the in-memory full-text index of the PurRDF toolkit. It reads
-RDF 1.2 literals out of a frozen dataset, tokenizes them by the Unicode word
-boundaries of `UAX #29` over NFC-normalized text (`UAX #15`), and answers ranked
-retrieval queries with BM25F scores.
+RDF 1.2 literals out of a frozen dataset, analyzes them through an explicit
+resolved Unicode/dictionary profile, and answers ranked queries with exact BM25F
+scores. [Analysis and auxiliary retrieval](../../docs/design/text-analysis.md)
+describes scoped accents, English stemming, all five full baseline dictionaries,
+emoji, HTML references, source evidence, positional substrings and the independent
+Han-character producer.
 
 ## Caller-supplied IRIs
 

@@ -600,6 +600,22 @@
       "source": "https://github.com/w3c/data-shapes/tree/08adb3776709a014bc3062ede793c36275b22446"
     },
     {
+      "id": "snowball-english-corpus",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt"
+      ],
+      "paths": [
+        "crates/text/tests/stemming_vectors/voc.txt",
+        "crates/text/tests/stemming_vectors/output.txt"
+      ],
+      "provenance": [
+        "crates/text/tests/stemming_vectors/PROVENANCE.md"
+      ],
+      "scope": "Complete unmodified English conformance DATA only; the independent prose-derived stemming implementation retains the first-party grant",
+      "source": "https://github.com/snowballstem/snowball-data/tree/a0ec0d0a2839ec885878868de20fcb63209d92b0/english"
+    },
+    {
       "id": "structured-zstd-0.0.49",
       "license": "Apache-2.0",
       "notices": [
@@ -769,6 +785,23 @@
       "source_checksum": "23939e44bb9a5d7576fa2b563dc2e136628f1224e88a8deed09e04858b77871f"
     },
     {
+      "id": "whatwg-html-references",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/whatwg-html-references/0-LICENSE-WHATWG"
+      ],
+      "paths": [
+        "crates/lex/data/html/**",
+        "crates/lex/src/html/entities.rs"
+      ],
+      "provenance": [
+        "crates/lex/data/html/PROVENANCE.md",
+        "LICENSING.md"
+      ],
+      "scope": "named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant",
+      "source": "https://github.com/whatwg/html-build/tree/283a3531a61106d07d9a7d9fb3e6f3b9bfd33d70/entities/out"
+    },
+    {
       "id": "windows-link-0.2.1",
       "license": "MIT OR Apache-2.0",
       "notices": [
@@ -811,7 +844,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "1d080949cee9906ac7fa74b2592fefec1e6081e60cad04fa4f931d53eb3d6d6d",
+    "NOTICE.txt": "ed6963ee3e05789ba1a30fe95c019be6c44257eea7dd990b82ed1d7dc85857eb",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -944,7 +977,9 @@
     "third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727",
     "third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
     "third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
-    "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
+    "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt": "359c9dc0eadeec2a4376cefd12cab1cb7cdedc3b064fac3075c04e916de05a19",
+    "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
+    "third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864"
   },
   "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
   "profile": "npm",

@@ -44,6 +44,12 @@ impl ViewTermId for DeltaViewId {
 /// grows with delta terms, never with the base. Reifier bindings and annotations
 /// retain their separate RDF 1.2 tables and original graph scopes.
 ///
+/// A named graph of the base that the mutation emptied — removed its last row,
+/// or withdrew its declaration while it held none — and that holds no row of
+/// this snapshot is not enumerated by [`DatasetView::named_graphs`]: the
+/// snapshot's graphs are the graphs that hold a row, plus the base's declared
+/// empty graphs no operation emptied.
+///
 /// The base remains available through [`Self::base`] for source locations and
 /// non-RDF sidecars that `DatasetView` does not expose. Materializing this view
 /// with a generic RDF importer does not transfer those sidecars automatically.
@@ -58,6 +64,9 @@ pub struct DeltaDatasetView {
     duplicate_annotations: Arc<FastSet<QuadIds>>,
     has_added_reifiers: bool,
     has_suppressed_reifiers: bool,
+    /// Base named graphs the mutation emptied that hold no row of this snapshot.
+    /// Probed by membership only; never iterated for order.
+    withdrawn_graphs: Arc<FastSet<TermId>>,
     stats: crate::ViewStats,
     work: Arc<super::super::view_accounting::WorkCounter>,
 }
@@ -67,6 +76,7 @@ impl DeltaDatasetView {
         base: Arc<RdfDataset>,
         delta: Arc<RdfDataset>,
         suppressed: FastSet<QuadIds>,
+        withdrawn_graphs: Arc<FastSet<TermId>>,
         limits: crate::ViewLimits,
     ) -> Result<Self, crate::RdfDiagnostic> {
         let mut stats = crate::ViewStats::default();
@@ -116,6 +126,7 @@ impl DeltaDatasetView {
             base_to_delta: Arc::new(base_to_delta),
             duplicate_reifiers: Arc::default(),
             duplicate_annotations: Arc::default(),
+            withdrawn_graphs,
             stats,
             work: Arc::default(),
         };
@@ -214,6 +225,13 @@ impl DeltaDatasetView {
             ..Default::default()
         });
         Ok(result)
+    }
+
+    /// Whether the mutation withdrew the base graph `graph`: it emptied the graph,
+    /// which now holds no row of this snapshot, so the snapshot does not enumerate
+    /// it. An O(1) membership probe of the set the mutation kept current.
+    fn is_withdrawn_graph(&self, graph: TermId) -> bool {
+        self.withdrawn_graphs.contains(&graph)
     }
 
     fn has_reifier(&self, subject: DeltaViewId, graph: Option<DeltaViewId>) -> bool {
@@ -852,6 +870,7 @@ impl DatasetView for DeltaDatasetView {
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
         self.base
             .named_graphs()
+            .filter(|&graph| !self.is_withdrawn_graph(graph))
             .map(DeltaViewId::Base)
             .chain(self.delta.named_graphs().map(|id| self.delta_id(id)))
             .collect::<BTreeSet<_>>()

@@ -50,7 +50,6 @@ use purrdf_sparql_eval::{
     RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
-use crate::analysis::Analyzer;
 use crate::error::TextError;
 use crate::index::{PartitionKey, TextIndex, TextIndexConfig, source_digest};
 use crate::score::{
@@ -397,9 +396,9 @@ fn index_generation(index: &TextIndex) -> Arc<str> {
 /// measured once at relation construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SearchBounds {
-    /// Every document the index retains.
+    /// Every document admitted to a scoring population.
     documents: u64,
-    /// Every partition the index holds.
+    /// Every partition with a positive scoring population.
     partitions: u64,
     /// How many distinct graphs those partitions name.
     graphs: u64,
@@ -413,15 +412,18 @@ struct SearchBounds {
 impl SearchBounds {
     /// Measure `index`.
     fn of(index: &TextIndex) -> Self {
-        let keys = partition_keys(index);
-        let documents_in: Vec<u64> = index
+        let (keys, documents_in): (Vec<_>, Vec<_>) = index
             .partitions()
-            .map(|(_, stats)| stats.document_count())
-            .collect();
+            .filter(|(_, stats)| stats.document_count() != 0)
+            .map(|(key, stats)| (key.clone(), stats.document_count()))
+            .unzip();
         let groups = language_groups(&keys);
         Self {
-            documents: index.document_count(),
-            partitions: index.partition_count(),
+            documents: documents_in
+                .iter()
+                .copied()
+                .fold(0_u64, u64::saturating_add),
+            partitions: keys.len() as u64,
             graphs: distinct_graphs(&keys),
             partitions_per_language: groups
                 .iter()
@@ -447,7 +449,7 @@ impl SearchBounds {
     /// result is the tightest of them and can never exceed any one of them.
     ///
     /// **Zero is a real declaration, not a missing one.** Over an index with no
-    /// documents every field measured above is zero, so every mode declares zero,
+    /// scoring documents every field measured above is zero, so every mode declares zero,
     /// and that is the truth about the relation: no invocation can emit a row. It
     /// is not the "unknown" or "unbounded" value — an honest ignorance would have
     /// to be `u64::MAX` — and a consumer reading it is entitled to invoke the
@@ -878,7 +880,7 @@ impl TextSearchRelation {
     ///
     /// # Errors
     ///
-    /// [`TextError::Config`] when the index holds **more than one partition**.
+    /// [`TextError::Config`] when the index holds **more than one scoring partition**.
     /// A partition is a `(graph, language)` pair and ranks are computed within
     /// one, so a multi-partition index emits rows partition-major: the answer
     /// opens with one rank-1 row per partition, the positions a consumer would
@@ -915,7 +917,12 @@ impl TextSearchRelation {
         fidelity: RankFidelity,
         domains: CandidateDomains,
     ) -> Result<RankedDeclaration, TextError> {
-        let partitions = self.index.partition_count();
+        let partitions = self
+            .index
+            .partitions()
+            .filter(|(_, stats)| stats.document_count() != 0)
+            .count();
+        // Auxiliary-only partitions emit no ranked row and contribute no scoring population.
         // Strictly greater than one: zero partitions is an index with no
         // documents, whose answer is the empty one and whose rank column
         // therefore cannot be out of order. See the doc comment above.
@@ -1340,7 +1347,7 @@ impl PropertyFunction for TextSearchRelation {
             || args.get(SEARCH_MATCHED).is_some();
         let select_ceiling = if post_rank_filtered { None } else { ceiling };
 
-        let analyzed = Analyzer::new().terms(text);
+        let analyzed = self.index.query_terms(text)?;
         let at = match rank {
             RankBound::At(at) => Some(at),
             // `BeyondTheIndex` is answered empty below; `Unbound` bounds nothing.
@@ -1508,7 +1515,7 @@ struct OccurrenceBounds {
     /// The largest number of occurrences of any one term within any one
     /// language, summed across the graphs that language appears in.
     per_language: u64,
-    /// Every partition the index holds.
+    /// Every partition with a positive scoring population.
     partitions: u64,
     /// How many distinct graphs those partitions name.
     graphs: u64,
@@ -1517,7 +1524,11 @@ struct OccurrenceBounds {
 impl OccurrenceBounds {
     /// Measure `index` by walking every term's postings once.
     fn of(index: &TextIndex) -> Self {
-        let keys = partition_keys(index);
+        let keys: Vec<_> = index
+            .partitions()
+            .filter(|(_, stats)| stats.document_count() != 0)
+            .map(|(key, _)| key.clone())
+            .collect();
         let groups = language_groups(&keys);
 
         let mut occurrences = 0_u64;
@@ -1555,7 +1566,7 @@ impl OccurrenceBounds {
             documents_holding,
             per_document,
             per_language,
-            partitions: index.partition_count(),
+            partitions: keys.len() as u64,
             graphs: distinct_graphs(&keys),
         }
     }
@@ -1634,7 +1645,7 @@ impl OccurrenceBounds {
 ///
 /// The term is analyzed through the index's own pipeline, so the caller writes
 /// the word rather than its folded form. If that analysis yields **more than
-/// one** term — a compound the tokenizer splits, or a CJK run that bigrams —
+/// one** term — a compound or Han run split by the selected dictionary —
 /// the invocation is refused rather than silently answered about one of them.
 /// A multi-term needle is written as one call per term, joined on `?doc`, which
 /// is the same shape the phrase example above already has.
@@ -1786,7 +1797,7 @@ impl PropertyFunction for TermOccurrenceRelation {
             filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
         }
 
-        let mut analyzed = Analyzer::new().terms(text);
+        let mut analyzed = self.index.query_terms(text)?;
         if analyzed.len() > 1 {
             return Err(EvalError::function(format!(
                 "the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \
@@ -2102,8 +2113,12 @@ mod tests {
 
     /// The configuration every fixture is built under.
     fn config() -> TextIndexConfig {
-        TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-            .expect("the fixture configuration is well formed")
+        TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Any,
+            crate::Analyzer::empty_lexicon(),
+        )
+        .expect("the fixture configuration is well formed")
     }
 
     fn index_of(rows: &[(&str, &str, Option<&str>)]) -> TextIndex {
@@ -2940,6 +2955,85 @@ mod tests {
         assert_eq!(declared("bbbb"), 1, "all three: one graph, one occurrence");
     }
 
+    /// Surface-only partitions cannot loosen a lexical occurrence bound, even
+    /// when they add another language or graph. Scoring populations span zero,
+    /// one or three partitions, and each binding is checked against real rows.
+    #[test]
+    fn auxiliary_partitions_do_not_loosen_occurrence_bounds() {
+        for active in [0, 1, 3] {
+            let build = |auxiliary: bool| {
+                let mut builder = RdfDatasetBuilder::new();
+                let predicate = builder.intern_iri(NOTE);
+                for (language, graph) in [
+                    ("en", None),
+                    ("en", Some("https://example.org/graph")),
+                    ("fr", Some("https://example.org/graph")),
+                ]
+                .into_iter()
+                .take(active)
+                {
+                    for name in ["a", "b", "c"] {
+                        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
+                        let text =
+                            builder.intern_literal(RdfLiteral::language_tagged("alpha", language));
+                        let graph = graph.map(|iri| builder.intern_iri(iri));
+                        builder.push_quad(subject, predicate, text, graph);
+                    }
+                }
+                if auxiliary {
+                    for (name, language, graph) in [
+                        ("punctuation-fr", "fr", None),
+                        (
+                            "punctuation-zh",
+                            "zh",
+                            Some("https://example.org/auxiliary-graph"),
+                        ),
+                    ] {
+                        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
+                        let text =
+                            builder.intern_literal(RdfLiteral::language_tagged("---", language));
+                        let graph = graph.map(|iri| builder.intern_iri(iri));
+                        builder.push_quad(subject, predicate, text, graph);
+                    }
+                }
+                let dataset = builder
+                    .freeze()
+                    .expect("mixed lexical and auxiliary fixture");
+                Arc::new(TextIndex::from_dataset(&*dataset, &config()).expect("fixture index"))
+            };
+            let base = TermOccurrenceRelation::new(build(false));
+            let augmented_index = build(true);
+            assert_eq!(augmented_index.partition_count(), active as u64 + 2);
+            let augmented = TermOccurrenceRelation::new(augmented_index);
+            let rows = invoke(&base, &occurrence_args("alpha"), None).expect("bound term");
+            assert_eq!(
+                invoke(&augmented, &occurrence_args("alpha"), None).expect("bound term"),
+                rows,
+                "auxiliary documents emit no lexical occurrences"
+            );
+            for mode in every_pattern(4) {
+                let expected = base.rows_per_invocation(mode);
+                assert_eq!(
+                    augmented.rows_per_invocation(mode),
+                    expected,
+                    "active={active}, {mode:?}"
+                );
+                for row in &rows {
+                    let bound = bindings_from(mode, row, super::OCCURRENCE_TERM);
+                    let actual = invoke(&augmented, &bound, None).expect("row-derived bindings");
+                    assert_eq!(
+                        actual,
+                        invoke(&base, &bound, None).expect("baseline bindings")
+                    );
+                    assert!(actual.len() as u64 <= expected);
+                }
+                if active == 0 {
+                    assert_eq!(expected, 0, "auxiliary-only populations declare zero");
+                }
+            }
+        }
+    }
+
     /// Over an index with no documents every mode of both relations declares
     /// **zero**, and an invocation honours that declaration by emitting no rows
     /// while still attesting the generation it read.
@@ -3269,26 +3363,22 @@ mod tests {
             "the message must say what the contract is: {error}"
         );
 
-        // The neighbouring valid case, and the one that is easy to get wrong:
-        // the refusal counts ANALYZED terms, not words, so a needle that looks
-        // like one word to a caller and segments into several is refused while a
-        // needle that looks like several and segments into one is not. `中文` is
-        // two ideographs and analyzes to exactly one bigram, so it must be
-        // accepted and must retrieve.
+        // The refusal counts analyzed terms. An explicitly empty lexicon emits
+        // unknown Han graphemes individually: one ideograph is one invocation,
+        // while adjacent ideographs require one invocation per position.
         let cjk = Arc::new(index_of(&[("cjk", "中文全文検索", None)]));
         let relation = TermOccurrenceRelation::new(cjk);
         assert_eq!(
-            invoke(&relation, &occurrence_args("中文"), None)
-                .expect("two adjacent ideographs analyze to ONE bigram"),
-            vec![vec![iri("cjk"), string("中文"), string(""), integer(0)]],
-            "a CJK term that analyzes to one bigram is a single-term needle"
+            invoke(&relation, &occurrence_args("中"), None)
+                .expect("one Han grapheme analyzes to one term"),
+            vec![vec![iri("cjk"), string("中"), string(""), integer(0)]],
+            "a single unknown Han grapheme is a single-term needle"
         );
-
-        // Three ideographs analyze to two bigrams and are refused, which is the
-        // other side of the same boundary.
-        let error = invoke(&relation, &occurrence_args("中文全"), None)
-            .expect_err("three ideographs are two bigrams");
-        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        for needle in ["中文", "中文全"] {
+            let error = invoke(&relation, &occurrence_args(needle), None)
+                .expect_err("multiple unknown Han graphemes require separate invocations");
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        }
 
         // A hyphenated compound is the Latin-script form of the same boundary.
         assert!(
@@ -3354,8 +3444,12 @@ mod tests {
         // A configuration that is not the one the index was built under would
         // digest different rows, so the comparison is refused rather than
         // answered with a verdict that means nothing.
-        let narrower = TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Default)
-            .expect("a well-formed configuration");
+        let narrower = TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Default,
+            crate::Analyzer::empty_lexicon(),
+        )
+        .expect("a well-formed configuration");
         let error = verify_binding(&index, &*source, &narrower)
             .expect_err("a different configuration asks a different question");
         assert!(matches!(error, TextError::Config(_)), "got {error:?}");

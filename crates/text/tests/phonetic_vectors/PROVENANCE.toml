@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+statement = "First-party contextual pronunciation and edit-graph implementations independently derived from algorithm descriptions and declarative pronunciation rules. No upstream implementation code is incorporated. The frozen first-party input/output corpus was computed through the published Commons Codec 1.18.0 binary oracle."
+
+[module]
+paths = ["../../src/phonetic.rs"]
+
+[[sources]]
+kind = "spec"
+id = "https://jacobfilipp.com/DrDobbs/articles/CUJ/2000/0006/philips/philips.htm"
+sections = ["The Double Metaphone Search Algorithm"]
+
+[[sources]]
+kind = "spec"
+id = "https://patents.google.com/patent/US20090043584A1/en"
+sections = ["Table 4: M3 correspondence to Double Metaphone"]
+
+[[sources]]
+kind = "spec"
+id = "https://doi.org/10.1145/316542.316550"
+sections = ["Bit-vector dynamic programming"]
+
+[[sources]]
+kind = "spec"
+id = "https://www.cs.helsinki.fi/u/ukkonen/InfCont85.PDF"
+sections = ["Threshold-bounded edit distance"]
+
+[[oracles]]
+kind = "answer-vectors"
+path_or_id = "commons-1.18.0.tsv and context-oracle.tsv; published Commons Codec 1.18.0 binary outputs"

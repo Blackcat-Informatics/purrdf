@@ -3,13 +3,25 @@ SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinform
 SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 -->
 
-# Provenance of `purrdf-lex`'s Unicode data and frozen vectors
+# Provenance of `purrdf-lex`'s data and frozen vectors
 
 The code under `src/` and `examples/` is first-party, written from the Unicode
 specifications: UAX 15 (Unicode Normalization Forms), the Unicode core
 specification chapter 3 (§3.11 normalization forms, §3.12 conjoining jamo
 behavior) and UAX 44 (the file formats). What the crate carries from elsewhere
-is data, recorded here.
+is data, recorded here. The HTML character-reference resolver and its generator
+are independently written from WHATWG's prose rules; their separately licensed
+data is described below.
+
+## `src/html/entities.rs` — generated HTML character-reference data
+
+The complete named-reference table and numeric C1 recovery data are pinned under
+`data/html/`. `data/html/PROVENANCE.md` records the immutable upstream revision,
+exact digests, specification snapshot, generator command and the explicit
+BSD-3-Clause source-incorporation grant. The complete WHATWG notice accompanies
+every recipient profile containing this data. The table is separately licensed
+BSD-3-Clause; resolver and generator code retain the first-party three-license
+choice. Frozen-input and generated-output gates verify both sides.
 
 ## `src/unicode_tables.rs` — generated from the Unicode Character Database
 

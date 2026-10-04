@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-"""Attach and verify the complete C distribution before publishing a release.
+"""Attach and verify the complete C distribution and lexicon data before publishing a release.
 
 GitHub locks assets when an immutable release is published. All mutations here
 therefore address a draft; an existing published release is only read and
@@ -199,6 +199,7 @@ def asset_names(version: str) -> set[str]:
         stem + ".tar.gz",
         stem + ".license-receipt.json",
         "license-evidence-cargo.json",
+        f"purrdf-text-lexicons-{version}.tar.gz",
         "SHA256SUMS",
     }
 
@@ -230,11 +231,11 @@ def verify_assets(
     assets = release.get("assets")
     names = asset_names(version)
     if not isinstance(assets, list) or len(assets) != len(names):
-        raise ReleaseError("release needs exactly four C distribution/checksum assets")
+        raise ReleaseError("release needs exactly five C, lexicon and checksum assets")
     by_name = {asset.get("name"): asset for asset in assets if isinstance(asset, dict)}
     if set(by_name) != names:
         raise ReleaseError(
-            "release asset names differ from the complete C distribution"
+            "release asset names differ from the complete C and lexicon distribution"
         )
     hashes = {}
     manifest = None
@@ -274,7 +275,7 @@ def verify_assets(
         name: digest for name, digest in hashes.items() if name != "SHA256SUMS"
     }:
         raise ReleaseError(
-            "retained release checksums do not match the three distribution assets"
+            "retained release checksums do not match the four distribution assets"
         )
     if expected is not None and hashes != expected:
         raise ReleaseError("draft assets differ from the audited local distribution")
@@ -291,7 +292,7 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     if release is not None and release.get("draft") is False:
         identity(release, tag, title, notes, draft=False)
         verify_assets(github, release, version)
-        print(f"OK: existing immutable {tag} and all four retained assets verified")
+        print(f"OK: existing immutable {tag} and all five retained assets verified")
         return
     if release is not None and release.get("draft") is not True:
         raise ReleaseError("existing release has no valid draft verdict")
@@ -350,7 +351,7 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     release = github.release(tag)
     identity(release, tag, title, notes, draft=False)
     verify_assets(github, release, version, expected)
-    print(f"OK: immutable {tag} published with all four verified assets")
+    print(f"OK: immutable {tag} published with all five verified assets")
 
 
 def main() -> int:

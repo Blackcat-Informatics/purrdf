@@ -249,6 +249,7 @@ fn fixture() -> TextIndex {
                 TermValue::iri("https://example.org/body"),
             ],
             GraphSelector::Any,
+            purrdf_text::Analyzer::empty_lexicon(),
         )
         .expect("config"),
     )

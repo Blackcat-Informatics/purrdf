@@ -56,6 +56,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   blank node was refused as a `validator-class` syntax violation. Cycles
   among blank nodes terminate, and a blank node on no path to the SHACL class
   registers nothing.
+- **SPARQL Update graph existence:** a named graph that an Update empties is
+  gone afterwards. This covers `DROP`/`CLEAR` of a graph, `NAMED` or `ALL`, the
+  source of a `MOVE`, and a `DELETE` that removes the graph's last quad,
+  reifier binding or annotation. The graph is no longer enumerated by
+  `GRAPH ?g` later in the same request or over the result. It is no longer
+  kept in the frozen dataset, so serializers stop writing it, for example as
+  `<g> {}` in TriG. Before this fix, every graph of the input stayed listed
+  after its quads were deleted, and graphs the input declared empty survived
+  `DROP ALL`. A graph the input declared empty (TriG `GRAPH <g> {}`) that no
+  operation touches is still kept, so a no-op or unrelated update writes the
+  declaration back unchanged. `CREATE GRAPH` still registers nothing, and
+  dropping a missing graph still succeeds. The new
+  `MutableDataset::withdraw_graph_declaration` and
+  `MutableDataset::withdraw_named_graph_declarations` remove an input
+  declaration directly.
 
 - **SPARQL string functions:** `SUBSTR` follows XPath `fn:substring` for a
   start at or below zero (`SUBSTR("12345", 0, 3)` is `"12"`, not `"123"`),

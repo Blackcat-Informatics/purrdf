@@ -10,7 +10,7 @@ These tests hold the Python surface to what makes that usable and honest from a
 host that writes Python:
 
 * **Producers are DATA, not callables.** ``text_producers`` maps a producer IRI
-  to ``(stratum, predicate, graph)``, or to ``(stratum, predicate, graph,
+  to ``(stratum, predicate, graph, analyzer)``, or to ``(stratum, predicate, graph, analyzer,
   domains)`` where the producer can say which blocks of the candidate universe
   it draws from, and ``hnsw_producers`` / ``knn_producers`` map one to the rows
   of a vector space; the engine builds the index and registers the relation
@@ -45,7 +45,6 @@ import re
 from typing import Any
 
 import pytest
-
 from purrdf import retrieval
 
 EX = "https://example.org/"
@@ -88,7 +87,8 @@ FOLDED = "weighted_reciprocal_rank"
 def _producers(*pairs: tuple[str, str, str]) -> dict[str, tuple[str, str, str]]:
     """``(producer, stratum, predicate)`` triples as the engine's declaration map."""
     return {
-        producer: (stratum, predicate, "any") for producer, stratum, predicate in pairs
+        producer: (stratum, predicate, "any", {"lexicon": "empty"})
+        for producer, stratum, predicate in pairs
     }
 
 
@@ -111,7 +111,9 @@ def _truncated_saturation(k: int) -> int:
     from the surface under test rather than from a literal that could quietly
     drift away from it.
     """
-    with pytest.raises(ValueError, match="no weight separates ranks to depth") as refused:
+    with pytest.raises(
+        ValueError, match="no weight separates ranks to depth"
+    ) as refused:
         retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, k, decay=TRUNCATED)
     found = re.search(r"separates to depth (\d+)", str(refused.value))
     assert found is not None, str(refused.value)
@@ -204,12 +206,12 @@ def _declared(
 ) -> dict[str, tuple[Any, ...]]:
     """``(producer, stratum, predicate, domains)`` as the engine's declaration map.
 
-    The four-element spelling of a ``text_producers`` value. ``domains`` of
-    ``None`` is the unrestricted promise — the same declaration the three-element
+    The five-element spelling of a ``text_producers`` value. ``domains`` of
+    ``None`` is the unrestricted promise — the same declaration the four-element
     spelling makes — and a list restricts the producer to those blocks.
     """
     return {
-        producer: (stratum, predicate, "any", domains)
+        producer: (stratum, predicate, "any", {"lexicon": "empty"}, domains)
         for producer, stratum, predicate, domains in entries
     }
 
@@ -309,6 +311,7 @@ def _two_producers(domains: str | None) -> dict[str, tuple[Any, ...]]:
             stratum,
             predicate,
             "any",
+            {"lexicon": "empty"},
             declared[producer] if domains == DOMAINS_DISJOINT else None,
             (None, None),
             (None, None),
@@ -602,15 +605,22 @@ def _note_attesting(
 
     The five-element spelling writes its ``domains`` position explicitly as
     ``None`` — the unrestricted promise, which is the same declaration the
-    three-element title producer beside it makes — because the attestation is
-    the fifth position. Only one of the two attests, so every assertion below is
+    four-element title producer beside it makes — because the attestation is
+    the sixth position. Only one of the two attests, so every assertion below is
     about a per-stratum fact rather than about a flag the answer carries once,
     and the two widths in one dict are the proof that a producer which declares
     nothing keeps its own reading.
     """
     return {
-        NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, attestation),
-        TITLE_PRODUCER: (TITLE_STRATUM, TITLE, "any"),
+        NOTE_PRODUCER: (
+            NOTE_STRATUM,
+            NOTE,
+            "any",
+            {"lexicon": "empty"},
+            None,
+            attestation,
+        ),
+        TITLE_PRODUCER: (TITLE_STRATUM, TITLE, "any", {"lexicon": "empty"}),
     }
 
 
@@ -717,12 +727,12 @@ def test_a_declared_generation_is_reported_and_is_not_a_shortfall() -> None:
     }, "naming which index answered says nothing about whether it was short"
     assert _ranking(named) == _ranking(silent)
 
-    assert named["attestations"][NOTE_STRATUM]["generation"] != (
-        silent["attestations"][NOTE_STRATUM]["generation"]
+    assert (
+        named["attestations"][NOTE_STRATUM]["generation"]
+        != (silent["attestations"][NOTE_STRATUM]["generation"])
     ), "one generation is pinned per invocation, so the host's replaces the digest"
     assert (
-        named["attestations"][TITLE_STRATUM]
-        == silent["attestations"][TITLE_STRATUM]
+        named["attestations"][TITLE_STRATUM] == silent["attestations"][TITLE_STRATUM]
     ), "the producer that declared nothing attests exactly what it always did"
 
 
@@ -730,7 +740,7 @@ def test_a_producer_that_declares_no_attestation_is_unchanged() -> None:
     """The valid neighbour: three widths, one answer, down to the evidence id.
 
     A position that changed what a spec without it means would be a silent
-    migration of every host already using this surface. So the three-element
+    migration of every host already using this surface. So the four-element
     spelling, the four-element one with an explicit ``None`` domains, and the
     five-element one attesting ``(None, None)`` must all be the same declaration
     — silence — and must produce the same answer, the same attestations and the
@@ -777,10 +787,12 @@ def test_a_producer_that_declares_no_attestation_is_unchanged() -> None:
     # the same whether one is declared or not.
     def _fingerprint(producers: dict[str, Any]) -> str:
         planned = retrieval.plan(
-            DATA, ATTESTED_REQUEST, text_producers=producers, statistics=STATISTICS
-        ,
+            DATA,
+            ATTESTED_REQUEST,
+            text_producers=producers,
+            statistics=STATISTICS,
             top_k=PLAN_TOP_K,
-)
+        )
         return planned["registry_content_fingerprint"]
 
     assert _fingerprint(_note_attesting((INDEX_GENERATION, REBUILDING))) == (
@@ -824,22 +836,34 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
     with pytest.raises(TypeError, match="`incompleteness` must be a str or None"):
         _search(_note_attesting((INDEX_GENERATION, 7)))  # type: ignore[arg-type]
 
-    # A bare string in the fifth position is NOT destructured into its own two
+    # A bare string in the sixth position is NOT destructured into its own two
     # characters. `"ab"` extracts as a perfectly well-formed two-member sequence,
     # so accepting it would have reported `generation="a"` back to an operator as
     # though the host had said it. It is a shape error, like any other value in a
     # position this spec does not have.
-    with pytest.raises(TypeError, match="an attestation is the fifth position"):
-        _search({NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, "ab")})
-
-    # As is a sequence of the wrong width — three axes is not this declaration.
-    with pytest.raises(TypeError, match="an attestation is the fifth position"):
+    with pytest.raises(TypeError, match="expected .*analyzer"):
         _search(
             {
                 NOTE_PRODUCER: (
                     NOTE_STRATUM,
                     NOTE,
                     "any",
+                    {"lexicon": "empty"},
+                    None,
+                    "ab",
+                )
+            }
+        )
+
+    # As is a sequence of the wrong width — three axes is not this declaration.
+    with pytest.raises(TypeError, match="expected .*analyzer"):
+        _search(
+            {
+                NOTE_PRODUCER: (
+                    NOTE_STRATUM,
+                    NOTE,
+                    "any",
+                    {"lexicon": "empty"},
                     None,
                     (INDEX_GENERATION, REBUILDING, "extra"),
                 )
@@ -847,16 +871,24 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
         )
 
     # And a value of the wrong number of positions altogether.
-    with pytest.raises(TypeError, match="an attestation is the fifth position"):
+    with pytest.raises(TypeError, match="expected .*analyzer"):
         _search({NOTE_PRODUCER: (NOTE_STRATUM, NOTE)})
 
-    # The fourth position is `domains` and stays `domains`, even when what was
+    # The fifth position is `domains` and stays `domains`, even when what was
     # written there would have been a well-formed attestation: the two are
     # genuinely ambiguous at that width, and this binding refuses to guess. A
     # host that wrote one there is told which list it landed in.
     with pytest.raises(ValueError, match="domain tag"):
         _search(
-            {NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", (INDEX_GENERATION, REBUILDING))}
+            {
+                NOTE_PRODUCER: (
+                    NOTE_STRATUM,
+                    NOTE,
+                    "any",
+                    {"lexicon": "empty"},
+                    (INDEX_GENERATION, REBUILDING),
+                )
+            }
         )
 
     # None of which disturbed the neighbouring producer or the next call: the
@@ -961,9 +993,7 @@ def test_a_terminal_status_carries_one_of_the_four_spellings_reachable_here() ->
     # own count — so its read ends at rank four and the row past it could not be
     # asked for. That is not ``"exhausted"``, though the space does hold exactly
     # four rows: whether a fifth existed was not observable to the reader.
-    space = [
-        (f"{EX}v{i}", [float(i + 1), float(2 * i + 1)]) for i in range(4)
-    ]
+    space = [(f"{EX}v{i}", [float(i + 1), float(2 * i + 1)]) for i in range(4)]
     self_bounded = retrieval.search(
         DATA,
         [("entity", f"<{EX}v0>")],
@@ -1002,7 +1032,8 @@ def test_a_terminal_status_carries_one_of_the_four_spellings_reachable_here() ->
     # ending the module header says it cannot — and a fourth going missing is a
     # fixture that stopped exercising what it was written for.
     reached = {
-        entry["status"] for entry in (exhausted, bounded, self_bounded, *stopped.values())
+        entry["status"]
+        for entry in (exhausted, bounded, self_bounded, *stopped.values())
     }
     assert reached == {
         "exhausted",
@@ -1378,7 +1409,11 @@ def test_an_unrestricted_or_overlapping_stratum_keeps_the_declared_depth() -> No
 
     def depths(producers: dict[str, tuple[Any, ...]]) -> dict[str, int]:
         compiled = retrieval.compile(
-            corpus, request, text_producers=producers, statistics=STATISTICS, top_k=top_k
+            corpus,
+            request,
+            text_producers=producers,
+            statistics=STATISTICS,
+            top_k=top_k,
         )
         return {unit["stratum"]: unit["depth"] for unit in compiled["units"]}
 
@@ -1408,9 +1443,7 @@ def test_an_unrestricted_or_overlapping_stratum_keeps_the_declared_depth() -> No
         (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
         (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [NOTE_DOMAIN]),
     )
-    assert depths(overlapping) == declared, (
-        "declarations that meet license no prefix"
-    )
+    assert depths(overlapping) == declared, "declarations that meet license no prefix"
 
     # And every one of them answers, identically. The depth is the only thing that
     # moved anywhere in this family.
@@ -1480,7 +1513,7 @@ def test_an_empty_domain_declaration_is_refused_and_its_neighbours_are_not() -> 
     assert _ranking(restricted) == _ranking(unrestricted)
     assert restricted["domains"] == {NOTE_STRATUM: [NOTE_DOMAIN]}
 
-    # The three-element spelling is the same declaration as an explicit None, so
+    # The four-element spelling is the same declaration as an explicit None, so
     # a host that never heard of domains keeps exactly the answer it had.
     omitted = retrieval.search(DATA, request, text_producers=NOTE_ONLY, **common)
     assert _ranking(omitted) == _ranking(unrestricted)
@@ -1498,7 +1531,9 @@ def test_an_empty_domain_declaration_is_refused_and_its_neighbours_are_not() -> 
         )
 
 
-def test_two_producers_under_one_stratum_are_refused_by_name_and_two_strata_are_not() -> None:
+def test_two_producers_under_one_stratum_are_refused_by_name_and_two_strata_are_not() -> (
+    None
+):
     """One stratum carries one producer, and the refusal is a ``ValueError``.
 
     The registry underneath enforces this with a panic, which is the right shape
@@ -1546,7 +1581,9 @@ def test_two_producers_under_one_stratum_are_refused_by_name_and_two_strata_are_
         ),
         **common,
     )
-    assert fused["rows"], "two producers under two strata is the configuration that fuses"
+    assert fused["rows"], (
+        "two producers under two strata is the configuration that fuses"
+    )
     assert set(fused["statuses"]) == {NOTE_STRATUM, TITLE_STRATUM}
 
 
@@ -1717,15 +1754,19 @@ def test_the_registry_shape_is_durable_where_the_instance_is_not() -> None:
     """
     request = [_lexical("quick fox", NOTE)]
     first = retrieval.plan(
-        DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    ,
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
         top_k=PLAN_TOP_K,
-)
+    )
     second = retrieval.plan(
-        DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    ,
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
         top_k=PLAN_TOP_K,
-)
+    )
     assert (
         first["registry_content_fingerprint"] == second["registry_content_fingerprint"]
     )
@@ -1739,8 +1780,8 @@ def test_plan_reports_why_a_producer_was_not_selected() -> None:
         [_lexical("quick fox", NOTE)],
         text_producers=BOTH,
         statistics=STATISTICS,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     decisions = {d["producer"]: d for d in planned["producer_decisions"]}
     assert decisions[NOTE_PRODUCER]["selected"] is True
     assert decisions[NOTE_PRODUCER]["stratum"] == NOTE_STRATUM
@@ -1754,17 +1795,19 @@ def test_a_measured_cardinality_lowers_the_planned_depth() -> None:
     """Statistics are the host's, and a measurement bounds rather than raises."""
     request = [_lexical("quick fox", NOTE)]
     unbounded = retrieval.plan(
-        DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    ,
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
         top_k=PLAN_TOP_K,
-)
+    )
     bounded = retrieval.plan(
         DATA,
         request,
         text_producers=NOTE_ONLY,
         statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     assert bounded["stratum_depths"][NOTE_STRATUM] == 1
     assert (
         bounded["stratum_depths"][NOTE_STRATUM]
@@ -1961,8 +2004,8 @@ def test_compile_emits_the_sparql_each_stratum_runs() -> None:
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     units = compiled["units"]
     assert len(units) == 1
     assert units[0]["stratum"] == NOTE_STRATUM
@@ -2012,8 +2055,8 @@ def test_a_compiled_unit_is_emitted_one_probe_row_deeper_than_it_reports() -> No
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     unit = compiled["units"][0]
     assert unit["depth"] == 1, "the host's measurement lowered the depth to one row"
     assert unit["declared_rows"] > unit["depth"], (
@@ -2057,16 +2100,16 @@ def test_a_probe_row_is_emitted_even_where_the_declaration_leaves_no_room() -> N
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     unit = compiled["units"][0]
     planned = retrieval.plan(
         DATA,
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     assert unit["depth"] == planned["stratum_depths"][NOTE_STRATUM], (
         "the unit reports the depth the plan recorded, not a number of its own"
     )
@@ -2098,8 +2141,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     planned = compiled["planned_resolution"][NOTE_STRATUM]
     assert planned["fully_separated"] is True, (
         "a whole unit of weight separates every rank this plan reads"
@@ -2129,8 +2172,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: sufficient - 1},
         k=60,
         decay=TRUNCATED,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     coarse_planned = coarse["planned_resolution"][NOTE_STRATUM]
     assert coarse_planned["requested_depth"] == depth
     assert coarse_planned["fully_separated"] is False, (
@@ -2149,8 +2192,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: sufficient},
         k=60,
         decay=TRUNCATED,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     assert exact["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
 
@@ -2173,14 +2216,17 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
             [_lexical("quick fox", NOTE)],
             weights={NOTE_STRATUM: retrieval.SCALE},
             **common,
-                    top_k=PLAN_TOP_K,
-)
+            top_k=PLAN_TOP_K,
+        )
     with pytest.raises(ValueError, match="smoothing constant"):
         retrieval.compile(
-            DATA, [_lexical("quick fox", NOTE)], k=60, decay=TRUNCATED, **common
-        ,
+            DATA,
+            [_lexical("quick fox", NOTE)],
+            k=60,
+            decay=TRUNCATED,
+            **common,
             top_k=PLAN_TOP_K,
-)
+        )
     # Two thirds of a law is still not a law, and the message names the third
     # that is missing rather than choosing one.
     with pytest.raises(ValueError, match=r"left the `decay` rule unnamed"):
@@ -2190,8 +2236,8 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
             weights={NOTE_STRATUM: retrieval.SCALE},
             k=60,
             **common,
-                    top_k=PLAN_TOP_K,
-)
+            top_k=PLAN_TOP_K,
+        )
 
     # All three together are a law, and the same call answers.
     whole = retrieval.compile(
@@ -2201,13 +2247,15 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
         k=60,
         decay=TRUNCATED,
         **common,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     assert whole["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
     # Naming NONE of the three is not a refusal: it compiles without a law and
     # is simply told nothing about resolution.
-    lawless = retrieval.compile(DATA, [_lexical("quick fox", NOTE)], **common, top_k=PLAN_TOP_K)
+    lawless = retrieval.compile(
+        DATA, [_lexical("quick fox", NOTE)], **common, top_k=PLAN_TOP_K
+    )
     assert lawless["planned_resolution"] == {}
     assert lawless["units"], "a call that names no law is still a compiled plan"
 
@@ -2251,8 +2299,8 @@ def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     assert compiled["planned_resolution"] == answer["planned_resolution"]
 
 
@@ -2260,10 +2308,12 @@ def test_no_producer_is_refused_by_name() -> None:
     """An empty producer set is a refusal; there is no default to fall back on."""
     with pytest.raises(ValueError, match="no ranked producers"):
         retrieval.plan(
-            DATA, [_lexical("quick fox", NOTE)], text_producers={}, statistics=STATISTICS
-        ,
+            DATA,
+            [_lexical("quick fox", NOTE)],
+            text_producers={},
+            statistics=STATISTICS,
             top_k=PLAN_TOP_K,
-)
+        )
 
 
 def test_statistics_must_name_their_own_revision() -> None:
@@ -2274,8 +2324,8 @@ def test_statistics_must_name_their_own_revision() -> None:
             [_lexical("quick fox", NOTE)],
             text_producers=NOTE_ONLY,
             statistics={"source": "host-statistics"},
-                    top_k=PLAN_TOP_K,
-)
+            top_k=PLAN_TOP_K,
+        )
 
 
 def test_a_float_weight_is_refused_and_an_exact_one_is_not() -> None:
@@ -2309,10 +2359,12 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
     )
     with pytest.raises(ValueError, match="partition"):
         retrieval.plan(
-            tagged, [_lexical("quick", NOTE)], text_producers=NOTE_ONLY, statistics=STATISTICS
-        ,
+            tagged,
+            [_lexical("quick", NOTE)],
+            text_producers=NOTE_ONLY,
+            statistics=STATISTICS,
             top_k=PLAN_TOP_K,
-)
+        )
 
     # The neighbouring valid case: one language is one partition, and it answers.
     one_language = (
@@ -2320,11 +2372,15 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
         f'<{EX}b> <{NOTE}> "a quick hound"@en .\n'
     )
     planned = retrieval.plan(
-        one_language, [_lexical("quick", NOTE)], text_producers=NOTE_ONLY, statistics=STATISTICS
-    ,
+        one_language,
+        [_lexical("quick", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
         top_k=PLAN_TOP_K,
-)
-    assert planned["producer_bindings"], "a single-partition index declares a ranked order"
+    )
+    assert planned["producer_bindings"], (
+        "a single-partition index declares a ranked order"
+    )
 
     # …and the declaration is worth having: the whole ladder runs over it and both
     # documents holding the needle come back ranked. "It planned" alone would be
@@ -2339,9 +2395,10 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
         decay=TRUNCATED,
         top_k=10,
     )
-    assert sorted(row["entity"] for row in answer["rows"]) == [f"<{EX}a>", f"<{EX}b>"], (
-        "one partition, one ranking, and every document holding the needle in it"
-    )
+    assert sorted(row["entity"] for row in answer["rows"]) == [
+        f"<{EX}a>",
+        f"<{EX}b>",
+    ], "one partition, one ranking, and every document holding the needle in it"
 
 
 def test_an_unknown_request_kind_names_what_is_accepted() -> None:
@@ -2352,8 +2409,8 @@ def test_an_unknown_request_kind_names_what_is_accepted() -> None:
             [("keyword", "quick fox", None, NOTE)],
             text_producers=NOTE_ONLY,
             statistics=STATISTICS,
-                    top_k=PLAN_TOP_K,
-)
+            top_k=PLAN_TOP_K,
+        )
 
 
 def test_an_unknown_graph_selector_names_what_is_accepted() -> None:
@@ -2362,10 +2419,12 @@ def test_an_unknown_graph_selector_names_what_is_accepted() -> None:
         retrieval.plan(
             DATA,
             [_lexical("quick fox", NOTE)],
-            text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every")},
+            text_producers={
+                NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every", {"lexicon": "empty"})
+            },
             statistics=STATISTICS,
-                    top_k=PLAN_TOP_K,
-)
+            top_k=PLAN_TOP_K,
+        )
 
 
 def test_the_folded_rule_reaches_every_number_in_the_answer() -> None:
@@ -2683,9 +2742,7 @@ def test_deepest_rank_within_width_asks_about_arithmetic_and_needs_no_stratum() 
     with pytest.raises(ValueError, match="strictly positive"):
         retrieval.deepest_rank_within_width(0, 60, 4, decay=TRUNCATED)
     assert (
-        _measured_depth(
-            retrieval.deepest_rank_within_width(1, 60, 4, decay=TRUNCATED)
-        )
+        _measured_depth(retrieval.deepest_rank_within_width(1, 60, 4, decay=TRUNCATED))
         >= 1
     )
 
@@ -2765,7 +2822,9 @@ def test_a_depth_that_outruns_every_plan_is_reported_as_saturation() -> None:
     assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED) > 0
 
 
-def test_deepest_rank_within_width_answers_under_both_rules_and_the_rules_differ() -> None:
+def test_deepest_rank_within_width_answers_under_both_rules_and_the_rules_differ() -> (
+    None
+):
     """The curve belongs to the rule, exactly as it does for ``class_width``.
 
     Read past the truncated rule's wall, the same tolerance buys the folded
@@ -2786,7 +2845,9 @@ def test_deepest_rank_within_width_answers_under_both_rules_and_the_rules_differ
         )
 
 
-def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth() -> None:
+def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth() -> (
+    None
+):
     """The three functions agree with each other where they must.
 
     ``deepest_rank_within_width`` answers a DEPTH question: the deepest rank
@@ -2936,7 +2997,15 @@ def _with_fidelity(
     other, which is why neither position can stand in for the other.
     """
     return {
-        producer: (stratum, predicate, "any", None, (None, None), fidelity)
+        producer: (
+            stratum,
+            predicate,
+            "any",
+            {"lexicon": "empty"},
+            None,
+            (None, None),
+            fidelity,
+        )
         for producer, stratum, predicate, fidelity in entries
     }
 
@@ -3126,10 +3195,10 @@ def test_an_empty_evidence_is_refused_on_either_axis_and_its_neighbours_are_not(
     # Refused: a bare string is NOT destructured into its own two characters.
     # `"ab"` extracts as a well-formed two-member sequence, so accepting it would
     # report `"a"` back as completeness evidence the host never wrote.
-    with pytest.raises(TypeError, match="a fidelity is the sixth"):
+    with pytest.raises(TypeError, match="expected .*analyzer"):
         search("ab")  # type: ignore[arg-type]
     # As is a sequence of the wrong width: three axes is not this declaration.
-    with pytest.raises(TypeError, match="a fidelity is the sixth"):
+    with pytest.raises(TypeError, match="expected .*analyzer"):
         search((LOSS, None, None))  # type: ignore[arg-type]
 
     # ── the neighbours that must still work, which is the point of the test ──
@@ -3267,7 +3336,17 @@ def test_the_four_producer_spellings_agree_where_they_overlap() -> None:
     three = _answer(NOTE_ONLY, **common)
     four = _answer(_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)), **common)
     five = _answer(
-        {NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, (None, None))}, **common
+        {
+            NOTE_PRODUCER: (
+                NOTE_STRATUM,
+                NOTE,
+                "any",
+                {"lexicon": "empty"},
+                None,
+                (None, None),
+            )
+        },
+        **common,
     )
     six = _answer(
         _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, (None, None))), **common
@@ -3369,8 +3448,8 @@ def test_the_planned_resolution_reports_the_depth_the_plan_itself_recorded() -> 
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     assert (
         compiled["planned_resolution"][NOTE_STRATUM]["requested_depth"]
         == compiled["plan"]["stratum_depths"][NOTE_STRATUM]
@@ -3386,8 +3465,8 @@ def test_the_planned_resolution_reports_the_depth_the_plan_itself_recorded() -> 
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-            top_k=PLAN_TOP_K,
-)
+        top_k=PLAN_TOP_K,
+    )
     assert bounded["plan"]["stratum_depths"][NOTE_STRATUM] == 1
     assert bounded["planned_resolution"][NOTE_STRATUM]["requested_depth"] == 1
     assert (
@@ -3420,18 +3499,24 @@ def test_a_non_positive_weight_is_refused_naming_the_stratum() -> None:
 
     for refused_weight in (0, -1, -retrieval.SCALE):
         with pytest.raises(ValueError, match="non-positive weight") as refused:
-            retrieval.search(DATA, request, weights={NOTE_STRATUM: refused_weight}, **common)
+            retrieval.search(
+                DATA, request, weights={NOTE_STRATUM: refused_weight}, **common
+            )
         assert NOTE_STRATUM in str(refused.value), (
             f"the refusal names the stratum whose weight was rejected: {refused.value}"
         )
 
     # The neighbouring valid weights, down to the smallest positive one there is.
     for accepted in (1, retrieval.SCALE // 2, retrieval.SCALE, 1000 * retrieval.SCALE):
-        answer = retrieval.search(DATA, request, weights={NOTE_STRATUM: accepted}, **common)
+        answer = retrieval.search(
+            DATA, request, weights={NOTE_STRATUM: accepted}, **common
+        )
         assert answer["rows"], f"a raw weight of {accepted} is a weight and answers"
 
 
-def test_crossing_rank_at_refuses_a_non_positive_weight_and_answers_its_neighbour() -> None:
+def test_crossing_rank_at_refuses_a_non_positive_weight_and_answers_its_neighbour() -> (
+    None
+):
     """The crossing derivation refuses a weight its search cannot rest on.
 
     ``retrieval.crossing_rank_at`` bisects over the head rank, which is exact only
@@ -3449,14 +3534,20 @@ def test_crossing_rank_at_refuses_a_non_positive_weight_and_answers_its_neighbou
     scale = retrieval.SCALE
     for decay in (TRUNCATED, "weighted_reciprocal_rank"):
         for refused in (0, -1):
-            for naming, sharing in (([refused], [scale, scale]), ([scale], [scale, refused])):
+            for naming, sharing in (
+                ([refused], [scale, scale]),
+                ([scale], [scale, refused]),
+            ):
                 with pytest.raises(ValueError, match="non-positive weight") as raised:
                     retrieval.crossing_rank_at(naming, 5, sharing, 60, decay=decay)
                 assert f"Fixed({refused})" in str(raised.value), (
                     f"the refusal names the weight it was handed: {raised.value}"
                 )
 
-        assert retrieval.crossing_rank_at([scale], 5, [scale, scale], 60, decay=decay) == 71
+        assert (
+            retrieval.crossing_rank_at([scale], 5, [scale, scale], 60, decay=decay)
+            == 71
+        )
         assert retrieval.crossing_rank_at([scale], 5, [scale, 1], 60, decay=decay) == 6
         assert retrieval.crossing_rank_at([scale], 5, [scale], 60, decay=decay) == 6
 
@@ -3494,7 +3585,9 @@ def test_every_graph_selector_spelling_selects_a_different_reading() -> None:
         answer = retrieval.search(
             corpus,
             request,
-            text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, selector)},
+            text_producers={
+                NOTE_PRODUCER: (NOTE_STRATUM, NOTE, selector, {"lexicon": "empty"})
+            },
             **common,
         )
         return [row["entity"] for row in answer["rows"]]
@@ -3519,7 +3612,9 @@ def test_every_graph_selector_spelling_selects_a_different_reading() -> None:
         retrieval.search(
             split,
             request,
-            text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every")},
+            text_producers={
+                NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every", {"lexicon": "empty"})
+            },
             **common,
         )
     message = str(refused.value)
@@ -3528,7 +3623,9 @@ def test_every_graph_selector_spelling_selects_a_different_reading() -> None:
         assert accepted in message, f"the refusal names {accepted}: {message}"
 
 
-def test_each_data_format_name_routes_the_document_and_an_unknown_one_is_refused() -> None:
+def test_each_data_format_name_routes_the_document_and_an_unknown_one_is_refused() -> (
+    None
+):
     """Three document syntaxes, named, with no default beyond ``"turtle"``.
 
     Each is proved by syntax only its own codec reads, so a name routed to the
@@ -3608,10 +3705,12 @@ def test_every_partial_fusion_law_names_what_arrived_and_what_did_not() -> None:
         absent = tuple(part for part in order if part not in supplied)
         with pytest.raises(ValueError) as refused:
             retrieval.compile(
-                DATA, request, **{part: whole[part] for part in supplied}, **common
-            ,
+                DATA,
+                request,
+                **{part: whole[part] for part in supplied},
+                **common,
                 top_k=PLAN_TOP_K,
-)
+            )
         message = str(refused.value)
         arrived = " and ".join(labels[part] for part in order if part in supplied)
         missing = " and ".join(labels[part] for part in absent)
@@ -3669,9 +3768,7 @@ def test_a_several_block_declaration_is_refused_where_it_is_registered() -> None
             retrieval.search(
                 DATA,
                 request,
-                text_producers=_declared(
-                    (NOTE_PRODUCER, NOTE_STRATUM, NOTE, declared)
-                ),
+                text_producers=_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, declared)),
                 **common,
             )
         message = str(refused.value)
@@ -3694,8 +3791,8 @@ def test_a_several_block_declaration_is_refused_where_it_is_registered() -> None
                 (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN, TITLE_DOMAIN])
             ),
             statistics=STATISTICS,
-                    top_k=PLAN_TOP_K,
-)
+            top_k=PLAN_TOP_K,
+        )
 
     # ── the valid neighbours, which is the point of the test ──────────────────
     # One block leaves nothing to disambiguate, so it registers AND still bounds
@@ -4154,7 +4251,10 @@ def _two_term_selectivity_document() -> tuple[dict[str, Any], bytes]:
         DATA,
         [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
         text_producers=BOTH,
-        statistics={**STATISTICS, "selectivity": {(NOTE, 0): 100_000, (NOTE, 1): 200_000}},
+        statistics={
+            **STATISTICS,
+            "selectivity": {(NOTE, 0): 100_000, (NOTE, 1): 200_000},
+        },
         top_k=PLAN_TOP_K,
     )
     assert sorted(
@@ -4222,8 +4322,7 @@ def test_a_selectivity_domain_that_addresses_no_request_term_is_refused() -> Non
     _empty, without_selectivity = _one_stratum_document()
     certified = retrieval.certify_plan(without_selectivity)
     assert all(
-        entry["selectivity_terms"] == []
-        for entry in certified["statistics"]["entries"]
+        entry["selectivity_terms"] == [] for entry in certified["statistics"]["entries"]
     )
     assert certified["stratum_derivations"][NOTE_STRATUM]["selectivity_terms"] == []
 
@@ -4398,3 +4497,225 @@ def test_a_compiled_plans_document_is_the_document_of_the_admitted_plan() -> Non
     # The oracle that keeps this from passing over an empty document: the depth
     # the certified plan records is the depth the compiled unit was keyed to.
     assert received["stratum_depths"][NOTE_STRATUM] == compiled["units"][0]["depth"]
+
+
+def test_text_analyzer_requires_an_explicit_lexicon_choice() -> None:
+    for analyzer in (
+        {},
+        {"lexicon": "baseline"},
+        {"lexicon": "empty", "unknown": True},
+    ):
+        with pytest.raises(ValueError):
+            retrieval.plan(
+                DATA,
+                [_lexical("quick", NOTE)],
+                text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", analyzer)},
+                statistics=STATISTICS,
+                top_k=10,
+            )
+    with pytest.raises(TypeError, match="analyzer"):
+        retrieval.plan(
+            DATA,
+            [_lexical("quick", NOTE)],
+            text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any")},
+            statistics=STATISTICS,
+            top_k=10,
+        )
+
+
+def test_han_producer_supplies_dictionary_independent_ranked_rows() -> None:
+    corpus = f'<{EX}university> <{NOTE}> "北京大学" .'
+    entries = [("北京大学", 1), ("北京", 1)]
+    common = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    answers = []
+    for projection in ("lexical", "han"):
+        answers.append(
+            retrieval.search(
+                corpus,
+                [_lexical("北京", NOTE)],
+                text_producers={
+                    NOTE_PRODUCER: (
+                        NOTE_STRATUM,
+                        NOTE,
+                        "any",
+                        {
+                            "lexicon": "dictionary",
+                            "entries": entries,
+                            "projection": projection,
+                        },
+                    )
+                },
+                **common,
+            )
+        )
+    assert answers[0]["rows"] == []
+    assert len(answers[1]["rows"]) == 1
+    assert answers[0]["evidence_id"] != answers[1]["evidence_id"]
+
+
+def test_standard_analyzer_resolves_all_five_caller_supplied_artifacts() -> None:
+    import json
+    from pathlib import Path
+
+    directory = Path(__file__).resolve().parents[3] / "crates/text/lexicons/artifacts"
+    manifest = json.loads((directory / "manifest.json").read_text())
+    artifacts = [
+        (directory / entry["artifact"]).read_bytes() for entry in manifest["artifacts"]
+    ]
+    corpus = f'<{EX}chinese> <{NOTE}> "中文" .'
+    answer = retrieval.search(
+        corpus,
+        [_lexical("中文", NOTE)],
+        text_producers={
+            NOTE_PRODUCER: (
+                NOTE_STRATUM,
+                NOTE,
+                "any",
+                {"lexicon": "baseline", "artifacts": artifacts},
+            )
+        },
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )
+    assert len(answer["rows"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("stored", "query", "expected"),
+    [
+        ("\u0600中", "中", 1),
+        ("中\u0600文", "文", 1),
+        ("中\u0600文", "中文", 0),
+        ("中\U00016ff0文", "中文", 1),
+        ("中\U00016ff1文", "中文", 1),
+        ("\u0600中\ufe00\u200c文", "中文", 1),
+    ],
+)
+def test_han_grapheme_bases_and_attached_marks(
+    stored: str, query: str, expected: int
+) -> None:
+    answer = retrieval.search(
+        f'<{EX}han> <{NOTE}> "{stored}" .',
+        [_lexical(query, NOTE)],
+        text_producers={
+            NOTE_PRODUCER: (
+                NOTE_STRATUM,
+                NOTE,
+                "any",
+                {"lexicon": "empty", "projection": "han"},
+            )
+        },
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )
+    assert len(answer["rows"]) == expected
+
+
+_ACCENT_SAMPLES = [
+    ("latin", "é", "e"),
+    ("greek", "ά", "α"),
+    ("cyrillic", "й", "и"),
+    ("arabic", "بَ", "ب"),
+    ("hebrew", "בּ", "ב"),
+]
+
+
+def _accent_answer(accent: Any) -> dict[str, Any]:
+    corpus = "\n".join(
+        f'<{EX}{name}> <{NOTE}> "{marked}" .' for name, marked, _ in _ACCENT_SAMPLES
+    )
+    return retrieval.search(
+        corpus,
+        [_lexical(" ".join(plain for _, _, plain in _ACCENT_SAMPLES), NOTE)],
+        text_producers={
+            NOTE_PRODUCER: (
+                NOTE_STRATUM,
+                NOTE,
+                "any",
+                {"lexicon": "empty", "accent": accent},
+            )
+        },
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )
+
+
+@pytest.mark.parametrize("subset", range(32))
+def test_each_accent_script_subset_is_independent_and_canonical(subset: int) -> None:
+    names = [
+        name for at, (name, _, _) in enumerate(_ACCENT_SAMPLES) if subset & (1 << at)
+    ]
+    answer = _accent_answer(names)
+    assert {row["entity"] for row in answer["rows"]} == {
+        f"<{EX}{name}>" for name in names
+    }
+    equivalent = _accent_answer(list(reversed(names)) + names)
+    assert answer["evidence_id"] == equivalent["evidence_id"]
+    assert answer["rows"] == equivalent["rows"]
+
+
+@pytest.mark.parametrize(
+    ("preset", "names"),
+    [
+        ("preserve", []),
+        ("latin-greek-cyrillic", ["cyrillic", "latin", "greek"]),
+        (
+            "latin-greek-cyrillic-arabic-hebrew",
+            ["hebrew", "arabic", "cyrillic", "greek", "latin"],
+        ),
+    ],
+)
+def test_accent_preset_aliases_share_the_explicit_set_identity(
+    preset: str, names: list[str]
+) -> None:
+    assert _accent_answer(preset)["evidence_id"] == _accent_answer(names)["evidence_id"]
+
+
+@pytest.mark.parametrize(
+    "accent",
+    [["thai"], ["Latin"], ["arabic", 1], 31, True, {"arabic": True}, ("arabic",), None],
+)
+def test_accent_script_sets_refuse_unknown_names_and_untyped_flags(accent: Any) -> None:
+    with pytest.raises((TypeError, ValueError), match="accent"):
+        _accent_answer(accent)
+
+
+def test_selected_arabic_accents_also_normalize_caller_dictionary_keys() -> None:
+    for names, expected in [(["arabic"], 1), (["hebrew"], 0)]:
+        answer = retrieval.search(
+            f'<{EX}compound> <{NOTE}> "أ中文" .',
+            [_lexical("ا中文", NOTE)],
+            text_producers={
+                NOTE_PRODUCER: (
+                    NOTE_STRATUM,
+                    NOTE,
+                    "any",
+                    {
+                        "lexicon": "dictionary",
+                        "entries": [("أ中文", 1)],
+                        "accent": names,
+                    },
+                )
+            },
+            weights={NOTE_STRATUM: retrieval.SCALE},
+            statistics=STATISTICS,
+            k=60,
+            decay=TRUNCATED,
+            top_k=10,
+        )
+        assert len(answer["rows"]) == expected

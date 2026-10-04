@@ -208,52 +208,24 @@ terms against index terms by equality, so two pipelines that merely resemble eac
 other produce a search that returns nothing and reports nothing. Silence is
 retrieval's failure mode, which is why the two ends are the same code.
 
-The pipeline is **compatibility normalization plus full case folding**, then
-segmentation at Unicode word boundaries (`UAX #15`, `UAX #21`, `UAX #29`).
+The analyzer is an explicit, immutable resolved profile, shared by indexing and
+queries. Compatibility caseless normalization follows the complete Unicode law
+`NFD → fold → NFKD → fold → NFKD → NFC`. The standard profile folds eligible
+Latin, Greek and Cyrillic accents, requires all five pinned full lexicon artifacts,
+and uses a nominal final bound of 128 scalars. English stemming is selected
+explicitly. Unicode 17 grapheme and emoji data protect atomic joined forms.
 
-Both halves of that choice matter:
+The lexical projection owns these scoring statistics and consecutive phrase
+positions. Surface words retain pre-stem spelling and orthographic controls;
+substring spans retain punctuation. The independent Han-character producer owns
+its own unigram/bigram frequencies, lengths and ranked corpus. Its terms never
+alter lexical BM25F or phrase positions. Fusion uses caller-selected parameters.
 
-* Lowercasing is not case folding. `str::to_lowercase` leaves `ß` as `ß`, so
-  `STRASSE` lowercases to `strasse` while `Straße` lowercases to `straße` — two
-  terms, no match, no diagnostic. Full case folding maps both to `strasse`.
-* Canonical normalization alone preserves compatibility distinctions by
-  construction, so fullwidth `ｒｕｓｔ` would stay distinct from `rust` and the
-  ligature `ﬁ` from `fi`. Compatibility normalization is what collapses them.
-
-Normalization runs over the whole input **before** segmentation, never per token.
-A canonically decomposed `é` is `e` followed by a combining acute accent, and a
-lone combining mark is not `Alphabetic`; the word-boundary rules would split it
-off the base character it modifies, so the decomposed spelling of a word would
-segment differently from the precomposed spelling of the same word.
-
-### CJK, as measured rather than assumed
-
-`UAX #29` assigns Han ideographs and Hiragana the `Word_Break` value `Other`, and
-rule WB999 breaks between any pair of characters not joined by an earlier rule.
-The observable consequences, confirmed against the linked tables and asserted by
-the test suite:
-
-* **Han** segments to **one token per ideograph** — `中文全文検索` yields six
-  single-character tokens, not one token for the phrase.
-* **Hiragana** likewise segments one token per character.
-* **Katakana does not.** It carries `Word_Break = Katakana`, and rule WB13 keeps
-  a katakana run together, so `サンドイッチ` is a single token.
-* **Hangul does not.** Hangul syllables are `ALetter`, and Korean is written with
-  spaces, so it segments into whole words.
-
-Because unspaced CJK arrives as a stream of one-character tokens, expanding
-*each token* into bigrams would accomplish nothing — every such token is already
-one character. Bigrams are therefore formed **across adjacent tokens**: a maximal
-run of adjacent all-CJK tokens is rejoined and expanded into overlapping
-character bigrams. Adjacency is read from byte offsets, so `中文` and `中 文`
-analyze differently, which is the intent.
-
-Bigrams are the standard answer for retrieval over a script with no spaces.
-Indexing unigrams would reduce a phrase query to a bag of characters, matching
-any document containing those characters anywhere; a dictionary segmenter would
-need per-language data this crate does not carry, and would make answers depend
-on that data's vintage. A run of exactly one character has no bigram to form and
-is emitted whole, so a single ideograph stays retrievable.
+Artifact identities, effective dictionary costs, every stage and parameter and the
+Unicode data digest belong in analyzer identity. An empty lexicon is explicitly
+named and uses grapheme fallback for unspaced scripts. See
+[analysis and auxiliary retrieval](text-analysis.md) for complete ordering,
+source alignment, input interpretation, domain and refusal contracts.
 
 ## 7. One Unicode version, generated in the crate
 
@@ -276,7 +248,7 @@ Two mechanisms make that loud instead of silent:
 
 1. **A golden token-vector test.** Exact expected token vectors span Latin case
    folding, Greek final sigma, Cyrillic, right-to-left Arabic, pointed Hebrew,
-   Devanagari with dependent vowel signs, Han bigrams, mixed Kana, Hangul,
+   Devanagari with dependent vowel signs, Han dictionaries and character projections, mixed Kana, Hangul,
    numerals, compatibility presentation forms and punctuation — so a change
    confined to any one of those still lands on an assertion. A failure there is
    not a test to update; it is a report that the term dictionary this crate would

@@ -221,14 +221,6 @@ anchor = "purrdf_text::term_bytes::fingerprint_terms"
 reason = "A term-sequence fingerprint is its own kind, compared only with another fingerprint, and a published identity callers record; a domain prefix would change every recorded value."
 
 [[job.variant]]
-symbol = "purrdf_text::index::TextIndex::analyzer_fingerprint"
-file = "crates/text/src/index.rs"
-detector = "undomained-digest"
-criterion = "a"
-anchor = "purrdf_text::index::TextIndex::analyzer_fingerprint"
-reason = "The analyzer profile id is absorbed first and already names the family; the fingerprint is its own kind and a published identity, so a registered domain would change every recorded value."
-
-[[job.variant]]
 symbol = "purrdf_core::artifact::identity::Identity::refresh"
 file = "crates/rdf-core/src/artifact/identity.rs"
 detector = "undomained-digest"
@@ -594,6 +586,23 @@ enforced = true
 constants = []
 fingerprints = ["rule:hex-digit-radix"]
 names = ['^(hex4|read_hex4|read_code_unit|parse_unicode_escape|escaped_char|unescape_iri|uchar_expanded|decode_uchar|decode_char_ref|hex_scalar)$']
+
+[[job]]
+id = "html-character-reference"
+summary = "Exactly-once HTML character-reference resolution in text and attribute contexts, with complete named data, numeric recovery, typed diagnostics and original UTF-8 scalar contributors"
+home = "purrdf_lex::html::resolve"
+entry_points = ["purrdf_lex::html::resolve_strict", "purrdf_lex::html::Mode", "purrdf_lex::html::Decoded", "purrdf_lex::html::Diagnostic", "purrdf_lex::html::ErrorKind"]
+spec = "WHATWG HTML Standard character-reference submachine at a5e15011a00ddefd648c29e4d27734f3e7ff821f; named data and numeric recovery provenance in crates/lex/data/html/PROVENANCE.md; no document parsing or recursive decoding"
+vectors = ["crates/lex/data/html/entities.json", "crates/lex/data/html/numeric-recovery.json"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^((resolve|decode|unescape)_html(_references)?|html_(resolve|decode|unescape))$']
 
 [[job]]
 id = "grammar-ws"
@@ -1891,7 +1900,7 @@ members = [
     "purrdf_retrieval::test_crate::real_producers::text_config",
     "purrdf_text::test_crate::determinism::config",
 ]
-kind = "shim"
+kind = "body"
 criterion = "b"
 anchor = "purrdf_text::test_crate::determinism::config"
 reason = "Two crates' fixtures over different predicates (text's NOTE is http://example.org/note, retrieval's is https://example.org/note) that happen to share a constant's name and the TextIndex config spelling; the values differ, so neither can call the other."

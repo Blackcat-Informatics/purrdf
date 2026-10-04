@@ -3,6 +3,8 @@
 
 [package]
 name = "purrdf-text"
+# Dictionaries are distributed in their separate, fully noticed data archive.
+exclude = ["lexicons/**"]
 description = "Deterministic in-memory full-text search over RDF 1.2 literals, exposed to SPARQL through the property-function seam under caller-supplied IRIs; exact fixed-point BM25F ranking with no floating-point arithmetic."
 version.workspace = true
 edition.workspace = true
@@ -58,6 +60,8 @@ purrdf-sparql-results.workspace = true
 # wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped from
 # the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit.workspace = true
+# The workspace's allocation instrument, used only by the host measurement example.
+purrdf-alloc-probe.workspace = true
 
 # The one test in this crate that must EXECUTE on wasm32-unknown-unknown rather
 # than merely compile for it. Ranking needs a natural logarithm, and "the same
@@ -76,4 +80,24 @@ harness = false
 # CJK text. Report-only, like `search`.
 [[bench]]
 name = "analysis"
+harness = false
+
+[[bench]]
+name = "phonetic"
+harness = false
+
+[[bench]]
+name = "dictionaries"
+harness = false
+
+[[test]]
+name = "surface"
+harness = false
+
+[[bench]]
+name = "surface"
+harness = false
+
+[[bench]]
+name = "emoji"
 harness = false

@@ -16,6 +16,7 @@ pub fn config(predicates: &[&str]) -> TextIndexConfig {
     TextIndexConfig::new(
         predicates.iter().map(|p| TermValue::iri(*p)).collect(),
         GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
     )
     .expect("the fixture configurations are well formed")
 }

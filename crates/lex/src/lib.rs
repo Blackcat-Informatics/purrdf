@@ -134,6 +134,7 @@ pub mod assoc;
 pub mod cbor;
 pub mod constructors;
 pub mod crockford;
+pub mod html;
 pub mod iri_escape;
 pub mod json;
 pub mod json_escape;
