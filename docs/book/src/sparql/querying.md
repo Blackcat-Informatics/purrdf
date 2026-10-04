@@ -126,8 +126,9 @@ Anything outside this surface — and every malformed query — is a typed
 ## Numeric casts
 
 An XSD constructor function such as `xsd:double(?x)` follows the casting rules
-of XPath and XQuery Functions and Operators 3.1 §19, which SPARQL 1.1 §17.5
-adopts. When the argument is a numeric or boolean literal, the cast converts its
+of XPath and XQuery Functions and Operators 3.1 §19. SPARQL 1.1 §17.5 defines
+its casting table by reference to the earlier XQuery 1.0 and XPath 2.0
+Functions and Operators; PurRDF applies the 3.1 text. When the argument is a numeric or boolean literal, the cast converts its
 value. It does not read the literal's digits again as the new type. The float
 written `0.1` is `0.100000001490116119384765625`, so
 `xsd:double("0.1"^^xsd:float)` is `1.0000000149011612E-1`. A string argument is
