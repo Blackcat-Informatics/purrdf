@@ -997,7 +997,8 @@ fn typed(lexical: &str, datatype: &str) -> Expression {
 /// **A NaN comparison answers the same, and the specified, boolean on both
 /// evaluators**: `=`, `<`, `>`, `<=`, `>=` are `false` and `!=` is `true` for a NaN
 /// against any number (XPath F&O `op:numeric-equal`/`-less-than`/`-greater-than`);
-/// a NaN does not order against itself, while `sameValue` keeps `NaN = NaN` true.
+/// a NaN equals nothing and orders against nothing, itself included, so `!=` is the
+/// only relation true of `NaN` and `NaN` (SPARQL 1.2 §17.4.2.2).
 /// Over the palette's rows too, which put a NaN cell beside every other kind.
 #[test]
 fn the_vm_matches_the_tree_walk_over_nan_comparisons() {
@@ -1056,9 +1057,15 @@ fn the_vm_matches_the_tree_walk_over_nan_comparisons() {
         }
     }
     for (name, build) in &relations {
-        let same = build(nan_double(), nan_double());
-        let expected = matches!(*name, "=");
-        assert_eq!(answer(&same), Some(expected), "NaN {name} NaN");
+        let expected = *name == "!=";
+        for (left, right) in [
+            (nan_double(), nan_double()),
+            (nan_float(), nan_float()),
+            (nan_double(), nan_float()),
+        ] {
+            let same = build(left, right);
+            assert_eq!(answer(&same), Some(expected), "NaN {name} NaN: {same:?}");
+        }
     }
 }
 

@@ -27,24 +27,35 @@ use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const EX: &str = "http://example.org/";
 
-fn dataset() -> Arc<RdfDataset> {
+/// `ex:s ex:p 1`, plus — with `with_nan` — `ex:n ex:p "NaN"^^xsd:double`.
+fn dataset_with(with_nan: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let s = builder.intern_iri(&format!("{EX}s"));
     let p = builder.intern_iri(&format!("{EX}p"));
-    let one = builder.intern_literal(RdfLiteral {
-        lexical_form: "1".to_owned(),
-        datatype: Some(format!("{XSD}integer")),
-        language: None,
-        direction: None,
-    });
+    let literal = |builder: &mut RdfDatasetBuilder, lexical: &str, datatype: &str| {
+        builder.intern_literal(RdfLiteral {
+            lexical_form: lexical.to_owned(),
+            datatype: Some(format!("{XSD}{datatype}")),
+            language: None,
+            direction: None,
+        })
+    };
+    let one = literal(&mut builder, "1", "integer");
     builder.push_quad(s, p, one, None);
+    if with_nan {
+        let n = builder.intern_iri(&format!("{EX}n"));
+        let nan = literal(&mut builder, "NaN", "double");
+        builder.push_quad(n, p, nan, None);
+    }
     builder.freeze().expect("a dataset")
 }
 
-fn evaluate(query: &str) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
-    let dataset = dataset();
+fn evaluate_over(
+    dataset: &RdfDataset,
+    query: &str,
+) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     NativeSparqlEngine::new().query_with_options_view(
-        &*dataset,
+        dataset,
         SparqlRequest {
             query: &format!("PREFIX xsd: <{XSD}> {query}"),
             base_iri: None,
@@ -54,11 +65,22 @@ fn evaluate(query: &str) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     )
 }
 
-fn rows(query: &str) -> Vec<Vec<Option<TermValue>>> {
-    match evaluate(query).unwrap_or_else(|e| panic!("evaluate `{query}`: {e:?}")) {
+fn evaluate(query: &str) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
+    evaluate_over(&dataset_with(false), query)
+}
+
+fn solutions(
+    result: Result<SparqlResult, purrdf_core::RdfDiagnostic>,
+    query: &str,
+) -> Vec<Vec<Option<TermValue>>> {
+    match result.unwrap_or_else(|e| panic!("evaluate `{query}`: {e:?}")) {
         SparqlResult::Solutions { rows, .. } => rows,
         other => panic!("expected solutions for `{query}`, got {other:?}"),
     }
+}
+
+fn rows(query: &str) -> Vec<Vec<Option<TermValue>>> {
+    solutions(evaluate(query), query)
 }
 
 /// The one cell `SELECT (<expression> AS ?y) {}` binds, as `(lexical, datatype)`, or
@@ -141,12 +163,66 @@ fn nan_does_not_order_against_itself() {
         boolean(&format!("{NAN_DOUBLE} <= {NAN_FLOAT}")),
         Some(false)
     );
-    // The neighbours: an ordinary identical term still orders against itself, and
-    // `sameValue`'s NaN carve-out keeps `=` between two NaNs true.
+    // The neighbours: an ordinary identical term still orders against itself.
     assert_eq!(boolean("1 <= 1"), Some(true));
     assert_eq!(boolean("2.5 >= 2.5"), Some(true));
-    assert_eq!(boolean(&format!("{NAN_DOUBLE} = {NAN_DOUBLE}")), Some(true));
-    assert_eq!(boolean(&format!("{NAN_DOUBLE} = {NAN_FLOAT}")), Some(true));
+}
+
+#[test]
+fn nan_equals_nothing_not_even_itself_while_same_term_holds() {
+    // SPARQL 1.2 §17.4.2.2: "The Operator Mapping for "=" is the function
+    // op:numeric-equal which is defined to return false when comparing arguments
+    // involving NaN. However, sameTerm(...NaN, ...NaN) is true."
+    for (a, b) in [
+        (NAN_DOUBLE, NAN_DOUBLE),
+        (NAN_FLOAT, NAN_FLOAT),
+        (NAN_FLOAT, NAN_DOUBLE),
+    ] {
+        assert_eq!(boolean(&format!("{a} = {b}")), Some(false), "{a} = {b}");
+        assert_eq!(boolean(&format!("{a} != {b}")), Some(true), "{a} != {b}");
+    }
+    assert_eq!(
+        boolean(&format!("sameTerm({NAN_DOUBLE}, {NAN_DOUBLE})")),
+        Some(true)
+    );
+    assert_eq!(
+        boolean(&format!("sameTerm({NAN_FLOAT}, {NAN_DOUBLE})")),
+        Some(false)
+    );
+    assert_eq!(
+        boolean(&format!("{NAN_DOUBLE} IN (1, {NAN_DOUBLE})")),
+        Some(false)
+    );
+    assert_eq!(
+        boolean(&format!("{NAN_DOUBLE} NOT IN (1, {NAN_DOUBLE})")),
+        Some(true)
+    );
+    // The neighbours: an ordinary identical term is still equal, and in its own list.
+    assert_eq!(boolean("1 = 1"), Some(true));
+    assert_eq!(boolean("1 IN (2, 1)"), Some(true));
+    // A stored NaN is not equal to itself, so `FILTER(?o = ?o)` drops its row and
+    // keeps the ordinary one; `sameTerm` keeps both.
+    let dataset = dataset_with(true);
+    let query = "SELECT ?s WHERE { ?s ?p ?o FILTER(?o = ?o) }";
+    let kept = solutions(evaluate_over(&dataset, query), query);
+    assert_eq!(
+        kept,
+        vec![vec![Some(TermValue::Iri(format!("{EX}s")))]],
+        "{query}"
+    );
+    let query = "SELECT ?s WHERE { ?s ?p ?o FILTER(sameTerm(?o, ?o)) }";
+    assert_eq!(
+        solutions(evaluate_over(&dataset, query), query).len(),
+        2,
+        "{query}"
+    );
+    let query = "SELECT ?s WHERE { ?s ?p ?o FILTER(?o != ?o) }";
+    let kept = solutions(evaluate_over(&dataset, query), query);
+    assert_eq!(
+        kept,
+        vec![vec![Some(TermValue::Iri(format!("{EX}n")))]],
+        "{query}"
+    );
 }
 
 #[test]

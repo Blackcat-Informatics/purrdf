@@ -685,8 +685,8 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
 /// `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1" — same
 /// question, current name): both operands resolve to a term, identical terms
 /// are equal, value-comparable literals compare in the XSD value space
-/// ([`sparql_value_eq`], including the `sameValue`-only cross-type NaN
-/// carve-out its docs explain), distinct terms where at least one is a
+/// ([`sparql_value_eq`], under which a numeric NaN equals nothing, itself
+/// included), distinct terms where at least one is a
 /// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error), and two
 /// incomparable literals are a type error (`None`). This is the equality companion to
 /// the ordering [`compare_terms`]; using it for `=` would wrongly turn a distinct
@@ -713,9 +713,12 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     if is_cdt_pair(ctx, ta, tb)? {
         return cdt_compare(ctx, crate::cdt_fn::CdtRelation::Equal, ta, tb);
     }
-    // sameTerm short-circuit: identical terms are equal regardless of value space.
+    // sameTerm short-circuit: identical terms are equal regardless of value space —
+    // except NaN: `=` on numerics is `op:numeric-equal`, which is false for a NaN
+    // operand even where `sameTerm` is true (SPARQL 1.2 §17.4.2.2).
     if ta == tb {
-        return Ok(Some(intern_boolean(ctx, true)?));
+        let equal = !xsd_of_term(ctx, ta)?.as_ref().is_some_and(is_xsd_nan);
+        return Ok(Some(intern_boolean(ctx, equal)?));
     }
     // Distinct `SolutionTerm`s are distinct RDF terms BY CONSTRUCTION: the dataset
     // builder interns terms by value (one id per value, table kept as-is at
@@ -762,8 +765,9 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
     target_value: &TermValue,
     candidate: SolutionTerm<D::Id>,
 ) -> Result<Option<bool>, EvalError> {
+    // An identical candidate is equal — unless it is NaN, which `=` never equals.
     if target == candidate {
-        return Ok(Some(true));
+        return Ok(Some(!xsd_of(target_value).as_ref().is_some_and(is_xsd_nan)));
     }
     let cv = value_of(ctx, candidate)?;
     Ok(rdf_equal(target_value, &cv))
@@ -853,34 +857,16 @@ fn is_numeric_nan_pair(ax: &XsdValue, bx: &XsdValue) -> bool {
     ax.is_numeric() && bx.is_numeric() && (is_xsd_nan(ax) || is_xsd_nan(bx))
 }
 
-/// `=` / `sameValue` equality between two already-typed XSD values (SPARQL 1.2
-/// §17.4.2.2 `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1"):
-/// [`value_cmp`]'s value-space comparison, EXCEPT for one carve-out `sameValue`
-/// states explicitly and `value_cmp` cannot: *"`NaN`^^xsd:double and
-/// `NaN`^^xsd:float are considered to represent the same value. If term1 and
-/// term2 are both `NaN` for either xsd:double or xsd:float, then return TRUE."*
-/// This fires even ACROSS the two types — `"NaN"^^xsd:double = "NaN"^^xsd:float`
-/// is `true` — which the ordinary numeric-tower promotion in [`value_cmp`]
-/// cannot answer on its own, since `f64::partial_cmp` (and its `f32` sibling)
-/// treats NaN as unordered by IEEE 754 design, exactly as `value_cmp` should
-/// keep doing for `<`/`>`/`ORDER BY`: the carve-out is `sameValue`'s alone, so
-/// it lives here rather than in `value_cmp` itself. `same-type` NaN pairs
-/// (`double`/`double` or `float`/`float`) already answer `true` one level up,
-/// via [`equal_terms`]'s/[`rdf_equal`]'s identical-RDF-term short-circuit — NaN's
-/// canonical lexical form is always `"NaN"`, so two same-typed NaN literals ARE
-/// the same RDF term before this function is ever reached (`sameValue` step 1)
-/// — this function is what the CROSS-type pair needs, since two literals with
-/// different datatype IRIs are never the same RDF term regardless of value.
-///
-/// A NaN against any OTHER number is the second rule `value_cmp` cannot answer:
-/// the pair is unordered, but `op:numeric-equal` is defined on it and is `false`
-/// (so `!=`, its `fn:not`, is `true`) — a definite answer, not a type error.
+/// `=` equality between two already-typed XSD values: [`value_equal`]'s
+/// value-space comparison, plus the answer `value_cmp` cannot give for NaN. On a
+/// numeric pair `=` is `op:numeric-equal`, which is `false` whenever either operand
+/// is NaN — NaN against another number, and NaN against NaN, of either or both of
+/// `xsd:float`/`xsd:double` (SPARQL 1.2 §17.4.2.2: "The Operator Mapping for "="
+/// is the function op:numeric-equal which is defined to return false when
+/// comparing arguments involving NaN. However, sameTerm(...NaN, ...NaN) is true.").
+/// The pair is unordered, but the answer is a definite `false` (so `!=`, its
+/// `fn:not`, is `true`), never the type error an unordered comparison would read as.
 pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
-    if is_xsd_nan(ax) && is_xsd_nan(bx) {
-        return Some(true);
-    }
-    // NaN against any other number is a definite `false` (`op:numeric-equal`), never
-    // the type error an unordered `value_cmp` would read as; `!=` is its negation.
     if is_numeric_nan_pair(ax, bx) {
         return Some(false);
     }
@@ -5939,35 +5925,29 @@ mod tests {
     }
 
     #[test]
-    fn equal_treats_cross_type_nan_as_same_value() {
-        // SPARQL 1.2 §17.4.2.2 `sameValue` (which defines `=`), step 5, verbatim:
-        // "NaN"^^xsd:double and "NaN"^^xsd:float are considered to represent the
-        // SAME value, even though they are not the same RDF term (different
-        // datatype IRIs) and `value_cmp`'s ordinary numeric-tower promotion
-        // treats NaN as unordered (`f64`/`f32` `partial_cmp`, correctly, for
-        // `<`/`>`/`ORDER BY`). Regression guard for the gap `sparql_value_eq`
-        // closes: this used to evaluate to a type error (unbound), not `true`.
+    fn equal_is_false_for_every_nan_pair_while_same_term_is_true() {
+        // SPARQL 1.2 §17.4.2.2: "The Operator Mapping for "=" is the function
+        // op:numeric-equal which is defined to return false when comparing
+        // arguments involving NaN. However, sameTerm(...NaN, ...NaN) is true."
         use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         use purrdf_xsd::datatype::XSD_FLOAT as XFLOAT;
         let ds = empty_ds();
-        let eq = Expression::Equal(
-            Child::new(typed_lit("NaN", XDOUBLE)),
-            Child::new(typed_lit("NaN", XFLOAT)),
-        );
-        assert_eq!(ebv(&ds, &eq), Some(true));
-        // Same-type NaN pairs already resolve via the identical-RDF-term
-        // short-circuit (NaN's canonical lexical form is always "NaN"); prove
-        // that path stays `true` too, not just the cross-type one this test
-        // targets.
-        let eq_same_type = Expression::Equal(
-            Child::new(typed_lit("NaN", XDOUBLE)),
-            Child::new(typed_lit("NaN", XDOUBLE)),
-        );
-        assert_eq!(ebv(&ds, &eq_same_type), Some(true));
-        // A NaN is still UNORDERED under `<`/`<=`: the carve-out is `sameValue`'s
-        // alone and must not leak into the ordering operators, which answer
-        // `false` for a NaN operand (`op:numeric-less-than`, and the
-        // `op:numeric-equal` half of `<=`), never `true` and never an error.
+        let nan_pairs = [(XDOUBLE, XFLOAT), (XDOUBLE, XDOUBLE), (XFLOAT, XFLOAT)];
+        for (a, b) in nan_pairs {
+            let eq = Expression::Equal(
+                Child::new(typed_lit("NaN", a)),
+                Child::new(typed_lit("NaN", b)),
+            );
+            assert_eq!(ebv(&ds, &eq), Some(false), "{a} = {b}");
+            let ne = Expression::Not(Child::new(eq));
+            assert_eq!(ebv(&ds, &ne), Some(true), "{a} != {b}");
+            let same = Expression::SameTerm(
+                Child::new(typed_lit("NaN", a)),
+                Child::new(typed_lit("NaN", b)),
+            );
+            assert_eq!(ebv(&ds, &same), Some(a == b), "sameTerm({a}, {b})");
+        }
+        // NaN is unordered under `<`/`<=` too: false, never `true` and never an error.
         let lt = Expression::Less(
             Child::new(typed_lit("NaN", XDOUBLE)),
             Child::new(typed_lit("NaN", XFLOAT)),
@@ -5975,7 +5955,7 @@ mod tests {
         assert_eq!(ebv(&ds, &lt), Some(false));
         let le = Expression::LessOrEqual(
             Child::new(typed_lit("NaN", XDOUBLE)),
-            Child::new(typed_lit("NaN", XFLOAT)),
+            Child::new(typed_lit("NaN", XDOUBLE)),
         );
         assert_eq!(ebv(&ds, &le), Some(false));
     }
