@@ -34,6 +34,7 @@ pub(crate) mod link;
 mod parser;
 
 pub(crate) use parser::node_expr::boolean_value as parser_boolean;
+pub(crate) use parser::shacl_instance::ShaclInstances;
 pub(crate) mod prefixes;
 
 /// Re-derive a shapes graph's `sh:SPARQLFunction` declarations from the shapes
@@ -1607,7 +1608,7 @@ impl<'s> Parser<'s> {
         //    counts, and so does `sh:ShapeClass`, which SHACL 1.2 Core makes "an
         //    rdfs:subClassOf of both sh:NodeShape and rdfs:Class".
         {
-            let mut instances = parser::shacl_instance::ShaclInstances::new(self.data);
+            let mut instances = ShaclInstances::new(self.data);
             let mut typed: Vec<::purrdf_rdf::TermId> = Vec::new();
             let mut seen = ::purrdf_rdf::IdSet::default();
             if let Some(rdf_type) = self.data.term_id_by_iri(rdf::TYPE) {
@@ -2035,9 +2036,8 @@ impl<'s> Parser<'s> {
     /// in the shapes graph, which every SHACL instance of `sh:ShapeClass` is (see
     /// [`parser::shacl_instance`]).
     fn has_implicit_class_target(&self, id: &Term) -> bool {
-        crate::data::resolve_id(self.data, id).is_some_and(|node| {
-            parser::shacl_instance::ShaclInstances::new(self.data).has_implicit_class_target(node)
-        })
+        crate::data::resolve_id(self.data, id)
+            .is_some_and(|node| ShaclInstances::new(self.data).has_implicit_class_target(node))
     }
 
     /// Parse a TOP-LEVEL property shape (a node with `sh:path` and its own
