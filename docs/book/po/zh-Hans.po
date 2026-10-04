@@ -10699,7 +10699,7 @@ msgstr "\"https://example.org/note\""
 
 #: src/sparql/full-text.md:81
 msgid "// Explicitly choose grapheme fallback.\n"
-msgstr ""
+msgstr "// 显式选择字素回退。\n"
 
 #: src/sparql/full-text.md:84
 msgid "// Which IRIs a query calls the index by: the caller names those too.\n"
