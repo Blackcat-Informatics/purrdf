@@ -191,6 +191,7 @@ fn text_index(dataset: &RdfDataset, predicate: &str) -> Arc<TextIndex> {
     let config = TextIndexConfig::new(
         vec![TermValue::iri(predicate.to_owned())],
         GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
     )
     .expect("the fixture configuration is well formed");
     Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))

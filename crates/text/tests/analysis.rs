@@ -6,7 +6,7 @@
 //! Every assertion here is an **exact** token vector. Nothing checks that a
 //! result "contains" a token or has "at least" so many, because a tokenizer's
 //! bugs are almost entirely bugs of surplus and shortfall: a stray empty token,
-//! a combining mark split off its base, a bigram emitted one too few times. A
+//! a combining mark split off its base, a grapheme emitted one too few times. A
 //! containment assertion cannot see any of those, so it would pass through
 //! exactly the changes this suite exists to stop.
 
@@ -17,7 +17,9 @@ use purrdf_text::{Analyzer, Token, unicode_versions};
 /// The `(text, position)` pairs of `input`, in order.
 fn positioned(input: &str) -> Vec<(String, u32)> {
     let mut out: Vec<Token<'_>> = Vec::new();
-    Analyzer::new().analyze(input, &mut out);
+    Analyzer::empty_lexicon()
+        .analyze(input, &mut out)
+        .expect("valid text analysis");
     out.into_iter()
         .map(|t| (t.text.into_owned(), t.position))
         .collect()
@@ -38,16 +40,30 @@ fn nfkc_composed_and_decomposed_forms_fold_identically() {
         "the two spellings must differ as byte strings, or this proves nothing"
     );
 
-    assert_eq!(Analyzer::new().terms(precomposed), vec!["café".to_owned()]);
-    assert_eq!(Analyzer::new().terms(decomposed), vec!["café".to_owned()]);
     assert_eq!(
-        Analyzer::new().terms(precomposed),
-        Analyzer::new().terms(decomposed)
+        Analyzer::empty_lexicon()
+            .terms(precomposed)
+            .expect("valid text analysis"),
+        vec!["cafe".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms(decomposed)
+            .expect("valid text analysis"),
+        vec!["cafe".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms(precomposed)
+            .expect("valid text analysis"),
+        Analyzer::empty_lexicon()
+            .terms(decomposed)
+            .expect("valid text analysis")
     );
 }
 
 /// The test that fails under `str::to_lowercase`, and the reason this crate
-/// takes a case-folding dependency at all.
+/// implements pinned native full case folding.
 ///
 /// Lowercasing leaves `ß` alone, so it would produce `strasse` from one of
 /// these and `straße` from the other: two terms, and a search for either that
@@ -55,13 +71,32 @@ fn nfkc_composed_and_decomposed_forms_fold_identically() {
 /// spellings — and the uppercase spelling German itself uses — agree.
 #[test]
 fn full_case_fold_matches_sharp_s() {
-    assert_eq!(Analyzer::new().terms("STRASSE"), vec!["strasse".to_owned()]);
-    assert_eq!(Analyzer::new().terms("Straße"), vec!["strasse".to_owned()]);
-    assert_eq!(Analyzer::new().terms("strasse"), vec!["strasse".to_owned()]);
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("STRASSE")
+            .expect("valid text analysis"),
+        vec!["strasse".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("Straße")
+            .expect("valid text analysis"),
+        vec!["strasse".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("strasse")
+            .expect("valid text analysis"),
+        vec!["strasse".to_owned()]
+    );
 
     assert_eq!(
-        Analyzer::new().terms("STRASSE"),
-        Analyzer::new().terms("Straße")
+        Analyzer::empty_lexicon()
+            .terms("STRASSE")
+            .expect("valid text analysis"),
+        Analyzer::empty_lexicon()
+            .terms("Straße")
+            .expect("valid text analysis")
     );
     assert_ne!(
         "Straße".to_lowercase(),
@@ -81,44 +116,87 @@ fn full_case_fold_matches_sharp_s() {
 /// document or a PDF.
 #[test]
 fn compatibility_fold_matches_fullwidth_and_ligatures() {
-    assert_eq!(Analyzer::new().terms("ｒｕｓｔ"), vec!["rust".to_owned()]);
     assert_eq!(
-        Analyzer::new().terms("ｒｕｓｔ"),
-        Analyzer::new().terms("rust")
+        Analyzer::empty_lexicon()
+            .terms("ｒｕｓｔ")
+            .expect("valid text analysis"),
+        vec!["rust".to_owned()]
     );
     assert_eq!(
-        Analyzer::new().terms("ＲＵＳＴ"),
-        Analyzer::new().terms("rust")
+        Analyzer::empty_lexicon()
+            .terms("ｒｕｓｔ")
+            .expect("valid text analysis"),
+        Analyzer::empty_lexicon()
+            .terms("rust")
+            .expect("valid text analysis")
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("ＲＵＳＴ")
+            .expect("valid text analysis"),
+        Analyzer::empty_lexicon()
+            .terms("rust")
+            .expect("valid text analysis")
     );
 
     assert_eq!(
-        Analyzer::new().terms("ﬁle ﬂow"),
+        Analyzer::empty_lexicon()
+            .terms("ﬁle ﬂow")
+            .expect("valid text analysis"),
         vec!["file".to_owned(), "flow".to_owned()]
     );
-    assert_eq!(Analyzer::new().terms("ﬁ"), Analyzer::new().terms("fi"));
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("ﬁ")
+            .expect("valid text analysis"),
+        Analyzer::empty_lexicon()
+            .terms("fi")
+            .expect("valid text analysis")
+    );
 
     // Compatibility folding also reaches the presentation forms of numbers:
     // a Roman numeral and a circled digit are spellings, not characters of
     // their own.
-    assert_eq!(Analyzer::new().terms("Ⅻ"), vec!["xii".to_owned()]);
-    assert_eq!(Analyzer::new().terms("①②③"), vec!["123".to_owned()]);
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("Ⅻ")
+            .expect("valid text analysis"),
+        vec!["xii".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("①②③")
+            .expect("valid text analysis"),
+        vec!["123".to_owned()]
+    );
 }
 
 /// Greek writes its lowercase sigma two ways — `σ` mid-word and `ς` word-final
 /// — for the same letter, and case folding unifies them on `σ`.
 ///
-/// Asserted as observed, including what the fold does *not* do: it is a case
-/// operation, not an accent-stripping one, so `σοφός` keeps its acute and stays
-/// a different term from `σοφος`. That is the correct behaviour — Greek accents
-/// are lexical — and it is pinned here so that a later change to accent handling
-/// cannot arrive unannounced.
+/// The standard scoped accent stage also removes Greek accents. A caller
+/// selecting accent preservation keeps those marks while sharing case folding.
 #[test]
 fn greek_final_sigma_folds_with_medial_sigma() {
-    assert_eq!(Analyzer::new().terms("ΣΟΦΟΣ"), vec!["σοφοσ".to_owned()]);
-    assert_eq!(Analyzer::new().terms("σοφος"), vec!["σοφοσ".to_owned()]);
     assert_eq!(
-        Analyzer::new().terms("ΣΟΦΟΣ"),
-        Analyzer::new().terms("σοφος"),
+        Analyzer::empty_lexicon()
+            .terms("ΣΟΦΟΣ")
+            .expect("valid text analysis"),
+        vec!["σοφοσ".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("σοφος")
+            .expect("valid text analysis"),
+        vec!["σοφοσ".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("ΣΟΦΟΣ")
+            .expect("valid text analysis"),
+        Analyzer::empty_lexicon()
+            .terms("σοφος")
+            .expect("valid text analysis"),
         "uppercase and lowercase spellings of the same word must agree"
     );
 
@@ -126,19 +204,34 @@ fn greek_final_sigma_folds_with_medial_sigma() {
     // Greek actually uses, folds onto the medial letter as well.
     let with_final_sigma = "\u{03C3}\u{03BF}\u{03C6}\u{03BF}\u{03C2}";
     assert_eq!(
-        Analyzer::new().terms(with_final_sigma),
+        Analyzer::empty_lexicon()
+            .terms(with_final_sigma)
+            .expect("valid text analysis"),
         vec!["σοφοσ".to_owned()]
     );
     assert_eq!(
-        Analyzer::new().terms(with_final_sigma),
-        Analyzer::new().terms("ΣΟΦΟΣ")
+        Analyzer::empty_lexicon()
+            .terms(with_final_sigma)
+            .expect("valid text analysis"),
+        Analyzer::empty_lexicon()
+            .terms("ΣΟΦΟΣ")
+            .expect("valid text analysis")
     );
 
-    assert_eq!(Analyzer::new().terms("σοφός"), vec!["σοφόσ".to_owned()]);
-    assert_ne!(
-        Analyzer::new().terms("σοφός"),
-        Analyzer::new().terms("σοφος"),
-        "case folding must not strip accents"
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("σοφός")
+            .expect("valid text analysis"),
+        vec!["σοφοσ".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("σοφός")
+            .expect("valid text analysis"),
+        Analyzer::empty_lexicon()
+            .terms("σοφος")
+            .expect("valid text analysis"),
+        "the default scoped Greek accent fold applies after casing"
     );
 }
 
@@ -151,9 +244,16 @@ fn greek_final_sigma_folds_with_medial_sigma() {
 /// does not.
 #[test]
 fn uax29_word_boundaries_over_apostrophes_and_numerals() {
-    assert_eq!(Analyzer::new().terms("don't"), vec!["don't".to_owned()]);
     assert_eq!(
-        Analyzer::new().terms("shelf's don't O'Brien"),
+        Analyzer::empty_lexicon()
+            .terms("don't")
+            .expect("valid text analysis"),
+        vec!["don't".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("shelf's don't O'Brien")
+            .expect("valid text analysis"),
         vec![
             "shelf's".to_owned(),
             "don't".to_owned(),
@@ -161,18 +261,29 @@ fn uax29_word_boundaries_over_apostrophes_and_numerals() {
         ]
     );
 
-    assert_eq!(Analyzer::new().terms("3.14"), vec!["3.14".to_owned()]);
     assert_eq!(
-        Analyzer::new().terms("3.14 and 2,718"),
+        Analyzer::empty_lexicon()
+            .terms("3.14")
+            .expect("valid text analysis"),
+        vec!["3.14".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::empty_lexicon()
+            .terms("3.14 and 2,718")
+            .expect("valid text analysis"),
         vec!["3.14".to_owned(), "and".to_owned(), "2,718".to_owned()]
     );
     assert_eq!(
-        Analyzer::new().terms("1st 42 007"),
+        Analyzer::empty_lexicon()
+            .terms("1st 42 007")
+            .expect("valid text analysis"),
         vec!["1st".to_owned(), "42".to_owned(), "007".to_owned()]
     );
 
     assert_eq!(
-        Analyzer::new().terms("state-of-the-art"),
+        Analyzer::empty_lexicon()
+            .terms("state-of-the-art")
+            .expect("valid text analysis"),
         vec![
             "state".to_owned(),
             "of".to_owned(),
@@ -182,87 +293,36 @@ fn uax29_word_boundaries_over_apostrophes_and_numerals() {
     );
 }
 
-/// The CJK model this crate documents, asserted rather than assumed.
-///
-/// Unspaced Han and Hiragana arrive from `UAX #29` as one token per character,
-/// so bigrams are formed by rejoining **adjacent** tokens; a space or an
-/// intervening Latin word ends a run, and a run of one character is emitted
-/// whole so that a single ideograph stays retrievable.
+/// Explicit empty-lexicon analysis emits complete graphemes for unspaced
+/// scripts. Character bigrams belong to the separate ranked Han producer.
 #[test]
-fn cjk_tokenization_matches_the_documented_model() {
-    // Six adjacent ideographs become five overlapping bigrams.
-    assert_eq!(
-        Analyzer::new().terms("中文全文検索"),
-        vec![
-            "中文".to_owned(),
-            "文全".to_owned(),
-            "全文".to_owned(),
-            "文検".to_owned(),
-            "検索".to_owned()
-        ]
-    );
-
-    // A phrase query is expressible: the needle's bigram is one of the
-    // document's.
-    assert_eq!(Analyzer::new().terms("全文"), vec!["全文".to_owned()]);
-
-    // A lone ideograph has no bigram to form and survives whole.
-    assert_eq!(Analyzer::new().terms("中"), vec!["中".to_owned()]);
-
-    // A space ends a run, so two separated ideographs are two whole tokens and
-    // NOT the bigram the unspaced spelling produces.
-    assert_eq!(
-        Analyzer::new().terms("中 文"),
-        vec!["中".to_owned(), "文".to_owned()]
-    );
-    assert_ne!(
-        Analyzer::new().terms("中 文"),
-        Analyzer::new().terms("中文")
-    );
-
-    // A Latin word ends a run in both directions, and is itself untouched by
-    // bigram expansion.
-    assert_eq!(
-        Analyzer::new().terms("中文rust混合"),
-        vec!["中文".to_owned(), "rust".to_owned(), "混合".to_owned()]
-    );
-
-    // Mixed Japanese: Hiragana arrives one character at a time and Katakana
-    // arrives as a whole run, but both are CJK and adjacent, so the whole
-    // sentence is one run and bigrams cross the script change.
-    assert_eq!(
-        Analyzer::new().terms("私はサンドイッチを食べます"),
-        vec![
-            "私は".to_owned(),
-            "はサ".to_owned(),
-            "サン".to_owned(),
-            "ンド".to_owned(),
-            "ドイ".to_owned(),
-            "イッ".to_owned(),
-            "ッチ".to_owned(),
-            "チを".to_owned(),
-            "を食".to_owned(),
-            "食べ".to_owned(),
-            "べま".to_owned(),
-            "ます".to_owned()
-        ]
-    );
-
-    // Korean is written with spaces, so each space-delimited word is its own
-    // run and is bigrammed within itself.
-    assert_eq!(
-        Analyzer::new().terms("한국어 전문 검색"),
-        vec![
-            "한국".to_owned(),
-            "국어".to_owned(),
-            "전문".to_owned(),
-            "검색".to_owned()
-        ]
-    );
+fn unspaced_script_fallback_emits_complete_graphemes() {
+    for (input, expected) in [
+        ("中文全文検索", vec!["中", "文", "全", "文", "検", "索"]),
+        ("全文", vec!["全", "文"]),
+        ("中", vec!["中"]),
+        ("中 文", vec!["中", "文"]),
+        ("中文rust混合", vec!["中", "文", "rust", "混", "合"]),
+        (
+            "私はサンドイッチを食べます",
+            vec![
+                "私", "は", "サ", "ン", "ド", "イ", "ッ", "チ", "を", "食", "べ", "ま", "す",
+            ],
+        ),
+        ("한국어 전문 검색", vec!["한국어", "전문", "검색"]),
+    ] {
+        assert_eq!(
+            Analyzer::empty_lexicon()
+                .terms(input)
+                .expect("valid text analysis"),
+            expected,
+            "{input:?}"
+        );
+    }
 }
 
 /// Positions are the token's ordinal in the stream: zero-based, consecutive,
-/// and with no gap where a bigram or a dropped punctuation segment sits.
+/// and with no gap where a grapheme or a dropped punctuation segment sits.
 ///
 /// A later stage emits term occurrences at these numbers so that phrase and
 /// proximity matching are expressible in SPARQL as `FILTER(?p2 = ?p1 + 1)`, and
@@ -291,16 +351,16 @@ fn positions_are_consecutive_and_zero_based() {
         ]
     );
 
-    // A bigram run numbers consecutively and hands the next number back to the
-    // word that follows it.
+    // A grapheme run numbers consecutively before the next lexical word.
     assert_eq!(
         positioned("hello 中文全文 world"),
         vec![
             ("hello".to_owned(), 0),
-            ("中文".to_owned(), 1),
-            ("文全".to_owned(), 2),
-            ("全文".to_owned(), 3),
-            ("world".to_owned(), 4)
+            ("中".to_owned(), 1),
+            ("文".to_owned(), 2),
+            ("全".to_owned(), 3),
+            ("文".to_owned(), 4),
+            ("world".to_owned(), 5)
         ]
     );
 
@@ -330,7 +390,9 @@ fn positions_are_consecutive_and_zero_based() {
 fn an_empty_or_punctuation_only_input_yields_no_tokens() {
     for input in ["", " ", "   ", "\t\n", "!!! ... ???", "—— :: ;;", "()[]{}"] {
         assert_eq!(
-            Analyzer::new().terms(input),
+            Analyzer::empty_lexicon()
+                .terms(input)
+                .expect("valid text analysis"),
             Vec::<String>::new(),
             "{input:?} must produce no tokens"
         );
@@ -351,7 +413,7 @@ fn an_empty_or_punctuation_only_input_yields_no_tokens() {
 /// These vectors turn that into a loud failure at the exact place the change
 /// enters. They deliberately span scripts that exercise different parts of the
 /// tables — Latin case folding, Greek sigma, Cyrillic, right-to-left Arabic and
-/// pointed Hebrew, Devanagari with dependent vowel signs, Han bigrams, mixed
+/// pointed Hebrew, Devanagari with dependent vowel signs, Han graphemes, mixed
 /// Kana, Hangul, numerals, compatibility presentation forms and punctuation —
 /// so a change confined to any one of them still lands on an assertion.
 ///
@@ -364,15 +426,15 @@ fn golden_token_vectors_pin_the_unicode_tables() {
     let golden: &[(&str, &[&str])] = &[
         // Latin, with case folding and a sharp s.
         ("The Quick Brown Fox", &["the", "quick", "brown", "fox"]),
-        ("Straße Größe", &["strasse", "grösse"]),
-        ("Ångström", &["ångström"]),
+        ("Straße Größe", &["strasse", "grosse"]),
+        ("Ångström", &["angstrom"]),
         // Latin with a canonically decomposed input.
-        ("cafe\u{0301} café", &["café", "café"]),
+        ("cafe\u{0301} café", &["cafe", "cafe"]),
         // Titlecase digraph and Turkish dotted capital I.
-        ("ǅungla", &["džungla"]),
-        ("İstanbul", &["i\u{0307}stanbul"]),
+        ("ǅungla", &["dzungla"]),
+        ("İstanbul", &["istanbul"]),
         // Greek.
-        ("Ελληνικά κείμενο", &["ελληνικά", "κείμενο"]),
+        ("Ελληνικά κείμενο", &["ελληνικα", "κειμενο"]),
         ("ΣΟΦΟΣ", &["σοφοσ"]),
         // Cyrillic.
         ("Привет, мир!", &["привет", "мир"]),
@@ -382,18 +444,17 @@ fn golden_token_vectors_pin_the_unicode_tables() {
         ("שָׁלוֹם עוֹלָם", &["שָׁלוֹם", "עוֹלָם"]),
         // Devanagari, whose dependent vowel signs must stay with their base.
         ("नमस्ते दुनिया", &["नमस्ते", "दुनिया"]),
-        // Han, bigrammed.
-        ("中文全文検索", &["中文", "文全", "全文", "文検", "検索"]),
+        // Han, explicit grapheme fallback.
+        ("中文全文検索", &["中", "文", "全", "文", "検", "索"]),
         // Hiragana and Katakana in one run.
         (
             "私はサンドイッチを食べます",
             &[
-                "私は", "はサ", "サン", "ンド", "ドイ", "イッ", "ッチ", "チを", "を食", "食べ",
-                "べま", "ます",
+                "私", "は", "サ", "ン", "ド", "イ", "ッ", "チ", "を", "食", "べ", "ま", "す",
             ],
         ),
         // Hangul, space-delimited.
-        ("한국어 전문 검색", &["한국", "국어", "전문", "검색"]),
+        ("한국어 전문 검색", &["한국어", "전문", "검색"]),
         // Digits and number-internal punctuation.
         ("3.14 and 2,718", &["3.14", "and", "2,718"]),
         ("1st 42 007", &["1st", "42", "007"]),
@@ -410,7 +471,9 @@ fn golden_token_vectors_pin_the_unicode_tables() {
     for (input, expected) in golden {
         let expected: Vec<String> = expected.iter().map(|s| (*s).to_owned()).collect();
         assert_eq!(
-            Analyzer::new().terms(input),
+            Analyzer::empty_lexicon()
+                .terms(input)
+                .expect("valid text analysis"),
             expected,
             "golden vector moved for {input:?}"
         );
@@ -427,16 +490,20 @@ fn golden_token_vectors_pin_the_unicode_tables() {
 /// that fails.
 #[test]
 fn analyze_reuses_the_caller_buffer() {
-    let analyzer = Analyzer::new();
+    let analyzer = Analyzer::empty_lexicon();
     let mut out: Vec<Token<'_>> = Vec::new();
 
-    analyzer.analyze("alpha beta gamma delta", &mut out);
+    analyzer
+        .analyze("alpha beta gamma delta", &mut out)
+        .expect("valid text analysis");
     assert_eq!(
         out.iter().map(|t| t.text.as_ref()).collect::<Vec<_>>(),
         vec!["alpha", "beta", "gamma", "delta"]
     );
 
-    analyzer.analyze("epsilon", &mut out);
+    analyzer
+        .analyze("epsilon", &mut out)
+        .expect("valid text analysis");
     assert_eq!(
         out.iter().map(|t| t.text.as_ref()).collect::<Vec<_>>(),
         vec!["epsilon"],
@@ -444,7 +511,7 @@ fn analyze_reuses_the_caller_buffer() {
     );
     assert_eq!(out[0].position, 0, "positions restart with the input");
 
-    analyzer.analyze("", &mut out);
+    analyzer.analyze("", &mut out).expect("valid text analysis");
     assert!(out.is_empty(), "an empty input must empty the buffer");
 }
 
@@ -452,16 +519,20 @@ fn analyze_reuses_the_caller_buffer() {
 /// does not is not — which is the whole reason the token text is a [`Cow`].
 #[test]
 fn unchanged_text_is_borrowed_rather_than_copied() {
-    let analyzer = Analyzer::new();
+    let analyzer = Analyzer::empty_lexicon();
     let mut out: Vec<Token<'_>> = Vec::new();
 
-    analyzer.analyze("already folded text", &mut out);
+    analyzer
+        .analyze("already folded text", &mut out)
+        .expect("valid text analysis");
     assert!(
         out.iter().all(|t| matches!(t.text, Cow::Borrowed(_))),
         "text needing no change must not be copied"
     );
 
-    analyzer.analyze("Needs Folding", &mut out);
+    analyzer
+        .analyze("Needs Folding", &mut out)
+        .expect("valid text analysis");
     assert!(
         out.iter().all(|t| matches!(t.text, Cow::Owned(_))),
         "text the fold rewrote cannot borrow the caller's string"
@@ -478,7 +549,7 @@ fn unchanged_text_is_borrowed_rather_than_copied() {
 /// long as its type exists, so the loop would not compile at all.
 #[test]
 fn the_scratch_form_agrees_and_borrows_every_token() {
-    let analyzer = Analyzer::new();
+    let analyzer = Analyzer::empty_lexicon();
     let mut scratch = String::new();
 
     for input in [
@@ -491,13 +562,15 @@ fn the_scratch_form_agrees_and_borrows_every_token() {
     ] {
         let expected = positioned(input);
         let mut actual: Vec<(String, u32)> = Vec::new();
-        analyzer.analyze_each(input, &mut scratch, |token| {
-            assert!(
-                matches!(token.text, Cow::Borrowed(_)),
-                "every token must borrow the scratch buffer, for {input:?}"
-            );
-            actual.push((token.text.into_owned(), token.position));
-        });
+        analyzer
+            .analyze_each(input, &mut scratch, |token| {
+                assert!(
+                    matches!(token.text, Cow::Borrowed(_)),
+                    "every token must borrow the scratch buffer, for {input:?}"
+                );
+                actual.push((token.text.into_owned(), token.position));
+            })
+            .expect("valid text analysis");
         assert_eq!(actual, expected, "the two forms disagreed on {input:?}");
     }
 }

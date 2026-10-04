@@ -7108,3 +7108,166 @@ summary = "`VerifyingKey::verify_strict`, Ed25519 verification: the variable-tim
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
+
+[[site]]
+id = "text.dictionary-storage"
+summary = "Dictionary storage construction, verified artifact loading and exact lookup"
+
+  [[site.measure]]
+  label = "build"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::segment::storage::Storage>::build"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "load"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::segment::Dictionary>::from_artifact"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "lookup"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::segment::Dictionary>::cost"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "text.dictionary-lattice"
+summary = "Grapheme-safe weighted dictionary segmentation and reusable scratch preparation"
+
+  [[site.measure]]
+  label = "lattice entry"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::segment::Dictionary>::segments"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "prepare"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::segment::SegmentationScratch>::prepare"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "text.emoji-recognition"
+summary = "Pinned emoji recognition with shape-filtered finite lookup and EP/RI protection"
+
+  [[site.measure]]
+  label = "recognize"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::unicode::grapheme::is_emoji_grapheme"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "finite lookup"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::unicode::grapheme::emoji_status"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "text.phonetic-spelling"
+summary = "Latin canonical spelling and native Double Metaphone pronunciation codes"
+
+  [[site.measure]]
+  label = "canonicalize"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::phonetic::canonicalize"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "encode canonical"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::phonetic::DoubleMetaphone>::encode_canonical"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "text.phonetic-distance"
+summary = "Prepared exact bounded edit distance and the separately benchmarked Myers comparison"
+
+  [[site.measure]]
+  label = "prepare band"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::phonetic::PreparedDistance>::new"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "band"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::phonetic::PreparedDistance>::distance"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "prepare Myers"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::phonetic::PreparedMyers>::new"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "Myers"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::phonetic::PreparedMyers>::distance"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "text.surface-build"
+summary = "Source-aware surface-index assembly"
+
+  [[site.measure]]
+  label = "assemble"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::surface::SurfaceIndex>::assemble"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "text.surface-substring"
+summary = "Bounded positional and explicit exhaustive substring retrieval"
+
+  [[site.measure]]
+  label = "retrieve"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::surface::SurfaceIndex>::run_substring"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true

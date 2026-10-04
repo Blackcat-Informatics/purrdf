@@ -106,6 +106,17 @@ GUARDED_ROOTS: dict[str, str] = {
         "scripts/conformance-frozen/jsonschema-metaschemas.sha256"
     ),
     "crates/iri/unicode": "scripts/conformance-frozen/iri-unicode.sha256",
+    "crates/lex/data/html": "scripts/conformance-frozen/lex-html.sha256",
+    "crates/text/lexicons/icu-78.3": (
+        "scripts/conformance-frozen/text-icu-78.3.sha256"
+    ),
+    "crates/text/tests/stemming_vectors": (
+        "scripts/conformance-frozen/text-stemming-vectors.sha256"
+    ),
+    # Frozen independent binary-oracle answers are data, not implementation code.
+    "crates/text/tests/phonetic_vectors": (
+        "scripts/conformance-frozen/text-phonetic-vectors.sha256"
+    ),
 }
 
 

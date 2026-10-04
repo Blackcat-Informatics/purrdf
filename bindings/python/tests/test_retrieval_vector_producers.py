@@ -27,7 +27,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from purrdf import retrieval
 
 EX = "https://example.org/"
@@ -116,7 +115,7 @@ def _corpus() -> str:
     space, symmetrically, holds no row for any text subject.
     """
     lines = [
-        f'<{_text_subject(at)}> <{NOTE}> '
+        f"<{_text_subject(at)}> <{NOTE}> "
         f'"alpha beta gamma {("alpha " * (at % 4 + 1)).strip()}" .'
         for at in range(CORPUS)
     ]
@@ -170,7 +169,15 @@ def _search(
     return retrieval.search(
         DATA,
         REQUEST,
-        text_producers={TEXT_PRODUCER: (TEXT_STRATUM, NOTE, "any", text_domains)},
+        text_producers={
+            TEXT_PRODUCER: (
+                TEXT_STRATUM,
+                NOTE,
+                "any",
+                {"lexicon": "empty"},
+                text_domains,
+            )
+        },
         weights=WEIGHTS,
         statistics=STATISTICS,
         k=K,
@@ -213,7 +220,9 @@ def _counters(answer: dict[str, Any]) -> dict[str, tuple[int, int, int]]:
 
 
 @pytest.mark.parametrize("kind", ["hnsw", "knn"])
-def test_a_shared_block_read_is_bounded_by_lookups_on_both_modalities(kind: str) -> None:
+def test_a_shared_block_read_is_bounded_by_lookups_on_both_modalities(
+    kind: str,
+) -> None:
     """One text stratum and one vector stratum, sharing a block and holding
     disjoint candidates: the full read's answer, out of a strictly shorter read,
     paid for with exclusion lookups on BOTH strata.
@@ -391,7 +400,15 @@ def test_a_vector_producer_attests_its_space_and_a_host_generation_replaces_it(
     answer = retrieval.search(
         DATA,
         REQUEST,
-        text_producers={TEXT_PRODUCER: (TEXT_STRATUM, NOTE, "any", [SHARED_BLOCK])},
+        text_producers={
+            TEXT_PRODUCER: (
+                TEXT_STRATUM,
+                NOTE,
+                "any",
+                {"lexicon": "empty"},
+                [SHARED_BLOCK],
+            )
+        },
         weights=WEIGHTS,
         statistics=STATISTICS,
         k=K,
@@ -426,7 +443,8 @@ def _plan(**producers: Any) -> dict[str, Any]:
         DATA,
         REQUEST,
         text_producers=producers.pop(
-            "text_producers", {TEXT_PRODUCER: (TEXT_STRATUM, NOTE, "any")}
+            "text_producers",
+            {TEXT_PRODUCER: (TEXT_STRATUM, NOTE, "any", {"lexicon": "empty"})},
         ),
         statistics=STATISTICS,
         top_k=TOP_K,
@@ -458,7 +476,12 @@ def _plan(**producers: Any) -> dict[str, Any]:
             [(_vector_term(0), [1.0, 2.0]), (_vector_term(1), [1.0, 2.0])],
             "bound to two different rows",
         ),
-        (1, [("not an iri", [1.0, 2.0])], [(_vector_term(0), [1.0, 2.0])], "row 0 names"),
+        (
+            1,
+            [("not an iri", [1.0, 2.0])],
+            [(_vector_term(0), [1.0, 2.0])],
+            "row 0 names",
+        ),
         (2, "euclidean", "negative_dot", "unknown metric"),
         (3, (CORPUS, 0), (CORPUS, 1), "can never answer"),
         (3, (CORPUS - 1, CORPUS), (CORPUS, 1), "more than the"),
@@ -530,17 +553,24 @@ def test_one_stratum_or_one_iri_across_two_maps_is_refused_by_name() -> None:
     clash = _vector_producers("knn", None)
     with pytest.raises(ValueError, match="both claim stratum"):
         _plan(
-            text_producers={TEXT_PRODUCER: (VECTOR_STRATUM, NOTE, "any")},
+            text_producers={
+                TEXT_PRODUCER: (VECTOR_STRATUM, NOTE, "any", {"lexicon": "empty"})
+            },
             **clash,
         )
     with pytest.raises(ValueError, match="declared twice"):
         _plan(
-            text_producers={KNN_PRODUCER: (TEXT_STRATUM, NOTE, "any")},
+            text_producers={
+                KNN_PRODUCER: (TEXT_STRATUM, NOTE, "any", {"lexicon": "empty"})
+            },
             **clash,
         )
     both = {**_vector_producers("knn", None), **_vector_producers("hnsw", None)}
     both["hnsw_producers"] = {
-        HNSW_PRODUCER: (f"{EX}stratum/approximate", *both["hnsw_producers"][HNSW_PRODUCER][1:])
+        HNSW_PRODUCER: (
+            f"{EX}stratum/approximate",
+            *both["hnsw_producers"][HNSW_PRODUCER][1:],
+        )
     }
     planned = _plan(**both)
     assert planned["plan_id"]

@@ -38,6 +38,23 @@
       ],
       "scope": "generated and vendored Unicode data; terms apply in addition to the first-party grant",
       "source": "https://www.unicode.org/Public/17.0.0/ucd/"
+    },
+    {
+      "id": "whatwg-html-references",
+      "license": "BSD-3-Clause",
+      "notices": [
+        "third-party/whatwg-html-references/0-LICENSE-WHATWG"
+      ],
+      "paths": [
+        "crates/lex/data/html/**",
+        "crates/lex/src/html/entities.rs"
+      ],
+      "provenance": [
+        "crates/lex/data/html/PROVENANCE.md",
+        "LICENSING.md"
+      ],
+      "scope": "named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant",
+      "source": "https://github.com/whatwg/html-build/tree/283a3531a61106d07d9a7d9fb3e6f3b9bfd33d70/entities/out"
     }
   ],
   "files": {
@@ -45,13 +62,14 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "70f8dee00a88276fc16f37f7d64fcb57966a60a55fbbe28cb6fe4427711cd8ba",
+    "NOTICE.txt": "a74333b1eca5aee0d80fc9cc2a5a3f8b6601ad80759faee2263ccd986d4e50f5",
     "third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
     "third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
-    "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
+    "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
+    "third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864"
   },
   "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0",
+  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0 AND BSD-3-Clause",
   "profile": "purrdf-lex",
   "schema": 1
 }

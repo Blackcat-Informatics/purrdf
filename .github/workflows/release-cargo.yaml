@@ -164,12 +164,15 @@ jobs:
         run: |
           cargo install cargo-c --version 0.10.23 --locked
           make capi-bundle
+          python3 scripts/package-text-lexicons.py
           python3 scripts/check-release-notes.py --checksum-output target/dist/SHA256SUMS
 
       - name: Attest build provenance for C distribution
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-path: target/dist/purrdf-capi-*.tar.gz
+          subject-path: |
+            target/dist/purrdf-capi-*.tar.gz
+            target/dist/purrdf-text-lexicons-*.tar.gz
 
       - name: Upload artifact license evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -178,6 +181,7 @@ jobs:
           path: |
             target/license-evidence-cargo.json
             target/dist/purrdf-capi-*.tar.gz
+            target/dist/purrdf-text-lexicons-*.tar.gz
             target/dist/*.license-receipt.json
             target/dist/SHA256SUMS
 
@@ -262,7 +266,7 @@ jobs:
           echo "::error::The publisher did not confirm the complete release set. No GitHub Release will be created; inspect the publication and registry preflight results before rerunning."
           exit 1
 
-      - name: Verify C assets on a draft, then publish the immutable GitHub Release
+      - name: Verify C and lexicon assets on a draft, then publish the immutable GitHub Release
         if: steps.publish.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -271,7 +275,7 @@ jobs:
           set -euo pipefail
 
           # Publishing locks assets. The helper creates/reuses a draft, uploads
-          # all four assets, downloads and verifies every byte, then publishes.
+          # all five assets, downloads and verifies every byte, then publishes.
           # Existing immutable releases are verified read-only against their
           # retained checksums, without comparing a different rebuild.
           python3 scripts/publish-github-release.py --version "${VERSION#rust-v}" \

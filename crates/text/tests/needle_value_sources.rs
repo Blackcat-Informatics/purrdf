@@ -43,8 +43,12 @@ fn fixture() -> (Arc<RdfDataset>, PropertyFunctionRegistry) {
         builder.push_quad(s, note, o, None);
     }
     let dataset = builder.freeze().expect("the fixture must validate");
-    let config = TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("the fixture configuration names a predicate");
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .expect("the fixture configuration names a predicate");
     let index = TextIndex::from_dataset(&*dataset, &config).expect("the fixture indexes");
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(

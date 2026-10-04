@@ -407,6 +407,7 @@ mod tests {
         let config = text::TextIndexConfig::new(
             vec![TermValue::iri("https://example.org/note")],
             text::GraphSelector::Any,
+            text::Analyzer::empty_lexicon(),
         )
         .expect("one IRI predicate is a well-formed configuration");
         let index =
@@ -484,9 +485,12 @@ mod tests {
         }
         let dataset = builder.freeze().expect("the facade fixture validates");
 
-        let config =
-            text::TextIndexConfig::new(vec![TermValue::iri(NOTE)], text::GraphSelector::Any)
-                .expect("one IRI predicate is a well-formed configuration");
+        let config = text::TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            text::GraphSelector::Any,
+            text::Analyzer::empty_lexicon(),
+        )
+        .expect("one IRI predicate is a well-formed configuration");
         let index =
             text::TextIndex::from_dataset(&*dataset, &config).expect("the facade index builds");
 

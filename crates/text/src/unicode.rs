@@ -36,6 +36,18 @@ use crate::unicode_tables as tables;
 
 pub use purrdf_lex::unicode::{Compare, Sink, nfc, nfd, nfkc, nfkd};
 
+mod grapheme;
+pub(crate) use grapheme::emoji_scalars;
+pub use grapheme::{
+    EmojiStatus, GraphemeBounds, emoji_status, grapheme_bounds, is_conjunct_consonant,
+    is_emoji_grapheme,
+};
+
+/// Largest recognized emoji atom, calculated from the pinned Unicode data.
+pub const MAX_EMOJI_SCALARS: usize = tables::MAX_EMOJI_SCALARS;
+/// Identity of all semantic Unicode analysis inputs, independent of compiler.
+pub const TEXT_DATA_DIGEST: [u8; 32] = tables::TEXT_DATA_DIGEST;
+
 /// The Unicode version of the normalization, word-break and alphanumeric
 /// tables: the workspace's one, [`purrdf_lex::unicode::UNICODE_VERSION`].
 pub const UNICODE_VERSION: (u8, u8, u8) = purrdf_lex::unicode::UNICODE_VERSION;
@@ -47,6 +59,229 @@ pub const FOLD_UNICODE_VERSION: (u8, u8, u8) = purrdf_lex::unicode::UNICODE_VERS
 #[inline]
 fn segmentation(c: char) -> u8 {
     lookup_two_stage(&tables::SEGMENTATION_INDEX, &tables::SEGMENTATION_BLOCKS, c)
+}
+
+/// The generated analysis-property word: marks, controls and script routing.
+#[inline]
+fn analysis_properties(c: char) -> u32 {
+    lookup_two_stage(&tables::ANALYSIS_INDEX, &tables::ANALYSIS_BLOCKS, c)
+}
+
+/// Whether `c` has General_Category `Mn` in the pinned Unicode database.
+///
+/// This is not a combining-class test: a nonspacing mark may have class zero.
+#[must_use]
+pub fn is_nonspacing_mark(c: char) -> bool {
+    analysis_properties(c) & tables::ANALYSIS_NONSPACING != 0
+}
+
+/// Whether `c` has General_Category `Mn`, `Mc` or `Me` in the pinned database.
+#[must_use]
+pub fn is_combining_mark(c: char) -> bool {
+    analysis_properties(c) & tables::ANALYSIS_MARK != 0
+}
+
+/// Unicode `Default_Ignorable_Code_Point`, including reserved default ignorables.
+#[must_use]
+pub fn is_default_ignorable(c: char) -> bool {
+    analysis_properties(c) & tables::ANALYSIS_IGNORABLE != 0
+}
+
+/// Unicode `Bidi_Control`, as declared in the pinned `PropList.txt`.
+#[must_use]
+pub fn is_bidi_control(c: char) -> bool {
+    analysis_properties(c) & tables::ANALYSIS_BIDI != 0
+}
+
+/// Unicode `White_Space` or General_Category `Cc`/`Cf`.
+///
+/// These characters separate dictionary lookup chunks and are refused inside
+/// dictionary entries. Values come from the pinned database, not the compiler.
+#[must_use]
+pub fn is_lexical_separator(c: char) -> bool {
+    c == '\u{200b}'
+        || (analysis_properties(c) & tables::ANALYSIS_SEPARATOR != 0
+            && !is_word_internal_control(c)
+            && (is_whitespace_separator(c) || is_removed_control(c)))
+}
+
+/// Exact General_Category L, from the pinned data rather than compiler tables.
+#[must_use]
+pub fn is_letter(c: char) -> bool {
+    analysis_properties(c) & tables::ANALYSIS_LETTER != 0
+}
+
+/// Whether a letter belongs to Latin Script or Script_Extensions.
+#[must_use]
+pub fn is_latin_letter(c: char) -> bool {
+    is_letter(c) && has_analysis_script(c, tables::SCRIPT_LATIN)
+}
+
+/// Exact White_Space plus ZWSP, which the search law declares a separator.
+#[must_use]
+pub fn is_whitespace_separator(c: char) -> bool {
+    c == '\u{200b}' || analysis_properties(c) & tables::ANALYSIS_WHITESPACE != 0
+}
+
+/// Controls transparent to dictionary keys and removed only from lexical words.
+/// ZWJ reaches this stage only after contextual preservation or stray removal.
+#[must_use]
+pub const fn is_word_internal_control(c: char) -> bool {
+    matches!(c, '\u{ad}' | '\u{200c}' | '\u{200d}' | '\u{180b}'..='\u{180d}' | '\u{180f}'
+        | '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}')
+}
+
+/// Explicit removed control set; whitespace has separator behavior instead.
+#[must_use]
+pub fn is_removed_control(c: char) -> bool {
+    matches!(c, '\u{61c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
+        | '\u{2066}'..='\u{2069}' | '\u{2060}' | '\u{feff}' | '\u{e0001}' | '\u{e0020}'..='\u{e007f}')
+        || (matches!(c, '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}') && !is_whitespace_separator(c))
+}
+
+/// Controls removed before Latin phonetic coding; separators remain inadmissible.
+#[must_use]
+pub fn is_phonetic_control(c: char) -> bool {
+    is_word_internal_control(c) || is_removed_control(c)
+}
+
+/// A joining-script letter or character, used for orthographic ZWJ context.
+#[must_use]
+pub fn is_joining_character(c: char) -> bool {
+    analysis_properties(c) & tables::ANALYSIS_JOINING != 0
+}
+
+#[inline]
+fn has_analysis_script(c: char, value: u32) -> bool {
+    let properties = analysis_properties(c);
+    let own = (properties >> tables::ANALYSIS_SCRIPT_SHIFT) & 0xF;
+    let extensions = (properties >> tables::ANALYSIS_EXTENSIONS_SHIFT) & 0x1FFF;
+    own == value || extensions & (1 << (value - 1)) != 0
+}
+
+/// Script assignments that the declared accent fold may select.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum AccentScript {
+    /// Latin letters and diacritics.
+    Latin = 0,
+    /// Greek letters and diacritics.
+    Greek = 1,
+    /// Cyrillic letters and diacritics.
+    Cyrillic = 2,
+    /// Hebrew points, explicitly selected.
+    Hebrew = 3,
+    /// Arabic harakat, explicitly selected.
+    Arabic = 4,
+}
+
+impl AccentScript {
+    const fn value(self) -> u32 {
+        match self {
+            Self::Latin => tables::SCRIPT_LATIN,
+            Self::Greek => tables::SCRIPT_GREEK,
+            Self::Cyrillic => tables::SCRIPT_CYRILLIC,
+            Self::Hebrew => tables::SCRIPT_HEBREW,
+            Self::Arabic => tables::SCRIPT_ARABIC,
+        }
+    }
+
+    /// Script membership of a base letter.
+    pub fn contains(self, c: char) -> bool {
+        is_letter(c) && has_analysis_script(c, self.value())
+    }
+
+    /// Whether an Mn mark can modify a base of this script. Explicit extensions
+    /// to unsupported scripts do not become a wildcard merely by being absent
+    /// from the small search-script enumeration.
+    pub fn admits_mark(self, c: char) -> bool {
+        if !is_nonspacing_mark(c) {
+            return false;
+        }
+        let properties = analysis_properties(c);
+        has_analysis_script(c, self.value())
+            || (properties & tables::ANALYSIS_NEUTRAL_SCRIPT != 0
+                && properties & tables::ANALYSIS_EXPLICIT_EXTENSIONS == 0)
+    }
+}
+
+/// Unicode `Extended_Pictographic`, used to recognize emoji joiner context.
+#[must_use]
+pub fn is_extended_pictographic(c: char) -> bool {
+    segmentation(c) & tables::EXTENDED_PICTOGRAPHIC != 0
+}
+
+/// Whether `c` has `Word_Break=Extend`, including emoji modifiers.
+#[must_use]
+pub fn is_word_extend(c: char) -> bool {
+    segmentation(c) & tables::WB_MASK == tables::WB_EXTEND
+}
+
+/// A Unicode `Script` routed through the dictionary segmenter.
+///
+/// These are exact `Scripts.txt` assignments, not approximations by block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SegmentationScript {
+    /// Han ideographs, including the supplementary extensions.
+    Han,
+    /// Hiragana.
+    Hiragana,
+    /// Katakana.
+    Katakana,
+    /// Hangul, including conjoining jamo.
+    Hangul,
+    /// Thai.
+    Thai,
+    /// Lao.
+    Lao,
+    /// Khmer.
+    Khmer,
+    /// Myanmar.
+    Myanmar,
+}
+
+/// The exact supported `Script` of `c`, or `None` for every other assignment.
+///
+/// Inherited marks and Common punctuation have no script here. The segmenter
+/// attaches combining marks to a preceding base and keeps punctuation as a
+/// boundary, rather than guessing a script for either.
+#[must_use]
+pub fn segmentation_script(c: char) -> Option<SegmentationScript> {
+    match (analysis_properties(c) >> tables::ANALYSIS_SCRIPT_SHIFT) & 0xF {
+        tables::SCRIPT_HAN => Some(SegmentationScript::Han),
+        tables::SCRIPT_HIRAGANA => Some(SegmentationScript::Hiragana),
+        tables::SCRIPT_KATAKANA => Some(SegmentationScript::Katakana),
+        tables::SCRIPT_HANGUL => Some(SegmentationScript::Hangul),
+        tables::SCRIPT_THAI => Some(SegmentationScript::Thai),
+        tables::SCRIPT_LAO => Some(SegmentationScript::Lao),
+        tables::SCRIPT_KHMER => Some(SegmentationScript::Khmer),
+        tables::SCRIPT_MYANMAR => Some(SegmentationScript::Myanmar),
+        _ => None,
+    }
+}
+
+/// Whether `c` belongs to a supported Script or its Script_Extensions.
+///
+/// This admits shared letters such as the Japanese prolonged sound mark, whose
+/// Script is Common and whose Script_Extensions are Hiragana and Katakana.
+/// Punctuation can also have script membership; tokenizers still decide lexical
+/// membership separately with [`is_alphanumeric`] and [`is_combining_mark`].
+#[must_use]
+pub fn has_segmentation_script(c: char, script: SegmentationScript) -> bool {
+    let value = match script {
+        SegmentationScript::Han => tables::SCRIPT_HAN,
+        SegmentationScript::Hiragana => tables::SCRIPT_HIRAGANA,
+        SegmentationScript::Katakana => tables::SCRIPT_KATAKANA,
+        SegmentationScript::Hangul => tables::SCRIPT_HANGUL,
+        SegmentationScript::Thai => tables::SCRIPT_THAI,
+        SegmentationScript::Lao => tables::SCRIPT_LAO,
+        SegmentationScript::Khmer => tables::SCRIPT_KHMER,
+        SegmentationScript::Myanmar => tables::SCRIPT_MYANMAR,
+    };
+    let properties = analysis_properties(c);
+    let own = (properties >> tables::ANALYSIS_SCRIPT_SHIFT) & 0xF;
+    let extensions = (properties >> tables::ANALYSIS_EXTENSIONS_SHIFT) & 0x1FFF;
+    own == value || extensions & (1 << (value - 1)) != 0
 }
 
 /// Whether `c` is `Alphabetic`, or of General_Category `Nd`, `Nl` or `No`:
@@ -66,23 +301,28 @@ struct Fold<N> {
     next: N,
 }
 
+/// Full C/F case mapping shared by streaming and source-tagged normalization.
+pub(crate) fn fold_scalar(c: char, mut emit: impl FnMut(char)) {
+    if c.is_ascii() {
+        emit(c.to_ascii_lowercase());
+        return;
+    }
+    let record = lookup_two_stage(&tables::FOLD_INDEX, &tables::FOLD_BLOCKS, c);
+    if record == 0 {
+        emit(c);
+        return;
+    }
+    let (start, len) = tables::FOLD_RECORDS[usize::from(record)];
+    let start = usize::from(start);
+    for &part in &tables::FOLD_CHARS[start..start + usize::from(len)] {
+        emit(part);
+    }
+}
+
 impl<N: Stage> Stage for Fold<N> {
     #[inline]
     fn push(&mut self, c: char) {
-        if c.is_ascii() {
-            self.next.push(c.to_ascii_lowercase());
-            return;
-        }
-        let record = lookup_two_stage(&tables::FOLD_INDEX, &tables::FOLD_BLOCKS, c);
-        if record == 0 {
-            self.next.push(c);
-            return;
-        }
-        let (start, len) = tables::FOLD_RECORDS[usize::from(record)];
-        let start = usize::from(start);
-        for &part in &tables::FOLD_CHARS[start..start + usize::from(len)] {
-            self.next.push(part);
-        }
+        fold_scalar(c, |part| self.next.push(part));
     }
 
     fn push_ascii(&mut self, ascii: &str, _lowercase: bool) {

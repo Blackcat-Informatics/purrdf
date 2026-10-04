@@ -200,9 +200,20 @@ expression:
 You choose one of the three first-party licences as usual; the Unicode-3.0
 terms apply in addition, to the data.
 
-`purrdf-lex` also preserves the reference YAML emitter's MIT terms, so its
+`purrdf-lex` also preserves the reference YAML emitter's MIT terms and the
+generated HTML reference data's BSD-3-Clause terms, so its
 complete package expression is
-`(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0`.
+`(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0 AND BSD-3-Clause`.
+
+The HTML resolver and generator are independently written first-party code.
+Only the separately identified named-reference and numeric recovery data are
+incorporated from the WHATWG standard. Its explicit source-incorporation grant
+licenses those portions under BSD-3-Clause; it does not remove attribution or
+relicense the data under the first-party choice. The full upstream notice,
+immutable source identities and reproduction procedure are recorded in
+[`crates/lex/data/html/PROVENANCE.md`](crates/lex/data/html/PROVENANCE.md).
+The generated table and its input data retain that grant in every recipient
+profile containing them.
 
 | Crate | Generated file | Generator | Source data |
 |---|---|---|---|
