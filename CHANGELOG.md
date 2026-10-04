@@ -6,6 +6,20 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+### Fixed
+
+- **rdf:** Serializing a named graph the dataset does not contain
+  (`SerializeGraph::Named` with an absent name) now emits no rows. Previously it
+  emitted the default graph's triples in place of the requested graph.
+- **rdf:** Declared empty named graphs survive JSON-LD, YAML-LD and TriX, as
+  they already did in TriG. The JSON-LD and YAML-LD writers emit
+  `{"@id": g, "@graph": []}` and their readers declare such a graph; the TriX
+  writer emits an empty named `<graph>` block and the reader declares it.
+  Documents for datasets without empty named graphs are byte-identical to
+  before; existing graph order is unchanged.
+
 ## [3.0.1] - 2026-10-02
 
 ### Fixed

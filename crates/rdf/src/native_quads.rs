@@ -35,6 +35,25 @@ use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 /// # Errors
 /// Returns the diagnostic string if the folded quads fail dataset validation.
 pub fn dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfDataset>, String> {
+    freeze_quad_sources(sources, &[])
+}
+
+/// [`dataset_from_quads`], additionally DECLARING each of `declared_graphs` as a named
+/// graph of the dataset, so a graph the source names but gives no quads (a JSON-LD
+/// `{"@id": g, "@graph": []}`) survives as a declared empty graph. The names are
+/// interned after the quads, in source scope 0, so a source without empty graphs
+/// freezes exactly as [`dataset_from_quads`] freezes it.
+pub(crate) fn dataset_from_quads_declaring(
+    quads: &[RdfQuad],
+    declared_graphs: &[RdfTerm],
+) -> Result<Arc<RdfDataset>, String> {
+    freeze_quad_sources(&[quads], declared_graphs)
+}
+
+fn freeze_quad_sources(
+    sources: &[&[RdfQuad]],
+    declared_graphs: &[RdfTerm],
+) -> Result<Arc<RdfDataset>, String> {
     let total: usize = sources.iter().map(|source| source.len()).sum();
     let mut builder = RdfDatasetBuilder::new();
     let mut rows: Vec<FoldRow> = Vec::with_capacity(total);
@@ -75,6 +94,12 @@ pub fn dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfDatase
     }
 
     fold_statement_layer(&mut builder, rows).map_err(|e| e.to_string())?;
+    for name in declared_graphs {
+        let id = builder
+            .intern_owned_term_bound(name, BlankScope::DEFAULT)
+            .map_err(|err| err.to_string())?;
+        builder.declare_named_graph(id);
+    }
     builder.freeze().map_err(|e| e.to_string())
 }
 

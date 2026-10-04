@@ -837,8 +837,15 @@ fn build_ser_graph_read<D: DatasetView>(
             let target = dataset
                 .term_id_by_value(name)
                 .map_err(source_read_failure)?;
+            // A name the dataset never interned selects NO graph. Comparing the
+            // absent `None` against each row's graph slot would match every
+            // default-graph row (whose slot is also `None`) and emit the wrong graph.
+            let Some(target) = target else {
+                graph.terms = std::mem::take(&mut interner.terms);
+                return Ok(graph);
+            };
             for quad in dataset.quads() {
-                if quad.g != target {
+                if quad.g != Some(target) {
                     continue;
                 }
                 let s = interner.intern(dataset, quad.s)?;
