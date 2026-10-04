@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Complete baseline artifact cases shared by the native and WASM test runners.
+//! Complete baseline artifact cases for native Rust conformance.
 //! These bytes are test fixtures only; shipping runtime libraries embed no lexicon.
 
 use purrdf_text::segment::{Dictionary, baseline};

@@ -127,8 +127,8 @@ public construction always applies the stored analyzer and retains source eviden
 These quick timing runs overlapped compilation on the development host.
 Uncertainty is substantial: they describe these workload samples and are not
 hardware-independent speedup guarantees. Use `cargo bench -p purrdf-text
---bench surface --locked -- --quick` to measure the public paths. Native and
-executed WASM tests require the same matches, budgets, counters and evidence.
+--bench surface --locked -- --quick` to measure the public paths. Native Rust
+tests require exact matches, budgets, counters and evidence.
 
 ## Allocation and artifact accounting
 
@@ -227,7 +227,7 @@ pictographic emoji without narrowing the semantic law.
 An independent oracle derives protected scalars directly from the official
 input files. It proves the hint covers every finite atom without those properties
 (53 source rows), checks all 5,760 unique spellings, every 1,112,064 Unicode
-scalar and 17,280 mutated spellings, and executes the same body on native/WASM.
+scalar and 17,280 mutated spellings in native Rust.
 Generated tables and their identities are unchanged.
 
 A rejected spare-bit hint increased deduplicated GCB blocks from 134 to 162 and
@@ -277,5 +277,6 @@ Rust APIs this facade carries; this figure does not measure a consuming module
 that exposes every new analyzer/producer operation. The standalone emoji
 executable's +304-byte code cost is reported separately above. Dictionary data
 is caller-loaded and absent from the production library packages. All release
-crates build for wasm32; the shared executable suites separately exercise the
-new loaders, linguistic kernels, projections, budgets and evidence there.
+crates build for wasm32. Native Rust suites qualify loaders, linguistic kernels,
+projections, budgets and evidence. Three focused WebAssembly probes verify i128
+scoring, integer logarithms and decimal score rendering on that target.

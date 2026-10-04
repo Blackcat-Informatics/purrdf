@@ -160,8 +160,10 @@ IRIs, declarations and fusion weights/law through `purrdf-retrieval`.
 
 Official Unicode normalization, grapheme and emoji data, the complete pinned
 English corpus, independent phonetic black-box vectors and full-matrix distance
-oracles validate the kernels. Shared runner bodies execute on native and WASM.
-Full dictionary source rows and artifacts are checked in both representations.
+oracles validate the kernels in native Rust. Full dictionary source rows and
+artifacts are checked in both representations there. Three focused WebAssembly
+probes verify the target's lowering of i128 scoring, integer logarithms and
+decimal score rendering against the native expectations.
 Original held-out domain judgments and an external Chinese judged pool compare
 lexical, character and explicitly weighted fusion results. Performance and quality
 reports state their workloads and limits; they do not claim universal optimality.

@@ -68,4 +68,5 @@ third-party Unicode crates were replaced. Their headers identify the reference
 crate/version and body hashes. They contain no implementation code. The
 differential tests record deliberate differences caused by Unicode version or
 the explicit analysis profile. Current conformance also reads the vendored
-Unicode word, grapheme, case and emoji corpora through shared native/WASM cases.
+Unicode word, grapheme, case and emoji corpora in native Rust. Focused
+WebAssembly probes cover i128 scoring and decimal rendering on that target.

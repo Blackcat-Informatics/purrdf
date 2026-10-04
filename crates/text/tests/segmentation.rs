@@ -7,6 +7,14 @@ use purrdf_text::TextError;
 use purrdf_text::segment::{Dictionary, SegmentationScratch};
 use purrdf_text::unicode::{self, SegmentationScript};
 
+#[path = "support/baseline_cases.rs"]
+mod baseline_cases;
+
+#[test]
+fn baseline_artifact_resolution() {
+    baseline_cases::baseline_artifact_resolution();
+}
+
 fn dictionary(words: &[&str]) -> Dictionary {
     Dictionary::new(words.iter().map(|word| (*word).to_owned())).expect("valid test vocabulary")
 }

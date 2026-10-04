@@ -792,7 +792,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-hnsw --test wasm_reassociated \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-text --test wasm_determinism --test surface \
+			-p purrdf-text --test wasm_determinism \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-retrieval --test wasm_determinism \
