@@ -301,9 +301,12 @@ impl MutableDataset {
     }
 
     /// Visit every retained blank identity without freezing or copying the dataset.
-    /// Includes suppressed base terms and blanks nested in delta triple terms or
-    /// composite literals, so fresh publication can avoid all identities this
-    /// destination owns. The first `Break` ends the visit.
+    /// Includes suppressed base terms, blanks nested in delta triple terms or
+    /// composite literals, and blank names of graphs declared through
+    /// [`Self::declare_named_graph`] — which own no row and so live in no term table,
+    /// yet survive every freeze and snapshot — so fresh publication can avoid all
+    /// identities this destination owns. An identity may be visited more than once.
+    /// The first `Break` ends the visit.
     pub fn visit_blank_identities<B>(
         &self,
         mut visit: impl FnMut(&str, crate::BlankScope) -> ControlFlow<B>,
@@ -316,6 +319,9 @@ impl MutableDataset {
         }
         for value in &self.delta.values {
             value.visit_blank_identities(&mut visit)?;
+        }
+        for graph in &self.declared_graphs {
+            graph.visit_blank_identities(&mut visit)?;
         }
         ControlFlow::Continue(())
     }
