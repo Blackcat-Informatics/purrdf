@@ -2204,15 +2204,17 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             | GraphPattern::Group { inner, .. } => {
                 steps.push(Step::Visit(inner, active_graph));
             }
-            GraphPattern::Graph { name, inner } => {
-                let inner_graph = match name {
-                    NamedNodePattern::NamedNode(n) => dataset
-                        .term_id_if_ready(&named_node_to_value(n))
-                        .map_or(GraphMatch::Default, GraphMatch::Named),
-                    NamedNodePattern::Variable(_) => GraphMatch::Any,
-                };
-                steps.push(Step::Visit(inner, inner_graph));
-            }
+            GraphPattern::Graph { name, inner } => match name {
+                NamedNodePattern::NamedNode(n) => {
+                    match addressed_graph(dataset, active_dataset, &named_node_to_value(n)) {
+                        Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph))),
+                        // An empty scope: the block yields no row and its inner pattern
+                        // is never evaluated, so the block's estimate is zero.
+                        None => survey.record(pattern, EMPTY_SCOPE),
+                    }
+                }
+                NamedNodePattern::Variable(_) => steps.push(Step::Visit(inner, GraphMatch::Any)),
+            },
             // A call with nothing written before it: its driving bag is the identity table,
             // which is one row, so its whole prediction is the relation's declared bound.
             GraphPattern::PropertyFunction(call) => {
@@ -2231,6 +2233,30 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
         }
     }
     Ok(())
+}
+
+/// The estimate of a `GRAPH <name> { ... }` block whose name addresses no graph: no
+/// row, and an inner pattern that is never evaluated.
+const EMPTY_SCOPE: PlanEstimate = PlanEstimate {
+    rows: 0,
+    peak_rows: 0,
+    columns: 0,
+};
+
+/// The graph `GRAPH <name> { ... }` scopes its block to, as evaluation decides it
+/// (`modifier::eval_graph`): the name's term, when it names a graph of `dataset` that
+/// `active_dataset`'s named set admits. `None` is an empty scope — never the default
+/// graph — whether the name is absent from the dictionary, a term that names no graph,
+/// or excluded by `FROM NAMED`. A lookup that is not ready prices as an empty scope too,
+/// the under-count this survey is documented to fail towards.
+pub(crate) fn addressed_graph<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    name: &purrdf_core::TermValue,
+) -> Option<D::Id> {
+    dataset
+        .term_id_if_ready(name)
+        .filter(|&id| dataset.has_named_graph(id) && active_dataset.named_allows(id))
 }
 
 /// Survey one basic graph pattern — `node`, holding `patterns` — for
@@ -4479,7 +4505,7 @@ mod survey_tests {
         TriplePattern, Variable,
     };
 
-    use super::{PlanSurvey, record_call_estimate, survey_bgp, survey_pattern_plans};
+    use super::{EMPTY_SCOPE, PlanSurvey, record_call_estimate, survey_bgp, survey_pattern_plans};
     use crate::DetHashSet;
     use crate::dataset_spec::ActiveDataset;
     use crate::error::EvalError;
@@ -4640,10 +4666,20 @@ mod survey_tests {
             ),
             GraphPattern::Graph { name, inner } => {
                 let inner_graph = match name {
-                    NamedNodePattern::NamedNode(n) => dataset
-                        .term_id_by_value(&crate::convert::named_node_to_value(n))
-                        .unwrap()
-                        .map_or(GraphMatch::Default, GraphMatch::Named),
+                    NamedNodePattern::NamedNode(n) => {
+                        let id = dataset
+                            .term_id_by_value(&crate::convert::named_node_to_value(n))
+                            .unwrap();
+                        match id.filter(|&id| {
+                            dataset.has_named_graph(id) && active_dataset.named_allows(id)
+                        }) {
+                            Some(id) => GraphMatch::Named(id),
+                            None => {
+                                survey.record(pattern, EMPTY_SCOPE);
+                                return Ok(());
+                            }
+                        }
+                    }
                     NamedNodePattern::Variable(_) => GraphMatch::Any,
                 };
                 reference_survey(

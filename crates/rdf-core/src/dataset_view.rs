@@ -800,6 +800,19 @@ pub trait DatasetView {
         set.into_iter()
     }
 
+    /// Whether `graph` names a named graph of this view: exactly whether
+    /// [`named_graphs`](Self::named_graphs) yields it. A term the view knows only in
+    /// another position (an object in the default graph, say) names no graph.
+    ///
+    /// Drives `GRAPH <iri> { ... }`, which must address the same graphs `GRAPH ?g`
+    /// ranges over. The default answers from [`named_graphs`](Self::named_graphs), so
+    /// it is correct for every backend; one that can answer membership without
+    /// enumerating (a sorted graph set, a graph index) overrides it to do so, and
+    /// must keep the two in agreement.
+    fn has_named_graph(&self, graph: Self::Id) -> bool {
+        self.named_graphs().any(|id| id == graph)
+    }
+
     /// The distinct objects of `(subject, predicate, ?)` in `graph`, ascending
     /// by id.
     ///
@@ -1434,6 +1447,11 @@ impl DatasetView for RdfDataset {
         // the quads-derived default would miss, so delegate to it verbatim.
         Self::named_graphs(self)
     }
+
+    #[inline]
+    fn has_named_graph(&self, graph: TermId) -> bool {
+        Self::has_named_graph(self, graph)
+    }
 }
 
 /// A shared [`Arc`]-wrapped read view is itself a read view: every method delegates
@@ -1613,6 +1631,11 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     #[inline]
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
         (**self).named_graphs()
+    }
+
+    #[inline]
+    fn has_named_graph(&self, graph: Self::Id) -> bool {
+        (**self).has_named_graph(graph)
     }
 }
 

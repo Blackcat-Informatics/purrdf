@@ -385,9 +385,13 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
                 .term_id_by_value(&named_node_to_value(n))
                 .map_err(EvalError::source_read)?
             {
-                // Addressable only if the active dataset's named set admits it (a
+                // Addressable only if the term names a graph of the dataset — the same
+                // set `GRAPH ?g` ranges over, so a term known only in another position
+                // names nothing — and the active dataset's named set admits it (a
                 // `FROM NAMED` / `USING NAMED` may restrict which graphs `GRAPH` sees).
-                Some(id) if ctx.active_dataset.named_allows(id) => {
+                Some(id)
+                    if ctx.dataset.has_named_graph(id) && ctx.active_dataset.named_allows(id) =>
+                {
                     let saved = ctx.active_graph;
                     ctx.active_graph = GraphMatch::Named(id);
                     let result = eval_evaluated(inner, ctx);
@@ -397,7 +401,8 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
                     };
                     Ok(lift.finish(seq))
                 }
-                // The IRI is not a term (no quads), or not in the named dataset → empty.
+                // The IRI is not a term, names no graph, or is not in the named
+                // dataset → empty.
                 _ => Ok(lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema(inner)))),
             }
         }

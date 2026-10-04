@@ -1093,6 +1093,16 @@ impl DatasetView for ShaclDatasetView {
             usize::MAX
         })
     }
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): the source answers
+    /// for its own id, behind the same projection gate that empties the enumeration.
+    fn has_named_graph(&self, graph: TermId) -> bool {
+        !(self.projected || self.selected_graph.is_some())
+            && match &self.source {
+                Source::Native(source) => source.has_named_graph(graph),
+                Source::Composite(dense) => dense.source.has_named_graph(dense.source_id(graph)),
+                Source::Delta(dense) => dense.source.has_named_graph(dense.source_id(graph)),
+            }
+    }
 }
 
 impl ShaclRead for ShaclDatasetView {
