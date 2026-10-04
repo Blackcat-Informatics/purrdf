@@ -24,8 +24,8 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetMut, FastHasher, FastSet, GraphMatchValue, MutableDataset, QuadValues, RdfDataset,
-    RdfDatasetBuilder, TermValue,
+    DatasetMut, DatasetView, FastHasher, FastSet, GraphMatchValue, MutableDataset, QuadValues,
+    RdfDataset, RdfDatasetBuilder, TermValue,
 };
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
@@ -234,6 +234,62 @@ fn bench_freeze(c: &mut Bench) {
     group.finish();
 }
 
+/// Named graphs in the snapshot-enumeration base.
+const GRAPHS: u32 = 200;
+/// Declared empty graphs in the snapshot-enumeration base.
+const EMPTY_GRAPHS: u32 = 50;
+
+/// `BASE_QUADS` quads spread over `GRAPHS` named graphs (`(s{n}, p, o{n}, g{n % GRAPHS})`),
+/// plus `EMPTY_GRAPHS` declared empty graphs.
+fn build_graph_base() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    for n in 0..BASE_QUADS {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let o = b.intern_iri(&format!("http://example.org/o{n}"));
+        let g = b.intern_iri(&format!("http://example.org/g{}", n % GRAPHS));
+        b.push_quad(s, p, o, Some(g));
+    }
+    for n in 0..EMPTY_GRAPHS {
+        let g = b.intern_iri(&format!("http://example.org/empty{n}"));
+        b.declare_named_graph(g);
+    }
+    b.freeze().expect("graph base freezes")
+}
+
+/// Snapshot publication and `GRAPH ?g` enumeration after removals spread over many
+/// named graphs: the first `REMOVES` base quads, which empties `REMOVES / (BASE_QUADS
+/// / GRAPHS)` graphs whole and leaves the rest partly populated, plus the withdrawal of
+/// half the declared empty graphs. Publication probes each graph the mutation touched
+/// for a surviving row, so this measures that probe against the enumeration it gates.
+/// Report-only.
+fn bench_snapshot_graphs(c: &mut Bench) {
+    let base = build_graph_base();
+    let mut cow = MutableDataset::new(Arc::clone(&base));
+    for n in 0..REMOVES {
+        cow.remove(&QuadValues::quad(
+            iri(&format!("s{n}")),
+            iri("p"),
+            iri(&format!("o{n}")),
+            iri(&format!("g{}", n % GRAPHS)),
+        ));
+    }
+    for n in 0..EMPTY_GRAPHS / 2 {
+        cow.withdraw_graph_declaration(&iri(&format!("empty{n}")));
+    }
+
+    let mut group = c.benchmark_group("mut_snapshot_graphs");
+    group.bench_function("snapshot_and_enumerate", |b| {
+        b.iter(|| {
+            let view = cow
+                .snapshot_view()
+                .expect("mutated bench fixture publishes");
+            std::hint::black_box(view.named_graphs().count())
+        });
+    });
+    group.finish();
+}
+
 /// Print the relative head-to-head context once: how many quads each store holds, so
 /// the timed numbers are read against the same effective set. No winner asserted.
 fn bench_context(_c: &mut Bench) {
@@ -268,6 +324,7 @@ bench_group!(
     bench_build,
     bench_mutate,
     bench_query,
-    bench_freeze
+    bench_freeze,
+    bench_snapshot_graphs
 );
 bench_main!(benches);

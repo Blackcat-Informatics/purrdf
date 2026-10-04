@@ -831,6 +831,11 @@ impl RdfDataset {
         self.named_graphs.iter().copied()
     }
 
+    /// Whether `graph` is one of [`Self::named_graphs`] (a binary search).
+    pub(crate) fn has_named_graph(&self, graph: TermId) -> bool {
+        self.named_graphs.binary_search(&graph).is_ok()
+    }
+
     /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
     /// This allocates owned strings at the explicit owned-model boundary
     /// used by serializers, the C-ABI (`purrdf-capi`

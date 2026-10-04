@@ -12,9 +12,15 @@
 //!
 //! - **Implicit graph existence.** This is a quad store: a named graph *exists* iff
 //!   it holds at least one quad. There is no empty-graph registry, so `CREATE GRAPH`
-//!   is a no-op success and `CLEAR` ≡ `DROP` (both just remove every quad of the
-//!   target — the only observable state a graph has). `CLEAR`/`DROP`/`CREATE` SILENT
-//!   never errors here (there is no missing-graph condition to fail on).
+//!   is a no-op success and `CLEAR` ≡ `DROP` (both remove every quad of the target —
+//!   the only observable state a graph has). `CLEAR`/`DROP`/`CREATE` never error,
+//!   SILENT or not (there is no missing-graph condition to fail on). The one carve-out
+//!   is a graph the INPUT declared empty (a TriG `GRAPH <g> {}`): it keeps existing,
+//!   through any request that does not touch it, until an operation empties it —
+//!   `DROP`/`CLEAR` of it (by name, `NAMED` or `ALL`), `MOVE` from it, `COPY`/`MOVE`
+//!   onto it from an empty source, or the removal of the last quad it was given.
+//!   Every such graph, like every graph whose last quad an operation removes, is then
+//!   gone from the request's snapshots, from `GRAPH ?g`, and from the frozen result.
 //! - **Snapshot per WHERE op + value-space round-trip.** A `DELETE/INSERT … WHERE`
 //!   evaluates its `WHERE` against a *frozen snapshot* of the current effective set
 //!   (`m.snapshot_view()`), retaining the immutable base and freezing only its delta. Each
@@ -1022,7 +1028,19 @@ fn clear_target(
     for q in &quads {
         m.remove(q);
     }
+    withdraw_declarations(target, m);
     Ok(())
+}
+
+/// Withdraw the input declarations of `target`'s named graphs: a graph the input
+/// declared empty has no quad for a removal to take, so an operation that removes
+/// the graph says so directly (see module docs). The default graph always exists.
+fn withdraw_declarations(target: &GraphTarget, m: &mut MutableDataset) {
+    match target {
+        GraphTarget::Default => {}
+        GraphTarget::Named(n) => m.withdraw_graph_declaration(&named_node_to_value(n)),
+        GraphTarget::NamedGraphs | GraphTarget::All => m.withdraw_named_graph_declarations(),
+    }
 }
 
 // ── ADD / MOVE / COPY ────────────────────────────────────────────────────────
@@ -1101,6 +1119,7 @@ fn graph_op_move(
     for q in &src {
         m.remove(q);
     }
+    withdraw_declarations(source, m);
     Ok(())
 }
 

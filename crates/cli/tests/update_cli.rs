@@ -54,3 +54,71 @@ fn governed_update_trip_writes_no_dataset_and_exits_three() {
     assert!(report.contains("\ntripped fuel-exhausted\n"), "{report}");
     assert!(report.contains("\nmutation none\n"), "{report}");
 }
+
+/// Run `update` over a TriG document and return the TriG it writes.
+fn update_trig(document: &str, update: &str) -> String {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let path = dir.path().join("input.trig");
+    std::fs::write(&path, document).expect("write fixture");
+    let input = path.to_str().expect("UTF-8 path");
+    let output = run(&["update", "--data", input, "--to", "trig", update]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    String::from_utf8(output.stdout).expect("UTF-8 output")
+}
+
+const DECLARED: &str = "@prefix ex: <http://example.org/> .\n\
+    ex:a ex:p ex:c .\n\
+    GRAPH ex:g {}\n\
+    GRAPH ex:h { ex:a ex:b ex:c }\n\
+    GRAPH _:bg {}\n";
+
+#[test]
+fn drop_all_writes_no_graph_the_input_declared() {
+    assert_eq!(update_trig(DECLARED, "DROP ALL").trim(), "");
+}
+
+#[test]
+fn drop_graph_writes_no_declaration_of_the_dropped_graph() {
+    let body = update_trig(DECLARED, "DROP GRAPH <http://example.org/g>");
+    assert!(!body.contains("<http://example.org/g>"), "{body}");
+    assert!(body.contains("<http://example.org/h> {"), "{body}");
+    assert!(body.contains("_:bg {}"), "{body}");
+}
+
+#[test]
+fn a_no_op_update_keeps_the_input_declarations() {
+    let body = update_trig(
+        DECLARED,
+        "DELETE DATA { <http://example.org/none> <http://example.org/p> <http://example.org/none> }",
+    );
+    assert!(body.contains("<http://example.org/g> {}"), "{body}");
+    assert!(body.contains("_:bg {}"), "{body}");
+    assert!(body.contains("<http://example.org/h> {"), "{body}");
+}
+
+#[test]
+fn a_graph_emptied_by_delete_is_neither_enumerated_nor_written() {
+    // The graph `g1` loses its only quad; `GRAPH ?g` later in the same request must
+    // not bind it, and the result must not declare it. The declared empty `e` that no
+    // operation touched still enumerates and is still written.
+    let update = "DELETE DATA { GRAPH <http://example.org/g1> { \
+        <http://example.org/a> <http://example.org/b> <http://example.org/c> } } ; \
+        INSERT { ?g <http://example.org/p> \"var-enumerated\" } \
+        WHERE { GRAPH ?g { BIND(1 AS ?x) } }";
+    let body = update_trig(
+        "<http://example.org/g1> { <http://example.org/a> <http://example.org/b> <http://example.org/c> }\n",
+        update,
+    );
+    assert_eq!(body.trim(), "", "{body}");
+    let body = update_trig(
+        "<http://example.org/g1> { <http://example.org/a> <http://example.org/b> <http://example.org/c> }\n\
+         GRAPH <http://example.org/e> {}\n",
+        update,
+    );
+    assert!(!body.contains("g1"), "{body}");
+    assert!(
+        body.contains("<http://example.org/e> <http://example.org/p> \"var-enumerated\" ."),
+        "{body}"
+    );
+    assert!(body.contains("<http://example.org/e> {}"), "{body}");
+}

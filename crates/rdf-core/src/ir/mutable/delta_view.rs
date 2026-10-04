@@ -44,6 +44,12 @@ impl ViewTermId for DeltaViewId {
 /// grows with delta terms, never with the base. Reifier bindings and annotations
 /// retain their separate RDF 1.2 tables and original graph scopes.
 ///
+/// A named graph of the base that the mutation emptied — removed its last row, or
+/// withdrew its declaration — and that holds no row of this snapshot is not
+/// enumerated by [`DatasetView::named_graphs`]: the snapshot's graphs are the
+/// graphs that hold a row, plus the base's declared empty graphs no operation
+/// touched.
+///
 /// The base remains available through [`Self::base`] for source locations and
 /// non-RDF sidecars that `DatasetView` does not expose. Materializing this view
 /// with a generic RDF importer does not transfer those sidecars automatically.
@@ -58,6 +64,9 @@ pub struct DeltaDatasetView {
     duplicate_annotations: Arc<FastSet<QuadIds>>,
     has_added_reifiers: bool,
     has_suppressed_reifiers: bool,
+    /// Base named graphs the mutation emptied that hold no row of this snapshot.
+    /// Probed by membership only; never iterated for order.
+    withdrawn_graphs: Arc<FastSet<TermId>>,
     stats: crate::ViewStats,
     work: Arc<super::super::view_accounting::WorkCounter>,
 }
@@ -67,6 +76,7 @@ impl DeltaDatasetView {
         base: Arc<RdfDataset>,
         delta: Arc<RdfDataset>,
         suppressed: FastSet<QuadIds>,
+        emptied_graphs: &FastSet<TermId>,
         limits: crate::ViewLimits,
     ) -> Result<Self, crate::RdfDiagnostic> {
         let mut stats = crate::ViewStats::default();
@@ -116,6 +126,7 @@ impl DeltaDatasetView {
             base_to_delta: Arc::new(base_to_delta),
             duplicate_reifiers: Arc::default(),
             duplicate_annotations: Arc::default(),
+            withdrawn_graphs: Arc::default(),
             stats,
             work: Arc::default(),
         };
@@ -155,9 +166,11 @@ impl DeltaDatasetView {
                 })
                 .collect(),
         );
+        view.withdrawn_graphs = Arc::new(view.withdrawn_graphs_of(emptied_graphs));
         view.work.add(crate::ViewWork {
             copied_index_bytes: (view.duplicate_reifiers.len() + view.duplicate_annotations.len())
-                * size_of::<QuadIds>(),
+                * size_of::<QuadIds>()
+                + view.withdrawn_graphs.len() * size_of::<TermId>(),
             ..Default::default()
         });
         Ok(view)
@@ -214,6 +227,56 @@ impl DeltaDatasetView {
             ..Default::default()
         });
         Ok(result)
+    }
+
+    /// The base graphs among `emptied` — those the mutation removed a row from or
+    /// withdrew — that hold no row of this snapshot.
+    ///
+    /// Only a graph the mutation emptied can have left the enumeration, so the work
+    /// is bounded by `emptied`, never by the base's graph count. Each candidate is
+    /// settled by the delta's own graph set and then by the base graph index, which
+    /// stops at the graph's first unsuppressed quad. A candidate left without a quad
+    /// either way may still hold a statement row; the statement tables have no graph
+    /// index, so those candidates share ONE pass over them, paid only when such a
+    /// candidate exists and the base has statement rows at all.
+    fn withdrawn_graphs_of(&self, emptied: &FastSet<TermId>) -> FastSet<TermId> {
+        let mut pending: FastSet<TermId> = emptied
+            .iter()
+            .copied()
+            .filter(|graph| {
+                let in_delta = self
+                    .base_to_delta
+                    .get(graph)
+                    .is_some_and(|&local| self.delta.has_named_graph(local));
+                !in_delta
+                    && !RdfDataset::quads_for_pattern_indexed(
+                        &self.base,
+                        None,
+                        None,
+                        None,
+                        GraphMatch::Named(*graph),
+                    )
+                    .any(|q| !self.suppressed.contains(&q))
+            })
+            .collect();
+        if !pending.is_empty() {
+            for row in self
+                .base
+                .reifier_quads()
+                .chain(self.base.annotation_quads())
+            {
+                if let Some(graph) = row.g
+                    && pending.contains(&graph)
+                    && !self.suppressed.contains(&row)
+                {
+                    pending.remove(&graph);
+                    if pending.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+        pending
     }
 
     fn has_reifier(&self, subject: DeltaViewId, graph: Option<DeltaViewId>) -> bool {
@@ -852,6 +915,7 @@ impl DatasetView for DeltaDatasetView {
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
         self.base
             .named_graphs()
+            .filter(|graph| !self.withdrawn_graphs.contains(graph))
             .map(DeltaViewId::Base)
             .chain(self.delta.named_graphs().map(|id| self.delta_id(id)))
             .collect::<BTreeSet<_>>()

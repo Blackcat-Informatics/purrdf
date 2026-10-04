@@ -206,7 +206,7 @@ here.
 | Bench | What it measures |
 | --- | --- |
 | `crates/rdf-core/benches/ir_layout.rs` | AoS / SoA / predicate-adjacency IR layout trade-offs (latency, allocations, peak RSS). |
-| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR. |
+| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration after removals spread over many graphs (`mut_snapshot_graphs`). |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
