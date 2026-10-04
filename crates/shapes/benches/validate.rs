@@ -86,6 +86,15 @@
 //! `unanchored`, where `n` untyped nodes carry an `owl:imports` that is data, so the
 //! classifier runs and imports nothing.
 //!
+//! `shacl_shapes_subclass_blank_chain` is `subClassOfInShapesGraph` over a shapes
+//! graph whose `n` IRI classes all sit under one shared chain of `n` blank nodes that
+//! ends at the target class: `shared_chain`, the chain alone, and `cycle`, the same
+//! chain whose last blank node also points back at its first. The data graph is one
+//! node typed with the first class and missing the required property, so every
+//! measured validation derives the membership through the whole chain and asserts its
+//! one result; the cost measured is the shapes-graph subclass supplement validation
+//! builds, which must not re-walk the shared chain once per IRI class.
+//!
 //! Every group here is **report-only**: nothing in this file asserts a threshold,
 //! a ratio or a comparison against a baseline. The allocation invariants these
 //! groups illustrate are executed as contracts in
@@ -122,7 +131,7 @@ use purrdf_rdf::loss::LossLedger;
 use purrdf_rdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_shapes::ShapesImports;
 use purrdf_shapes::engine::{
-    __prepared_class_membership_view, FocusId, PreparedValidator, parse_shapes,
+    __prepared_class_membership_view, FocusId, PreparedValidator, ValidationOptions, parse_shapes,
     parse_shapes_with_config, validate_graphs, validate_projected_dataset,
     validate_projected_dataset_with_focus_filter,
 };
@@ -2069,6 +2078,71 @@ fn bench_shapes_graph_imports(c: &mut Bench) {
     group.finish();
 }
 
+/// The `shacl_shapes_subclass_blank_chain` fixture: `n` IRI classes under one shared
+/// chain of `n` blank nodes ending at `ex:Top`, the chain closed into a cycle when
+/// `cycle`, with `subClassOfInShapesGraph` on, over one violating instance.
+fn blank_chain_fixture(n: usize, cycle: bool) -> ValidationFixture {
+    let mut shapes = format!(
+        "@prefix ex: <{BENCH_EX}> .\n\
+         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+         @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         ex:TopShape a sh:NodeShape ; sh:targetClass ex:Top ;\n\
+             sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n"
+    );
+    for class in 0..n {
+        writeln!(shapes, "ex:C{class} rdfs:subClassOf _:b0 .").expect("writes");
+    }
+    for link in 1..n {
+        writeln!(shapes, "_:b{} rdfs:subClassOf _:b{link} .", link - 1).expect("writes");
+    }
+    writeln!(shapes, "_:b{} rdfs:subClassOf ex:Top .", n - 1).expect("writes");
+    if cycle {
+        writeln!(shapes, "_:b{} rdfs:subClassOf _:b0 .", n - 1).expect("writes");
+    }
+    let mut shapes = parse_shapes(&shapes, None).expect("the bench's shapes graph loads");
+    shapes.set_validation_options(
+        ValidationOptions::default().with_subclass_of_in_shapes_graph(true),
+    );
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri(&format!("{BENCH_EX}x"));
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let class = builder.intern_iri(&format!("{BENCH_EX}C{}", n - 1));
+    builder.push_quad(subject, rdf_type, class, None);
+    ValidationFixture {
+        dataset: builder.freeze().expect("the bench's data graph freezes"),
+        shapes,
+        focus_nodes: 1,
+    }
+}
+
+fn validate_blank_chain(fixture: &ValidationFixture) {
+    let report = validate_projected_dataset(Arc::clone(&fixture.dataset), &fixture.shapes)
+        .expect("benchmark validation must not error");
+    assert_eq!(
+        report.results.len(),
+        1,
+        "the instance reaches ex:Top through the blank chain"
+    );
+    black_box(report);
+}
+
+fn bench_shapes_subclass_blank_chain(c: &mut Bench) {
+    let mut group = c.benchmark_group("shacl_shapes_subclass_blank_chain");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    for n in [256_usize, 1_024, 4_096] {
+        for (label, cycle) in [("shared_chain", false), ("cycle", true)] {
+            let fixture = blank_chain_fixture(n, cycle);
+            group.throughput(Throughput::Elements(n as u64));
+            group.bench_with_input(BenchmarkId::new(label, n), &fixture, |bencher, fixture| {
+                bencher.iter(|| validate_blank_chain(black_box(fixture)));
+            });
+        }
+    }
+    group.finish();
+}
+
 bench_group!(
     benches,
     bench_validate,
@@ -2090,6 +2164,7 @@ bench_group!(
     bench_schema_import,
     bench_linkml_import,
     bench_linkml_slot_emission,
-    bench_shapes_graph_imports
+    bench_shapes_graph_imports,
+    bench_shapes_subclass_blank_chain
 );
 bench_main!(benches);

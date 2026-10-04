@@ -170,3 +170,80 @@ fn a_mutation_snapshot_binding_follows_the_shapes_graph_and_keeps_its_change_pat
         "the moved focus node is in the expansion"
     );
 }
+
+/// SHACL type follows the transitive `rdfs:subClassOf` closure whatever the kind of its
+/// intermediate nodes: one blank node between two IRI classes of the shapes graph connects
+/// them, both for a class target and for `sh:class`. The controls — a direct instance of
+/// the target class, a member of an unrelated class — answer the same both ways.
+#[test]
+fn a_blank_intermediate_in_the_shapes_graph_connects_iri_classes() {
+    let targets = "ex:Student rdfs:subClassOf _:b .\n_:b rdfs:subClassOf ex:Person .\n\
+        ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;\n\
+            sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n";
+    let data = "ex:alice a ex:Student .\nex:bob a ex:Person .\n";
+    assert_eq!(focus_nodes(targets, data, false), nodes(&["bob"]));
+    assert_eq!(focus_nodes(targets, data, true), nodes(&["alice", "bob"]));
+
+    let class = "ex:Student rdfs:subClassOf _:b .\n_:b rdfs:subClassOf ex:Person .\n\
+        ex:TeamShape a sh:NodeShape ; sh:targetClass ex:Team ;\n\
+            sh:property [ sh:path ex:member ; sh:class ex:Person ] .\n";
+    let data = "ex:t1 a ex:Team ; ex:member ex:alice .\nex:alice a ex:Student .\n\
+        ex:t2 a ex:Team ; ex:member ex:rock .\nex:rock a ex:Stone .\n";
+    assert_eq!(focus_nodes(class, data, false), nodes(&["t1", "t2"]));
+    assert_eq!(focus_nodes(class, data, true), nodes(&["t2"]));
+}
+
+/// Several blank hops, a cycle among them (which must terminate), and an IRI edge past the
+/// blank chain — in the shapes graph and in the data graph — all compose. A blank label
+/// in the data graph equal to one in the shapes graph names a different node, so a data
+/// node typed with it gains no membership.
+#[test]
+fn blank_chains_and_cycles_in_the_shapes_graph_compose_and_terminate() {
+    let shapes = "ex:Student rdfs:subClassOf _:same .\n\
+        _:same rdfs:subClassOf _:second .\n\
+        _:second rdfs:subClassOf ex:Scholar, _:same .\n\
+        ex:Scholar rdfs:subClassOf ex:Person .\n\
+        ex:Loop rdfs:subClassOf _:l1 .\n_:l1 rdfs:subClassOf _:l2 .\n_:l2 rdfs:subClassOf _:l1 .\n\
+        ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;\n\
+            sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n\
+        ex:AgentShape a sh:NodeShape ; sh:targetClass ex:Agent ;\n\
+            sh:property [ sh:path ex:id ; sh:minCount 1 ] .\n";
+    let data = "ex:alice a ex:Student .\nex:bob a ex:Person .\n\
+        ex:collision a _:same .\nex:looper a ex:Loop .\n\
+        ex:Person rdfs:subClassOf ex:Agent .\n\
+        ex:carol a ex:Student ; ex:name \"Carol\" .\n";
+    assert_eq!(focus_nodes(shapes, data, false), nodes(&["bob"]));
+    assert_eq!(
+        focus_nodes(shapes, data, true),
+        nodes(&["alice", "bob", "carol"])
+    );
+}
+
+/// A blank node that lies on no path from one IRI class to another creates no membership:
+/// a chain into a dead-end blank, a blank with no IRI subclass above an IRI class, and a
+/// cycle of blanks under an IRI class all leave their members outside `ex:Person`. Four
+/// members violate `sh:class ex:Person` with the parameter off and on; the one member whose
+/// class reaches `ex:Person` through a blank conforms only with it on.
+#[test]
+fn a_blank_off_every_iri_path_creates_no_membership() {
+    let shapes = "ex:Student rdfs:subClassOf _:b .\n_:b rdfs:subClassOf ex:Person .\n\
+        ex:Orphan rdfs:subClassOf _:dead .\n\
+        _:floating rdfs:subClassOf ex:Person .\n\
+        ex:Spinner rdfs:subClassOf _:c1 .\n_:c1 rdfs:subClassOf _:c2 .\n_:c2 rdfs:subClassOf _:c1 .\n\
+        ex:Robot rdfs:subClassOf _:r .\n_:r rdfs:subClassOf ex:Machine .\n\
+        ex:TeamShape a sh:NodeShape ; sh:targetClass ex:Team ;\n\
+            sh:property [ sh:path ex:member ; sh:class ex:Person ] .\n";
+    let data = "ex:t0 a ex:Team ; ex:member ex:alice .\nex:alice a ex:Student .\n\
+        ex:t1 a ex:Team ; ex:member ex:orphan .\nex:orphan a ex:Orphan .\n\
+        ex:t2 a ex:Team ; ex:member ex:spinner .\nex:spinner a ex:Spinner .\n\
+        ex:t3 a ex:Team ; ex:member ex:robot .\nex:robot a ex:Robot .\n\
+        ex:t4 a ex:Team ; ex:member ex:untyped .\n";
+    assert_eq!(
+        focus_nodes(shapes, data, false),
+        nodes(&["t0", "t1", "t2", "t3", "t4"])
+    );
+    assert_eq!(
+        focus_nodes(shapes, data, true),
+        nodes(&["t1", "t2", "t3", "t4"])
+    );
+}

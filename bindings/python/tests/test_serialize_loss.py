@@ -201,3 +201,16 @@ def test_a_store_without_declared_empty_graphs_counts_none() -> None:
     ):
         assert store.dump_with_loss(format).empty_named_graphs_dropped == 0, format
     assert "empty_named_graphs_dropped=0" in repr(store.dump_with_loss(purrdf.RdfFormat.N_QUADS))
+
+
+def test_a_dropped_declared_graph_is_withdrawn_and_an_untouched_one_survives() -> None:
+    """A loaded `<g> { }` follows the Update withdrawal rules: DROP removes it."""
+    for store in (purrdf.Store(), purrdf.MutableDataset()):
+        store.load(_DECLARED_TRIG, format=purrdf.RdfFormat.TRIG)
+        store.update(f"DROP GRAPH <{EX}empty>")
+        trig = store.dump_with_loss(purrdf.RdfFormat.TRIG).bytes.decode()
+        assert f"{EX}empty" not in trig
+        assert "_:" in trig  # the untouched blank-named declaration survives
+        assert store.dump_with_loss(purrdf.RdfFormat.N_QUADS).empty_named_graphs_dropped == 1
+        store.update("DROP ALL")
+        assert store.dump_with_loss(purrdf.RdfFormat.N_QUADS).empty_named_graphs_dropped == 0

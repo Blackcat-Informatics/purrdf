@@ -3927,7 +3927,13 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         // ---- term constructors --------------------------------------------
         Function::Iri | Function::Uri => match arg(vals, 0) {
             Some(TermValue::Iri(iri)) => Ok(Some(iri_term(ctx, iri.clone())?)),
-            Some(TermValue::Literal { lexical_form, .. }) => {
+            // §17.4.2.8: the string form is a simple literal or `xsd:string`; a tagged
+            // string or any other literal is an error.
+            Some(TermValue::Literal {
+                lexical_form,
+                datatype,
+                ..
+            }) if datatype == XSD_STRING => {
                 match resolve_against_base(ctx.base_iri.as_deref(), lexical_form) {
                     Some(resolved) => Ok(Some(iri_term(ctx, resolved)?)),
                     // Relative reference with no base to resolve against — a SPARQL
@@ -3946,8 +3952,9 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         // BNODE(strExpr): the SAME argument string within the SAME query solution
         // (§17.4.2.9) reuses the previously-minted blank; see `ctx.bnode_memo`'s
         // doc for the row-identity mechanism and its scope.
+        // The label is a simple literal or `xsd:string` (§17.4.2.9).
         Function::BNode => {
-            let Some((s, _)) = string_arg(vals, 0) else {
+            let Some(s) = plain_string_arg(vals, 0) else {
                 return Ok(None);
             };
             let key = (ctx.current_row, s);
@@ -4103,43 +4110,43 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- hash functions ------------------------------------------------
         //
-        // Every arm here reads its argument through `string_arg_ref`, NOT
-        // `string_arg`: a hash consumes the lexical form as bytes and never
+        // Every arm here reads its argument through `plain_string_arg_ref`, NOT
+        // `plain_string_arg`: a hash consumes the lexical form as bytes and never
         // keeps it, so copying it into a fresh `String` first would be one
         // wasted heap allocation and one wasted memcpy of the whole literal,
         // per solution row, on every one of these nine built-ins. The only
         // allocation a hash call still makes per row is the hex digest it
         // returns, which is genuinely new text.
-        Function::Md5 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Md5 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::md5::Md5::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha1 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha1 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha1::Sha1::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha256 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha256 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha384 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha384 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha512 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha512 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
@@ -4147,31 +4154,31 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         },
 
         // SEP-0008 SHA-3 (FIPS 202). Same call convention as SHA1/SHA256: one
-        // simple-literal/xsd:string argument in, the lowercase hex digest out,
+        // simple-literal/xsd:string argument in (a tagged string is an error), the lowercase hex digest out,
         // an unbound/ill-typed argument yielding an error (`None`).
-        Function::Sha3_224 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha3_224 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_224::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha3_256 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha3_256 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha3_384 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha3_384 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
             None => Ok(None),
         },
-        Function::Sha3_512 => match string_arg_ref(vals, 0) {
-            Some((s, _)) => {
+        Function::Sha3_512 => match plain_string_arg_ref(vals, 0) {
+            Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
             }
@@ -4616,7 +4623,9 @@ pub(crate) fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
 }
 
 /// RFC 4647 basic filtering as `LANGMATCHES` applies it: `range` is `*`, or equals
-/// `tag` ASCII-case-insensitively, or is a `-`-terminated prefix of it.
+/// `tag` ASCII-case-insensitively, or is a `-`-terminated prefix of it. An empty
+/// `tag` or `range` matches nothing, so `*` matches only a non-empty tag (SPARQL 1.1
+/// §17.4.3.13, SPARQL 1.2 §17.4.3.11): `LANGMATCHES(LANG("abc"), "*")` is false.
 ///
 /// Compares bytes with `eq_ignore_ascii_case` instead of building three lowercased
 /// `String`s per row: `to_ascii_lowercase` only folds `A-Z`, which is exactly the
@@ -4624,13 +4633,21 @@ pub(crate) fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
 /// untouched, so the answer is identical with zero allocations.
 pub(crate) fn lang_matches(tag: &str, range: &str) -> bool {
     let (t, r) = (tag.as_bytes(), range.as_bytes());
+    if t.is_empty() || r.is_empty() {
+        return false;
+    }
     range == "*"
         || t.eq_ignore_ascii_case(r)
         || (t.len() > r.len() && t[r.len()] == b'-' && t[..r.len()].eq_ignore_ascii_case(r))
 }
 
-/// A term read as a string argument: its lexical form and language tag, when it is a
-/// simple, `xsd:string`, `rdf:langString` or `rdf:dirLangString` literal.
+/// A string argument as the string built-ins read it: its lexical form, language tag
+/// and RDF 1.2 base direction.
+pub(crate) type StringArg = (String, Option<String>, Option<RdfTextDirection>);
+
+/// A term read as a string argument: its lexical form, language tag and base
+/// direction, when it is a simple, `xsd:string`, `rdf:langString` or
+/// `rdf:dirLangString` literal.
 ///
 /// Out of line, so the per-row `String` it materializes is one compiled function
 /// rather than a fragment of each expression-VM caller.
@@ -4638,8 +4655,8 @@ pub(crate) fn lang_matches(tag: &str, range: &str) -> bool {
 pub(crate) fn string_arg_of_term<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
-) -> Result<Option<(String, Option<String>)>, EvalError> {
-    Ok(string_arg_value_owned(value_of(ctx, term)?).map(|(s, l, _)| (s, l)))
+) -> Result<Option<StringArg>, EvalError> {
+    Ok(string_arg_value_owned(value_of(ctx, term)?))
 }
 
 /// The lexical form `STR(term)` has, read straight off the term without minting it.
@@ -4690,31 +4707,25 @@ fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<St
     string_arg_value(arg(vals, i)?).map(|(s, l, _)| (s, l))
 }
 
-/// [`string_arg`] without the copy: `(lexical, language)` BORROWED from the
-/// argument rather than cloned out of it.
+/// [`plain_string_arg`] without the copy: the lexical form of a simple literal or
+/// `xsd:string` argument, BORROWED from the argument rather than cloned out of it.
 ///
-/// The accepted-datatype rule is identical to [`string_arg`]'s (simple literal,
-/// `xsd:string`, `rdf:langString`, `rdf:dirLangString`); only the ownership
-/// differs. Callers that merely READ the lexical form — the hash built-ins,
-/// which hash it straight from its bytes — must use this one:
-/// [`string_arg`] heap-allocates a fresh `String` per call, and these are
-/// evaluated once per solution row, so a `SHA3-256(?o)` over a million-row scan
-/// paid a million allocations to hand `as_bytes()` a pointer it could have had
-/// for free. The hex digest is still allocated (it is a genuinely new string),
-/// so the per-row allocation count for a hash call drops from two to one.
-fn string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<&str>)> {
+/// The accepted-datatype rule is identical to [`plain_string_arg`]'s: a
+/// language-tagged or directional string is an error, as the hash built-ins'
+/// signatures require (SPARQL 1.1 §17.4.6, SEP-0008). Callers that merely READ
+/// the lexical form — the hash built-ins, which hash it straight from its bytes —
+/// must use this one: [`plain_string_arg`] heap-allocates a fresh `String` per
+/// call, and these are evaluated once per solution row, so a `SHA3-256(?o)` over a
+/// million-row scan would pay a million allocations to hand `as_bytes()` a pointer
+/// it could have had for free. The hex digest is still allocated (it is a
+/// genuinely new string), so a hash call allocates once per row.
+fn plain_string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<&str> {
     match arg(vals, i)? {
         TermValue::Literal {
             lexical_form,
             datatype,
-            language,
             ..
-        } if datatype == XSD_STRING
-            || datatype == RDF_LANG_STRING
-            || datatype == RDF_DIR_LANG_STRING =>
-        {
-            Some((lexical_form.as_str(), language.as_deref()))
-        }
+        } if datatype == XSD_STRING => Some(lexical_form.as_str()),
         _ => None,
     }
 }
@@ -4726,14 +4737,7 @@ fn string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<
 /// `rdf:dirLangString`) argument is a type error here, not an accepted input
 /// whose language would silently be discarded.
 fn plain_string_arg(vals: &[Option<TermValue>], i: usize) -> Option<String> {
-    match arg(vals, i)? {
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            ..
-        } if datatype == XSD_STRING => Some(lexical_form.clone()),
-        _ => None,
-    }
+    plain_string_arg_ref(vals, i).map(str::to_owned)
 }
 
 /// Like [`string_arg`] but also returns the RDF 1.2 base direction (for functions
@@ -4787,14 +4791,14 @@ fn string_arg_value_owned(
 }
 
 /// Apply a pure string transform to a single string argument, preserving its
-/// language tag.
+/// language tag and base direction.
 fn map_string<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
     f: impl Fn(&str) -> String,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match string_arg(vals, 0) {
-        Some((s, lang)) => Ok(make_string(ctx, f(&s), lang)?),
+    match string_arg3(vals, 0) {
+        Some((s, lang, dir)) => Ok(make_string_dir(ctx, f(&s), lang, dir)?),
         None => Ok(None),
     }
 }
@@ -4871,49 +4875,88 @@ fn eval_concat<D: DatasetView + Sync>(
     }
 }
 
-/// `SUBSTR(str, start[, length])` with 1-based indexing over Unicode scalars.
+/// `SUBSTR(str, start[, length])`: XPath F&O `fn:substring` over SPARQL's
+/// `xsd:integer` arguments (§17.4.3.3). The result is the characters at the 1-based
+/// positions `p` with `start <= p` and, when a length is given, `p < start + length`,
+/// so a start at or below zero eats into the length rather than being moved to one:
+/// `SUBSTR("12345", 0, 3)` is `"12"`. The result keeps the source's language tag and
+/// base direction.
+///
+/// A length that is supplied but unbound (or an error) is an error, not an omitted
+/// length; a non-integer start or length is an error. The bounds are computed without
+/// overflow over the integers' whole range.
 fn eval_substr<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some((s, lang)) = string_arg(vals, 0) else {
+    let Some((s, lang, dir)) = string_arg3(vals, 0) else {
         return Ok(None);
     };
-    let Some(start) = arg(vals, 1).and_then(xsd_int_of) else {
+    let Some(start) = arg(vals, 1).and_then(xsd_integer_of) else {
         return Ok(None);
     };
-    let chars: Vec<char> = s.chars().collect();
-    // SPARQL substr is 1-based; clamp to the string bounds.
-    let start0 = (start - 1).max(0) as usize;
-    let end = match vals.get(2).and_then(|v| v.as_ref()) {
-        Some(len_val) => {
-            let Some(len) = xsd_int_of(len_val) else {
+    let end = match vals.get(2) {
+        None => None,
+        Some(length) => {
+            let Some(length) = length.as_ref().and_then(xsd_integer_of) else {
                 return Ok(None);
             };
-            ((start - 1).max(0) + len.max(0)) as usize
+            // Saturating is exact here: the sum overflows only when both operands
+            // have the same sign, and then the saturated end lies past every position
+            // a string has (upwards) or before the first one (downwards), as the true
+            // end does.
+            Some(start.saturating_add(length))
         }
-        None => chars.len(),
     };
-    let slice: String = chars
-        .get(start0..end.min(chars.len()))
-        .unwrap_or(&[])
-        .iter()
-        .collect();
-    make_string(ctx, slice, lang)
+    let slice = substring(&s, start, end).to_owned();
+    make_string_dir(ctx, slice, lang, dir)
 }
 
-/// SPARQL 1.1 §17.4.1.1 "argument compatibility": whether a string operand
-/// tagged `arg1_lang` may be compared against one tagged `arg2_lang`.
-/// Compatible when: both are simple/`xsd:string` (no language); both carry the
-/// *same* language tag (compared case-insensitively per RFC 4646); or `arg1`
-/// has a language tag and `arg2` is simple/`xsd:string`. NOT compatible the
-/// other way around (`arg1` simple, `arg2` tagged) — a plain string cannot be
-/// searched for a language-tagged pattern.
-fn args_compatible(arg1_lang: Option<&str>, arg2_lang: Option<&str>) -> bool {
+/// The characters of `s` at the 1-based positions `p` with `start <= p` and, when
+/// `end` is given, `p < end`.
+fn substring(s: &str, start: i128, end: Option<i128>) -> &str {
+    let first = start.max(1);
+    // `first - 1` is non-negative; a position past `usize` is past the string.
+    let skip = usize::try_from(first - 1).unwrap_or(usize::MAX);
+    let from = s
+        .char_indices()
+        .nth(skip)
+        .map_or(s.len(), |(offset, _)| offset);
+    let rest = &s[from..];
+    let to = match end {
+        None => rest.len(),
+        Some(end) if end <= first => 0,
+        // `end > first >= 1`, so `end - first` neither overflows nor is negative.
+        Some(end) => {
+            let take = usize::try_from(end - first).unwrap_or(usize::MAX);
+            rest.char_indices()
+                .nth(take)
+                .map_or(rest.len(), |(offset, _)| offset)
+        }
+    };
+    &rest[..to]
+}
+
+/// SPARQL 1.1 §17.4.1.1 "argument compatibility", with RDF 1.2's base direction as
+/// a facet of the language tag: whether a string operand with facets
+/// `(arg1_lang, arg1_dir)` may be searched for one with `(arg2_lang, arg2_dir)`.
+///
+/// Compatible when `arg2` is simple/`xsd:string` (whatever `arg1` is), or when both
+/// carry the *same* language tag (compared case-insensitively, RFC 4646) **and** the
+/// same base direction (both none, or both `ltr`, or both `rtl`). NOT compatible when
+/// `arg1` is simple/`xsd:string` and `arg2` is tagged — a plain string cannot be
+/// searched for a language-tagged pattern — nor when the tags or directions differ.
+/// `CONTAINS`, `STRSTARTS`, `STRENDS`, `STRBEFORE` and `STRAFTER` are an error
+/// (unbound) over an incompatible pair.
+pub(crate) fn args_compatible(
+    arg1_lang: Option<&str>,
+    arg1_dir: Option<RdfTextDirection>,
+    arg2_lang: Option<&str>,
+    arg2_dir: Option<RdfTextDirection>,
+) -> bool {
     match (arg1_lang, arg2_lang) {
-        (None, None) => true,
-        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-        (Some(_), None) => true,
+        (_, None) => true,
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b) && arg1_dir == arg2_dir,
         (None, Some(_)) => false,
     }
 }
@@ -4924,14 +4967,16 @@ fn eval_str_before_after<D: DatasetView + Sync>(
     vals: &[Option<TermValue>],
     before: bool,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some((h, lang)), Some((n, needle_lang))) = (string_arg(vals, 0), string_arg(vals, 1))
+    let (Some((h, lang, dir)), Some((n, needle_lang, needle_dir))) =
+        (string_arg3(vals, 0), string_arg3(vals, 1))
     else {
         return Ok(None);
     };
     // §17.4.1.1: the needle must be argument-compatible with the haystack, or
     // the call is a type error (unbound) — e.g. a `@cy`-tagged needle can never
-    // match an untagged or `@en`-tagged haystack.
-    if !args_compatible(lang.as_deref(), needle_lang.as_deref()) {
+    // match an untagged or `@en`-tagged haystack, nor an `@en--ltr` one an
+    // `@en--rtl` haystack.
+    if !args_compatible(lang.as_deref(), dir, needle_lang.as_deref(), needle_dir) {
         return Ok(None);
     }
     // An empty needle matches at the start: STRBEFORE → "", STRAFTER → the haystack.
@@ -4946,10 +4991,15 @@ fn eval_str_before_after<D: DatasetView + Sync>(
         // No match → empty (typed xsd:string, no language).
         None => return Ok(Some(string_term(ctx, "")?)),
     };
-    make_string(ctx, result, lang)
+    make_string_dir(ctx, result, lang, dir)
 }
 
 /// `REPLACE(str, pattern, replacement[, flags])` via the regex engine.
+///
+/// The text is any string literal, and the result keeps its language tag and base
+/// direction. The pattern, the replacement and the flags are simple literals
+/// (§17.4.3.15): a tagged one is an error, and so is a supplied flags argument that
+/// is unbound, an error or not a string — only an omitted one means no flags.
 ///
 /// `linked` is the pattern the call's constant pattern and flags compiled to at link
 /// time; without one the pattern is compiled (or found) in the per-query cache.
@@ -4958,19 +5008,25 @@ fn eval_replace<D: DatasetView + Sync>(
     vals: &[Option<TermValue>],
     linked: Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some((s, lang)) = string_arg(vals, 0) else {
+    let Some((s, lang, dir)) = string_arg3(vals, 0) else {
         return Ok(None);
     };
-    let (Some((pattern, _)), Some((replacement, _))) = (string_arg(vals, 1), string_arg(vals, 2))
+    let (Some(pattern), Some(replacement)) = (plain_string_arg(vals, 1), plain_string_arg(vals, 2))
     else {
         return Ok(None);
     };
+    let flags = match vals.get(3) {
+        None => String::new(),
+        Some(_) => {
+            let Some(flags) = plain_string_arg(vals, 3) else {
+                return Ok(None);
+            };
+            flags
+        }
+    };
     let compiled = match linked {
         Some(compiled) => compiled.clone(),
-        None => {
-            let flags = string_arg(vals, 3).map_or_default(|(f, _)| f);
-            cached_regex(ctx, &pattern, &flags)
-        }
+        None => cached_regex(ctx, &pattern, &flags),
     };
     let Some(compiled) = compiled else {
         return Ok(None);
@@ -4983,7 +5039,7 @@ fn eval_replace<D: DatasetView + Sync>(
         Ok(replaced) => replaced.into_owned(),
         Err(_) => return Ok(None),
     };
-    make_string(ctx, replaced, lang)
+    make_string_dir(ctx, replaced, lang, dir)
 }
 
 /// The compiled pattern for `(pattern, flags)`, from the per-query cache.
@@ -5100,7 +5156,8 @@ fn eval_str_lang<D: DatasetView + Sync>(
     // §17.4.2.5: the lexical-form argument must be a simple/`xsd:string` literal
     // — one that ALREADY carries a language tag (or RDF 1.2 base direction) is a
     // type error, not silently re-tagged.
-    let (Some(lex), Some((lang, _))) = (plain_string_arg(vals, 0), string_arg(vals, 1)) else {
+    // Both arguments are simple literals (§17.4.2.4): a tagged tag is an error too.
+    let (Some(lex), Some(lang)) = (plain_string_arg(vals, 0), plain_string_arg(vals, 1)) else {
         return Ok(None);
     };
     if lang.is_empty() {
@@ -5124,10 +5181,13 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some((lex, _)), Some((lang, _)), Some((dir, _))) = (
-        string_arg(vals, 0),
-        string_arg(vals, 1),
-        string_arg(vals, 2),
+    // Like `STRLANG`, the lexical form must carry no tag of its own: re-tagging an
+    // already tagged string would silently discard its language and direction.
+    // The language and direction are simple literals too.
+    let (Some(lex), Some(lang), Some(dir)) = (
+        plain_string_arg(vals, 0),
+        plain_string_arg(vals, 1),
+        plain_string_arg(vals, 2),
     ) else {
         return Ok(None);
     };
@@ -5262,10 +5322,10 @@ fn triple_part<D: DatasetView + Sync>(
     }
 }
 
-/// An `i64` from an XSD integer argument value.
-fn xsd_int_of(v: &TermValue) -> Option<i64> {
+/// The value of an XSD integer argument (`xsd:integer` or a type derived from it).
+fn xsd_integer_of(v: &TermValue) -> Option<i128> {
     match xsd_of(v)? {
-        XsdValue::Integer { value, .. } => i64::try_from(value).ok(),
+        XsdValue::Integer { value, .. } => Some(value),
         _ => None,
     }
 }
@@ -5861,7 +5921,9 @@ mod tests {
         fn reference(tag: &str, range: &str) -> bool {
             let tag = purrdf_iri::langtag::identity_fold(tag);
             let range = purrdf_iri::langtag::identity_fold(range);
-            range == "*" || tag == range || tag.starts_with(&(range + "-"))
+            !tag.is_empty()
+                && !range.is_empty()
+                && (range == "*" || tag == range || tag.starts_with(&(range + "-")))
         }
         let cases: &[(&str, &str, bool)] = &[
             // exact
@@ -5883,13 +5945,13 @@ mod tests {
             ("Ünd", "ünd", false),
             ("ünd-x", "ünd", true),
             ("ündx", "ünd", false),
-            // range "*" matches any tag, including the empty one (the live path's rule)
+            // range "*" matches any non-empty tag, and not the empty one
             ("en", "*", true),
-            ("", "*", true),
-            // empty tag / empty range
-            ("", "", true),
+            ("", "*", false),
+            // an empty tag or range matches nothing
+            ("", "", false),
             ("en", "", false),
-            ("-en", "", true),
+            ("-en", "", false),
             ("", "en", false),
             // tag shorter than range never matches by prefix
             ("e", "en", false),
@@ -5920,7 +5982,8 @@ mod tests {
         assert_eq!(ebv(&ds, &lm("EN", "en")), Some(true));
         assert_eq!(ebv(&ds, &lm("english", "en")), Some(false));
         assert_eq!(ebv(&ds, &lm("de", "*")), Some(true));
-        assert_eq!(ebv(&ds, &lm("", "*")), Some(true));
+        assert_eq!(ebv(&ds, &lm("", "*")), Some(false));
+        assert_eq!(ebv(&ds, &lm("", "")), Some(false));
         assert_eq!(ebv(&ds, &lm("", "en")), Some(false));
         assert_eq!(ebv(&ds, &lm("ünd-x", "ünd")), Some(true));
     }
@@ -6072,8 +6135,8 @@ mod tests {
 
     /// The **three-argument** `REPLACE(text, pattern, replacement)` arity — no
     /// flags argument at all. Every other REPLACE test supplies a PRESENT final
-    /// `lit("")`, so only this shape exercises `eval_replace`'s
-    /// `string_arg(vals, 3)`-absent `unwrap_or_default()` path, and the XPath
+    /// `lit("")`, so only this shape exercises `eval_replace`'s omitted-flags
+    /// path (no fourth value at all, which reads as no flags), and the XPath
     /// replacement syntax (`$2` here) must still resolve there.
     #[test]
     fn replace_three_argument_call_defaults_flags_to_empty() {
@@ -7125,19 +7188,14 @@ mod tests {
     }
 
     /// The hash built-ins read their argument through the BORROWING accessor
-    /// (`string_arg_ref`) rather than the cloning one, and that swap must not
-    /// have narrowed which arguments they accept.
-    ///
-    /// `string_arg` admits a simple literal, an explicitly `xsd:string`-typed
-    /// one, an `rdf:langString` and an RDF 1.2 `rdf:dirLangString` — hashing the
-    /// LEXICAL form in every case and ignoring the tag — and refuses everything
-    /// else. This pins the same four accepts and one refuse across all nine
-    /// hash functions, against the `xsd:string` digest of the same lexical form,
-    /// so an accessor that dropped an accepted datatype (or started hashing the
-    /// language tag along with the text) fails here rather than silently
-    /// erroring on tagged data at a host boundary.
+    /// (`plain_string_arg_ref`) rather than the cloning one, and take exactly the
+    /// arguments their signatures name (SPARQL 1.1 §17.4.6, SEP-0008): a simple
+    /// literal and an explicitly `xsd:string`-typed one hash to the same digest of
+    /// the lexical form, while an `rdf:langString`, an RDF 1.2 `rdf:dirLangString`
+    /// and a non-string literal are expression errors. This pins both halves across
+    /// all nine hash functions, so neither a wider nor a narrower accessor passes.
     #[test]
-    fn every_hash_builtin_accepts_the_same_argument_shapes_by_reference() {
+    fn every_hash_builtin_accepts_exactly_simple_literals_by_reference() {
         let ds = empty_ds();
         let functions = [
             Function::Md5,
@@ -7156,36 +7214,36 @@ mod tests {
                 &Expression::FunctionCall(f.clone(), vec![lit("abc")].into()),
             )
             .unwrap_or_else(|| panic!("{f:?} must hash a simple literal"));
-            for accepted in [
-                typed_lit("abc", "http://www.w3.org/2001/XMLSchema#string"),
+            assert_eq!(
+                lex(
+                    &ds,
+                    &Expression::FunctionCall(
+                        f.clone(),
+                        vec![typed_lit("abc", "http://www.w3.org/2001/XMLSchema#string")].into()
+                    )
+                )
+                .as_deref(),
+                Some(baseline.as_str()),
+                "{f:?} must hash an xsd:string's lexical form as a simple literal's"
+            );
+            for refused in [
                 Expression::Literal(Literal::new_lang("abc", "en", None)),
                 Expression::Literal(Literal::new_lang(
                     "abc",
                     "en",
                     Some(purrdf_sparql_algebra::BaseDirection::Ltr),
                 )),
+                typed_lit("1", "http://www.w3.org/2001/XMLSchema#integer"),
             ] {
                 assert_eq!(
                     lex(
                         &ds,
-                        &Expression::FunctionCall(f.clone(), vec![accepted].into())
-                    )
-                    .as_deref(),
-                    Some(baseline.as_str()),
-                    "{f:?} must hash the lexical form of every string-shaped literal"
+                        &Expression::FunctionCall(f.clone(), vec![refused.clone()].into())
+                    ),
+                    None,
+                    "{f:?} over {refused:?} must be an expression error"
                 );
             }
-            assert_eq!(
-                lex(
-                    &ds,
-                    &Expression::FunctionCall(
-                        f.clone(),
-                        vec![typed_lit("1", "http://www.w3.org/2001/XMLSchema#integer")].into()
-                    )
-                ),
-                None,
-                "{f:?} over a non-string literal must stay an expression error"
-            );
         }
     }
 
