@@ -1909,10 +1909,10 @@ impl<'a> Parser<'a, '_> {
                 // `TriplesTemplate ::= TriplesSameSubject ( '.' TriplesTemplate? )?`:
                 // with no `.`, the template ends here. A `LATERAL` is left to
                 // `parse_template_triple`, which refuses it by name.
-                if !self.eat(&Token::Dot)
-                    && !(self.at(&Token::RBrace)
-                        || self.peek_kw("GRAPH")
-                        || self.peek_kw("LATERAL"))
+                if !(self.eat(&Token::Dot)
+                    || self.at(&Token::RBrace)
+                    || self.peek_kw("GRAPH")
+                    || self.peek_kw("LATERAL"))
                 {
                     return Err(ParseError::syntax(
                         format!("expected '.' between triples, found {:?}", self.peek()),
