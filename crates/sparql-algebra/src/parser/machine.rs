@@ -2257,7 +2257,7 @@ impl Parser<'_, '_> {
                 // there, never a per-row value the grouping would have to collapse.
                 let bindable: std::collections::HashSet<Variable, FixedState> =
                     if select_exprs.is_empty() {
-                        std::collections::HashSet::default()
+                        std::collections::HashSet::with_hasher(FixedState::new())
                     } else {
                         visible_variables(&where_pat).into_iter().collect()
                     };
