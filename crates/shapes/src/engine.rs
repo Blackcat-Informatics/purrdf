@@ -3044,7 +3044,7 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
 /// `subClassOfInShapesGraph` ([`ValidationOptions::subclass_of_in_shapes_graph`]):
 /// `data` with SHACL type also following the shapes graph's `rdfs:subClassOf` triples,
 /// or `None` when the option is off or the shapes graph (its whole import closure) has
-/// no such triple between two IRIs.
+/// no `rdfs:subClassOf` path between two IRIs ([`shapes_graph_subclass_pairs`]).
 ///
 /// The shapes graph's triples join the edge set SHACL type is derived from and nothing
 /// else ([`ShaclData::with_class_supplement`]): the data graph's rows are unchanged, and
@@ -3063,23 +3063,183 @@ fn with_shapes_graph_subclasses(
     let Some(subclass_of) = graph.term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF) else {
         return Ok(None);
     };
-    let mut supplement: Vec<(String, String)> = graph
-        .quads_for_pattern(None, Some(subclass_of), None, ::purrdf_rdf::GraphMatch::Any)
-        .filter_map(
-            |quad| match (graph.term_value(quad.s), graph.term_value(quad.o)) {
-                (::purrdf_rdf::TermValue::Iri(child), ::purrdf_rdf::TermValue::Iri(parent)) => {
-                    Some((child, parent))
-                }
-                _ => None,
-            },
-        )
-        .collect();
+    let supplement = shapes_graph_subclass_pairs(graph, subclass_of);
     if supplement.is_empty() {
         return Ok(None);
     }
-    supplement.sort_unstable();
-    supplement.dedup();
     data.with_class_supplement(&supplement).map(Some)
+}
+
+/// The `(subclass, superclass)` IRI pairs SHACL type follows from `graph`'s
+/// `rdfs:subClassOf` triples, in every graph of it.
+///
+/// SHACL type follows the transitive closure of `rdfs:subClassOf` whatever the kind
+/// of its intermediate nodes, but the supplement names classes by IRI (a blank node
+/// of the shapes graph is not a node of the data graph). So each IRI class is paired
+/// with every IRI class reached from it through blank (or other non-IRI)
+/// intermediates only: an IRI-to-IRI triple is its own pair, `ex:A rdfs:subClassOf
+/// _:b . _:b rdfs:subClassOf ex:B` contributes `(ex:A, ex:B)`, and a walk stops at
+/// each IRI it reaches, because the class-membership view already closes over chains
+/// of IRI pairs. A blank node on no IRI-to-IRI path contributes nothing. Sorted and
+/// deduplicated.
+///
+/// Many IRI classes may share one long blank chain, so the IRIs a blank node reaches
+/// (its FRONTIER) are computed once per blank node, not once per IRI class above it:
+/// the blank-to-blank edges are collapsed into strongly connected components — which
+/// is also what makes a cycle of blank nodes terminate — and each component's frontier
+/// is the IRIs directly above its members plus the frontiers of the components above
+/// it ([`blank_frontiers`]). An IRI class then pairs with its direct IRI superclasses
+/// and the frontiers of its blank ones.
+fn shapes_graph_subclass_pairs(graph: &RdfDataset, subclass_of: TermId) -> Vec<(String, String)> {
+    let mut edges: Vec<(TermId, TermId)> = graph
+        .quads_for_pattern(None, Some(subclass_of), None, ::purrdf_rdf::GraphMatch::Any)
+        .map(|quad| (quad.s, quad.o))
+        .collect();
+    edges.sort_unstable();
+    edges.dedup();
+
+    // Every node of an edge, once: an IRI keeps its text, any other node gets a dense
+    // index into the blank-node arrays.
+    let mut iris: FastMap<TermId, String> = FastMap::default();
+    let mut blanks: FastMap<TermId, usize> = FastMap::default();
+    for &(child, parent) in &edges {
+        for node in <[TermId; 2]>::from((child, parent)) {
+            if iris.contains_key(&node) || blanks.contains_key(&node) {
+                continue;
+            }
+            match graph.term_value(node) {
+                ::purrdf_rdf::TermValue::Iri(iri) => {
+                    iris.insert(node, iri);
+                }
+                _ => {
+                    let index = blanks.len();
+                    blanks.insert(node, index);
+                }
+            }
+        }
+    }
+    let mut iri_parents: Vec<Vec<TermId>> = vec![Vec::new(); blanks.len()];
+    let mut blank_parents: Vec<Vec<usize>> = vec![Vec::new(); blanks.len()];
+    for &(child, parent) in &edges {
+        let Some(&child) = blanks.get(&child) else {
+            continue;
+        };
+        match blanks.get(&parent) {
+            Some(&parent) => blank_parents[child].push(parent),
+            None => iri_parents[child].push(parent),
+        }
+    }
+    let (component_of, frontiers) = blank_frontiers(&iri_parents, &blank_parents);
+
+    let mut pairs = Vec::new();
+    let mut reached: Vec<TermId> = Vec::new();
+    let mut start = 0;
+    while start < edges.len() {
+        let child = edges[start].0;
+        let end = start + edges[start..].partition_point(|&(node, _)| node == child);
+        if let Some(child_iri) = iris.get(&child) {
+            reached.clear();
+            for &(_, parent) in &edges[start..end] {
+                match blanks.get(&parent) {
+                    Some(&blank) => reached.extend_from_slice(&frontiers[component_of[blank]]),
+                    None => reached.push(parent),
+                }
+            }
+            reached.sort_unstable();
+            reached.dedup();
+            pairs.extend(
+                reached
+                    .iter()
+                    .map(|parent| (child_iri.clone(), iris[parent].clone())),
+            );
+        }
+        start = end;
+    }
+    pairs.sort_unstable();
+    pairs.dedup();
+    pairs
+}
+
+/// The strongly connected component of every blank node of a blank-to-blank
+/// `rdfs:subClassOf` graph, and each component's FRONTIER: the IRI classes reached
+/// from any member through blank nodes only, sorted and deduplicated.
+///
+/// `iri_parents[b]` are blank node `b`'s IRI superclasses and `blank_parents[b]` its
+/// blank ones. Tarjan's algorithm, run with an explicit stack so a long chain cannot
+/// exhaust the thread's, completes a component only after every component reachable
+/// from it, so the frontiers it reads are already final.
+fn blank_frontiers(
+    iri_parents: &[Vec<TermId>],
+    blank_parents: &[Vec<usize>],
+) -> (Vec<usize>, Vec<Vec<TermId>>) {
+    const UNVISITED: usize = usize::MAX;
+    let count = blank_parents.len();
+    let mut order = vec![UNVISITED; count];
+    let mut low = vec![0_usize; count];
+    let mut on_stack = vec![false; count];
+    let mut component_of = vec![UNVISITED; count];
+    let mut frontiers: Vec<Vec<TermId>> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut calls: Vec<(usize, usize)> = Vec::new();
+    let mut next = 0_usize;
+    for root in 0..count {
+        if order[root] != UNVISITED {
+            continue;
+        }
+        order[root] = next;
+        low[root] = next;
+        next += 1;
+        stack.push(root);
+        on_stack[root] = true;
+        calls.push((root, 0));
+        while let Some(&mut (node, ref mut edge)) = calls.last_mut() {
+            if let Some(&parent) = blank_parents[node].get(*edge) {
+                *edge += 1;
+                if order[parent] == UNVISITED {
+                    order[parent] = next;
+                    low[parent] = next;
+                    next += 1;
+                    stack.push(parent);
+                    on_stack[parent] = true;
+                    calls.push((parent, 0));
+                } else if on_stack[parent] {
+                    low[node] = low[node].min(order[parent]);
+                }
+                continue;
+            }
+            calls.pop();
+            if let Some(&(caller, _)) = calls.last() {
+                low[caller] = low[caller].min(low[node]);
+            }
+            if low[node] != order[node] {
+                continue;
+            }
+            let component = frontiers.len();
+            let first = stack
+                .iter()
+                .rposition(|&member| member == node)
+                .expect("a component root is on the stack");
+            let members = stack.split_off(first);
+            for &member in &members {
+                on_stack[member] = false;
+                component_of[member] = component;
+            }
+            let mut frontier: Vec<TermId> = Vec::new();
+            for &member in &members {
+                frontier.extend_from_slice(&iri_parents[member]);
+                for &parent in &blank_parents[member] {
+                    let above = component_of[parent];
+                    if above != component {
+                        frontier.extend_from_slice(&frontiers[above]);
+                    }
+                }
+            }
+            frontier.sort_unstable();
+            frontier.dedup();
+            frontiers.push(frontier);
+        }
+    }
+    (component_of, frontiers)
 }
 
 /// [`validate_with_focus_filter`] over data the entailment regime has already been
@@ -3675,6 +3835,124 @@ mod tests {
     use super::*;
     use crate::report::Severity;
     use crate::shapes::Shapes;
+
+    /// The per-IRI-class walk [`shapes_graph_subclass_pairs`] replaced, kept as its
+    /// oracle: from every IRI class, a depth-first walk through non-IRI nodes with a
+    /// visited set, pairing the class with each IRI reached.
+    fn subclass_pairs_oracle(graph: &RdfDataset, subclass_of: TermId) -> Vec<(String, String)> {
+        let mut edges: Vec<(TermId, TermId)> = graph
+            .quads_for_pattern(None, Some(subclass_of), None, ::purrdf_rdf::GraphMatch::Any)
+            .map(|quad| (quad.s, quad.o))
+            .collect();
+        edges.sort_unstable();
+        edges.dedup();
+        let iri = |id: TermId| match graph.term_value(id) {
+            ::purrdf_rdf::TermValue::Iri(iri) => Some(iri),
+            _ => None,
+        };
+        let mut pairs = Vec::new();
+        let mut children: Vec<TermId> = edges.iter().map(|&(child, _)| child).collect();
+        children.dedup();
+        for child in children {
+            let Some(child_iri) = iri(child) else {
+                continue;
+            };
+            let mut visited: FastSet<TermId> = FastSet::default();
+            let mut stack = vec![child];
+            while let Some(class) = stack.pop() {
+                for &(_, parent) in edges.iter().filter(|&&(node, _)| node == class) {
+                    if !visited.insert(parent) {
+                        continue;
+                    }
+                    match iri(parent) {
+                        Some(parent_iri) => pairs.push((child_iri.clone(), parent_iri)),
+                        None => stack.push(parent),
+                    }
+                }
+            }
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        pairs
+    }
+
+    /// The component-frontier closure pairs exactly what the per-class walk pairs, on
+    /// generated graphs mixing IRI classes, blank nodes and a literal: random edges,
+    /// long blank chains shared by many IRI classes, blank cycles (with and without an
+    /// exit), self-loops, edges in a named graph, and IRI-to-IRI edges.
+    #[test]
+    fn subclass_pairs_match_the_per_class_walk_on_generated_graphs() {
+        use ::purrdf_rdf::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+        let mut nonempty = 0;
+        for seed in 0..96_u64 {
+            let mut rng = purrdf_testkit::rng::SplitMix64::new(0x5C1A_55B1_A2C0_0000 ^ seed);
+            let mut builder = RdfDatasetBuilder::new();
+            let sub_class_of = builder.intern_iri(crate::model::rdfs::SUB_CLASS_OF);
+            let graph_name = builder.intern_iri("http://example.org/graph");
+            let iri_count = 1 + rng.below_usize(12);
+            let blank_count = rng.below_usize(24);
+            let mut nodes: Vec<TermId> = (0..iri_count)
+                .map(|index| builder.intern_iri(&format!("http://example.org/C{index}")))
+                .collect();
+            let blanks: Vec<TermId> = (0..blank_count)
+                .map(|index| builder.intern_blank(&format!("b{index}"), BlankScope::DEFAULT))
+                .collect();
+            nodes.extend_from_slice(&blanks);
+            let literal = builder.intern_literal(RdfLiteral::simple("not a class"));
+            let edge = |builder: &mut RdfDatasetBuilder, s: TermId, o: TermId, named: bool| {
+                builder.push_quad(s, sub_class_of, o, named.then_some(graph_name));
+            };
+            for _ in 0..rng.below_usize(3 * nodes.len() + 1) {
+                let s = nodes[rng.below_usize(nodes.len())];
+                let o = nodes[rng.below_usize(nodes.len())];
+                edge(&mut builder, s, o, rng.below(4) == 0);
+            }
+            if blanks.len() > 1 {
+                // A shared chain: several IRI classes enter at its foot.
+                let chain = &blanks[..=rng.below_usize(blanks.len())];
+                for pair in chain.windows(2) {
+                    edge(&mut builder, pair[0], pair[1], false);
+                }
+                for _ in 0..=rng.below_usize(iri_count) {
+                    let entry = nodes[rng.below_usize(iri_count)];
+                    edge(&mut builder, entry, chain[0], false);
+                }
+                match rng.below(3) {
+                    0 => edge(&mut builder, chain[chain.len() - 1], chain[0], false),
+                    1 => {
+                        edge(&mut builder, chain[chain.len() - 1], chain[0], false);
+                        let exit = nodes[rng.below_usize(iri_count)];
+                        edge(
+                            &mut builder,
+                            chain[rng.below_usize(chain.len())],
+                            exit,
+                            false,
+                        );
+                    }
+                    _ => {
+                        let exit = nodes[rng.below_usize(iri_count)];
+                        edge(&mut builder, chain[chain.len() - 1], exit, false);
+                    }
+                }
+            }
+            if rng.below(2) == 0 {
+                let s = nodes[rng.below_usize(nodes.len())];
+                edge(&mut builder, s, literal, false);
+            }
+            let graph = builder.freeze().expect("the generated graph freezes");
+            let subclass_of = graph
+                .term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF)
+                .expect("interned");
+            let expected = subclass_pairs_oracle(&graph, subclass_of);
+            nonempty += usize::from(!expected.is_empty());
+            assert_eq!(
+                shapes_graph_subclass_pairs(&graph, subclass_of),
+                expected,
+                "seed {seed}"
+            );
+        }
+        assert!(nonempty > 48, "the generator produces pairs: {nonempty}");
+    }
 
     const PREFIXES: &str = r"
         @prefix sh:   <http://www.w3.org/ns/shacl#> .
