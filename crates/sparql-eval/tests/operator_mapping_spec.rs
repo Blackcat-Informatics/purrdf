@@ -233,18 +233,12 @@ fn every_cast_the_table_allows_still_casts() {
         Some(("12".to_owned(), integer.clone()))
     );
     // The numeric and boolean rows.
-    assert_eq!(
-        select("xsd:double(1)"),
-        Some(("1.0E0".to_owned(), double.clone()))
-    );
+    assert_eq!(select("xsd:double(1)"), Some(("1.0E0".to_owned(), double)));
     assert_eq!(
         select("xsd:integer(2.5)"),
         Some(("2".to_owned(), integer.clone()))
     );
-    assert_eq!(
-        select("xsd:integer(true)"),
-        Some(("1".to_owned(), integer.clone()))
-    );
+    assert_eq!(select("xsd:integer(true)"), Some(("1".to_owned(), integer)));
     assert_eq!(
         select("xsd:boolean(0.0e0)"),
         Some(("false".to_owned(), boolean_dt))
