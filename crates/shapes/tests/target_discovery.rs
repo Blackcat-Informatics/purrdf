@@ -109,6 +109,30 @@ fn plain_targets_discover_untyped_node_and_standalone_property_shapes() {
 }
 
 #[test]
+fn calendar_constructor_filters_preserve_sparql_target_focus_nodes() {
+    use purrdf_xsd::XsdDatatype as D;
+    for filter in [
+        format!(
+            "FILTER(<{}>(\"2026-10-04T12:00:00Z\"^^<{}>) >= \"2026-10-04Z\"^^<{}>)",
+            D::Date.iri(),
+            D::DateTime.iri(),
+            D::Date.iri(),
+        ),
+        format!("FILTER(<{0}>(NOW()) = <{0}>(NOW()))", D::Date.iri()),
+    ] {
+        assert_target_discovery(&format!(
+            r#"
+            ex:Target a sh:SPARQLTarget ;
+                sh:select """SELECT ?this WHERE {{
+                    ?this <http://example.org/kind> <http://example.org/Kind> .
+                    {filter}
+                }}""" .
+            "#,
+        ));
+    }
+}
+
+#[test]
 fn parameterized_targets_discover_untyped_node_and_standalone_property_shapes() {
     assert_target_discovery(PARAMETERIZED_TARGET);
 }
