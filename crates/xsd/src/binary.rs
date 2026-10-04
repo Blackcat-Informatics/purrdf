@@ -73,6 +73,9 @@ const BASE64_ALPHABET: &[u8; 64] =
 /// - An internal `=` (before the final group) is a hard failure.
 /// - Over-padding (`====`, `TQ===`, etc.) is a hard failure.
 /// - Any character outside the alphabet is a hard failure.
+/// - The character before the padding encodes no bits past the last byte (`B16`
+///   before `=`, `B04` before `==`): `AQ==` and `AQI=` are valid, `AR==` and
+///   `AQJ=` are not.
 /// - The empty string (after stripping whitespace) is valid and decodes to empty `Vec<u8>`.
 pub fn parse_base64(lexical: &str) -> Result<Vec<u8>, XsdError> {
     let err = |reason| XsdError::invalid(XsdDatatype::Base64Binary, lexical, reason);
@@ -143,6 +146,13 @@ pub fn parse_base64(lexical: &str) -> Result<Vec<u8>, XsdError> {
                         "expected padding character '=' in base64Binary lexical",
                     ));
                 }
+                // XSD 1.1 Part 2 §3.3.17 `B16`: the character before a single `=`
+                // carries no bits past the two encoded bytes.
+                if c & 0b11 != 0 {
+                    return Err(err(
+                        "base64Binary character before '=' must be one of AEIMQUYcgkosw048",
+                    ));
+                }
                 out.push((a << 2) | (b >> 4));
                 out.push((b << 4) | (c >> 2));
             } else {
@@ -154,6 +164,13 @@ pub fn parse_base64(lexical: &str) -> Result<Vec<u8>, XsdError> {
                 if c_raw != b'=' || d_raw != b'=' {
                     return Err(err(
                         "expected padding characters '==' in base64Binary lexical",
+                    ));
+                }
+                // XSD 1.1 Part 2 §3.3.17 `B04`: the character before `==` carries no
+                // bits past the one encoded byte.
+                if b & 0b1111 != 0 {
+                    return Err(err(
+                        "base64Binary character before '==' must be one of AQgw",
                     ));
                 }
                 out.push((a << 2) | (b >> 4));
@@ -495,6 +512,24 @@ mod tests {
             parse_base64("TQ===").is_err(),
             "triple-pad must be rejected"
         );
+    }
+
+    /// XSD 1.1 Part 2 §3.3.17: the character before the padding carries no bits
+    /// past the last encoded byte (`B16` before `=`, `B04` before `==`).
+    #[test]
+    fn base64_padding_bits_must_be_zero() {
+        for refused in ["AQJ=", "AR==", "Zh==", "Zm9=", "AQ J="] {
+            assert!(parse_base64(refused).is_err(), "{refused:?}");
+        }
+        for (accepted, bytes) in [
+            ("AQI=", &[0x01, 0x02][..]),
+            ("AQ==", &[0x01][..]),
+            ("Zg==", b"f"),
+            ("Zm8=", b"fo"),
+            ("Zm9v", b"foo"),
+        ] {
+            assert_eq!(parse_base64(accepted).as_deref(), Ok(bytes), "{accepted:?}");
+        }
     }
 
     // ── dispatch ──────────────────────────────────────────────────────────────────
