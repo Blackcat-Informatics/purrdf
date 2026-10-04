@@ -1515,7 +1515,7 @@ struct OccurrenceBounds {
     /// The largest number of occurrences of any one term within any one
     /// language, summed across the graphs that language appears in.
     per_language: u64,
-    /// Every partition the index holds.
+    /// Every partition with a positive scoring population.
     partitions: u64,
     /// How many distinct graphs those partitions name.
     graphs: u64,
@@ -1524,7 +1524,11 @@ struct OccurrenceBounds {
 impl OccurrenceBounds {
     /// Measure `index` by walking every term's postings once.
     fn of(index: &TextIndex) -> Self {
-        let keys = partition_keys(index);
+        let keys: Vec<_> = index
+            .partitions()
+            .filter(|(_, stats)| stats.document_count() != 0)
+            .map(|(key, _)| key.clone())
+            .collect();
         let groups = language_groups(&keys);
 
         let mut occurrences = 0_u64;
@@ -1562,7 +1566,7 @@ impl OccurrenceBounds {
             documents_holding,
             per_document,
             per_language,
-            partitions: index.partition_count(),
+            partitions: keys.len() as u64,
             graphs: distinct_graphs(&keys),
         }
     }
@@ -2949,6 +2953,85 @@ mod tests {
         );
         assert_eq!(declared("bbfb"), 2, "?doc and ?position: one per partition");
         assert_eq!(declared("bbbb"), 1, "all three: one graph, one occurrence");
+    }
+
+    /// Surface-only partitions cannot loosen a lexical occurrence bound, even
+    /// when they add another language or graph. Scoring populations span zero,
+    /// one or three partitions, and each binding is checked against real rows.
+    #[test]
+    fn auxiliary_partitions_do_not_loosen_occurrence_bounds() {
+        for active in [0, 1, 3] {
+            let build = |auxiliary: bool| {
+                let mut builder = RdfDatasetBuilder::new();
+                let predicate = builder.intern_iri(NOTE);
+                for (language, graph) in [
+                    ("en", None),
+                    ("en", Some("https://example.org/graph")),
+                    ("fr", Some("https://example.org/graph")),
+                ]
+                .into_iter()
+                .take(active)
+                {
+                    for name in ["a", "b", "c"] {
+                        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
+                        let text =
+                            builder.intern_literal(RdfLiteral::language_tagged("alpha", language));
+                        let graph = graph.map(|iri| builder.intern_iri(iri));
+                        builder.push_quad(subject, predicate, text, graph);
+                    }
+                }
+                if auxiliary {
+                    for (name, language, graph) in [
+                        ("punctuation-fr", "fr", None),
+                        (
+                            "punctuation-zh",
+                            "zh",
+                            Some("https://example.org/auxiliary-graph"),
+                        ),
+                    ] {
+                        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
+                        let text =
+                            builder.intern_literal(RdfLiteral::language_tagged("---", language));
+                        let graph = graph.map(|iri| builder.intern_iri(iri));
+                        builder.push_quad(subject, predicate, text, graph);
+                    }
+                }
+                let dataset = builder
+                    .freeze()
+                    .expect("mixed lexical and auxiliary fixture");
+                Arc::new(TextIndex::from_dataset(&*dataset, &config()).expect("fixture index"))
+            };
+            let base = TermOccurrenceRelation::new(build(false));
+            let augmented_index = build(true);
+            assert_eq!(augmented_index.partition_count(), active as u64 + 2);
+            let augmented = TermOccurrenceRelation::new(augmented_index);
+            let rows = invoke(&base, &occurrence_args("alpha"), None).expect("bound term");
+            assert_eq!(
+                invoke(&augmented, &occurrence_args("alpha"), None).expect("bound term"),
+                rows,
+                "auxiliary documents emit no lexical occurrences"
+            );
+            for mode in every_pattern(4) {
+                let expected = base.rows_per_invocation(mode);
+                assert_eq!(
+                    augmented.rows_per_invocation(mode),
+                    expected,
+                    "active={active}, {mode:?}"
+                );
+                for row in &rows {
+                    let bound = bindings_from(mode, row, super::OCCURRENCE_TERM);
+                    let actual = invoke(&augmented, &bound, None).expect("row-derived bindings");
+                    assert_eq!(
+                        actual,
+                        invoke(&base, &bound, None).expect("baseline bindings")
+                    );
+                    assert!(actual.len() as u64 <= expected);
+                }
+                if active == 0 {
+                    assert_eq!(expected, 0, "auxiliary-only populations declare zero");
+                }
+            }
+        }
     }
 
     /// Over an index with no documents every mode of both relations declares
