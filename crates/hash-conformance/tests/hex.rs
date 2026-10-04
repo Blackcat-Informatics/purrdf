@@ -15,11 +15,8 @@
 //! vector.
 //!
 //! The target is `harness = false` on `purrdf_testkit`'s runner, so the same
-//! full suite runs natively under `cargo test`. `make wasm-test` selects the
-//! explicit encoder differential and required-backend assertion on baseline
-//! and `+simd128`: the actual i8x16.swizzle path must agree with portable at
-//! every tested input/output alignment, length and letter case. Reader,
-//! formatter and general refusal coverage remain native.
+//! cases run natively under `cargo test` and on `wasm32-unknown-unknown` in
+//! Node (`make wasm-test`), baseline and `+simd128`.
 
 use purrdf_hash::Backend as _;
 use purrdf_hash::backend::HexBackend;

@@ -3,17 +3,20 @@
 
 //! The bench harness, checked from outside.
 //!
-//! Native Rust owns the complete statistics, command-line, estimates-file and
-//! in-process run contracts: hand-computed quantiles, median and MAD, Tukey's
-//! fences, known bootstrap distributions, exact records and valid/refused options.
-//! Filesystem and unwinding cases keep their native target conditions.
+//! * The statistics against hand-computed values: type 7 quantiles, the
+//!   median, the MAD, Tukey's fences at and beyond their boundaries, and
+//!   bootstrap intervals whose distribution is known exactly; a seeded
+//!   bootstrap gives one interval.
+//! * Every command-line option, and every refusal beside a valid neighbour.
+//! * The estimates file: the exact text written, a bit-exact round trip
+//!   through the reader, and each refused file beside the accepted one.
+//! * Whole runs in-process: `--test` runs each routine once, `--list` runs
+//!   none, a measured run writes and compares records natively, and on wasm32
+//!   says it writes nothing.
 //!
-//! The suite uses the testkit's `harness = false` runner. `make wasm-test`
-//! selects two host-boundary cases: a measured run exercises the clock supplied
-//! by the WASM runner, and store options are refused on wasm32. The exact named
-//! obligations and native owners are in
-//! [WASM test ownership](../../../docs/WASM_TESTING.md). Every general case
-//! remains registered for native `cargo test -p purrdf-testkit --test bench`.
+//! The suite is `harness = false` on the testkit runner, so `make wasm-test`
+//! runs it on wasm32; the cases that need a file system, or a panic that
+//! unwinds, are native only.
 
 use std::cell::Cell;
 use std::time::Duration;

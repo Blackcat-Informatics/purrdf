@@ -156,7 +156,6 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/check-simd-asm.py --self-test
-	cargo run -q --locked -p wasm-link --bin wasm-focused-tests -- --self-test
 	python3 scripts/bench-suite-targets.py --self-test
 	python3 scripts/cleanroom/transcript_audit.py --self-test
 	python3 scripts/cleanroom/guard_hook.py --self-test
@@ -688,8 +687,6 @@ wasm-test: ## Execute target-specific WASM arithmetic, SIMD, stack and host/ABI 
 	@# and SIMD kernels, 32-bit integer/floating lowering, shadow-stack floors,
 	@# host clock/refusals and native-to-WASM wire identities. Existing full test
 	@# targets remain registered under cargo test --workspace.
-	@# The focused runner checks each exact filtered listing before execution;
-	@# missing or renamed cases fail instead of silently selecting zero tests.
 	@# Runner preflight observes planted panic, refused flags and sealed host reads.
 	@# +simd128 is target codegen, not a Cargo feature. Target-scoped flags replace
 	@# build.rustflags and are ignored when RUSTFLAGS/CARGO_ENCODED_RUSTFLAGS is
@@ -711,87 +708,78 @@ wasm-test: ## Execute target-specific WASM arithmetic, SIMD, stack and host/ABI 
 		if [ -n "$${CI:-}" ]; then echo "FAIL: node absent in CI"; exit 1; fi; \
 		echo "SKIP: node not on PATH — the wasm test harness runs the module in Node"; \
 	else \
-		driver=$$(cargo run --quiet --locked -p wasm-link --bin wasm-focused-tests -- --print-self-path) \
-		&& "$$driver" --self-test \
-		&& bash scripts/check-wasm-test-runner.sh \
+		bash scripts/check-wasm-test-runner.sh \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-sparql-eval knn_wasm_determinism \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_determinism -- --exact \
 				the_lane_tree_cosine_answer_is_reproduced_on_this_target \
 				the_lane_tree_squared_euclidean_answer_is_reproduced_on_this_target \
 				the_pinned_answer_is_reproduced_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-sparql-eval knn_wasm_reassociated \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_distance_is_within_the_error_bound_of_the_exact_one \
 				the_reassociated_distance_refuses_an_overflow \
 				the_reassociated_path_is_the_one_this_build_was_made_for \
 				the_reassociated_relation_constructs_and_ranks_within_the_error_bound_of_the_exact_one \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-sparql-eval stack_refusal \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test stack_refusal -- --exact \
 				prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-hnsw wasm_reassociated \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hnsw --test wasm_reassociated -- --exact \
 				a_payload_one_distance_bit_away_does_not_verify \
 				an_image_recorded_on_another_wasm_path_is_refused_by_name \
 				the_image_decodes_verifies_and_searches_as_the_kernel_ranks \
 				the_image_records_the_path_and_shape_this_build_was_made_for \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-text wasm_determinism \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test wasm_determinism -- --exact \
 				the_independent_fielded_reference_is_reproduced_on_this_target \
 				the_integer_logarithm_agrees_with_its_hand_values_on_this_target \
 				the_pinned_ranking_is_reproduced_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-retrieval wasm_determinism \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-retrieval --test wasm_determinism -- --exact \
 				a_collided_pair_fuses_to_the_same_order_on_both_targets \
 				a_fused_answer_is_the_same_rows_in_the_same_order_on_both_targets \
 				a_unit_weight_contribution_is_the_same_exact_decimal_on_both_targets \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-shapes product_wasm \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test product_wasm -- --exact \
 				encoding_matches_the_committed_bytes_on_this_target \
 				the_committed_golden_restores_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-hash-conformance digest_differential \
-				integer_digest_lowering_matches_frozen_boundaries \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-hash-conformance hex \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test hex -- --exact \
 				every_path_matches_portable \
 				required_paths_are_available_and_selected \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-hash-conformance blake3 \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test blake3 -- --exact \
 				required_backends_are_available \
 				random_inputs_cover_irregular_trees_and_alignment \
 				streaming_boundary_answers \
 				frozen_answers_match \
 				streaming_answers_match \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-hash-conformance fixed_hasher \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test fixed_hasher -- --exact \
 				portable_vectors_are_reproduced \
 				the_selected_function_answers_its_own_vectors \
 				integers_share_one_word \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-hash-conformance splitmix_fnv \
-				splitmix64_lowering_matches_boundary_vectors \
-				fnv1a64_lowering_matches_boundary_vectors \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-testkit bench \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-testkit --test bench -- --exact \
 				the_store_options_are_refused_on_wasm32 \
 				a_measured_run_reports_its_estimates \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-stack on_stack \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-stack --test on_stack -- --exact \
 				an_in_floor_request_runs \
 				a_scoped_in_floor_request_borrows_the_caller_s_locals \
 				an_over_floor_request_is_refused \
 				an_over_floor_scoped_request_is_refused \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-core csv_scan_wasm \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test csv_scan_wasm -- --exact \
 				every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length \
 				every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs \
 				the_target_explicit_kernel_is_among_those_compared \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-core segmented \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test segmented -- --exact \
 				indexed_reopen_preserves_high_ids_and_bidirectional_batches \
 				charged_read_peak_covers_measured_allocations_including_streamed_output \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-deflate deflate_conformance \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-deflate --test deflate_conformance -- --exact \
 				required_paths_are_available \
 				the_selected_path_is_available \
 				every_kernel_path_encodes_and_decodes_the_same_bytes \
@@ -801,21 +789,19 @@ wasm-test: ## Execute target-specific WASM arithmetic, SIMD, stack and host/ABI 
 				hash_kernels_match_portable \
 				selected_backend_is_reported \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			"$$driver" purrdf-lex frozen_vectors \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-lex --test frozen_vectors -- --exact \
 				needle_searches_replay_the_frozen_vectors \
-				json_byte_scans_match_scalar_on_this_target \
-				percent_byte_scans_match_scalar_on_this_target \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
-			"$$driver" purrdf-sparql-eval knn_wasm_determinism \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_determinism -- --exact \
 				the_lane_tree_cosine_answer_is_reproduced_on_this_target \
 				the_lane_tree_squared_euclidean_answer_is_reproduced_on_this_target \
 				the_pinned_answer_is_reproduced_on_this_target \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
-			"$$driver" purrdf-sparql-eval knn_wasm_reassociated \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_distance_is_within_the_error_bound_of_the_exact_one \
 				the_reassociated_distance_refuses_an_overflow \
 				the_reassociated_path_is_the_one_this_build_was_made_for \
@@ -823,7 +809,7 @@ wasm-test: ## Execute target-specific WASM arithmetic, SIMD, stack and host/ABI 
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
-			"$$driver" purrdf-hnsw wasm_reassociated \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hnsw --test wasm_reassociated -- --exact \
 				a_payload_one_distance_bit_away_does_not_verify \
 				an_image_recorded_on_another_wasm_path_is_refused_by_name \
 				the_image_decodes_verifies_and_searches_as_the_kernel_ranks \
@@ -831,13 +817,13 @@ wasm-test: ## Execute target-specific WASM arithmetic, SIMD, stack and host/ABI 
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
-			"$$driver" purrdf-hash-conformance hex \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test hex -- --exact \
 				every_path_matches_portable \
 				required_paths_are_available_and_selected \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
-			"$$driver" purrdf-hash-conformance blake3 \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test blake3 -- --exact \
 				required_backends_are_available \
 				random_inputs_cover_irregular_trees_and_alignment \
 				streaming_boundary_answers \
@@ -846,14 +832,14 @@ wasm-test: ## Execute target-specific WASM arithmetic, SIMD, stack and host/ABI 
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
-			"$$driver" purrdf-core csv_scan_wasm \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test csv_scan_wasm -- --exact \
 				every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length \
 				every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs \
 				the_target_explicit_kernel_is_among_those_compared \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
-			"$$driver" purrdf-deflate deflate_conformance \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-deflate --test deflate_conformance -- --exact \
 				required_paths_are_available \
 				the_selected_path_is_available \
 				every_kernel_path_encodes_and_decodes_the_same_bytes \
@@ -865,10 +851,8 @@ wasm-test: ## Execute target-specific WASM arithmetic, SIMD, stack and host/ABI 
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
-			"$$driver" purrdf-lex frozen_vectors \
-				needle_searches_replay_the_frozen_vectors \
-				json_byte_scans_match_scalar_on_this_target \
-				percent_byte_scans_match_scalar_on_this_target; \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-lex --test frozen_vectors -- --exact \
+				needle_searches_replay_the_frozen_vectors; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.

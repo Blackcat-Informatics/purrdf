@@ -1,29 +1,56 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Prepared-product native semantics and two WASM carrier probes.
+//! **The whole prepared-product lifecycle, EXECUTED on
+//! `wasm32-unknown-unknown`, against the same bytes the host writes.**
 //!
-//! Native `cargo test -p purrdf-shapes --test product_wasm` owns the complete
-//! product lifecycle and the vendored W3C SHACL 1.2 subset registered here.
-//! The shared `harness = false` runner retains every body and registration.
+//! `make wasm` proves the crate builds for wasm32. It cannot prove the codec
+//! *answers* the same way there, and for a cache format that is the claim that
+//! matters: a product is prepared by a build tool on a host and restored months
+//! later by a browser. If those two disagree by one byte, the browser's `open`
+//! refuses a product that is perfectly valid, or — far worse — the browser writes
+//! products the host cannot read, and the divergence surfaces as a cache that
+//! mysteriously never hits.
 //!
-//! `make wasm-test` selects only encoding against committed native bytes and
-//! restoration of that native golden. These exercise the product's integer
-//! fields and byte layout on wasm32, qualifying a product prepared by a host
-//! for restoration in a browser. The golden is committed under `tests/fixtures/`
-//! and produced by a native build; each target compares with those same bytes.
-//! Named selections and native owners are documented in
-//! [WASM test ownership](../../../docs/WASM_TESTING.md).
+//! Two runs on one target cannot tell a codec that is target-independent from one
+//! that merely agrees with whichever target it was last compiled for. So this file
+//! asserts against a byte string that was produced *elsewhere*: the golden
+//! committed under `tests/fixtures/`, written by a native build.
 //!
-//! The W3C cases cover list details, `sh:closed sh:ByTypes`,
-//! `sh:uniqueValuesFor`, standalone node expressions, SPARQL 1.2 RL and merged
-//! SHACL vocabularies. They remain complete native conformance coverage.
+//! # How it runs on both
 //!
-//! # No filesystem
+//! One test body per case, one runner on both targets. The target is
+//! `harness = false`, and its `main` hands the named cases to
+//! `purrdf_testkit::harness`: natively they run under `cargo test -p purrdf-shapes`,
+//! and on `wasm32-unknown-unknown` the same named cases run in Node through
+//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` sets:
 //!
-//! Shapes, data and the golden product are compile-time constants. Neither
-//! carrier probe opens a file, so it measures the codec rather than runner
-//! filesystem shims.
+//! ```text
+//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
+//!     cargo test -p purrdf-shapes --target wasm32-unknown-unknown --test product_wasm
+//! ```
+//!
+//! Both runs assert the *same* expectations, so the native run is not a weaker
+//! version of the wasm one — it is the other half of the comparison.
+//!
+//! # The W3C SHACL 1.2 subset
+//!
+//! The second half of this file runs a vendored W3C SHACL 1.2 subset the same
+//! way — the list components with `sh:detail`, `sh:closed sh:ByTypes`,
+//! `sh:uniqueValuesFor`, a node-expression entry evaluated through the standalone
+//! evaluator every host reaches, a SPARQL 1.2 RL evaluation, and a shapes graph
+//! that merges all three vendored SHACL 1.2 vocabularies — each graded against the
+//! expectation the W3C file itself states, on whichever target runs it. A
+//! behaviour that holds natively but not in a browser fails here rather than in a
+//! user's page.
+//!
+//! # No filesystem, on purpose
+//!
+//! Nothing here opens a file. The shapes graph, the data graph and the golden
+//! product are all compile-time constants (`include_bytes!` resolves before the
+//! module ever reaches a target), because a wasm32 test that needed a filesystem
+//! would be proving something about the runner's shims rather than about the
+//! codec.
 
 mod product_fixture;
 

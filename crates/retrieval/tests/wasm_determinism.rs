@@ -1,21 +1,50 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Exact fixed-point fusion arithmetic on native Rust and wasm32.
+//! **The same fusion, executed on x86-64 and on `wasm32-unknown-unknown`,
+//! compared against the same hand-computed decimals.**
 //!
-//! Native `cargo test -p purrdf-retrieval --test wasm_determinism` owns every
-//! registered case, including profile identities, evidence and candidate-domain
-//! finality. `make wasm-test` selects three arithmetic probes: a unit-weight
-//! contribution, a complete fused answer, and a collided candidate pair. They
-//! exercise wasm32's lowering of i128 division, multiplication and accumulation,
-//! then compare exact decimal lexicals and rank order with hand-computed answers.
-//! The selections and native owners are documented in
-//! [WASM test ownership](../../../docs/WASM_TESTING.md).
+//! Every other test in this crate's suite proves something weaker: that fusion
+//! is a pure function *of one target*. Run it fifty times on this machine and it
+//! agrees with itself — which cannot distinguish a fusion that is
+//! target-independent from one that merely happens to be self-consistent
+//! wherever it was last compiled. `make wasm` does not close that gap either: it
+//! proves the release crates **build** for wasm32, not that they **answer** the
+//! same way there.
 //!
-//! # Arithmetic oracle
+//! # What is actually at risk
 //!
-//! A contribution at rank `r`, with `K = 60`, a unit weight and twelve scale
-//! digits, is `trunc(10^12 / (60 + r))`:
+//! A fused score is a sum of `weight * recip(K + rank)` terms, and the whole
+//! ordering claim rests on those terms being the same value everywhere. If the
+//! reciprocal were a `f64` division, a reassociated sum or a fused multiply-add
+//! would move a last bit, two near-tied candidates would swap, and the browser
+//! would return a different *answer* than the host — an answer divergence, not a
+//! rounding detail, and one nothing downstream could detect. The reciprocal is
+//! therefore a single integer division over `i128` fixed point, truncating
+//! toward zero, with no floating-point value anywhere in the path.
+//!
+//! That is an argument. This file is where it becomes an executed test.
+//!
+//! # How it runs on both
+//!
+//! One test body per case, one runner on both targets. The target is
+//! `harness = false`, and its `main` hands the named cases to
+//! `purrdf_testkit::harness`: natively they run under `cargo test`, and on
+//! `wasm32-unknown-unknown` the same named cases run in Node through
+//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` (and CI's
+//! wasm job) sets:
+//!
+//! ```text
+//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
+//!     cargo test -p purrdf-retrieval --target wasm32-unknown-unknown --test wasm_determinism
+//! ```
+//!
+//! # Why the expectations are what they are
+//!
+//! The scores are **hand computed, not recorded** — a test that fills its
+//! expectation from the kernel it is testing agrees with any kernel at all,
+//! including a wrong one. At `SCALE_DIGITS` twelve and a weight of exactly one,
+//! a contribution at rank `r` under `K = 60` is `trunc(10^12 / (60 + r))`:
 //!
 //! ```text
 //! rank 1 -> 10^12 / 61 = 16393442622 remainder 58 -> 0.016393442622
@@ -23,18 +52,38 @@
 //! rank 3 -> 10^12 / 63 = 15873015873 remainder  1 -> 0.015873015873
 //! ```
 //!
-//! The two strata rank the same candidates differently. Expected fused sums
-//! are those independently calculated integers added by hand; expectations are
-//! never derived from the kernel under test. Decimal lexicals are compared
-//! because they are the values consumers receive and serializers write.
+//! The two strata rank the same three candidates in different orders, so each
+//! candidate's fused score is the sum of two *different* ranks' contributions
+//! and no two scores are equal. Every expected sum below is those integers added
+//! by hand.
 //!
-//! # Native semantic coverage
+//! The recorded expectations are the two BLAKE3 digests — the fusion profile's
+//! identity and an answer's evidence identity — because there is no hand
+//! arithmetic that produces one. Pinning them is still the cross-target claim
+//! this file exists to make: each digest is taken over a canonical,
+//! length-framed encoding, so a target that framed an integer or ordered a map
+//! differently would produce a different hex here. The evidence digest is also
+//! pinned the stronger way, by writing out the **bytes** it is a digest of, which
+//! is a claim about the layout that no digest alone can make.
 //!
-//! The complete suite also pins canonical profile and evidence identities,
-//! evidence bytes, exactness verdicts and candidate-domain depth. All bodies and
-//! registrations remain on the shared `harness = false` testkit runner. Native
-//! execution covers these general contracts; the Node WASM lane selects only
-//! the three arithmetic obligations above.
+//! The comparison is on the **decimal lexical**, not on the raw `i128`, because
+//! the lexical is what a consumer receives and what a serializer writes.
+//!
+//! # What else crosses the target boundary
+//!
+//! A fused score is not the only thing an answer carries, so two further facts
+//! about the same fusion are pinned here rather than on one target only:
+//!
+//! * **the evidence identity**, which is what two holders of two answers compare
+//!   to decide whether they were served from the same indexes — hand-written
+//!   bytes, then their digest, then the exactness verdict a declared shortfall
+//!   produces;
+//! * **the depth a declared candidate domain licenses**, because a declaration
+//!   that two strata draw from disjoint blocks lets a candidate certify before
+//!   every stream has been consulted. That makes the number of ranks read part of
+//!   the answer's contract: a stream stopped short reports a ceiling rather than
+//!   exhaustion, so a target whose finality test read one rank further would hand
+//!   back a different terminal report for identical streams.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 

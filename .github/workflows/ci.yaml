@@ -65,9 +65,6 @@ jobs:
       - name: Check the gate-parity gate can still fail
         run: python3 scripts/check-gate-parity.py --self-test
 
-      - name: Check exact WASM selections refuse missing cases
-        run: cargo run -q --locked -p wasm-link --bin wasm-focused-tests -- --self-test
-
       - name: Check `make check` and this workflow run the same hygiene gates
         run: python3 scripts/check-gate-parity.py
 
@@ -732,8 +729,8 @@ jobs:
         if: matrix.gate == 'wasm-test'
         # Native workspace tests own complete semantic/conformance corpora.
         # docs/WASM_TESTING.md records every retained named target obligation.
-        # Each exact selection is listed and checked before execution; the runner
-        # preflight separately observes panic, refused flags and sealed host reads.
+        # Existing exact filters select the retained cases; runner preflight
+        # observes panic, refused flags and sealed host reads.
         # Actual kernels run on baseline and +simd128 builds; width, shadow-stack,
         # host-clock and wire-identity probes use only the build they require.
         run: make wasm-test

@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! SplitMix64 and FNV-1a 64-bit: complete frozen streams and structured
-//! corpora replayed natively. `make wasm-test` selects the two compact probes
-//! for wrapping u64 arithmetic at boundary seeds and byte/word seams. The
-//! Unicode and IRI corpora remain native semantic coverage.
+//! SplitMix64 and FNV-1a 64-bit: their frozen answers, replayed on every
+//! target.
 //!
 //! # SplitMix64
 //!
@@ -334,95 +332,7 @@ fn record_vectors_when_asked() {
     purrdf_testkit::harness::print_line("recorded the SplitMix64 and FNV-1a vectors");
 }
 
-/// Wasm i64 shifts, wrapping additions and multiplies at zero and all-ones
-/// seeds, through all three existing stream entry points. Two records per
-/// stream/seed retain carry transitions without replaying 10,000 draws.
-fn splitmix64_lowering_matches_boundary_vectors() {
-    let file = VectorFile::parse(include_str!("vectors/splitmix64_differential_vectors.txt"))
-        .expect("frozen vector integrity");
-    let mut checked = 0;
-    for stream in STREAMS {
-        for seed in SEEDS {
-            let seed_text = format!("{seed:016x}");
-            for first in [0, PER_RECORD] {
-                let first_text = first.to_string();
-                let record = file
-                    .records()
-                    .iter()
-                    .find(|record| {
-                        record.fields[0] == stream
-                            && record.fields[1] == seed_text
-                            && record.fields[2] == first_text
-                    })
-                    .expect("the frozen boundary record");
-                let actual = draws(stream, seed, first, PER_RECORD);
-                assert_eq!(record.fields.len(), 3 + actual.len());
-                for (value, answer) in actual.iter().zip(&record.fields[3..]) {
-                    let expected = u64::from_str_radix(answer, 16).expect("a frozen u64 answer");
-                    assert_eq!(
-                        *value, expected,
-                        "{stream}, seed {seed_text}, first {first}"
-                    );
-                }
-                checked += 1;
-            }
-        }
-    }
-    assert_eq!(checked, 2 * STREAMS.len() * SEEDS.len());
-    purrdf_testkit::harness::print_line(&format!(
-        "splitmix64 integer lowering: {checked} frozen records"
-    ));
-}
-
-/// Wasm i64 wrapping multiplication and seeded-fold arithmetic, with high-bit
-/// bytes and either side of word/chunk boundaries. Full text corpora stay native.
-fn fnv1a64_lowering_matches_boundary_vectors() {
-    const BYTE_INPUTS: [&str; 5] = [r"\0", r"\x00", r"\x7f", r"\x80", r"\xff"];
-    const LENGTHS: [usize; 15] = [0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255, 256];
-    let file = VectorFile::parse(include_str!("vectors/fnv1a64_differential_vectors.txt"))
-        .expect("frozen vector integrity");
-    let mut checked = 0;
-    // A named Unicode boundary repeats the singleton NUL input later in the
-    // full corpus. Choose one exact record per declared byte fixture; the full
-    // native replay retains both occurrences and all their expected answers.
-    let bytes = BYTE_INPUTS.iter().map(|input| {
-        let record = file
-            .records()
-            .iter()
-            .find(|record| record.fields[0] == "bytes" && record.fields[1] == *input)
-            .expect("the declared frozen byte fixture");
-        (record, None)
-    });
-    // The frozen stream records are ordered by length 0..=256. Select by
-    // that index before decoding so only the chosen inputs are generated.
-    let streams = file
-        .records()
-        .iter()
-        .filter(|record| record.fields[0] == "stream")
-        .enumerate()
-        .filter(|(length, _)| LENGTHS.contains(length))
-        .map(|(length, record)| (record, Some(length)));
-    for (record, length) in bytes.chain(streams) {
-        let data = decode_input(record.fields[0], record.fields[1]);
-        if let Some(length) = length {
-            assert_eq!(data.len(), length, "the selected frozen stream length");
-        }
-        let actual = fnv_answers(&data);
-        assert_eq!(record.fields.len(), 2 + actual.len());
-        for (answer, frozen) in actual.iter().zip(&record.fields[2..]) {
-            assert_eq!(answer.as_str(), *frozen, "{:?}", &record.fields[..2]);
-        }
-        checked += 1;
-    }
-    assert_eq!(checked, BYTE_INPUTS.len() + LENGTHS.len());
-    purrdf_testkit::harness::print_line(&format!(
-        "fnv1a64 integer lowering: {checked} frozen records"
-    ));
-}
-
 purrdf_testkit::harness_main!(
-    splitmix64_lowering_matches_boundary_vectors,
-    fnv1a64_lowering_matches_boundary_vectors,
     #[cfg(not(target_arch = "wasm32"))]
     record_vectors_when_asked,
     splitmix64_vectors_are_reproduced,

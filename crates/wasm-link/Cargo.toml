@@ -3,7 +3,6 @@
 
 [package]
 name = "wasm-link"
-default-run = "wasm-link"
 description = "The PurRDF wasm package's post-link rewriter: structural stack-pointer switching for the asynchronous lane and the poison gate, applied to the optimized module after wasm-opt"
 version.workspace = true
 edition.workspace = true
@@ -32,5 +31,3 @@ wasm-encoder.workspace = true
 [dev-dependencies]
 # The base16 reader the frozen instruction-span fixture is decoded with.
 purrdf-hash = { workspace = true }
-# The canonical workspace root used by the native assembly-runtime regressions.
-purrdf-testkit.workspace = true

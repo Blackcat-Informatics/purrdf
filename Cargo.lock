@@ -1260,7 +1260,6 @@ name = "wasm-link"
 version = "3.0.1"
 dependencies = [
  "purrdf-hash",
- "purrdf-testkit",
  "wasm-encoder",
 ]
 

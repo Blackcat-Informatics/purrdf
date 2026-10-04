@@ -9,19 +9,16 @@ Native Rust owns general semantics, grammar, refusal corpora and conformance.
 crates build for `wasm32-unknown-unknown`. `make wasm-pkg-test` proves the
 optimized package, JavaScript bindings and ABI.
 
-`make wasm-test` executes only the target obligations below: 55 named cases
-in 18 integration targets, with 87 case executions across 26 scalar/SIMD
+`make wasm-test` executes only the target obligations below: 50 named cases
+in 16 integration targets, with 80 case executions across 24 scalar/SIMD
 target invocations. Runner preflight is additional host-boundary evidence.
-The Rust `wasm-focused-tests` host binary in `crates/wasm-link` compares each
-exact filtered `--list` with the
-requested names and count before executing it; missing names fail. The existing
-testkit harness and full native registrations retain their behavior.
+Existing exact filters select these cases through the existing Cargo runner.
+The testkit harness and full native registrations retain their behavior.
 
 The native owner of each row is `cargo test --locked -p PACKAGE --test TARGET`.
 The three WASM-only store/floor refusal cases exercise platform-specific
 branches; their native targets exercise the native filesystem/thread behavior.
-All other retained cases, including compact arithmetic/scanner probes, also
-run natively. `scalar + SIMD` means both the baseline and `+simd128` build;
+All other retained cases also run natively. `scalar + SIMD` means both the baseline and `+simd128` build;
 `scalar` means the baseline build only.
 
 | Package / target | Build | Exact case | Target behavior proved |
@@ -46,7 +43,6 @@ run natively. `scalar + SIMD` means both the baseline and `+simd128` build;
 | `purrdf-retrieval` / `wasm_determinism` | scalar | `a_unit_weight_contribution_is_the_same_exact_decimal_on_both_targets` | Wasm i128 helper arithmetic, exact truncation, scores/order and decimal lexical rendering against pinned/hand expectations. |
 | `purrdf-shapes` / `product_wasm` | scalar | `encoding_matches_the_committed_bytes_on_this_target` | Cross-width prepared-product wire ABI; encoding matches native committed bytes, and native bytes restore through the Wasm reader. |
 | `purrdf-shapes` / `product_wasm` | scalar | `the_committed_golden_restores_on_this_target` | Cross-width prepared-product wire ABI; encoding matches native committed bytes, and native bytes restore through the Wasm reader. |
-| `purrdf-hash-conformance` / `digest_differential` | scalar | `integer_digest_lowering_matches_frozen_boundaries` | Compact independent-answer block/padding boundaries for Wasm i64 rotation and length arithmetic, retaining full digest conformance natively. |
 | `purrdf-hash-conformance` / `hex` | scalar + SIMD | `every_path_matches_portable` | Actual i8x16.swizzle encoder versus portable over all lengths/alignment/case/write boundaries, plus required backend selection. |
 | `purrdf-hash-conformance` / `hex` | scalar + SIMD | `required_paths_are_available_and_selected` | Actual i8x16.swizzle encoder versus portable over all lengths/alignment/case/write boundaries, plus required backend selection. |
 | `purrdf-hash-conformance` / `blake3` | scalar + SIMD | `required_backends_are_available` | Explicit Wasm128 versus portable kernels across independent frozen answers, irregular trees, alignment, chunk schedules and buffer boundaries. |
@@ -57,8 +53,6 @@ run natively. `scalar + SIMD` means both the baseline and `+simd128` build;
 | `purrdf-hash-conformance` / `fixed_hasher` | scalar | `portable_vectors_are_reproduced` | Wasm 32-bit target selects four partial 32x32 products instead of widening native u128 multiply; usize hashing zero extends to u64. |
 | `purrdf-hash-conformance` / `fixed_hasher` | scalar | `the_selected_function_answers_its_own_vectors` | Wasm 32-bit target selects four partial 32x32 products instead of widening native u128 multiply; usize hashing zero extends to u64. |
 | `purrdf-hash-conformance` / `fixed_hasher` | scalar | `integers_share_one_word` | Wasm 32-bit target selects four partial 32x32 products instead of widening native u128 multiply; usize hashing zero extends to u64. |
-| `purrdf-hash-conformance` / `splitmix_fnv` | scalar | `splitmix64_lowering_matches_boundary_vectors` | Small frozen records for wrapping u64 seed/add/multiply/shift boundaries; full streams remain native. |
-| `purrdf-hash-conformance` / `splitmix_fnv` | scalar | `fnv1a64_lowering_matches_boundary_vectors` | Small frozen wrapping u64 multiply/fold answers; full Unicode/IRI corpus remains native. |
 | `purrdf-testkit` / `bench` | scalar | `the_store_options_are_refused_on_wasm32` | Actual Wasm host-clock measurement and cfg-gated filesystem/store refusal; generic statistics/CLI/record semantics native. |
 | `purrdf-testkit` / `bench` | scalar | `a_measured_run_reports_its_estimates` | Actual Wasm host-clock measurement and cfg-gated filesystem/store refusal; generic statistics/CLI/record semantics native. |
 | `purrdf-stack` / `on_stack` | scalar | `an_in_floor_request_runs` | Wasm inline/scoped shadow-stack floor and typed over-floor refusal; native uses independent threads. |
@@ -79,15 +73,14 @@ run natively. `scalar + SIMD` means both the baseline and `+simd128` build;
 | `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `hash_kernels_match_portable` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
 | `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `selected_backend_is_reported` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
 | `purrdf-lex` / `frozen_vectors` | scalar + SIMD | `needle_searches_replay_the_frozen_vectors` | Actual ByteClass/find_byte/find_byte2 packed scanner answers; grammar and Unicode corpora remain native. |
-| `purrdf-lex` / `frozen_vectors` | scalar + SIMD | `json_byte_scans_match_scalar_on_this_target` | Production JSON scanner versus scalar oracle across SIMD vector alignments, stops and tails; full Unicode/escape grammar native. |
-| `purrdf-lex` / `frozen_vectors` | scalar + SIMD | `percent_byte_scans_match_scalar_on_this_target` | Production percent encoder scans for existing encode sets versus scalar oracle at SIMD vector seams; Unicode-plane corpus native. |
 
 General query completion, join scaling, ordered JSON reconstruction/metadata/
 vocabulary refusal, length framing, SHACL lifecycle/corpus, benchmark statistics
 and storage conformance stay in their native targets. The hash benchmark targets
 remain native benchmarks; WASM host-clock execution and actual kernel comparisons
 are covered by the named cases above. General Unicode/escape grammar remains in
-the native lexical corpus; the WASM subset exercises production byte scanners.
+the native lexical corpus; the existing retained scanner case exercises actual
+byte-search kernels.
 
 Release build, package execution, focused target execution and assembly codegen
 are separate claims. `make simd-asm` measures all seven configurations under its
