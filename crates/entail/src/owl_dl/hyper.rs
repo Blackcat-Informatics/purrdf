@@ -791,6 +791,10 @@ impl<'a> Hyper<'a> {
                             .work()
                             .charge((level.state.nodes.len() + level.state.edges.len()) as u64 + 1);
                         let mut next = level.state.clone();
+                        // A stacked level is a saturated fixpoint, so what its last round
+                        // saw is exactly what it reads now; recomputing that here keeps the
+                        // stack free of a per-node snapshot per level.
+                        next.seen = next.signatures();
                         let slot = record.and_then(|branch| {
                             Some(OpenSlot {
                                 branch,
@@ -840,6 +844,8 @@ impl<'a> Hyper<'a> {
                         Some(slot) => self.record_outcome(&slot, outcome),
                         None => self.record_root(outcome),
                     }
+                    // See the alternative's clone above: the snapshot is recomputed there.
+                    st.seen = Vec::new();
                     stack.push(Branches {
                         state: st,
                         alternatives: branching.alternatives.into_iter(),
