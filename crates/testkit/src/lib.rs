@@ -35,6 +35,10 @@
 //!   bootstrapped change, and a fixed-schema JSON estimates file per
 //!   benchmark, written with [`bench_group!`] and [`bench_main!`]. The same
 //!   targets run on `wasm32-unknown-unknown` under the test runner.
+//! * [`exact`] — an exact rational oracle for numeric conversions: unbounded
+//!   integers, rationals built from an integer, a decimal, a numeral or a float's
+//!   exact binary value, and their correctly rounded `f64`, `f32` and fixed-scale
+//!   decimal, computed with integer arithmetic only.
 //! * [`rng`] — the one deterministic SplitMix64 / xoshiro256** stream every
 //!   crate's fixed-seed tests draw from, including [`prop`] itself, and the
 //!   xorshift64 and 64-bit LCG recurrences pinned test fixtures are built on.
@@ -64,6 +68,7 @@
 #![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
 
 pub mod bench;
+pub mod exact;
 pub mod golden;
 pub mod harness;
 #[cfg(target_arch = "wasm32")]
