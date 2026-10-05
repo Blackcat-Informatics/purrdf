@@ -1811,7 +1811,9 @@ impl NativeSparqlEngine {
     /// inside a `SELECT` is — fuel, the intermediate-cell peak, scratch bytes, remote
     /// requests, the recursion guard — and the stop signal is polled at the evaluator's
     /// charge points, before each operation of the request, and before the `LOAD` host seam
-    /// issues any I/O.
+    /// issues any I/O. Bulk graph declarations also poll before each entry, and the
+    /// private frozen branch polls once more before publication; neither checkpoint
+    /// adds a quad mutation charge.
     ///
     /// [`QueryGovernors::with_max_answers`] is the one ceiling that does **not** apply: it
     /// bounds the answer sequence a caller receives, and an UPDATE has none. A request's
@@ -1877,8 +1879,17 @@ impl NativeSparqlEngine {
         };
         match tripped {
             None => {
-                // The one place the branch is published, and it is on this arm only.
-                *dataset = m.freeze()?;
+                let frozen = m.freeze()?;
+                // Freeze can do work after the earlier poll. Observe a stop there
+                // before the only assignment that publishes this private branch.
+                let _ = state.poll_stop();
+                if let Some(tripped) = state.tripped() {
+                    return Ok(GovernedUpdateOutcome::BudgetExhausted {
+                        tripped,
+                        evidence: state.evidence(),
+                    });
+                }
+                *dataset = frozen;
                 Ok(GovernedUpdateOutcome::Applied {
                     evidence: state.evidence(),
                 })

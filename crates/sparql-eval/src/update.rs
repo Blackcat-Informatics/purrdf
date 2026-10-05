@@ -187,9 +187,10 @@ pub(crate) struct UpdateEvalConfig<'e> {
 
 /// Poll the request's stop signal, converting a fired signal into a trip.
 ///
-/// Called at the two places the evaluator's own charge-point polling cannot reach: before
-/// starting each operation of a request, and — the load-bearing one — immediately before
-/// the `LOAD` host seam issues I/O. [`StopSignal`](crate::governor::StopSignal) latches by
+/// Observe stop at operation, row-mutation, declaration and host boundaries that
+/// the query evaluator's own charge-point polling cannot reach. The `LOAD` poll
+/// precedes host I/O; bulk declaration polls precede each entry's work.
+/// [`StopSignal`](crate::governor::StopSignal) latches by
 /// contract, so the trip reported is the one already recorded on the state rather than a
 /// fresh derivation of the same condition; that is what keeps a stop that raced some other
 /// ceiling reporting one governor rather than two.
@@ -236,8 +237,9 @@ fn charge_host_fetch(governors: Option<&Arc<GovernorState>>) -> Result<(), Updat
 
 /// Charge `quads` mutated quads against the request's fuel.
 ///
-/// The one charge site for the mutation half of an UPDATE, called by every operation that
-/// writes to `m`. Charged as a batch rather than a quad at a time wherever the count is
+/// The one charge site for an UPDATE's RDF row mutations. Graph declarations are
+/// metadata and have stop checkpoints rather than quad fuel costs. Charged as a
+/// batch rather than a quad at a time wherever the count is
 /// known in advance, which is everywhere except the two `DATA` forms (whose quads are
 /// instantiated one at a time and may individually be skipped as ill-formed, so charging a
 /// batch would charge for quads no operation ever wrote).
@@ -443,7 +445,7 @@ pub(crate) fn eval_update(
 /// blank-mint counter (see [`eval_update`]) — never reset between operations.
 ///
 /// The stop signal is polled here, before the operation starts, which is the granularity a
-/// request has: a fuel ceiling stops an operation *within* itself (every mutating operation
+/// request has: a fuel ceiling stops an operation *within* itself (every row-mutating operation
 /// charges — see [`charge_mutations`]), but a deadline or a cancellation is observed
 /// between operations, exactly as the query evaluator observes one between operator
 /// boundaries rather than between charge points. Without this poll a cancelled
@@ -1042,7 +1044,7 @@ fn clear_target(
         m.remove(q);
     }
     if m.graph_existence() == GraphExistenceMode::Implicit {
-        withdraw_declarations(target, m);
+        withdraw_declarations(target, m, governors)?;
     }
     Ok(())
 }
@@ -1082,7 +1084,7 @@ fn clear_or_drop(
     }
     clear_target(target, m, governors)?;
     if drop_graph && m.graph_existence() == GraphExistenceMode::RememberEmpty {
-        withdraw_declarations(target, m);
+        withdraw_declarations(target, m, governors)?;
     }
     Ok(())
 }
@@ -1104,12 +1106,19 @@ fn remember_destination(
 /// Withdraw the input declarations of `target`'s named graphs: a graph the input
 /// declared empty has no quad for a removal to take, so an operation that removes
 /// the graph says so directly (see module docs). The default graph always exists.
-fn withdraw_declarations(target: &GraphTarget, m: &mut MutableDataset) {
+fn withdraw_declarations(
+    target: &GraphTarget,
+    m: &mut MutableDataset,
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
     match target {
         GraphTarget::Default => {}
         GraphTarget::Named(n) => m.withdraw_graph_declaration(&named_node_to_value(n)),
-        GraphTarget::NamedGraphs | GraphTarget::All => m.withdraw_named_graph_declarations(),
+        GraphTarget::NamedGraphs | GraphTarget::All => {
+            m.try_withdraw_named_graph_declarations(|| check_stop(governors))?;
+        }
     }
+    Ok(())
 }
 
 // ── ADD / MOVE / COPY ────────────────────────────────────────────────────────
@@ -1204,7 +1213,7 @@ fn graph_op_move(
         m.remove(q);
     }
     remember_destination(dest.as_ref(), m)?;
-    withdraw_declarations(source, m);
+    withdraw_declarations(source, m, governors)?;
     Ok(())
 }
 

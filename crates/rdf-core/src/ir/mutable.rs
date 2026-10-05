@@ -816,11 +816,33 @@ impl MutableDataset {
     /// [`Self::withdraw_graph_declaration`] for every named graph of the base —
     /// `DROP NAMED` / `DROP ALL` of a dataset with declared empty graphs.
     pub fn withdraw_named_graph_declarations(&mut self) {
+        self.try_withdraw_named_graph_declarations(|| Ok::<_, Infallible>(()))
+            .unwrap_or_else(|never| match never {});
+    }
+
+    /// Withdraw every named-graph declaration, checking before each base entry
+    /// and each declaration added to this branch.
+    ///
+    /// Entries are visited once; populated graphs remain present through their rows.
+    /// A caller that needs atomic publication must discard its private branch on error.
+    ///
+    /// # Errors
+    /// Returns the callback's first error before withdrawing that entry. Earlier
+    /// withdrawals remain applied to this mutable branch; retained snapshots are unchanged.
+    pub fn try_withdraw_named_graph_declarations<E>(
+        &mut self,
+        mut checkpoint: impl FnMut() -> Result<(), E>,
+    ) -> Result<(), E> {
         let base = Arc::clone(&self.base);
         for graph in base.named_graphs() {
+            checkpoint()?;
             self.withdraw_base_graph(graph);
         }
-        self.declared_graphs.clear();
+        while !self.declared_graphs.is_empty() {
+            checkpoint()?;
+            let _ = self.declared_graphs.pop();
+        }
+        Ok(())
     }
 
     fn withdraw_base_graph(&mut self, graph: TermId) {

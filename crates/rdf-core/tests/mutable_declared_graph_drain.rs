@@ -259,3 +259,114 @@ fn named_graph_capability_reads_do_not_allocate_the_registry() {
         "capability reads allocate neither a registry nor its replay order"
     );
 }
+
+#[test]
+fn bulk_declaration_checkpoints_preserve_unvisited_entries_and_snapshots() {
+    use purrdf_core::DatasetView as _;
+
+    const BASE_GRAPHS: usize = 8;
+    let mut builder = RdfDatasetBuilder::new();
+    let base_names: Vec<_> = (0..BASE_GRAPHS)
+        .map(|index| iri(&format!("slot{index}")))
+        .collect();
+    for name in &base_names {
+        let TermValue::Iri(name) = name else {
+            unreachable!("the fixture declares only IRIs")
+        };
+        let id = builder.intern_iri(name);
+        builder.declare_named_graph(id);
+    }
+    let base = builder.freeze().expect("declared-empty base");
+    assert_eq!(
+        base.named_graphs()
+            .map(|id| base.as_ref().term_value(id))
+            .collect::<Vec<_>>(),
+        base_names,
+        "the fixture's base-entry order is independently known"
+    );
+    for mode in [
+        GraphExistenceMode::Implicit,
+        GraphExistenceMode::RememberEmpty,
+    ] {
+        for fail_at in [3, BASE_GRAPHS + 1, BASE_GRAPHS + 2] {
+            let mut mutable = MutableDataset::new_with_graph_existence(Arc::clone(&base), mode);
+            let delta = [iri("delta-first"), TermValue::blank("delta-last")];
+            for name in &delta {
+                assert_eq!(mutable.declare_named_graph(name.clone()), Ok(true));
+            }
+            let retained = mutable.snapshot_view().expect("retained declarations");
+            assert_eq!(retained.named_graphs().count(), BASE_GRAPHS + delta.len());
+            let mut checkpoints = 0;
+            let result = mutable.try_withdraw_named_graph_declarations(|| {
+                checkpoints += 1;
+                if checkpoints == fail_at {
+                    Err("stop before this entry")
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(result, Err("stop before this entry"));
+            assert_eq!(checkpoints, fail_at);
+            for (index, name) in base_names.iter().enumerate() {
+                assert_eq!(mutable.has_named_graph(name), index >= fail_at - 1);
+            }
+            assert!(mutable.has_named_graph(&delta[0]));
+            assert_eq!(
+                mutable.has_named_graph(&delta[1]),
+                fail_at <= BASE_GRAPHS + 1
+            );
+            assert_eq!(retained.named_graphs().count(), BASE_GRAPHS + delta.len());
+            let mut remaining_checkpoints = 0;
+            mutable
+                .try_withdraw_named_graph_declarations(|| {
+                    remaining_checkpoints += 1;
+                    Ok::<_, std::convert::Infallible>(())
+                })
+                .expect("the clear neighbor finishes every remaining entry");
+            let remaining_delta = delta.len() - usize::from(fail_at == BASE_GRAPHS + 2);
+            assert_eq!(remaining_checkpoints, BASE_GRAPHS + remaining_delta);
+            assert_eq!(
+                mutable.freeze().expect("withdrawn").named_graphs().count(),
+                0
+            );
+            assert_eq!(retained.named_graphs().count(), BASE_GRAPHS + delta.len());
+        }
+    }
+}
+
+#[test]
+fn bulk_declaration_checkpoints_retain_populated_graphs_and_skip_an_empty_registry() {
+    let mut mutable =
+        MutableDataset::new_with_graph_existence(base(), GraphExistenceMode::RememberEmpty);
+    let graph = iri("populated-delta");
+    assert_eq!(mutable.declare_named_graph(graph.clone()), Ok(true));
+    assert!(
+        mutable
+            .insert(rows_in(&graph, 1).remove(0))
+            .expect("one row")
+    );
+    let mut checkpoints = 0;
+    mutable
+        .try_withdraw_named_graph_declarations(|| {
+            checkpoints += 1;
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .expect("clear callback");
+    assert_eq!(checkpoints, 2, "one base graph and one delta declaration");
+    assert!(mutable.has_named_graph(&iri("base-graph")));
+    assert!(mutable.has_named_graph(&graph));
+    assert_eq!(
+        mutable.freeze().expect("live rows").named_graphs().count(),
+        2
+    );
+
+    let empty = RdfDatasetBuilder::new().freeze().expect("empty base");
+    let mut mutable = MutableDataset::new(empty);
+    mutable
+        .try_withdraw_named_graph_declarations(|| {
+            checkpoints += 1;
+            Err("an empty registry must not call the checkpoint")
+        })
+        .expect("no entry to visit");
+    assert_eq!(checkpoints, 2);
+}

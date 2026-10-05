@@ -3,7 +3,7 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 11
+**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 12
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Every value in this document is readable from the library rather than only from
@@ -430,6 +430,12 @@ So the trip arm carries the governor and the evidence and **structurally nothing
 else** — there is no field partial mutations could be read out of, because there are
 none. A tripped request leaves the caller's dataset handle exactly as it found it.
 
+The mutable branch is frozen into a private handle, then the same request state
+polls its stop signal before the sole assignment that publishes that handle.
+Bulk named-graph declaration withdrawal also polls before each base or added
+declaration, so even an empty-only DROP can stop between entries. These checkpoints
+do not price graph metadata as quad mutations; the row fuel schedule is unchanged.
+
 ### 7.4 Entailment regimes are governed in two halves
 
 Phase two — the SPARQL evaluation over the materialized closure — is governed
@@ -518,7 +524,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `11` |
+| `GOVERNOR_PROFILE_VERSION` | `12` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -535,7 +541,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n11\n'
+{ printf 'purrdf-sparql-governors\n12\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -544,7 +550,7 @@ therefore recompute it from this document alone:
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work
 } | sha256sum
-# 135209daa53d2d55380f95f1331a1e34f019dbc4af10d8ab4c82d0c0b349c3e8
+# a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -628,7 +634,7 @@ at the former and a certified positional-prefix `budget-exhausted` at the latter
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc
+GOVERNOR_CORPUS_DIGEST = 0a6f48072b0945d728f3e19d4d23dd60778259d4217277ec16bd3157fdf35554
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -658,7 +664,9 @@ at which a caller's budget trips**:
 * a change to the precedence order of §6;
 * a change to the inclusive-boundary rule of §3.2;
 * a change to how many charged events a given query performs, even when the schedule
-  itself is byte-identical.
+  itself is byte-identical;
+* a change to stop checkpoints, including metadata-only work and final UPDATE
+  publication, even when numeric costs are unchanged.
 
 A change that cannot move a charge — a refactor, a clearer diagnostic — does not
 increment it. That restraint is what makes the number worth pinning.
@@ -675,14 +683,15 @@ increment it. That restraint is what makes the number worth pinning.
 | 8 | `property-function-work` is appended, because v5 priced a host relation by the two quantities the *engine* can see — invocations driven and rows accepted — and for a generator relation neither is where the work is: a nearest-neighbour search examining a million vectors to return five rows charged six units, pricing a million distance computations exactly as it priced a six-row table scan. The count comes from the relation itself through `PfCursor::take_work`, the only party that can see inside its own search, and it is *spent* rather than merely recorded — so over-reporting exhausts the reporter's own caller, and under-reporting (the default, zero) can cost a receipt precision but never costs soundness, because every other ceiling stays in force unchanged. No relation written against v5's seam charges it |
 | 9 | schedule byte-identical; the per-row loops of `FILTER`, `BIND`, `UNFOLD` and every aggregate pass one checkpoint: a trip already latched is observed before the next row, `UNFOLD` admits a row before it ingests it, work is reported to the stop poll exactly once, and a loop forked across threads admits only the rows the remaining fuel covers and commits them in source order, so it trips on the row, spends the fuel and keeps the prefix the sequential loop does. Charge order inside those loops, and where polls fall in forked loops, move |
 | 10 | fuel schedule byte-identical; each scratch arena charges its own retention independently of aggregate buffers/state and child arenas, so an unrelated scratch charge cannot hide later computed values. Concrete identity registration, fresh blank mints and stateful child reservation copies checkpoint scratch growth immediately. Incomplete expression/template/list/SERVICE output is withheld and staged UPDATE publication is aborted on a trip. Scratch consumption and the point at which a scratch ceiling trips can move |
-| **11** | fuel schedule byte-identical; eligible positive operands of ordinary joins receive incoming bindings, replacing independent-relation work with indexed candidate visits and carried rows. OPTIONAL evaluates its positive right operand per driver occurrence, moving node-entry counts and row-charge order; eligible correlated EXISTS/NOT EXISTS uses native restrictions and the first-witness definition path, moving candidate and existence-evidence charges. Carried columns change intermediate-cell widths, and admission forecasts the seeded plan with relation-local join domains. Complete answers keep their scope and bag multiplicity; fuel totals and budget-cut points can move |
+| 11 | fuel schedule byte-identical; eligible positive operands of ordinary joins receive incoming bindings, replacing independent-relation work with indexed candidate visits and carried rows. OPTIONAL evaluates its positive right operand per driver occurrence, moving node-entry counts and row-charge order; eligible correlated EXISTS/NOT EXISTS uses native restrictions and the first-witness definition path, moving candidate and existence-evidence charges. Carried columns change intermediate-cell widths, and admission forecasts the seeded plan with relation-local join domains. Complete answers keep their scope and bag multiplicity; fuel totals and budget-cut points can move |
+| **12** | fuel schedule and query charges byte-identical; governed UPDATE polls before each bulk named-graph declaration withdrawal and after freezing its private branch before publication. Metadata-only work and the final publication boundary can observe a stop earlier, while declarations remain distinct from charged quad mutations |
 
 ### 12.1 What a consumer must re-verify when the version moves
 
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `11` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `12` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
@@ -702,7 +711,10 @@ a thing a pinned number can silently stop meaning:
    build. A profile version without corpus evidence is a claim, not a receipt.
 5. **Re-check any simultaneous-trip handling** if §6 moved: which governor a caller
    sees for a query that breaches two ceilings at once is part of this contract.
-6. **Nothing needs re-verifying for the wall deadline**, because nothing was
+6. **Re-check caller-defined stop checkpoints.** v12 adds declaration-work and
+   post-freeze UPDATE checkpoints; a deterministic signal can stop at a different
+   boundary even though every row fuel cost is unchanged.
+7. **Nothing needs re-verifying for the wall deadline**, because nothing was
    guaranteed about it in the first place (§1). Do not treat a changed deadline trip
    point as a regression.
 
@@ -716,7 +728,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `11` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `12` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

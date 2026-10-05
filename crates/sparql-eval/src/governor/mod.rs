@@ -1664,7 +1664,15 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// widths. Admission also prices the selected seeded execution and relation-local
 /// join domains. Consumers must remeasure fuel and cell ceilings for these query
 /// shapes; a budget sized against v10 does not identify the execution it buys in v11.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 11;
+///
+/// # v12
+///
+/// [`CHARGE_SCHEDULE`] and every query charge remain byte-identical to v11.
+/// Governed UPDATE checks stop before each bulk named-graph declaration withdrawal,
+/// including metadata-only entries, and after freezing its private branch before
+/// publishing it. These additional checkpoints can move an observable stop cut point;
+/// graph declarations are not repriced as quad mutations and row fuel is unchanged.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1674,7 +1682,8 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 11;
 /// it unchanged and moves only the order of charges in a per-row loop; v10 also
 /// leaves it unchanged and corrects scratch ownership and mint checkpoints; v11
 /// leaves it unchanged and moves charged work through binding-driven positive
-/// operands and existence restrictions — see
+/// operands and existence restrictions; v12 leaves it unchanged and checks UPDATE
+/// declaration work and final publication — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
@@ -2031,7 +2040,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc";
+    "0a6f48072b0945d728f3e19d4d23dd60778259d4217277ec16bd3157fdf35554";
 
 #[cfg(test)]
 mod tests {
@@ -2682,15 +2691,15 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 11);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 12);
         assert_eq!(
-            pinned, "135209daa53d2d55380f95f1331a1e34f019dbc4af10d8ab4c82d0c0b349c3e8",
-            "the consumer's v11 receipt identity pins the unchanged charge table"
+            pinned, "a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a",
+            "the consumer's v12 receipt identity pins the unchanged charge table and new stop cut points"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 10, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 11, &CHARGE_SCHEDULE),
             pinned,
-            "binding-driven execution cannot reuse the v10 receipt identity"
+            "UPDATE publication checkpoints cannot reuse the v11 receipt identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(
