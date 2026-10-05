@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_core::term_fixture::iri;
 use purrdf_core::{
     DatasetMut, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, TermValue,
 };
@@ -24,10 +25,6 @@ use purrdf_core::{
 static GLOBAL: CountingAllocator = CountingAllocator;
 
 const EX: &str = "http://example.org/";
-
-fn iri(local: &str) -> TermValue {
-    TermValue::iri(format!("{EX}{local}"))
-}
 
 /// A base with default-graph rows and one populated named graph, so a re-walk
 /// would also pay for rows the drained graph does not own.

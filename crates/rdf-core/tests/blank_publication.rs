@@ -148,9 +148,13 @@ fn mint_namespace(destination: &MutableDataset) -> Option<String> {
     if !occupied("") {
         return None;
     }
-    (0_u64..)
-        .map(|ordinal| format!("append{ordinal}_"))
-        .find(|candidate| !occupied(candidate))
+    for ordinal in 0_u64.. {
+        let candidate = format!("append{ordinal}_");
+        if !occupied(&candidate) {
+            return Some(candidate);
+        }
+    }
+    unreachable!("a finite destination cannot occupy every mint namespace")
 }
 
 /// The label an allocator mints for its first fresh blank (`c1` under the
