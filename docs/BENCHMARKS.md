@@ -481,7 +481,9 @@ properties, the shape that keeps coverage provenance honest: each restriction
 axiom is provenance on its own class's rows only, so the work grows linearly
 with the classes. The dense and
 restricted fixtures differ only in those axioms, so their difference is the
-cost of reading, inheriting, classifying, and projecting them. Inputs are
+cost of reading, inheriting, classifying, and projecting them. The restricted
+and shared-restriction fixtures are built inside their own lanes, untimed, so
+the other lanes and the empty-filter baseline do not pay for them. Inputs are
 generated deterministically without RNG, time, or filesystem data.
 
 The suite is report-only and carries no latency threshold. Run its compile and

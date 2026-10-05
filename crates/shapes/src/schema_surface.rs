@@ -46,7 +46,8 @@ use crate::term::{NamedNode, Term};
 use purrdf_iri::vocab::owl::{
     ALL_DISJOINT_CLASSES as OWL_ALL_DISJOINT_CLASSES, DISJOINT_UNION_OF as OWL_DISJOINT_UNION_OF,
     DISJOINT_WITH as OWL_DISJOINT_WITH, HAS_KEY as OWL_HAS_KEY, MEMBERS as OWL_MEMBERS,
-    NOTHING as OWL_NOTHING, SYMMETRIC_PROPERTY as OWL_SYMMETRIC_PROPERTY, THING as OWL_THING,
+    NOTHING as OWL_NOTHING, NS as OWL_NS, SYMMETRIC_PROPERTY as OWL_SYMMETRIC_PROPERTY,
+    THING as OWL_THING,
 };
 use purrdf_iri::vocab::owl::{
     ALL_VALUES_FROM as OWL_ALL_VALUES_FROM, ANNOTATION_PROPERTY as OWL_ANNOTATION_PROPERTY,
@@ -2281,7 +2282,10 @@ pub(crate) fn build(
     for facts in properties.values() {
         for domain in &facts.domains {
             domain.expression.named_members(&mut explicit_classes);
-            class_names(&domain.expression, &mut explicit_classes);
+            // A named skeleton's names are its members, inserted just above.
+            if !domain.expression.is_named_skeleton() {
+                class_names(&domain.expression, &mut explicit_classes);
+            }
         }
         let kind = facts.kind("range class discovery")?;
         if matches!(
@@ -2500,23 +2504,26 @@ fn existential_domain_edges(
 
 /// The predicates that make an IRI subject a class constructor.
 fn is_construct_predicate(predicate: &str) -> bool {
-    [
-        OWL_UNION_OF,
-        OWL_INTERSECTION_OF,
-        OWL_COMPLEMENT_OF,
-        OWL_ONE_OF,
-        OWL_ON_PROPERTY,
-        OWL_ON_PROPERTIES,
-        OWL_ON_CLASS,
-        OWL_ON_DATA_RANGE,
-        OWL_ON_DATATYPE,
-        OWL_WITH_RESTRICTIONS,
-        OWL_DATATYPE_COMPLEMENT_OF,
-    ]
-    .contains(&predicate)
-        || RESTRICTION_FACETS
-            .iter()
-            .any(|(facet, _)| *facet == predicate)
+    // Every constructor predicate is in the OWL namespace: one prefix test
+    // settles the rows of an ontology without constructors.
+    predicate.starts_with(OWL_NS)
+        && ([
+            OWL_UNION_OF,
+            OWL_INTERSECTION_OF,
+            OWL_COMPLEMENT_OF,
+            OWL_ONE_OF,
+            OWL_ON_PROPERTY,
+            OWL_ON_PROPERTIES,
+            OWL_ON_CLASS,
+            OWL_ON_DATA_RANGE,
+            OWL_ON_DATATYPE,
+            OWL_WITH_RESTRICTIONS,
+            OWL_DATATYPE_COMPLEMENT_OF,
+        ]
+        .contains(&predicate)
+            || RESTRICTION_FACETS
+                .iter()
+                .any(|(facet, _)| *facet == predicate))
 }
 
 /// The rendering of an axiom side in a malformed axiom's provenance: a named
@@ -3489,10 +3496,14 @@ fn assemble_surface(
     let infos = conjunct_infos(class_axioms);
     let class_facts = class_expression_facts(class_axioms, &eligible_classes, supertypes, &infos)?;
     let mut property_templates: BTreeMap<String, SurfaceProperty> = BTreeMap::new();
+    let needs_templates = !class_facts.is_empty();
     let no_anonymous = AnonymousSupers::default();
     let mut statuses: BTreeMap<(String, String), SchemaCoverageStatus> = BTreeMap::new();
 
     for (property_iri, facts) in properties {
+        let mut template_taken = false;
+        // Decided once per property rather than once per class.
+        let caller_owned = request.namespaces().is_caller_owned(&property_iri);
         let kind = facts.kind(&property_iri)?;
         let mut datatype_iris = BTreeSet::new();
         for range in &facts.ranges {
@@ -3535,7 +3546,12 @@ fn assemble_surface(
 
         for class_iri in &eligible_classes {
             let shape_info = shape_classes.get(class_iri);
-            let class_expressions = class_facts.get(class_iri.as_str());
+            // An ontology without anonymous class expressions skips the lookup.
+            let class_expressions = if class_facts.is_empty() {
+                None
+            } else {
+                class_facts.get(class_iri.as_str())
+            };
             let has_shape = shape_info
                 .is_some_and(|info| info.direct_properties.contains(property_iri.as_str()));
             // A class that a restriction on the property is asserted of carries
@@ -3544,22 +3560,21 @@ fn assemble_surface(
             // a value of is in it by OWL.
             let restricted = class_expressions
                 .is_some_and(|expressions| expressions.admitted.contains(property_iri.as_str()));
-            // The restriction axioms this class carries or inherits on the
-            // property, and no others: provenance stays linear in the cells.
             // The restriction axioms of the nearest classes that own
             // restrictions on the property (this class, where it owns some):
             // each class's row names what it owns or the nearest owner it
             // references, so provenance grows with the restrictions, not with
             // the depth.
-            let owners: Vec<&str> = class_expressions
+            let owners: &[&str] = class_expressions
                 .and_then(|expressions| expressions.restriction_owners.get(property_iri.as_str()))
-                .cloned()
-                .unwrap_or_default();
-            let provenance = if owners.is_empty() {
-                base_provenance.clone()
-            } else {
+                .map_or(&[], Vec::as_slice);
+            // A class referencing restriction owners adds their axioms; any
+            // other cell's provenance is the property's own, copied where each
+            // copy is stored (the property entry's, then the row's), so an
+            // ontology without restrictions allocates as before.
+            let owned_provenance = (!owners.is_empty()).then(|| {
                 let mut provenance = base_provenance.clone();
-                for owner in &owners {
+                for &owner in owners {
                     if let Some(owned) = class_facts
                         .get(owner)
                         .and_then(|facts| facts.owned_restrictions.get(property_iri.as_str()))
@@ -3574,7 +3589,7 @@ fn assemble_surface(
                 provenance.sort();
                 provenance.dedup();
                 provenance
-            };
+            });
 
             let (status, precision) = if has_shape {
                 (
@@ -3586,7 +3601,7 @@ fn assemble_surface(
                     SchemaCoverageStatus::ExcludedShapedOnly,
                     SchemaCoveragePrecision::Exact,
                 )
-            } else if !request.namespaces().is_caller_owned(&property_iri) {
+            } else if !caller_owned {
                 (
                     SchemaCoverageStatus::ExcludedNamespace,
                     SchemaCoveragePrecision::Exact,
@@ -3649,12 +3664,18 @@ fn assemble_surface(
                             .collect(),
                         datatype_iris: datatype_iris.clone(),
                         functional: !facts.functional.is_empty(),
-                        provenance: provenance.clone(),
+                        provenance: owned_provenance
+                            .as_ref()
+                            .unwrap_or(&base_provenance)
+                            .clone(),
                         restrictions,
                         restriction_owners: owners.iter().map(|&owner| owner.to_owned()).collect(),
                     },
                 );
-                if !property_templates.contains_key(&property_iri) {
+                // Fragments need a template only where some class owns
+                // restrictions; an ontology without them pays nothing here.
+                if needs_templates && !template_taken {
+                    template_taken = true;
                     let mut template = class.properties[&property_iri].clone();
                     template.restrictions.clear();
                     template.restriction_owners.clear();
@@ -3675,7 +3696,7 @@ fn assemble_surface(
                     .is_some_and(|class| class.synthesized_open),
                 status,
                 precision,
-                provenance,
+                provenance: owned_provenance.unwrap_or_else(|| base_provenance.clone()),
             });
         }
 
@@ -3698,7 +3719,7 @@ fn assemble_surface(
             }
         }
         if outcomes.is_empty() {
-            outcomes.insert(if !request.namespaces().is_caller_owned(&property_iri) {
+            outcomes.insert(if !caller_owned {
                 SchemaCoverageStatus::ExcludedNamespace
             } else if request.mode() == SchemaSurfaceMode::ShapedOnly {
                 SchemaCoverageStatus::ExcludedShapedOnly
@@ -5313,7 +5334,7 @@ mod tests {
             assert_eq!(
                 surface.classes[&class_iri].properties["https://example.org/schema/name"]
                     .restrictions,
-                vec![Restriction::SomeValues(OntologyExpression::Named(
+                [Restriction::SomeValues(OntologyExpression::Named(
                     "http://www.w3.org/2001/XMLSchema#string".to_owned()
                 ))]
             );
