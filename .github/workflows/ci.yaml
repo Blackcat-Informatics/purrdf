@@ -775,11 +775,10 @@ jobs:
       - name: Check complete matrix and document parity
         run: make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-reports"
 
-  # The third ISA the distance arithmetic's bit-identity claim is EXECUTED on. The
-  # exact law pins one summation order in source, so its results must be the same
-  # bits on x86_64, wasm32 and aarch64; the asm gate above can only show NEON code
-  # exists, and this job runs it. The pinned goldens these tests compare against are
-  # the ones x86_64 and wasm32 already hold, so a divergent aarch64 fold fails here.
+  # Native aarch64 distance arithmetic is checked against the same literal
+  # goldens as native x86_64. The exact law pins one summation order; this job
+  # executes the NEON path rather than only checking that its assembly exists.
+  # Focused WASM checks select dispatch and SIMD kernels separately.
   # The reassociated arithmetic runs its NEON path too, against its error bound, and
   # the CSV field scanner runs its NEON kernel against its portable one.
   aarch64:
