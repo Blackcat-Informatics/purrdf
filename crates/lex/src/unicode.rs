@@ -365,7 +365,17 @@ impl<const COMPAT: bool, N: Stage> Decompose<COMPAT, N> {
         self.next
     }
 
-    #[inline]
+    // The boundary where a decomposition stage hands its output on. Natively
+    // it is inlined like every other stage. On wasm it is kept out of line: a
+    // decomposition reaches `emit` from several call sites per input
+    // character, so inlining every stage multiplies the next stage's code at
+    // each level, and a composed pipeline such as the text analyzer's becomes
+    // one function of over a hundred thousand instructions. WebAssembly's
+    // register stackification is superlinear in function size, and that one
+    // function took half an hour to compile. One call per decomposed
+    // character keeps each level its own function.
+    #[cfg_attr(not(target_arch = "wasm32"), inline)]
+    #[cfg_attr(target_arch = "wasm32", inline(never))]
     fn emit(&mut self, c: char) {
         let class = ccc(c);
         if class == 0 {
