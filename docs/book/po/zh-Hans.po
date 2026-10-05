@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-04T23:55:03-06:00\n"
+"POT-Creation-Date: 2026-10-05T02:05:30-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -544,25 +544,25 @@ msgstr ""
 msgid ""
 "All three are pure functions of their input on every target — fixed point, "
 "exact rationals, or a pinned binary64 order, with canonical tie-breaks — and "
-"the claim is executed rather than argued: the text and kNN determinism tests "
-"run the same body natively and on `wasm32-unknown-unknown`, and `make geo-"
-"determinism` compares the two targets byte for byte. They are Rust-host "
-"seams: a host registers an index or space under its own IRIs, and that host "
-"may itself be compiled to wasm32. The shipped npm package and Python wheel "
-"do not yet expose these three relations."
+"native Rust tests pin their numeric and serialized expectations. `make wasm` "
+"builds all three crates for `wasm32-unknown-unknown`; focused WASM tests "
+"exercise actual dispatch, SIMD kernels and host interfaces. They are Rust-"
+"host seams: a host registers an index or space under its own IRIs, and that "
+"host may itself be compiled to wasm32. The shipped npm package and Python "
+"wheel do not yet expose these three relations."
 msgstr ""
 "三者在每个目标上都是其输入的纯函数——定点数、精确有理数，或固定顺序的 "
-"binary64，外加规范的并列判定——而这一声称是被执行而非被论证的：文本与 k 近邻"
-"（kNN）的确定性测试在原生与 `wasm32-unknown-unknown` 上运行同一份测试体，"
-"`make geo-determinism` 则逐字节比较两个目标。它们是 Rust 宿主上的扩展点：宿主"
-"在自己的 IRI 之下注册一个索引或一个空间，而该宿主本身也可以编译到 wasm32。已"
-"发布的 npm 包与 Python wheel 尚未公开这三种关系。"
+"binary64，外加规范的并列判定。原生 Rust 测试固定其数值与序列化的预期结果。"
+"`make wasm` 为 `wasm32-unknown-unknown` 构建三个 crate；WASM 测试只运行实际分"
+"派、SIMD 内核与宿主接口。它们是 Rust 宿主上的扩展点：宿主在自己的 IRI 之下注"
+"册一个索引或一个空间，而该宿主本身也可以编译到 wasm32。已发布的 npm 包与 "
+"Python wheel 尚未公开这三种关系。"
 
-#: src/introduction.md:127
+#: src/introduction.md:126
 msgid "Two design rules worth knowing on day one"
 msgstr "第一天就值得知道的两条设计规则"
 
-#: src/introduction.md:129
+#: src/introduction.md:128
 msgid ""
 "**No feature flags — ever.** There are deliberately no Cargo feature flags "
 "anywhere in the workspace, and CI enforces this. A data carrier must not "
@@ -573,7 +573,7 @@ msgstr ""
 "CI 强制执行这一点。数据载体不得有可选行为：可选性会让语义因使用方而异，因此每"
 "个使用方得到的是同样的、逐字节相同的语义。"
 
-#: src/introduction.md:134
+#: src/introduction.md:133
 msgid ""
 "**PurRDF is a toolkit, not an ontology — it mints no vocabulary IRIs.** "
 "Every vocabulary the library reads or writes is caller-supplied "
@@ -586,17 +586,17 @@ msgstr ""
 "功能，要么硬错误，要么保持未激活；它绝不会替调用方发明一个 IRI。（测试夹具使"
 "用 `example.org`。）"
 
-#: src/introduction.md:140
+#: src/introduction.md:139
 msgid ""
 "The full invariant list is in [Design Rules & Invariants](project/design-"
 "rules.md)."
 msgstr "完整的不变量清单见[设计规则与不变量](project/design-rules.md)。"
 
-#: src/introduction.md:143
+#: src/introduction.md:142
 msgid "What the version number commits to"
 msgstr "版本号所承诺的内容"
 
-#: src/introduction.md:145
+#: src/introduction.md:144
 msgid ""
 "From 1.0.0 the suite follows semantic versioning in full: a breaking change "
 "bumps the major version, a minor bump is additive, a patch bump is bugfix-"
@@ -611,11 +611,11 @@ msgstr ""
 "本，每当导出签名变更时递增，且并未冻结。参见[版本与发布](project/"
 "releases.md)。"
 
-#: src/introduction.md:152
+#: src/introduction.md:151
 msgid "Why RDF 1.2?"
 msgstr "为什么是 RDF 1.2？"
 
-#: src/introduction.md:154
+#: src/introduction.md:153
 msgid ""
 "RDF 1.2 (and SPARQL 1.2) add first-class statement-level metadata to the "
 "data model: **triple terms** that can appear in object position, "
@@ -631,11 +631,11 @@ msgstr ""
 "扩展：它们贯穿 IR、编解码器、SPARQL、SHACL 1.2（具体化节点形状与三元组项节点"
 "类型）、RDF/JS 接口以及 GTS 传输。参见 [RDF 1.2 特性](concepts/rdf12.md)。"
 
-#: src/introduction.md:163
+#: src/introduction.md:162
 msgid "Where PurRDF sits"
 msgstr "PurRDF 的位置"
 
-#: src/introduction.md:165
+#: src/introduction.md:164
 msgid ""
 "PurRDF is the library layer of a small family of linked-data projects: it is "
 "the data backbone of the [GMEOW](https://github.com/Blackcat-Informatics/"
@@ -646,11 +646,11 @@ msgstr ""
 "Informatics/gmeow-ontology) 技术栈的数据骨干，也是 Rust 版 [GTS](gts.md) 引擎"
 "的参考实现所在——但它对调用方的本体或应用不作任何假设。"
 
-#: src/introduction.md:171
+#: src/introduction.md:170
 msgid "How to read this book"
 msgstr "如何阅读本书"
 
-#: src/introduction.md:173
+#: src/introduction.md:172
 msgid ""
 "New users: start with [Getting Started](getting-started/rust.md) in your "
 "language, then read the [Concepts](concepts/interned-dataset.md) chapters."
@@ -658,7 +658,7 @@ msgstr ""
 "新用户：从所用语言的[入门](getting-started/rust.md)开始，然后阅读[概念]"
 "(concepts/interned-dataset.md)各章。"
 
-#: src/introduction.md:175
+#: src/introduction.md:174
 msgid ""
 "Engine users: jump to [SPARQL](sparql/querying.md), [Validation](validation/"
 "shacl.md), or [Entailment](entailment.md)."
@@ -666,13 +666,13 @@ msgstr ""
 "引擎用户：直接跳到 [SPARQL](sparql/querying.md)、[验证](validation/shacl.md)"
 "或[蕴涵](entailment.md)。"
 
-#: src/introduction.md:177
+#: src/introduction.md:176
 msgid ""
 "Integrators: see [Interop](interop/rdflib.md) and [GTS Graph Transport]"
 "(gts.md)."
 msgstr "集成者：参见[互操作](interop/rdflib.md)与 [GTS 图传输](gts.md)。"
 
-#: src/introduction.md:179
+#: src/introduction.md:178
 msgid ""
 "Contributors: read the [Project](project/design-rules.md) chapters, then "
 "[AGENTS.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -681,7 +681,7 @@ msgstr ""
 "贡献者：阅读[项目](project/design-rules.md)各章，然后阅读仓库中的 [AGENTS.md]"
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/AGENTS.md)。"
 
-#: src/introduction.md:183
+#: src/introduction.md:182
 msgid ""
 "API reference documentation lives on [docs.rs/purrdf](https://docs.rs/"
 "purrdf); the repository is [github.com/Blackcat-Informatics/purrdf](https://"
@@ -11000,18 +11000,18 @@ msgid ""
 "engine. The logarithm here is a fixed-length integer series with a fixed "
 "iteration count, never a convergence test, so its result is a pure function "
 "of its input on every target. The ranking — row order together with every "
-"score's decimal lexical — is pinned by a single test body per case on one "
-"shared test runner, so `make wasm-test` executes it on wasm32 against the "
-"same expectations `cargo test` asserts natively."
+"score's decimal lexical — is pinned against independent expectations by "
+"native Rust tests. `make wasm` separately builds the crate for WASM; focused "
+"WASM execution covers actual target paths and host interfaces."
 msgstr ""
 "这是一项正确性要求，而不是偏好。BM25 需要自然对数，而 libm 的 `ln` 在不同实现"
 "之间可能相差一个最后位单位（ulp）——这足以颠倒两个分数几乎相同的文档的顺序，从"
 "而使同一数据上的同一查询，在原生构建中按一种顺序返回行，而在同一引擎的 "
 "`wasm32-unknown-unknown` 构建中按另一种顺序返回。这里的对数是一个固定长度、固"
 "定迭代次数的整数级数，从不使用收敛测试，因此其结果在每个目标上都是其输入的纯"
-"函数。排名——行顺序连同每个分数的十进制词法形式——由同时带有 `#[test]` 与 "
-"`#[wasm_bindgen_test]` 的同一个测试体固定，因此 `make wasm-test` 会在 wasm32 "
-"上按 `cargo test` 在原生环境中断言的同一组预期执行它。"
+"函数。排名——行顺序连同每个分数的十进制词法形式——由原生 Rust 测试按独立预期结"
+"果固定。`make wasm` 单独为 WASM 构建 crate；WASM 执行只覆盖实际目标路径与宿主"
+"接口。"
 
 #: src/sparql/full-text.md:140
 msgid ""
@@ -11399,11 +11399,11 @@ msgstr ""
 
 #: src/sparql/geosparql.md:174
 msgid ""
-"The cross-target claim is executed, not argued: `make geo-determinism` runs "
-"the same corpus natively and on wasm32 and compares bytes."
+"Native Rust pins the complete geometry corpus against committed digest "
+"bytes. `make wasm` separately builds the crate for the WASM target."
 msgstr ""
-"跨目标的声明是被执行验证的，而不是靠论证：`make geo-determinism` 在原生与 "
-"wasm32 上运行同一份语料并比较字节。"
+"原生 Rust 测试按已提交的摘要字节固定完整几何语料。`make wasm` 单独为 WASM 目"
+"标构建 crate。"
 
 #: src/sparql/geosparql.md:177
 msgid "What is here, and what is not"
@@ -23618,6 +23618,13 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid ""
+#~ "The cross-target claim is executed, not argued: `make geo-determinism` "
+#~ "runs the same corpus natively and on wasm32 and compares bytes."
+#~ msgstr ""
+#~ "跨目标的声明是被执行验证的，而不是靠论证：`make geo-determinism` 在原生与 "
+#~ "wasm32 上运行同一份语料并比较字节。"
 
 #~ msgid ""
 #~ "After its initial record bootstrap, every version of every crate in the "

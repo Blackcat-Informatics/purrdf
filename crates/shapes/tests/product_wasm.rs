@@ -1,37 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! **The whole prepared-product lifecycle, EXECUTED on
-//! `wasm32-unknown-unknown`, against the same bytes the host writes.**
-//!
-//! `make wasm` proves the crate builds for wasm32. It cannot prove the codec
-//! *answers* the same way there, and for a cache format that is the claim that
-//! matters: a product is prepared by a build tool on a host and restored months
-//! later by a browser. If those two disagree by one byte, the browser's `open`
-//! refuses a product that is perfectly valid, or — far worse — the browser writes
-//! products the host cannot read, and the divergence surfaces as a cache that
-//! mysteriously never hits.
-//!
-//! Two runs on one target cannot tell a codec that is target-independent from one
-//! that merely agrees with whichever target it was last compiled for. So this file
-//! asserts against a byte string that was produced *elsewhere*: the golden
-//! committed under `tests/fixtures/`, written by a native build.
-//!
-//! # How it runs on both
-//!
-//! One test body per case, one runner on both targets. The target is
-//! `harness = false`, and its `main` hands the named cases to
-//! `purrdf_testkit::harness`: natively they run under `cargo test -p purrdf-shapes`,
-//! and on `wasm32-unknown-unknown` the same named cases run in Node through
-//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` sets:
-//!
-//! ```text
-//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
-//!     cargo test -p purrdf-shapes --target wasm32-unknown-unknown --test product_wasm
-//! ```
-//!
-//! Both runs assert the *same* expectations, so the native run is not a weaker
-//! version of the wasm one — it is the other half of the comparison.
+//! Native prepared-product lifecycle against committed encoding and restoration
+//! bytes. The complete target runs under `cargo test -p purrdf-shapes`.
+//! General codec and SHACL semantics remain native Rust; `make wasm` separately
+//! builds the release crate for the WASM target.
 //!
 //! # The W3C SHACL 1.2 subset
 //!

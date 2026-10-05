@@ -1738,10 +1738,9 @@ async fn equality_fusion(profile: &FusionProfile) -> FusionResult<Term> {
 /// name says so. A plan encodes to the same bytes twice, a decode reproduces
 /// them, and two independent runs of one fusion law render identically.
 ///
-/// The cross-target claim — that a `wasm32` execution agrees with this one — is
-/// a different claim that this test cannot make, because it never leaves this
-/// target. It is made where it can be executed, in `wasm_determinism`, which
-/// runs the same law on `wasm32-unknown-unknown` against pinned expectations.
+/// Independent expected bytes and scores are pinned by the native
+/// `wasm_determinism` target. General encoding and arithmetic tests stay native;
+/// release-crate WASM compilation is checked separately.
 #[test]
 fn encoding_and_fusion_are_deterministic_in_one_process() {
     let registry = single_registry(&ex("stratum/eq"), &ex("pf/eq"), 12, 3);

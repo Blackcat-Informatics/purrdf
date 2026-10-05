@@ -44,7 +44,7 @@ doc = false
 
 # The bench harness's own suite: statistics against hand-computed values, the
 # command line, the estimates file round trip and whole runs in-process. It is
-# on the harness = false runner so `make wasm-test` runs it on wasm32 too.
+# on the shared runner; WASM selects only host-clock and storage-refusal cases.
 [[test]]
 name = "bench"
 harness = false

@@ -3,9 +3,8 @@
 
 //! Frozen first-party corpus and adversarial checks through production RDF codecs.
 //!
-//! `harness = false` on `purrdf_testkit::harness`, so the same named cases run
-//! natively under `cargo test` and on `wasm32-unknown-unknown` in Node through
-//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` sets.
+//! The complete corpus runs natively under `cargo test` on the shared harness.
+//! Release-crate WASM compilation is checked separately by `make wasm`.
 
 use std::sync::Arc;
 

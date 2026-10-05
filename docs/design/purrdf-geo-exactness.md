@@ -93,16 +93,11 @@ DE-9IM matrices, the exact decimal measures, the constructors, and the IEEE bit
 patterns at the float boundary. It folds the resulting **bytes** into one FNV-1a
 `u64`.
 
-* `crates/geo/tests/determinism.rs` pins that number, in `GOLDEN_DIGEST`. It is
-  `harness = false` on the shared test runner, so the same named cases run
-  natively and on `wasm32-unknown-unknown`, each printing the digest it computed.
-* `scripts/check-geo-determinism.sh` runs that target natively and on
-  `wasm32-unknown-unknown` — in Node, through `scripts/wasm-test-runner.sh`, the
-  cargo runner every wasm32 test uses — reads `GOLDEN_DIGEST` out of the test
-  file rather than restating it, and fails unless every named case reports the
-  same digest on both targets and it is the golden.
-* `make geo-determinism` runs it; CI runs it in the `wasm` job, where the target
-  and Node are already present.
+`crates/geo/tests/determinism.rs` pins that number in `GOLDEN_DIGEST` and
+runs the complete corpus natively under `make check`. The conformance matrix
+reads the same constant from the test source and compares it with the native
+example's digest. `make wasm` separately builds the release crate; general
+geometry and numeric expectations stay in native Rust.
 
 Two design points in that harness are load-bearing:
 
@@ -112,24 +107,17 @@ and double renderings at once, and it is the artefact a downstream cache, diff o
 signature would key on. A digest over internal values would pass while the
 renderer diverged.
 
-**Every host clock and entropy source throws while the digest runs.**
-`purrdf-geo` depends on `purrdf-sparql-eval`, which uses target-gated
-`wasm-bindgen` imports on wasm32 to give SPARQL's `NOW()` and `RAND()` a browser clock
-and browser entropy. The digest touches neither. Leaving those sources live
-would let a future change quietly consult a clock and still produce a digest — a
-digest that agreed on two targets while one had read a clock is precisely the
-false green the harness exists to prevent. So the test computes the digest
-inside `purrdf_testkit::harness::without_host_clock_or_entropy`, and on wasm32
-the runner replaces `Date.now`, `new Date()`, `performance.now`, `Math.random`,
-`crypto.getRandomValues` and `crypto.randomUUID` with functions that throw for
-that duration, turning a clock or entropy read into a failure with the source's
-name in it.
+**Repeated native runs hold the serialized digest fixed.** The test checks the
+committed golden and repeats the corpus 64 times to detect a moving result.
+`report_digest` invokes `purrdf_testkit::harness::without_host_clock_or_entropy`,
+which runs the computation directly on native targets. Its WASM host-source seal
+is a runner capability; the current geometry lane does not execute it.
 
 ### 2.1 What the guarantee does not cover
 
-It covers the two targets it runs on. A 32-bit native target is not exercised;
-nothing in the crate depends on pointer width, but that is an argument again, not
-evidence, and it is recorded here as such rather than claimed.
+The digest establishes the pinned output on the native target executing it.
+`make wasm` checks release-crate compilation and does not run this digest.
+Neither that build nor the native digest proves cross-target byte agreement.
 
 ---
 
