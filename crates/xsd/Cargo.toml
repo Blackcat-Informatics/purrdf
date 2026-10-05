@@ -44,6 +44,17 @@ purrdf-lex = { workspace = true }
 # from the packaged manifest.
 purrdf-testkit = { workspace = true }
 
+# The arbitrary-precision tower's answers, run natively under `cargo test` and on
+# wasm32-unknown-unknown in Node through scripts/wasm-test-runner.sh (`make
+# wasm-test`), the same named cases on purrdf_testkit's runner.
+[[test]]
+name = "exact_wasm_determinism"
+harness = false
+
 [[bench]]
 name = "lexical"
+harness = false
+
+[[bench]]
+name = "exact"
 harness = false

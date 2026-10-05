@@ -730,6 +730,11 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# bench binaries under `--test`, so every routine of the hash benches runs
 	@# once on wasm32 through the same runner and host clock.
 	@#
+	@# purrdf-xsd's arbitrary-precision tower replays its hand values and a
+	@# seeded transcript of every exact operation there, against the digest the
+	@# native run reproduces: wasm32 lowers the i128 fast path, the limb carry
+	@# lanes and the u128 float-rounding step through narrower operations.
+	@#
 	@# purrdf-stack's `on_stack` runs there on its inline path: a computation under
 	@# a fresh floor that many bytes below the caller, and the typed refusal of a
 	@# request larger than the stack left, beside a neighbour that fits.
@@ -797,6 +802,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-text --test wasm_determinism \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-xsd --test exact_wasm_determinism \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-retrieval --test wasm_determinism \

@@ -48,8 +48,8 @@ other compares two different questions.
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 93 `[[bench]]`
-targets in total; this section and the inventory table below document 23 of
+They live under `crates/*/benches/`. The workspace registers 105 `[[bench]]`
+targets in total; this section and the inventory table below document 24 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -128,6 +128,12 @@ simply not narrated here:
 - `crates/lex/benches/scan.rs` — the chunked byte-class scanners over a long
   clean run and a token-sized one, and the JSON string escaper in each of its
   four spellings over clean and stop-dense text.
+- `crates/xsd/benches/exact.rs` — the arbitrary-precision numeric tower: its
+  inline small-value path beside the bounded `i128` arithmetic it will replace,
+  its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
+  crossover. Each routine runs its body once under `--test`, so
+  `perf stat -e instructions:u` of `--test --exact <id>`, less the same run
+  selecting nothing, is a load-independent instruction count.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
@@ -197,7 +203,7 @@ estimates are printed, not written.
 
 ### Native benchmark inventory
 
-This table documents 23 of the 93 `[[bench]]` targets registered across the
+This table documents 24 of the 105 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -233,6 +239,7 @@ here.
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
+| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and through the bounded `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); schoolbook against Karatsuba products from 16 to 2,048 limbs (`xsd_exact_karatsuba`). |
 
 ### PURREMB companion format
 

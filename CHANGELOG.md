@@ -10,6 +10,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **Arbitrary-precision numeric tower (`purrdf_xsd::exact`):** exact
+  `xsd:integer`, `xsd:decimal` and `owl:rational` values of any size, beside
+  the bounded types, which are unchanged. `exact::Integer` keeps values that
+  fit `i128` inline and computes on them with checked machine arithmetic.
+  `exact::Decimal` has a big-integer coefficient and an unbounded scale.
+  `exact::Rational` is reduced and closed under `+ − × ÷`. All three parse
+  (`FromStr`) lexical forms of any length and render the XSD 1.1 canonical
+  form, matching the bounded types byte for byte where both hold the value.
+  `+ − ×` are exact. Decimal division follows a caller-chosen `DivisionPolicy`: a scale
+  and one of nine `Rounding` directions, or the exact expansion, refusing a
+  non-terminating quotient. The default is eighteen digits truncated, the
+  bounded quotient. Conversions to `f64`/`f32` round once, to nearest with
+  ties to even, subnormals included, using integer arithmetic only.
+  Conversions from them are exact. Narrowing to `i128`, `i64`, the bounded
+  `Decimal` or the bounded `Rational` returns the value or an `ExactError`
+  carrying its XPath F&O error code (`FOCA0003`, `FOCA0001`, `FOAR0002`); it
+  never wraps or rounds. Division by zero is `FOAR0001`, and `NaN` or an
+  infinity is `FOCA0002`. Each operation has a cost method (`add_cost`,
+  `mul_cost`, `div_cost`, `pow_cost`, …) that returns an `exact::Cost` from
+  the operand sizes in constant time, so a governor can refuse an operation
+  before it allocates. The module documentation describes how the tower
+  becomes the default value representation.
+- **`BigInt` arithmetic:** `purrdf_xsd::bigint::BigInt` gains truncating
+  division with a quotient (`div_rem`, `div_rem_pow10`), `pow`, `gcd`, `abs`,
+  `signum`, `pow10`, `decimal_digits`, `trailing_decimal_zeros`, `limb_len`,
+  `to_i64`, a Karatsuba product (`mul_fast`, above `KARATSUBA_THRESHOLD`
+  limbs), `Display`, and `+ − ×` and negation as operators.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of

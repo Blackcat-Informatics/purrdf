@@ -35,8 +35,12 @@
 //!   ([`crate::json_number::JsonNumber`]), and JSON Schema's `multipleOf` over them
 //!   ([`BigInt::from_digits`], [`BigInt::mul`], [`BigInt::rem`]).
 //!
-//! It is still not a general-purpose bignum: there is no quotient of two
-//! `BigInt`s, only the remainder divisibility needs.
+//! And it is the engine of the arbitrary-precision numeric tower in
+//! [`crate::exact`]: the general arithmetic — subtraction, truncating division
+//! with a quotient ([`BigInt::div_rem`]), powers, the greatest common divisor,
+//! Karatsuba products and the operator traits — lives in this module's `arith`
+//! submodule, with the cost of each operation stated as a function of its
+//! operands' limb counts.
 //!
 //! # Representation
 //!
@@ -52,6 +56,10 @@
 
 use std::cmp::Ordering;
 use std::fmt::Write as _;
+
+mod arith;
+
+pub use arith::KARATSUBA_THRESHOLD;
 
 /// Each limb holds a base-`1e9` digit group.
 const LIMB_BASE: u64 = 1_000_000_000;
@@ -726,52 +734,10 @@ fn magnitude_mul(a: &[u32], b: &[u32]) -> Vec<u32> {
     out
 }
 
-/// `a mod b` over base-`1e9` magnitudes, `b` canonical and non-empty.
-///
-/// A one-limb divisor is the machine-word division [`magnitude_div_rem_u64`]
-/// already does. Otherwise schoolbook long division, one base-`1e9` quotient
-/// digit per dividend limb, most significant first: the running remainder `r`
-/// stays below `b`, and each digit `q = ⌊(r·1e9 + limb) / b⌋` is estimated from
-/// the top three limbs of the partial dividend over the top two of `b`. With the
-/// top two divisor limbs at least `1e9` the estimate is never low and at most
-/// two high, so at most two corrections follow.
+/// `a mod b` over base-`1e9` magnitudes, `b` canonical and non-empty: the
+/// remainder half of the long division in `arith`.
 fn magnitude_rem(a: &[u32], b: &[u32]) -> Vec<u32> {
-    if magnitude_cmp(a, b) == Ordering::Less {
-        return a.to_vec();
-    }
-    if let [single] = b {
-        let (_, remainder) = magnitude_div_rem_u64(a, u64::from(*single));
-        return magnitude_limbs(u128::from(remainder));
-    }
-    let top = u128::from(b[b.len() - 1]) * u128::from(LIMB_BASE) + u128::from(b[b.len() - 2]);
-    let mut remainder: Vec<u32> = Vec::with_capacity(b.len() + 1);
-    for &limb in a.iter().rev() {
-        // remainder = remainder × 1e9 + limb.
-        remainder.insert(0, limb);
-        while remainder.last() == Some(&0) {
-            remainder.pop();
-        }
-        if magnitude_cmp(&remainder, b) == Ordering::Less {
-            continue;
-        }
-        // The partial dividend has `b.len()` or `b.len() + 1` limbs; its top
-        // three (zero-extended) over `b`'s top two estimate the digit.
-        let limb_at = |index: usize| u128::from(remainder.get(index).copied().unwrap_or(0));
-        let n = b.len();
-        let head = (limb_at(n) * u128::from(LIMB_BASE) + limb_at(n - 1)) * u128::from(LIMB_BASE)
-            + limb_at(n - 2);
-        let mut digit = (head / top).min(u128::from(LIMB_BASE - 1));
-        loop {
-            // `digit < 1e9 < 2^32`.
-            let product = mul_by_small(b, digit as u64);
-            if magnitude_cmp(&product, &remainder) != Ordering::Greater {
-                remainder = magnitude_sub(&remainder, &product);
-                break;
-            }
-            digit -= 1;
-        }
-    }
-    remainder
+    arith::magnitude_div_rem(a, b).1
 }
 
 /// `a ÷ divisor` over a base-`1e9` magnitude, `divisor > 0` (the caller checks).

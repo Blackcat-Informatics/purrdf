@@ -89,6 +89,18 @@
 //! see its module docs for why a running total can need one when no individual
 //! value ever does.
 //!
+//! # The arbitrary-precision tower
+//!
+//! [`exact`] holds the unbounded tower beside the bounded default: an `xsd:integer`
+//! with an inline `i128` fast path ([`exact::Integer`]), an `xsd:decimal` with a big
+//! coefficient and unbounded scale ([`exact::Decimal`]), and an exact `owl:rational`
+//! ([`exact::Rational`]), with exact `+ − ×`, decimal division under a
+//! caller-configurable precision policy, correctly rounded conversions to and from
+//! `f64`/`f32`, fallible narrowing to the bounded types, and a cost estimate for
+//! every operation so a governor can charge by operand size. Nothing in the bounded
+//! value space above changes; [`exact`]'s module docs describe how the tower becomes
+//! the default representation.
+//!
 //! # Datatype-range satisfiability
 //!
 //! [`range`] answers a question the value spaces alone do not: **is this datatype range
@@ -172,6 +184,7 @@ pub mod bigint;
 pub mod binary;
 pub mod datatype;
 mod decimal_float;
+pub mod exact;
 pub mod ieee;
 pub mod json_number;
 pub mod numeric;
