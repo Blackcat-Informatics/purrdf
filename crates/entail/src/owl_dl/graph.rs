@@ -259,6 +259,47 @@ impl State {
 /// cached closure is read far more often than it is built.
 pub(crate) type Achievers = std::rc::Rc<[(u32, bool)]>;
 
+/// Closed role closures, one slot per role: `Named(p)` at `2p`, `Inv(p)` at `2p + 1`.
+///
+/// A neighbourhood read asks for its role's closure every time, so the lookup is on the
+/// hottest path either calculus has: a dense slot is one index where an ordered map paid a
+/// tree search of `Role` comparisons per read.
+#[derive(Default)]
+pub(crate) struct AchieverCache {
+    slots: Vec<Option<Achievers>>,
+}
+
+impl AchieverCache {
+    fn slot(role: Role) -> usize {
+        match role {
+            Role::Named(p) => 2 * p as usize,
+            Role::Inv(p) => 2 * p as usize + 1,
+        }
+    }
+
+    pub(crate) fn get(&self, role: Role) -> Option<&Achievers> {
+        self.slots.get(Self::slot(role)).and_then(Option::as_ref)
+    }
+
+    pub(crate) fn insert(&mut self, role: Role, closure: Achievers) {
+        let slot = Self::slot(role);
+        if self.slots.len() <= slot {
+            self.slots.resize(slot + 1, None);
+        }
+        self.slots[slot] = Some(closure);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains_key(&self, role: &Role) -> bool {
+        self.get(*role).is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.slots.iter().all(Option::is_none)
+    }
+}
+
 /// Whether `pattern` realizes the role `achievers` was closed for.
 fn realizes(achievers: &[(u32, bool)], pattern: (u32, bool)) -> bool {
     achievers.binary_search(&pattern).is_ok()
@@ -847,7 +888,7 @@ pub(crate) struct Graph<'a> {
     /// see [`crate::owl_dl::clause::ClauseSet::untriggered`]): those clauses are retried at
     /// every node of every round, and before this cache each retry rebuilt the same closure
     /// from scratch.
-    achiever_cache: RefCell<BTreeMap<Role, Achievers>>,
+    achiever_cache: RefCell<AchieverCache>,
     /// Absorbed range clauses (`⊤ ⊑ ∀r.DR`, from `rdfs:range` over a data property),
     /// pre-indexed by the edge role — the narrowed data-range ids a `≥n r.DR` counting
     /// question at [`Self::data_clashes`] must fold in.
@@ -892,7 +933,7 @@ impl<'a> Graph<'a> {
             work: Work::new(work_cap),
             meta,
             unconditional,
-            achiever_cache: RefCell::new(BTreeMap::new()),
+            achiever_cache: RefCell::new(AchieverCache::default()),
             range_by_role,
         }
     }
@@ -1468,7 +1509,7 @@ impl<'a> Graph<'a> {
     /// below, so the meter still moves on every call but the search now pays the closure's
     /// real cost once rather than once per call.
     fn achievers(&self, role: Role) -> Achievers {
-        if let Some(cached) = self.achiever_cache.borrow().get(&role) {
+        if let Some(cached) = self.achiever_cache.borrow().get(role) {
             self.work.charge(1);
             return std::rc::Rc::clone(cached);
         }
