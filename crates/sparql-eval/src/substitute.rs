@@ -414,11 +414,17 @@ pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) ->
     // descent, then one `substitute_variable` per pre-binding — so its behaviour is
     // unchanged rather than approximated.
     let mut query = query;
+    // The group keeps only its keys and aggregates, so a pre-bound variable read
+    // above it needs its value carried past it — see [`seed_above_group`]. Taken
+    // while the probes are still in hand, planted after the core seed: planted first,
+    // the new `Join` would stop the core descent above the group.
+    let above_group = group_seed(&mut query, &probes);
     if has_repeated_variable(&probes) {
         query.map_core_pattern_mut(|core| push_probe_constants(core, &probes));
         for (var, ground) in probes {
             query.substitute_variable_mut(&var, ground);
         }
+        seed_above_group(&mut query, above_group);
         return query;
     }
     // ONE descent doing both rewrites, in the order the two separate descents ran
@@ -451,7 +457,93 @@ pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) ->
             right: Child::new(core),
         });
     });
+    seed_above_group(&mut query, above_group);
     query
+}
+
+/// The query's top-level `GROUP BY`, when it has one: the group node beneath the
+/// solution modifiers, never a sub-`SELECT`'s.
+fn top_group_mut(query: &mut Query) -> Option<&mut GraphPattern> {
+    let (Query::Select { pattern, .. }
+    | Query::Construct { pattern, .. }
+    | Query::Describe { pattern, .. }
+    | Query::Ask { pattern, .. }) = query;
+    let mut node = pattern;
+    let mut projected = false;
+    loop {
+        match node {
+            // A second projection is a sub-`SELECT`'s: its group is not this query's.
+            GraphPattern::Project { .. } if projected => return None,
+            GraphPattern::Project { inner, .. } => {
+                projected = true;
+                node = inner;
+            }
+            GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Filter { inner, .. }
+            | GraphPattern::Unfold { inner, .. } => node = inner,
+            GraphPattern::Group { .. } => return Some(node),
+            _ => return None,
+        }
+    }
+}
+
+/// The single `VALUES` row [`seed_above_group`] plants: every pre-binding the query's
+/// top-level `GROUP BY` does not keep as a key, or `None` when there is no such group
+/// or nothing it drops.
+fn group_seed(
+    query: &mut Query,
+    probes: &[(Variable, GroundTerm)],
+) -> Option<(Vec<Variable>, Vec<Option<GroundTerm>>)> {
+    let Some(GraphPattern::Group {
+        variables: keys, ..
+    }) = top_group_mut(query)
+    else {
+        return None;
+    };
+    let mut variables = Vec::new();
+    let mut row = Vec::new();
+    for (var, ground) in probes {
+        if !group_key_carries(keys, var) && !variables.contains(var) {
+            variables.push(var.clone());
+            row.push(Some(ground.clone()));
+        }
+    }
+    (!variables.is_empty()).then_some((variables, row))
+}
+
+/// Join the pre-bindings a query's top-level `GROUP BY` does not keep onto the
+/// group's output, as one single-row `VALUES` ([`group_seed`]), so every solution
+/// modifier above the group — `HAVING`, a `SELECT` expression, `ORDER BY`, the
+/// projection — reads the bound value.
+///
+/// The seed [`apply_probes`] plants sits at the core `WHERE` pattern, beneath the
+/// group, and a `Group` outputs only its keys and its aggregates: a pre-bound variable
+/// that is not a key would otherwise be unbound in every grouped row. That variable
+/// holds one value for the whole evaluation — it is why the parser admits it in an
+/// aggregate projection (`SparqlParser::with_prebound_variables`) — so carrying it
+/// past the group as a constant column is exactly its meaning: every group reads the
+/// same value. A key needs nothing: the group keeps it, from the seed below.
+///
+/// Only the top-level wrapper stack is read. A sub-`SELECT`'s group belongs to that
+/// sub-query, whose projection decides what its pre-bound variables mean outside it.
+fn seed_above_group(query: &mut Query, seed: Option<(Vec<Variable>, Vec<Option<GroundTerm>>)>) {
+    let Some((variables, row)) = seed else {
+        return;
+    };
+    let Some(group) = top_group_mut(query) else {
+        return;
+    };
+    purrdf_sparql_algebra::substitute::take_and_replace(group, |group| GraphPattern::Join {
+        left: Child::new(GraphPattern::Values {
+            variables,
+            bindings: vec![row],
+        }),
+        right: Child::new(group),
+    });
 }
 
 /// Whether any variable is pre-bound twice, which is the one shape the combined
