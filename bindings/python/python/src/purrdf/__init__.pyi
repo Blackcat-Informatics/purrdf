@@ -864,7 +864,10 @@ class Store(_QuadStore):
     # cost per row for the same plan. `parameters` names the variables `run` will
     # bind, without the `?`/`$` sigil — each behaves exactly as a `query`
     # `substitutions` entry, so a parameter reaches inside `OPTIONAL`, `MINUS`,
-    # `EXISTS` and sub-`SELECT`s by ordinary correlation.
+    # `EXISTS` and sub-`SELECT`s by ordinary correlation. A parameter the query
+    # never mentions (in its pattern, an expression, a projection, a CONSTRUCT
+    # template or a DESCRIBE target) could bind nothing, so it raises ValueError
+    # naming it, with `message_id` `sparql-prepared-parameter-unmentioned`.
     #
     # The returned `PreparedQuery` holds a reference to THIS store and re-reads its
     # current contents on every `run` rather than freezing a snapshot now, so a later
@@ -2235,7 +2238,10 @@ class entail:
     # retrieval IRI or parse base, when the caller knows one): an `owl:imports`
     # of one names the premise itself and is resolved in place. `[]` is the
     # ordinary case for bare text; required like `imports`, same position on
-    # all four hosts.
+    # all four hosts. Each must be an absolute IRI: any other string raises
+    # ValueError naming it, whose `message_id` is `premise-iri-not-absolute` and
+    # whose `presentation["detail"]` is the IRI parser's `iri-*` condition. That
+    # holds on every function here and on `Store.query_entailment_governed`.
     @staticmethod
     def certain_answers(
         regime: RegimeLike,

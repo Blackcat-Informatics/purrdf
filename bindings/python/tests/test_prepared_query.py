@@ -331,9 +331,9 @@ def test_declaring_one_parameter_twice_is_refused() -> None:
     with pytest.raises(ValueError, match="more than once"):
         store.prepare(QUERY, parameters=["this", "this"])
 
-    # The neighbour: distinct parameters prepare, including one the query does not
-    # mention, which is an unused binding rather than an error.
-    prepared = store.prepare(QUERY, parameters=["this", "other"])
+    # The neighbour: distinct parameters, each one mentioned by the query, prepare.
+    both = f"{QUERY} VALUES ?other {{ 1 }}"
+    prepared = store.prepare(both, parameters=["this", "other"])
     assert prepared.parameters == ["this", "other"]
 
 
