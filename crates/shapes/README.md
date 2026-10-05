@@ -391,6 +391,10 @@ Anonymous class expressions are part of the theory:
   ranges, and `[ owl:inverseOf p ]` is read wherever a property expression may
   stand, `rdfs:subPropertyOf`, `owl:equivalentProperty` and `owl:inverseOf`
   included;
+- an `owl:equivalentClass` between an IRI and a data range, or another
+  datatype, is a datatype definition (OWL 2 Structural Specification §9.4):
+  the IRI is a datatype, no class, and a value of it is held to the defining
+  range or typed with the datatype by name;
 - each named member of a union a class is equivalent to becomes its subclass,
   an existential restriction places a class within the restricted property's
   domain, and a domain that is itself an anonymous expression matches the

@@ -778,9 +778,11 @@ the unqualified and qualified cardinalities over `owl:onClass` or
 every subclass. The property it names joins the catalog. Data ranges built with
 `owl:onDatatype` and `owl:withRestrictions`, `owl:datatypeComplementOf`, or a
 literal `owl:oneOf` are read as fillers and ranges, and `[ owl:inverseOf p ]` is
-read wherever a property expression may stand. Each named member of a union a
-class is equivalent to becomes its subclass, and an existential restriction
-places a class within the restricted property's domain.
+read wherever a property expression may stand. An equivalence between an IRI
+and a data range, or another datatype, defines a datatype: a value is then held
+to the defining range, or typed with the datatype by name. Each named member
+of a union a class is equivalent to becomes its subclass, and an existential
+restriction places a class within the restricted property's domain.
 
 What a developer schema can state is projected onto the class definition.
 `owl:allValuesFrom` holds every value to the filler, as a range does. An

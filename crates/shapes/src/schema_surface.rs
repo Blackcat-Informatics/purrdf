@@ -827,8 +827,11 @@ pub(crate) struct SchemaSurface {
     pub(crate) classes: BTreeMap<String, SurfaceClass>,
     pub(crate) report: SchemaCoverageReport,
     pub(crate) class_expressions: SchemaClassExpressionReport,
-    /// Every IRI declared `rdfs:Datatype` or `owl:DataRange`.
+    /// Every IRI declared `rdfs:Datatype` or `owl:DataRange`, or defined as a
+    /// datatype by an equivalence with a data range.
     pub(crate) datatypes: BTreeSet<String>,
+    /// Each defined datatype's defining data range.
+    pub(crate) datatype_definitions: BTreeMap<String, OntologyExpression>,
 }
 
 impl SchemaSurface {
@@ -941,6 +944,9 @@ const GENERAL_INCLUSION_REASON: &str = "a general class inclusion whose subclass
 const SUFFICIENT_REASON: &str = "the sufficient-condition direction of owl:equivalentClass \
      classifies instances that satisfy the expression; it constrains no named class, so no \
      developer schema constraint is projected";
+const DATATYPE_DEFINITION_REASON: &str = "a datatype definition: a value of the defined datatype \
+     is accepted when it is typed with the datatype by name, or when it meets the defining data \
+     range";
 const UNCARRIED_REASON: &str =
     "no caller-owned class carries this axiom, so no developer schema represents it";
 
@@ -1078,22 +1084,6 @@ impl<'a> ExpressionReader<'a> {
             budget,
             path: Vec::new(),
         }
-    }
-
-    /// Read a class expression: any expression whose boolean skeleton holds no
-    /// data-range construct.
-    fn class_expression(&mut self, term: &Term) -> Result<OntologyExpression, SchemaCompileError> {
-        let expression = self.expression(term, 0)?;
-        if expression.has_data_only_construct() {
-            return Err(SchemaCompileError::InvalidOntology {
-                subject: term.to_string(),
-                reason: format!(
-                    "the data range {} stands where a class expression is required",
-                    expression.canonical()
-                ),
-            });
-        }
-        Ok(expression)
     }
 
     fn expression(
@@ -1583,6 +1573,64 @@ impl<'a> ExpressionReader<'a> {
     }
 }
 
+/// Refuse a data range standing where a class expression is required.
+fn refuse_data_range_as_class(
+    expression: &OntologyExpression,
+    term: &Term,
+) -> Result<(), SchemaCompileError> {
+    if expression.has_data_only_construct() {
+        return Err(SchemaCompileError::InvalidOntology {
+            subject: term.to_string(),
+            reason: format!(
+                "the data range {} stands where a class expression is required",
+                expression.canonical()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// An `owl:equivalentClass` or `rdfs:subClassOf` axiom with an anonymous
+/// side, read but not yet classified: whether it defines a datatype depends on
+/// every datatype declaration and definition in the request.
+struct PendingAxiom {
+    subject_term: Term,
+    object_term: Term,
+    subject: OntologyExpression,
+    object: OntologyExpression,
+    equivalent: bool,
+    provenance: SchemaCoverageProvenance,
+}
+
+impl PendingAxiom {
+    /// The datatype this axiom defines and its defining data range, when it is
+    /// `DT owl:equivalentClass DR` (OWL 2 Structural Specification §9.4).
+    fn datatype_definition(
+        &self,
+        datatypes: &BTreeSet<String>,
+    ) -> Option<(&str, &OntologyExpression)> {
+        if !self.equivalent {
+            return None;
+        }
+        match (&self.subject, &self.object) {
+            (OntologyExpression::Named(name), range) | (range, OntologyExpression::Named(name))
+                if is_data_range(range, datatypes) =>
+            {
+                Some((name, range))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Whether an expression is a data range: no class-only construct, and a
+/// data-only construct or only datatypes as named members.
+fn is_data_range(expression: &OntologyExpression, datatypes: &BTreeSet<String>) -> bool {
+    !expression.has_class_only_construct()
+        && (expression.has_data_only_construct()
+            || expression.all_named_members_match(&|iri| is_datatype(iri, datatypes)))
+}
+
 fn single<'t>(
     values: &'t [Term],
     predicate: &str,
@@ -1688,7 +1736,8 @@ pub(crate) fn build(
     let mut subclass_relations = Vec::new();
     let mut equivalent_class_relations = Vec::new();
     let mut property_relations = Vec::new();
-    let mut class_axioms: Vec<ClassAxiom> = Vec::new();
+    let mut named_equivalences: Vec<(String, String)> = Vec::new();
+    let mut pending_axioms: Vec<PendingAxiom> = Vec::new();
     let mut reader = ExpressionReader::new(&union);
 
     for (class, info) in &shape_classes {
@@ -1711,17 +1760,23 @@ pub(crate) fn build(
                 if let (Some(child), Some(parent)) =
                     (named_iri(&row.subject), named_iri(&row.object))
                 {
-                    explicit_classes.insert(child.to_owned());
-                    explicit_classes.insert(parent.to_owned());
                     if equivalent {
-                        equivalent_class_relations.push((child.to_owned(), parent.to_owned()));
+                        // Two classes, or a datatype and its definition; which
+                        // is decided once every datatype is known.
+                        named_equivalences.push((child.to_owned(), parent.to_owned()));
                     } else {
+                        explicit_classes.insert(child.to_owned());
+                        explicit_classes.insert(parent.to_owned());
                         subclass_relations.push((child.to_owned(), parent.to_owned()));
                     }
                     continue;
                 }
-                let subject = reader.class_expression(&row.subject)?;
-                let object = reader.class_expression(&row.object)?;
+                let subject = reader.expression(&row.subject, 0)?;
+                let object = reader.expression(&row.object, 0)?;
+                if !equivalent {
+                    refuse_data_range_as_class(&subject, &row.subject)?;
+                    refuse_data_range_as_class(&object, &row.object)?;
+                }
                 let provenance = SchemaCoverageProvenance {
                     subject: subject.provenance_subject(),
                     predicate: row.predicate.clone(),
@@ -1729,9 +1784,14 @@ pub(crate) fn build(
                 };
                 catalog_restrictions(&subject, &provenance, &mut properties)?;
                 catalog_restrictions(&object, &provenance, &mut properties)?;
-                class_axioms.push(ClassAxiom::classify(
-                    &subject, &object, equivalent, provenance,
-                ));
+                pending_axioms.push(PendingAxiom {
+                    subject_term: row.subject.clone(),
+                    object_term: row.object.clone(),
+                    subject,
+                    object,
+                    equivalent,
+                    provenance,
+                });
             }
             RDFS_SUB_PROPERTY_OF | OWL_EQUIVALENT_PROPERTY | OWL_INVERSE_OF => {
                 // `_:x owl:inverseOf p` with a blank subject defines an inverse
@@ -1836,6 +1896,70 @@ pub(crate) fn build(
         }
     }
 
+    // Datatype definitions (OWL 2 Structural Specification §9.4): an
+    // equivalence between a datatype and a data range defines the datatype.
+    // A definition can make another equivalence a definition, so this runs to
+    // a fixpoint, bounded by the number of equivalences.
+    let mut datatype_definitions: BTreeMap<String, OntologyExpression> = BTreeMap::new();
+    let mut datatype_axioms: Vec<(SchemaCoverageProvenance, String)> = Vec::new();
+    loop {
+        let known = datatypes.len();
+        named_equivalences.retain(|(left, right)| {
+            match (
+                is_datatype(left, &datatypes),
+                is_datatype(right, &datatypes),
+            ) {
+                (false, false) => true,
+                (true, true) => false,
+                (left_is_datatype, _) => {
+                    let (defined, by) = if left_is_datatype {
+                        (right, left)
+                    } else {
+                        (left, right)
+                    };
+                    datatypes.insert(defined.clone());
+                    datatype_definitions
+                        .entry(defined.clone())
+                        .or_insert_with(|| OntologyExpression::Named(by.clone()));
+                    false
+                }
+            }
+        });
+        let mut index = 0;
+        while index < pending_axioms.len() {
+            if let Some((name, range)) = pending_axioms[index].datatype_definition(&datatypes) {
+                let (name, range) = (name.to_owned(), range.clone());
+                let axiom = pending_axioms.swap_remove(index);
+                datatypes.insert(name.clone());
+                datatype_axioms.push((axiom.provenance, range.canonical()));
+                datatype_definitions.entry(name).or_insert(range);
+            } else {
+                index += 1;
+            }
+        }
+        if datatypes.len() == known {
+            break;
+        }
+    }
+    for (left, right) in named_equivalences {
+        explicit_classes.insert(left.clone());
+        explicit_classes.insert(right.clone());
+        equivalent_class_relations.push((left, right));
+    }
+    pending_axioms.sort_by(|left, right| left.provenance.cmp(&right.provenance));
+    let mut class_axioms: Vec<ClassAxiom> = Vec::with_capacity(pending_axioms.len());
+    for axiom in pending_axioms {
+        refuse_data_range_as_class(&axiom.subject, &axiom.subject_term)?;
+        refuse_data_range_as_class(&axiom.object, &axiom.object_term)?;
+        class_axioms.push(ClassAxiom::classify(
+            &axiom.subject,
+            &axiom.object,
+            axiom.equivalent,
+            axiom.provenance,
+        ));
+    }
+    datatype_axioms.sort();
+
     enforce_limit("properties", properties.len(), MAX_SCHEMA_PROPERTIES)?;
     propagate_property_facts(&mut properties, &property_relations)?;
     validate_property_ranges(&properties, &datatypes)?;
@@ -1889,10 +2013,22 @@ pub(crate) fn build(
         properties,
         &shape_classes,
         explicit_classes,
-        datatypes,
+        DatatypeFacts {
+            declared: datatypes,
+            definitions: datatype_definitions,
+            axioms: datatype_axioms,
+        },
         &supertypes,
         &class_axioms,
     )
+}
+
+/// The request's datatypes: every declared or defined one, each definition's
+/// data range, and the anonymous definition axioms for the manifest.
+struct DatatypeFacts {
+    declared: BTreeSet<String>,
+    definitions: BTreeMap<String, OntologyExpression>,
+    axioms: Vec<(SchemaCoverageProvenance, String)>,
 }
 
 fn dataset_rows(dataset: &RdfDataset) -> Vec<TripleRow> {
@@ -2480,10 +2616,15 @@ fn assemble_surface(
     properties: BTreeMap<String, PropertyFacts>,
     shape_classes: &BTreeMap<String, ShapeClassInfo>,
     explicit_classes: BTreeSet<String>,
-    datatypes: BTreeSet<String>,
+    datatype_facts: DatatypeFacts,
     supertypes: &BTreeMap<String, BTreeSet<String>>,
     class_axioms: &[ClassAxiom],
 ) -> Result<SchemaSurface, SchemaCompileError> {
+    let DatatypeFacts {
+        declared: datatypes,
+        definitions: datatype_definitions,
+        axioms: datatype_axioms,
+    } = datatype_facts;
     let eligible_classes: Vec<String> = explicit_classes
         .into_iter()
         .filter(|class| request.namespaces().is_caller_owned(class))
@@ -2707,6 +2848,7 @@ fn assemble_surface(
     let class_expressions = class_expression_report(
         request.mode(),
         class_axioms,
+        &datatype_axioms,
         &class_facts,
         &statuses,
         supertypes,
@@ -2722,6 +2864,7 @@ fn assemble_surface(
         },
         class_expressions,
         datatypes,
+        datatype_definitions,
     };
     surface.assert_conservation();
     Ok(surface)
@@ -3038,6 +3181,7 @@ impl ConjunctContext<'_> {
 fn class_expression_report(
     mode: SchemaSurfaceMode,
     class_axioms: &[ClassAxiom],
+    datatype_axioms: &[(SchemaCoverageProvenance, String)],
     class_facts: &BTreeMap<&str, ClassExpressionFacts<'_>>,
     statuses: &BTreeMap<(String, String), SchemaCoverageStatus>,
     supertypes: &BTreeMap<String, BTreeSet<String>>,
@@ -3102,6 +3246,30 @@ fn class_expression_report(
                 components: components.into_iter().collect(),
             });
         }
+    }
+    for (provenance, range) in datatype_axioms {
+        let (outcome, reason) = if mode == SchemaSurfaceMode::ShapedOnly {
+            (SchemaExpressionOutcome::Excluded, SHAPED_ONLY_REASON)
+        } else {
+            (
+                SchemaExpressionOutcome::Approximated,
+                DATATYPE_DEFINITION_REASON,
+            )
+        };
+        axioms
+            .entry(provenance.clone())
+            .or_insert_with(|| SchemaClassExpressionAxiom {
+                provenance: provenance.clone(),
+                components: Vec::new(),
+                classes: Vec::new(),
+            })
+            .components
+            .push(SchemaExpressionComponent {
+                expression: range.clone(),
+                property_iri: None,
+                outcome,
+                reason: reason.to_owned(),
+            });
     }
     let mut axioms: Vec<SchemaClassExpressionAxiom> = axioms.into_values().collect();
     for axiom in &mut axioms {
@@ -3937,7 +4105,7 @@ mod tests {
         .pop()
         .expect("root superclass");
         let error = ExpressionReader::with_budget(dataset.as_ref(), 4_096)
-            .class_expression(&root)
+            .expression(&root, 0)
             .expect_err("an exponentially shared expression exhausts the budget");
         assert!(matches!(
             error,
@@ -3962,7 +4130,7 @@ mod tests {
         .pop()
         .expect("root superclass");
         ExpressionReader::with_budget(shallow.as_ref(), 4_096)
-            .class_expression(&root)
+            .expression(&root, 0)
             .expect("a shallow shared expression expands within the budget");
         complete(&doubling_chain(8)).expect("and the whole surface accepts it");
     }
@@ -4120,5 +4288,54 @@ mod tests {
         // `^` and `$` are ordinary characters in an XSD pattern.
         assert_eq!(xsd_pattern_as_xpath("^a$[^$]"), "^(\\^a\\$[^$])$");
         complete(&restriction("^a$")).expect("anchors are literal characters in XSD");
+    }
+
+    #[test]
+    fn equivalences_with_data_ranges_define_datatypes() {
+        let surface = complete(
+            "ex:Percent owl:equivalentClass [ a rdfs:Datatype ; owl:onDatatype xsd:integer ;
+                 owl:withRestrictions ( [ xsd:minInclusive 0 ] ) ] .
+             ex:Count owl:equivalentClass xsd:nonNegativeInteger .
+             ex:Label owl:equivalentClass ex:Text .
+             ex:Text owl:equivalentClass [ a rdfs:Datatype ; owl:datatypeComplementOf xsd:integer ] .
+             ex:score a owl:DatatypeProperty ; rdfs:range ex:Percent .
+             ex:n a owl:DatatypeProperty ; rdfs:range ex:Count .
+             ex:label a owl:DatatypeProperty ; rdfs:range ex:Label .",
+        )
+        .expect("datatype definitions are accepted as ranges of datatype properties");
+        for datatype in ["Percent", "Count", "Label", "Text"] {
+            let iri = format!("https://example.org/schema/{datatype}");
+            assert!(surface.datatypes.contains(&iri), "{datatype} is a datatype");
+            assert!(
+                !surface.classes.contains_key(&iri),
+                "{datatype} is no class"
+            );
+            assert!(surface.datatype_definitions.contains_key(&iri));
+        }
+        assert_eq!(
+            surface
+                .class_expressions
+                .axioms
+                .iter()
+                .map(|axiom| axiom.provenance.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://example.org/schema/Percent",
+                "https://example.org/schema/Text"
+            ],
+            "only the anonymous definitions are class-expression axioms"
+        );
+        // The neighbour: an equivalence with a class expression still makes
+        // the named side a class.
+        let classes = complete(
+            "ex:Parent owl:equivalentClass [ a owl:Restriction ; owl:onProperty ex:child ;
+                 owl:someValuesFrom ex:Person ] .",
+        )
+        .expect("class equivalence");
+        assert!(
+            classes
+                .classes
+                .contains_key("https://example.org/schema/Parent")
+        );
     }
 }

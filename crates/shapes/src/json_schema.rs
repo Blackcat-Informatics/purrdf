@@ -1242,6 +1242,12 @@ struct Ctx<'ns> {
     /// which decide whether a named OWL filler projects as a literal or as a
     /// node. Empty outside ontology-complete compilation.
     surface_datatypes: BTreeSet<String>,
+    /// Each datatype the ontology defines by an equivalence, with its
+    /// defining data range. Empty outside ontology-complete compilation.
+    datatype_definitions: BTreeMap<String, OntologyExpression>,
+    /// The defined datatypes whose definitions are being expanded, innermost
+    /// last: a definition reached again through itself is not expanded again.
+    defining: Vec<String>,
 }
 
 impl<'ns> Ctx<'ns> {
@@ -1260,6 +1266,8 @@ impl<'ns> Ctx<'ns> {
             ns,
             member_stack: Vec::new(),
             surface_datatypes: BTreeSet::new(),
+            datatype_definitions: BTreeMap::new(),
+            defining: Vec::new(),
         }
     }
 
@@ -1604,6 +1612,8 @@ fn compile_with_surface(
     let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
     let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
     ctx.surface_datatypes.clone_from(&surface.datatypes);
+    ctx.datatype_definitions
+        .clone_from(&surface.datatype_definitions);
     ctx.record_entries(vocab_losses);
 
     let mut defs: Map<String, Value> = Map::new();
@@ -2314,7 +2324,7 @@ fn range_expression_schema(
     ctx: &mut Ctx<'_>,
 ) -> Value {
     match expression {
-        OntologyExpression::Named(iri) => named_range_schema(iri, property, ctx),
+        OntologyExpression::Named(iri) => named_range_schema(iri, property, class_iri, ctx),
         OntologyExpression::Union(members) => {
             let alternatives: Vec<Value> = members
                 .iter()
@@ -2413,9 +2423,24 @@ fn datatype_restriction_schema(
     compile_property(&constraints, class_iri, &key, "", ctx).0
 }
 
-fn named_range_schema(iri: &str, property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
+fn named_range_schema(
+    iri: &str,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
     if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
         return json!({ "$ref": format!("#/$defs/{enum_key}") });
+    }
+    // A defined datatype admits a literal typed with it by name, or a value
+    // that meets its defining data range.
+    if let Some(definition) = ctx.datatype_definitions.get(iri).cloned()
+        && !ctx.defining.iter().any(|defining| defining == iri)
+    {
+        ctx.defining.push(iri.to_owned());
+        let defined = range_expression_schema(&definition, property, class_iri, ctx);
+        ctx.defining.pop();
+        return json!({ "anyOf": [datatype_value_schema(iri, ctx.ns), defined] });
     }
     if iri == rdfs::LITERAL {
         return general_literal_schema();

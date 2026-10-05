@@ -69,7 +69,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (`owl:onDatatype`/`owl:withRestrictions`, `owl:datatypeComplementOf`, a
   literal `owl:oneOf`) are read as fillers and ranges. `[ owl:inverseOf p ]`
   is accepted wherever a property expression may stand, including in
-  `rdfs:subPropertyOf`, `owl:equivalentProperty` and `owl:inverseOf`. The JSON
+  `rdfs:subPropertyOf`, `owl:equivalentProperty` and `owl:inverseOf`. An
+  `owl:equivalentClass` between an IRI and a data range or a datatype is read
+  as a datatype definition. The IRI used to become a class, so an
+  `owl:DatatypeProperty` ranging over it was refused; it is now a datatype
+  whose values are held to the defining range. The JSON
   Schema and OpenAPI carriers, and the LinkML, TypeScript, GraphQL and
   Pydantic emitters that read them, carry what a schema can state:
   `owl:allValuesFrom` as a value constraint, existentials and minimums as

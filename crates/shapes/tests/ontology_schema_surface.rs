@@ -290,6 +290,9 @@ const ONTOLOGY: &str = r#"
     ex:self a owl:ObjectProperty .
     ex:serial a owl:DatatypeProperty ; rdfs:range xsd:string .
     ex:member a owl:ObjectProperty ; rdfs:domain ex:Party .
+    ex:Percent owl:equivalentClass [ a rdfs:Datatype ; owl:onDatatype xsd:integer ;
+        owl:withRestrictions ( [ xsd:minInclusive 0 ] [ xsd:maxInclusive 100 ] ) ] .
+    ex:rating a owl:DatatypeProperty ; rdfs:range ex:Percent .
 "#;
 
 /// An ontology with only IRI objects — the fragment the surface accepted
@@ -530,6 +533,22 @@ fn manifest_reports_every_form_with_its_outcome_and_provenance() {
         "a qualifier whose facets the value schema states is counted"
     );
 
+    // A datatype definition is an axiom-level component, and the defined
+    // datatype is no class.
+    let percent = report
+        .axioms
+        .iter()
+        .find(|axiom| axiom.provenance.subject == iri("Percent"))
+        .expect("datatype definition axiom");
+    assert_eq!(percent.classes.len(), 0);
+    assert_eq!(percent.components.len(), 1);
+    assert_eq!(percent.components[0].outcome, Approximated);
+    assert!(
+        percent.components[0]
+            .reason
+            .contains("a datatype definition")
+    );
+
     // Components no named class carries are reported on the axiom itself.
     let uncarried = |subject: &str| {
         report
@@ -671,7 +690,7 @@ fn accepts(schema_json: &str, class: &str, data: &str, subject: &str) -> bool {
 const ALICE: &str = r#"
     ex:alice a ex:Person ; ex:name "Alice" ; ex:email "alice@example.org" ; ex:phone "555" ;
         ex:birthDate "2000-01-01"^^xsd:date ; ex:score 50 ; ex:status ex:active ;
-        ex:nickname "Al" , "Bob" ; ex:code "c-1" .
+        ex:nickname "Al" , "Bob" ; ex:code "c-1" ; ex:rating 70 .
 "#;
 
 #[test]
@@ -725,6 +744,10 @@ fn json_schema_projection_judges_projected_instances() {
         (
             variant("ex:code \"c-1\"", "ex:code 7"),
             "datatypeComplementOf xsd:integer",
+        ),
+        (
+            variant("ex:rating 70", "ex:rating 170"),
+            "a range named by a datatype definition is held to the definition",
         ),
         (
             variant("a ex:Person ;", "a ex:Person , ex:Robot ;"),
