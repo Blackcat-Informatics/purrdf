@@ -16,10 +16,9 @@
 //!
 //! The target is `harness = false` on `purrdf_testkit`'s runner, so the same
 //! named cases run natively under `cargo test` and on `wasm32-unknown-unknown`
-//! in Node (`make wasm-test`), baseline and `+simd128`. Only the `+simd128`
-//! build compiles `csv::arch::simd128::find`; the baseline row proves the
-//! portable kernel and the live dispatch (there, the portable kernel again)
-//! still agree with the reference on that target.
+//! in Node (`make wasm-test`) with `+simd128`. This executes
+//! `csv::arch::simd128::find` directly against the per-byte reference and
+//! asserts that simd128 is present and selected.
 
 use purrdf_core::csv::backend::{Backend, kernels, reference};
 use purrdf_hash::Backend as _;

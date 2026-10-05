@@ -16,8 +16,11 @@ Turtle with absolute IRIs, Turtle with an explicit document base, N-Triples and
 JSON-LD: 76 serialization/reparse/byte-reconstruction crossings. Its complete
 framed RDF output SHA-256 is
 `580633f8ca53cbdca3045ec708a9b9acf9631ff007457fb8878ab93454eee0fc`.
-The native suite passes 23 tests plus the public example doctest. The same
-integration tests and output golden are wired into `make wasm-test`.
+The native suite passed 23 tests plus the public example doctest in the recorded
+2026-09-14 measurement. Those integration tests and the output golden were also
+selected by `make wasm-test` at that time. Current ownership keeps this complete
+semantic corpus in native Rust and qualifies WASM compilation separately; see
+[WASM test ownership](../../docs/WASM_TESTING.md).
 
 ## Forward parser scaling
 

@@ -249,7 +249,7 @@ completeness claim.
 ```sh
 cargo test -p purrdf-hnsw                 # unit, invariant, guard and oracle suites
 make wasm                                 # builds the crate for wasm32-unknown-unknown
-make hnsw-determinism                     # proves native and wasm32 bytes are identical
+make wasm-test                          # actual WASM dispatch, SIMD kernels and path admission
 cargo bench -p purrdf-hnsw --bench recall # recall/work/latency against the exact oracle
 cargo bench -p purrdf-hnsw --bench build  # build cost, exact and reassociated, report-only
 ```
