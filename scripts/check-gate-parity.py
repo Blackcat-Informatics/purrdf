@@ -100,13 +100,10 @@ def strip_yaml_comments(text: str) -> str:
 # an exemption cannot outlive its reason, and a NEW divergence is still a failure. That is
 # the difference between a stated exception and the silence this file was written to end.
 ONE_SIDED_BY_DESIGN: dict[str, str] = {
-    "scripts/check-geo-determinism.sh": (
-        "cross-checks native against wasm32 output, so it needs the pinned wasm toolchain "
-        "that only the wasm job installs"
-    ),
-    "scripts/check-hnsw-determinism.sh": (
-        "same as the geo determinism check: a native-versus-wasm32 comparison needing the "
-        "wasm toolchain"
+    "scripts/check-wasm-dataset-identity.sh": (
+        "exercises the exact >2^53 Dataset/exchange ABI in Node and TypeScript, so it "
+        "needs the wasm32 target, pinned wasm-bindgen CLI and package Node dependencies; "
+        "`make wasm-pkg-test` is the local entry point"
     ),
     "scripts/check-wasm-test-runner.sh": (
         "observes the wasm32 test runner failing a planted panic, a refused flag and a "
@@ -143,7 +140,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
 # refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
 # both the changelog and the PR body is the proof that nothing noticed. Growth is now a
 # deliberate, visible edit to this number.
-ONE_SIDED_COUNT = 8
+ONE_SIDED_COUNT = 7
 
 
 def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:

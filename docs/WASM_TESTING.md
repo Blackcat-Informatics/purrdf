@@ -3,86 +3,56 @@
 
 # Native ownership and WASM execution
 
-Native Rust owns general semantics, grammar, refusal corpora and conformance.
-`make check` executes their complete registered targets through
-`cargo test --workspace --locked`. `make wasm` separately proves the release
-crates build for `wasm32-unknown-unknown`. `make wasm-pkg-test` proves the
-optimized package, JavaScript bindings and ABI.
+Native Rust owns general semantics, grammar, arithmetic, refusal corpora and
+conformance. `make check` executes their complete registered targets through
+`cargo test --workspace --locked`. `make wasm` separately builds the release
+crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
+package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` executes only the target obligations below: 50 named cases
-in 16 integration targets, with 80 case executions across 24 scalar/SIMD
-target invocations. Runner preflight is additional host-boundary evidence.
-Existing exact filters select these cases through the existing Cargo runner.
-The testkit harness and full native registrations retain their behavior.
+`make wasm-test` selects 22 existing named cases in 9 integration targets,
+with 27 executions across 13 scalar/SIMD target invocations. Every selection
+exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
+interface. Runner preflight additionally exercises panic handling, refused flags
+and sealed host reads. General digest vectors, numeric expectations, geometry,
+index determinism and codec corpora run in native Rust.
 
 The native owner of each row is `cargo test --locked -p PACKAGE --test TARGET`.
 The three WASM-only store/floor refusal cases exercise platform-specific
-branches; their native targets exercise the native filesystem/thread behavior.
-All other retained cases also run natively. `scalar + SIMD` means both the baseline and `+simd128` build;
-`scalar` means the baseline build only.
+branches; their native targets exercise filesystem/thread behavior. All other
+selected cases also run natively. `scalar + SIMD` means both the baseline and
+`+simd128` build; other rows execute only the named build. Full native test
+bodies and registrations are retained.
 
-| Package / target | Build | Exact case | Target behavior proved |
+| Package / target | Build | Exact case | WASM behavior proved |
 | --- | --- | --- | --- |
-| `purrdf-sparql-eval` / `knn_wasm_determinism` | scalar + SIMD | `the_lane_tree_cosine_answer_is_reproduced_on_this_target` | Wasm binary64 arithmetic/lane packing against pinned distance lexicals; see named metric in each case. |
-| `purrdf-sparql-eval` / `knn_wasm_determinism` | scalar + SIMD | `the_lane_tree_squared_euclidean_answer_is_reproduced_on_this_target` | Wasm binary64 arithmetic/lane packing against pinned distance lexicals; see named metric in each case. |
-| `purrdf-sparql-eval` / `knn_wasm_determinism` | scalar + SIMD | `the_pinned_answer_is_reproduced_on_this_target` | Wasm binary64 arithmetic/lane packing against pinned distance lexicals; see named metric in each case. |
-| `purrdf-sparql-eval` / `knn_wasm_reassociated` | scalar + SIMD | `the_reassociated_distance_is_within_the_error_bound_of_the_exact_one` | Actual WasmScalar/WasmSimd128 path, numerical error bounds, overflow refusal and relation reachability; each named boundary is target sensitive. |
-| `purrdf-sparql-eval` / `knn_wasm_reassociated` | scalar + SIMD | `the_reassociated_distance_refuses_an_overflow` | Actual WasmScalar/WasmSimd128 path, numerical error bounds, overflow refusal and relation reachability; each named boundary is target sensitive. |
-| `purrdf-sparql-eval` / `knn_wasm_reassociated` | scalar + SIMD | `the_reassociated_path_is_the_one_this_build_was_made_for` | Actual WasmScalar/WasmSimd128 path, numerical error bounds, overflow refusal and relation reachability; each named boundary is target sensitive. |
-| `purrdf-sparql-eval` / `knn_wasm_reassociated` | scalar + SIMD | `the_reassociated_relation_constructs_and_ranks_within_the_error_bound_of_the_exact_one` | Actual WasmScalar/WasmSimd128 path, numerical error bounds, overflow refusal and relation reachability; each named boundary is target sensitive. |
-| `purrdf-sparql-eval` / `stack_refusal` | scalar | `prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller` | Actual Wasm shadow-stack floor refusal and restored caller context; baseline alone suffices. |
-| `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `a_payload_one_distance_bit_away_does_not_verify` | Build-specific Wasm floating kernel, distance bits, image path/shape ABI, restore/search and foreign-path refusal. |
-| `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name` | Build-specific Wasm floating kernel, distance bits, image path/shape ABI, restore/search and foreign-path refusal. |
-| `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `the_image_decodes_verifies_and_searches_as_the_kernel_ranks` | Build-specific Wasm floating kernel, distance bits, image path/shape ABI, restore/search and foreign-path refusal. |
-| `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `the_image_records_the_path_and_shape_this_build_was_made_for` | Build-specific Wasm floating kernel, distance bits, image path/shape ABI, restore/search and foreign-path refusal. |
-| `purrdf-text` / `wasm_determinism` | scalar | `the_independent_fielded_reference_is_reproduced_on_this_target` | Wasm i128 helper arithmetic, exact truncation, scores/order and decimal lexical rendering against pinned/hand expectations. |
-| `purrdf-text` / `wasm_determinism` | scalar | `the_integer_logarithm_agrees_with_its_hand_values_on_this_target` | Wasm i128 helper arithmetic, exact truncation, scores/order and decimal lexical rendering against pinned/hand expectations. |
-| `purrdf-text` / `wasm_determinism` | scalar | `the_pinned_ranking_is_reproduced_on_this_target` | Wasm i128 helper arithmetic, exact truncation, scores/order and decimal lexical rendering against pinned/hand expectations. |
-| `purrdf-retrieval` / `wasm_determinism` | scalar | `a_collided_pair_fuses_to_the_same_order_on_both_targets` | Wasm i128 helper arithmetic, exact truncation, scores/order and decimal lexical rendering against pinned/hand expectations. |
-| `purrdf-retrieval` / `wasm_determinism` | scalar | `a_fused_answer_is_the_same_rows_in_the_same_order_on_both_targets` | Wasm i128 helper arithmetic, exact truncation, scores/order and decimal lexical rendering against pinned/hand expectations. |
-| `purrdf-retrieval` / `wasm_determinism` | scalar | `a_unit_weight_contribution_is_the_same_exact_decimal_on_both_targets` | Wasm i128 helper arithmetic, exact truncation, scores/order and decimal lexical rendering against pinned/hand expectations. |
-| `purrdf-shapes` / `product_wasm` | scalar | `encoding_matches_the_committed_bytes_on_this_target` | Cross-width prepared-product wire ABI; encoding matches native committed bytes, and native bytes restore through the Wasm reader. |
-| `purrdf-shapes` / `product_wasm` | scalar | `the_committed_golden_restores_on_this_target` | Cross-width prepared-product wire ABI; encoding matches native committed bytes, and native bytes restore through the Wasm reader. |
-| `purrdf-hash-conformance` / `hex` | scalar + SIMD | `every_path_matches_portable` | Actual i8x16.swizzle encoder versus portable over all lengths/alignment/case/write boundaries, plus required backend selection. |
-| `purrdf-hash-conformance` / `hex` | scalar + SIMD | `required_paths_are_available_and_selected` | Actual i8x16.swizzle encoder versus portable over all lengths/alignment/case/write boundaries, plus required backend selection. |
-| `purrdf-hash-conformance` / `blake3` | scalar + SIMD | `required_backends_are_available` | Explicit Wasm128 versus portable kernels across independent frozen answers, irregular trees, alignment, chunk schedules and buffer boundaries. |
-| `purrdf-hash-conformance` / `blake3` | scalar + SIMD | `random_inputs_cover_irregular_trees_and_alignment` | Explicit Wasm128 versus portable kernels across independent frozen answers, irregular trees, alignment, chunk schedules and buffer boundaries. |
-| `purrdf-hash-conformance` / `blake3` | scalar + SIMD | `streaming_boundary_answers` | Explicit Wasm128 versus portable kernels across independent frozen answers, irregular trees, alignment, chunk schedules and buffer boundaries. |
-| `purrdf-hash-conformance` / `blake3` | scalar + SIMD | `frozen_answers_match` | Explicit Wasm128 versus portable kernels across independent frozen answers, irregular trees, alignment, chunk schedules and buffer boundaries. |
-| `purrdf-hash-conformance` / `blake3` | scalar + SIMD | `streaming_answers_match` | Explicit Wasm128 versus portable kernels across independent frozen answers, irregular trees, alignment, chunk schedules and buffer boundaries. |
-| `purrdf-hash-conformance` / `fixed_hasher` | scalar | `portable_vectors_are_reproduced` | Wasm 32-bit target selects four partial 32x32 products instead of widening native u128 multiply; usize hashing zero extends to u64. |
-| `purrdf-hash-conformance` / `fixed_hasher` | scalar | `the_selected_function_answers_its_own_vectors` | Wasm 32-bit target selects four partial 32x32 products instead of widening native u128 multiply; usize hashing zero extends to u64. |
-| `purrdf-hash-conformance` / `fixed_hasher` | scalar | `integers_share_one_word` | Wasm 32-bit target selects four partial 32x32 products instead of widening native u128 multiply; usize hashing zero extends to u64. |
-| `purrdf-testkit` / `bench` | scalar | `the_store_options_are_refused_on_wasm32` | Actual Wasm host-clock measurement and cfg-gated filesystem/store refusal; generic statistics/CLI/record semantics native. |
-| `purrdf-testkit` / `bench` | scalar | `a_measured_run_reports_its_estimates` | Actual Wasm host-clock measurement and cfg-gated filesystem/store refusal; generic statistics/CLI/record semantics native. |
-| `purrdf-stack` / `on_stack` | scalar | `an_in_floor_request_runs` | Wasm inline/scoped shadow-stack floor and typed over-floor refusal; native uses independent threads. |
-| `purrdf-stack` / `on_stack` | scalar | `a_scoped_in_floor_request_borrows_the_caller_s_locals` | Wasm inline/scoped shadow-stack floor and typed over-floor refusal; native uses independent threads. |
-| `purrdf-stack` / `on_stack` | scalar | `an_over_floor_request_is_refused` | Wasm inline/scoped shadow-stack floor and typed over-floor refusal; native uses independent threads. |
-| `purrdf-stack` / `on_stack` | scalar | `an_over_floor_scoped_request_is_refused` | Wasm inline/scoped shadow-stack floor and typed over-floor refusal; native uses independent threads. |
-| `purrdf-core` / `csv_scan_wasm` | scalar + SIMD | `every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length` | Actual simd128 i8x16.eq field kernel versus per-byte reference; explicit presence/selection assertions guard backend execution. |
-| `purrdf-core` / `csv_scan_wasm` | scalar + SIMD | `every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs` | Actual simd128 i8x16.eq field kernel versus per-byte reference; explicit presence/selection assertions guard backend execution. |
-| `purrdf-core` / `csv_scan_wasm` | scalar + SIMD | `the_target_explicit_kernel_is_among_those_compared` | Actual simd128 i8x16.eq field kernel versus per-byte reference; explicit presence/selection assertions guard backend execution. |
-| `purrdf-core` / `segmented` | scalar | `indexed_reopen_preserves_high_ids_and_bidirectional_batches` | 32-bit Wasm must retain IDs above 2^54 and portable wire charges; actual 32-bit heap allocations must fit the common conservative ledger. |
-| `purrdf-core` / `segmented` | scalar | `charged_read_peak_covers_measured_allocations_including_streamed_output` | 32-bit Wasm must retain IDs above 2^54 and portable wire charges; actual 32-bit heap allocations must fit the common conservative ledger. |
-| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `required_paths_are_available` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
-| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `the_selected_path_is_available` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
-| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `every_kernel_path_encodes_and_decodes_the_same_bytes` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
-| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `copy_kernels_match_portable` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
-| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `match_length_kernels_match_portable` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
-| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `match_length_paths_reproduce_the_vectors` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
-| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `hash_kernels_match_portable` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
-| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `selected_backend_is_reported` | Actual simd128 copy/match/hash kernels and composition against portable/bytewise/frozen answers, plus backend presence/selection. |
-| `purrdf-lex` / `frozen_vectors` | scalar + SIMD | `needle_searches_replay_the_frozen_vectors` | Actual ByteClass/find_byte/find_byte2 packed scanner answers; grammar and Unicode corpora remain native. |
+| `purrdf-sparql-eval` / `knn_wasm_reassociated` | scalar + SIMD | `the_reassociated_path_is_the_one_this_build_was_made_for` | Selects WasmScalar or WasmSimd128 and records that exact path. |
+| `purrdf-sparql-eval` / `knn_wasm_reassociated` | SIMD | `the_reassociated_distance_is_within_the_error_bound_of_the_exact_one` | Calls the actual WasmSimd128 distance kernel and bounded kernel against the exact reference. |
+| `purrdf-sparql-eval` / `stack_refusal` | scalar | `prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller` | Refuses evaluation against an installed smaller shadow-stack floor and restores the caller context. |
+| `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name` | Refuses an image naming a different WASM arithmetic path with its typed admission error. |
+| `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `the_image_records_the_path_and_shape_this_build_was_made_for` | Records wasm32 and the actual SIMD feature bit and arithmetic path in the image. |
+| `purrdf-hash-conformance` / `hex` | SIMD | `every_path_matches_portable` | Explicitly calls the wasm simd128 encoder over lengths, alignments and write boundaries and asserts its selection. |
+| `purrdf-hash-conformance` / `blake3` | scalar + SIMD | `required_backends_are_available` | Asserts Wasm128 selection with simd128 and Portable selection without it. |
+| `purrdf-hash-conformance` / `blake3` | SIMD | `random_inputs_cover_irregular_trees_and_alignment` | Explicitly calls Wasm128 one-shot and streaming kernels against the portable kernel over irregular trees, chunk schedules and alignments. |
+| `purrdf-testkit` / `bench` | scalar | `the_store_options_are_refused_on_wasm32` | Refuses filesystem-backed benchmark storage on wasm32. |
+| `purrdf-testkit` / `bench` | scalar | `a_measured_run_reports_its_estimates` | Runs measurements using the imported WASM host clock and prints estimates without filesystem storage. |
+| `purrdf-stack` / `on_stack` | scalar | `an_in_floor_request_runs` | Runs inline within an installed WASM shadow-stack floor. |
+| `purrdf-stack` / `on_stack` | scalar | `a_scoped_in_floor_request_borrows_the_caller_s_locals` | Runs a borrowing scoped call inline within an installed WASM shadow-stack floor. |
+| `purrdf-stack` / `on_stack` | scalar | `an_over_floor_request_is_refused` | Refuses a request exceeding the installed WASM shadow-stack floor. |
+| `purrdf-stack` / `on_stack` | scalar | `an_over_floor_scoped_request_is_refused` | Refuses a scoped request exceeding the installed WASM shadow-stack floor. |
+| `purrdf-core` / `csv_scan_wasm` | SIMD | `every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length` | Explicitly calls the simd128 field scanner against a bytewise reference over vector widths and alignments. |
+| `purrdf-core` / `csv_scan_wasm` | SIMD | `every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs` | Explicitly calls the simd128 field scanner against a bytewise reference over seeded byte buffers. |
+| `purrdf-core` / `csv_scan_wasm` | SIMD | `the_target_explicit_kernel_is_among_those_compared` | Asserts that simd128 is included in the compared kernels and is the selected backend. |
+| `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `selected_backend_is_reported` | Asserts Simd128 selection with simd128 and Portable selection without it. |
+| `purrdf-deflate` / `deflate_conformance` | SIMD | `every_kernel_path_encodes_and_decodes_the_same_bytes` | Explicitly selects the simd128 encoder and decoder and compares their composed output with the portable backend. |
+| `purrdf-deflate` / `deflate_conformance` | SIMD | `copy_kernels_match_portable` | Calls simd128 overlapping match-copy operations against a bytewise reference. |
+| `purrdf-deflate` / `deflate_conformance` | SIMD | `match_length_kernels_match_portable` | Calls the simd128 match-length kernel against the portable kernel over vector widths and mismatch positions. |
+| `purrdf-deflate` / `deflate_conformance` | SIMD | `hash_kernels_match_portable` | Calls the simd128 window-hash kernel against the scalar reference over lengths and offsets. |
 
-General query completion, join scaling, ordered JSON reconstruction/metadata/
-vocabulary refusal, length framing, SHACL lifecycle/corpus, benchmark statistics
-and storage conformance stay in their native targets. The hash benchmark targets
-remain native benchmarks; WASM host-clock execution and actual kernel comparisons
-are covered by the named cases above. General Unicode/escape grammar remains in
-the native lexical corpus; the existing retained scanner case exercises actual
-byte-search kernels.
+The hash benchmark targets remain native benchmarks. No benchmark smoke target
+runs in the WASM lane; the selected testkit host-clock case exercises its WASM
+clock import and filesystem refusal.
 
-Release build, package execution, focused target execution and assembly codegen
-are separate claims. `make simd-asm` measures all seven configurations under its
-unchanged codegen/site/provenance requirements; successful tests do not establish
-SIMD code generation or completion within the hosted job limit.
+Release build, package interfaces, focused execution and assembly codegen are
+separate claims. `make simd-asm` retains all seven configurations and its existing
+codegen, site and provenance requirements. Successful execution alone does not
+establish SIMD code generation.

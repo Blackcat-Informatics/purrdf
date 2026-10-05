@@ -497,16 +497,12 @@ handle, so a round trip cannot be witnessed with `==`. The witness is the bytes.
 **This codec supplies the canonical form, and hence the equality relation the
 types themselves lack**: two values are equal exactly when they encode alike.
 
-Native Rust runs the complete prepared-product lifecycle and W3C SHACL
-conformance cases. The `make wasm-test` lane selects two carrier probes from
-`crates/shapes/tests/product_wasm.rs`: encoding matches the committed native
-golden, and that golden restores on the 32-bit WASM target. These compare the
-writer and reader against bytes produced by a native build, so target-dependent
-integer widths or byte layout cannot silently break host-to-browser products.
-The named selections and native owners are in
-[WASM test ownership](../WASM_TESTING.md). Both targets use the same
-`harness = false` runner, with compile-time shapes, data and golden buffers;
-neither carrier probe needs a filesystem.
+Native Rust runs the complete prepared-product lifecycle, committed encoding
+and restoration goldens, and W3C SHACL conformance cases. `make wasm` builds the
+codec for the WASM target; `make wasm-pkg-test` exercises the actual JavaScript
+binding and identity ABI. General codec semantics remain native. The named
+WASM behaviors and native owners are in
+[WASM test ownership](../WASM_TESTING.md).
 
 The codec itself touches no filesystem, no clock, no thread and no source of
 randomness at any layer — envelope, identity, dataset section, model section — and

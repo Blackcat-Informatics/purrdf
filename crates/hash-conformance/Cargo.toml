@@ -45,17 +45,14 @@ name = "hasher"
 harness = false
 
 # The frozen-vector replay of MD5, SHA-1, SHA-3 and CRC-32 over every path the
-# host runs. Every target below runs on purrdf_testkit's `harness = false`
-# runner, so the same named cases run natively under `cargo test` and on
-# wasm32-unknown-unknown in Node under scripts/wasm-test-runner.sh
-# (`make wasm-test`).
+# host runs. Every target below runs natively on purrdf_testkit's
+# `harness = false` runner; focused WASM selects actual SIMD kernels.
 [[test]]
 name = "digest_differential"
 harness = false
 
 # Base16 rendering: RFC 4648 vectors and every encoding path against the
-# portable one, so `make wasm-test` executes the wasm32 `simd128` kernel as
-# well as the portable path.
+# portable one. `make wasm-test` selects the explicit simd128 kernel comparison.
 [[test]]
 name = "hex"
 harness = false

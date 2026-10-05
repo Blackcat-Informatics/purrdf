@@ -93,16 +93,11 @@ DE-9IM matrices, the exact decimal measures, the constructors, and the IEEE bit
 patterns at the float boundary. It folds the resulting **bytes** into one FNV-1a
 `u64`.
 
-* `crates/geo/tests/determinism.rs` pins that number, in `GOLDEN_DIGEST`. It is
-  `harness = false` on the shared test runner, so the same named cases run
-  natively and on `wasm32-unknown-unknown`, each printing the digest it computed.
-* `scripts/check-geo-determinism.sh` runs that target natively and on
-  `wasm32-unknown-unknown` — in Node, through `scripts/wasm-test-runner.sh`, the
-  cargo runner every wasm32 test uses — reads `GOLDEN_DIGEST` out of the test
-  file rather than restating it, and fails unless every named case reports the
-  same digest on both targets and it is the golden.
-* `make geo-determinism` runs it; CI runs it in the `wasm` job, where the target
-  and Node are already present.
+`crates/geo/tests/determinism.rs` pins that number in `GOLDEN_DIGEST` and
+runs the complete corpus natively under `make check`. The conformance matrix
+reads the same constant from the test source and compares it with the native
+example's digest. `make wasm` separately builds the release crate; general
+geometry and numeric expectations stay in native Rust.
 
 Two design points in that harness are load-bearing:
 

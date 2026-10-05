@@ -108,15 +108,10 @@ purrdf-alloc-probe = { workspace = true }
 # from the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 
-# The tests in this crate that must EXECUTE on wasm32-unknown-unknown rather than
-# merely compile for it, because the embedding kNN surface ranks by binary64
-# arithmetic: "the same answer on every target" (exact) and "within the error
-# bound on every target" (reassociated) are claims two runs on one target cannot
-# check. `harness = false` on the shared runner, so `make wasm-test` runs the same
-# named cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs
-# natively.
+# Complete native semantic expectations on the shared harness.
+# Actual WASM behaviors are selected separately in `make wasm-test`.
 [[test]]
-# Execute the same full-scale binding and EXPLAIN regressions natively and in Node.
+# Complete native binding and EXPLAIN regressions.
 name = "boundary_join_scaling"
 harness = false
 

@@ -15,10 +15,10 @@
 //! real PURREMB space there, and every neighbour it ranks sits within that bound of the
 //! exact relation's distance for the same neighbour.
 //!
-//! `make wasm-test` runs it twice on wasm32: on the baseline build, whose path is
-//! `wasm-scalar`, and on a `+simd128` build, whose path is `wasm-simd128`, each time in
-//! Node through `scripts/wasm-test-runner.sh`. The target is `harness = false` on
-//! `purrdf_testkit::harness`, so natively the same named cases run under `cargo test`,
+//! `make wasm-test` selects the actual path assertion on scalar and simd128
+//! builds and the direct distance-kernel comparison on simd128. Generic overflow
+//! and relation semantics stay native. The target uses the shared harness, so
+//! natively every named case runs under `cargo test`,
 //! on `x86_64` and `aarch64` along their named paths and on every other target along
 //! the portable one.
 //!

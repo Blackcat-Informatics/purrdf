@@ -1,43 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! **The same fusion, executed on x86-64 and on `wasm32-unknown-unknown`,
-//! compared against the same hand-computed decimals.**
-//!
-//! Every other test in this crate's suite proves something weaker: that fusion
-//! is a pure function *of one target*. Run it fifty times on this machine and it
-//! agrees with itself — which cannot distinguish a fusion that is
-//! target-independent from one that merely happens to be self-consistent
-//! wherever it was last compiled. `make wasm` does not close that gap either: it
-//! proves the release crates **build** for wasm32, not that they **answer** the
-//! same way there.
-//!
-//! # What is actually at risk
-//!
-//! A fused score is a sum of `weight * recip(K + rank)` terms, and the whole
-//! ordering claim rests on those terms being the same value everywhere. If the
-//! reciprocal were a `f64` division, a reassociated sum or a fused multiply-add
-//! would move a last bit, two near-tied candidates would swap, and the browser
-//! would return a different *answer* than the host — an answer divergence, not a
-//! rounding detail, and one nothing downstream could detect. The reciprocal is
-//! therefore a single integer division over `i128` fixed point, truncating
-//! toward zero, with no floating-point value anywhere in the path.
-//!
-//! That is an argument. This file is where it becomes an executed test.
-//!
-//! # How it runs on both
-//!
-//! One test body per case, one runner on both targets. The target is
-//! `harness = false`, and its `main` hands the named cases to
-//! `purrdf_testkit::harness`: natively they run under `cargo test`, and on
-//! `wasm32-unknown-unknown` the same named cases run in Node through
-//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` (and CI's
-//! wasm job) sets:
-//!
-//! ```text
-//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
-//!     cargo test -p purrdf-retrieval --target wasm32-unknown-unknown --test wasm_determinism
-//! ```
+//! Native fusion expectations against hand-computed fixed-point decimals and
+//! committed canonical identities. The full target runs under `cargo test`;
+//! generic arithmetic and hash expectations remain native Rust.
 //!
 //! # Why the expectations are what they are
 //!
@@ -59,8 +25,8 @@
 //!
 //! The recorded expectations are the two BLAKE3 digests — the fusion profile's
 //! identity and an answer's evidence identity — because there is no hand
-//! arithmetic that produces one. Pinning them is still the cross-target claim
-//! this file exists to make: each digest is taken over a canonical,
+//! arithmetic that produces one. Pinning them asserts the encoding law:
+//! each digest is taken over a canonical,
 //! length-framed encoding, so a target that framed an integer or ordered a map
 //! differently would produce a different hex here. The evidence digest is also
 //! pinned the stronger way, by writing out the **bytes** it is a digest of, which
@@ -72,7 +38,7 @@
 //! # What else crosses the target boundary
 //!
 //! A fused score is not the only thing an answer carries, so two further facts
-//! about the same fusion are pinned here rather than on one target only:
+//! about the same fusion are pinned here against native expectations:
 //!
 //! * **the evidence identity**, which is what two holders of two answers compare
 //!   to decide whether they were served from the same indexes — hand-written
