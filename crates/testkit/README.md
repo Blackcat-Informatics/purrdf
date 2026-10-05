@@ -44,6 +44,11 @@ member.
   and clock are Node's, cases run serially, and since a panic aborts a wasm32
   module, a panicking case is reported `FAILED` with its message and tally
   before the module traps and the runner exits non-zero.
+  `PURRDF_TEST_REQUIRE_EXACT=1` requires nonempty exact filters and refuses the
+  run unless every filter executes one case. `make wasm-test` enables it after
+  runner preflight; native subprocess tests use the existing fixture to check
+  absent, partial, ignored, skipped and duplicate selections. Unset or `0`
+  preserves normal libtest behavior.
   `harness::without_host_clock_or_entropy` runs a computation with every host
   clock and entropy source throwing on wasm32, for answers that must be a
   function of their inputs alone; `harness::print_line` prints a line that

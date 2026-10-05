@@ -16,6 +16,11 @@ interface. Runner preflight additionally exercises panic handling, refused flags
 and sealed host reads. General digest vectors, numeric expectations, geometry,
 index determinism and codec corpora run in native Rust.
 
+After preflight, the lane sets `PURRDF_TEST_REQUIRE_EXACT=1` in the shared Rust
+harness. Each invocation must execute one case for every exact filter; missing,
+duplicate, ignored or skipped selections refuse the run. Native subprocess
+regressions establish this admission rule using the existing harness fixture.
+
 The native owner of each row is `cargo test --locked -p PACKAGE --test TARGET`.
 The three WASM-only store/floor refusal cases exercise platform-specific
 branches; their native targets exercise filesystem/thread behavior. All other

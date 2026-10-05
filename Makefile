@@ -698,6 +698,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack and host-interfa
 		echo "SKIP: node not on PATH — the wasm test harness runs the module in Node"; \
 	else \
 		bash scripts/check-wasm-test-runner.sh \
+		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \

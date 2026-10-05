@@ -22,13 +22,78 @@ const FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-harness-fixture");
 const PRINT_FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-harness-print-fixture");
 const HOST_FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-wasm-host-fixture");
 
-fn run_fixture(args: &[&str]) -> Output {
-    Command::new(FIXTURE)
+fn fixture_command(args: &[&str]) -> Command {
+    let mut command = Command::new(FIXTURE);
+    command
         .args(args)
         .env_remove("RUST_TEST_THREADS")
         .env_remove("RUST_TEST_NOCAPTURE")
+        .env_remove("PURRDF_TEST_REQUIRE_EXACT");
+    command
+}
+
+fn run_fixture(args: &[&str]) -> Output {
+    fixture_command(args)
         .output()
         .expect("run the fixture harness")
+}
+
+#[test]
+fn required_exact_filters_refuse_incomplete_execution() {
+    for args in [
+        vec!["--exact", "does_not_exist"],
+        vec!["--exact", "alpha_passes", "does_not_exist"],
+        vec!["--exact", "epsilon_is_ignored"],
+        vec!["--exact", "alpha_passes", "--skip", "alpha_passes"],
+        vec!["--exact", "alpha_passes", "alpha_passes"],
+        vec!["alpha_passes"],
+        vec!["--exact"],
+        vec!["--exact", "alpha_passes", "--list"],
+    ] {
+        let output = fixture_command(&args)
+            .env("PURRDF_TEST_REQUIRE_EXACT", "1")
+            .output()
+            .expect("run the required exact selection");
+        assert_eq!(
+            output.status.code(),
+            Some(101),
+            "incomplete selection {args:?} succeeded: {}",
+            stdout_of(&output)
+        );
+    }
+}
+
+#[test]
+fn required_exact_filters_execute_every_requested_case() {
+    let output = fixture_command(&["--exact", "alpha_passes", "beta_passes"])
+        .env("PURRDF_TEST_REQUIRE_EXACT", "1")
+        .output()
+        .expect("run both required cases");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = stdout_of(&output);
+    assert!(stdout.contains("test alpha_passes ... ok"));
+    assert!(stdout.contains("test beta_passes ... ok"));
+    assert!(stdout.contains("test result: ok. 2 passed; 0 failed; 0 ignored;"));
+
+    let normal = run_fixture(&["--exact", "does_not_exist"]);
+    assert_eq!(
+        normal.status.code(),
+        Some(0),
+        "libtest default is preserved"
+    );
+    assert!(stdout_of(&normal).contains("test result: ok. 0 passed;"));
+
+    let disabled = fixture_command(&["--exact", "does_not_exist"])
+        .env("PURRDF_TEST_REQUIRE_EXACT", "0")
+        .output()
+        .expect("run with the requirement disabled");
+    assert_eq!(disabled.status.code(), Some(0));
+
+    let invalid = fixture_command(&["--exact", "alpha_passes"])
+        .env("PURRDF_TEST_REQUIRE_EXACT", "true")
+        .output()
+        .expect("run with an invalid requirement value");
+    assert_eq!(invalid.status.code(), Some(101));
 }
 
 /// The output with the run's duration replaced by `S.SS`.
