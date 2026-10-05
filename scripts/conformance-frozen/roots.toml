@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+# Declarative corpus roots and their SHA-256 receipts, consumed by the existing guard.
+# Payloads and receipt paths are data; the freeze algorithm stays in check-corpus-frozen.py.
+
+[roots]
+"vectors/rdf12-canon" = "scripts/conformance-frozen/vectors-rdf12-canon.sha256"
+"vectors/sparql-governors" = "scripts/conformance-frozen/vectors-sparql-governors.sha256"
+"vectors/shacl" = "scripts/conformance-frozen/vectors-shacl.sha256"
+"vectors/shacl12" = "scripts/conformance-frozen/vectors-shacl12.sha256"
+"vectors/shexTest" = "scripts/conformance-frozen/vectors-shexTest.sha256"
+"vectors/sparql-cdt" = "scripts/conformance-frozen/vectors-sparql-cdt.sha256"
+"vectors/wycheproof" = "scripts/conformance-frozen/vectors-wycheproof.sha256"
+"vectors/JSONTestSuite" = "scripts/conformance-frozen/vectors-JSONTestSuite.sha256"
+"vectors/xmlconf" = "scripts/conformance-frozen/vectors-xmlconf.sha256"
+"vectors/yaml-test-suite" = "scripts/conformance-frozen/vectors-yaml-test-suite.sha256"
+"crates/shapes/corpus" = "scripts/conformance-frozen/shapes-corpus.sha256"
+"crates/shapes/spec" = "scripts/conformance-frozen/shapes-spec.sha256"
+"crates/sparql-conformance/corpus/construct" = "scripts/conformance-frozen/sparql-conformance-corpus-construct.sha256"
+"crates/sparql-conformance/corpus/describe" = "scripts/conformance-frozen/sparql-conformance-corpus-describe.sha256"
+"crates/sparql-conformance/entailment-suite/w3c-owl2" = "scripts/conformance-frozen/sparql-conformance-w3c-owl2.sha256"
+"crates/sparql-conformance/entailment-suite/w3c-owl2-rl" = "scripts/conformance-frozen/sparql-conformance-w3c-owl2-rl.sha256"
+"crates/sparql-conformance/suite/w3c-sparql10" = "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql10.sha256"
+"crates/sparql-conformance/suite/w3c-sparql11" = "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql11.sha256"
+"crates/sparql-conformance/suite/w3c-sparql12" = "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql12.sha256"
+"crates/rdf/tests/corpus/w3c" = "scripts/conformance-frozen/rdf-tests-corpus-w3c.sha256"
+"crates/jsonschema/tests/suite" = "scripts/conformance-frozen/jsonschema-suite.sha256"
+"crates/jsonschema/tests/metaschemas" = "scripts/conformance-frozen/jsonschema-metaschemas.sha256"
+"crates/iri/unicode" = "scripts/conformance-frozen/iri-unicode.sha256"
+"crates/lex/data/html" = "scripts/conformance-frozen/lex-html.sha256"
+"crates/text/lexicons/icu-78.3" = "scripts/conformance-frozen/text-icu-78.3.sha256"
+"crates/text/tests/stemming_vectors" = "scripts/conformance-frozen/text-stemming-vectors.sha256"
+"crates/text/tests/phonetic_vectors" = "scripts/conformance-frozen/text-phonetic-vectors.sha256"

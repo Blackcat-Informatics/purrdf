@@ -28,9 +28,11 @@ import argparse
 import hashlib
 import sys
 import subprocess
+import tomllib
 from pathlib import Path
 
-# Each guarded root -> its manifest file (repo-relative). A root is frozen whole:
+# Each guarded root -> its manifest file is declared in conformance-frozen/roots.toml.
+# A root is frozen whole:
 # every payload file beneath it is hashed. These are the corpora the SHACL/shexTest
 # conformance runners consume, the first-party frozen SHACL corpus, the first-party
 # execution-governor corpus (whose freeze manifest is itself the preimage of the
@@ -41,7 +43,7 @@ from pathlib import Path
 # W3C RDF 1.2 syntax/eval corpus the native text codecs (Turtle / TriG /
 # N-Triples / N-Quads / RDF-XML) round-trip against — which is also where every
 # language-tag and base-direction negative vector lives — the vendored W3C
-# SPARQL 1.1 and 1.2 suites the conformance matrix grades against, and the
+# SPARQL 1.0, 1.1 and 1.2 suites the conformance matrix grades against, and the
 # official JSON-Schema-Test-Suite and the draft 2020-12, 2019-09 and draft-07
 # meta-schemas `purrdf-jsonschema`'s tests register (test data only: the crate
 # compiles no meta-schema in) — together with the vendored W3C SHACL 1.2 vocabularies,
@@ -49,75 +51,21 @@ from pathlib import Path
 # all declared
 # byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
 # in gmeow-gts and is intentionally not policed here; adding a new root is a
-# deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
+# deliberate edit to that registry followed by `--update` — a corpus is NEVER guarded
 # until it appears here.)
 #
 # The roots name *vendored* trees, not their first-party parents. Freezing is
 # the claim "no one hand-edits this", and it is only true of a tree PurRDF
 # copies from upstream and never authors into. That is why the guarded SPARQL
-# entries are `suite/w3c-sparql11` and `suite/w3c-sparql12` rather than
+# entries are `suite/w3c-sparql10`, `suite/w3c-sparql11` and `suite/w3c-sparql12` rather than
 # `suite/`: the sibling `suite/purrdf-*` suites are first-party cases this
 # project writes as features land, and freezing them would make every added
 # conformance test demand a `--update` — turning the loud, reviewable
 # re-vendor act into routine noise and destroying the signal for the vendored
 # corpora that actually need it.
-GUARDED_ROOTS: dict[str, str] = {
-    "vectors/rdf12-canon": "scripts/conformance-frozen/vectors-rdf12-canon.sha256",
-    "vectors/sparql-governors": (
-        "scripts/conformance-frozen/vectors-sparql-governors.sha256"
-    ),
-    "vectors/shacl": "scripts/conformance-frozen/vectors-shacl.sha256",
-    "vectors/shacl12": "scripts/conformance-frozen/vectors-shacl12.sha256",
-    "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",
-    "vectors/sparql-cdt": "scripts/conformance-frozen/vectors-sparql-cdt.sha256",
-    "vectors/wycheproof": "scripts/conformance-frozen/vectors-wycheproof.sha256",
-    "vectors/JSONTestSuite": "scripts/conformance-frozen/vectors-JSONTestSuite.sha256",
-    "vectors/xmlconf": "scripts/conformance-frozen/vectors-xmlconf.sha256",
-    "vectors/yaml-test-suite": (
-        "scripts/conformance-frozen/vectors-yaml-test-suite.sha256"
-    ),
-    "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",
-    "crates/shapes/spec": "scripts/conformance-frozen/shapes-spec.sha256",
-    "crates/sparql-conformance/corpus/construct": (
-        "scripts/conformance-frozen/sparql-conformance-corpus-construct.sha256"
-    ),
-    "crates/sparql-conformance/corpus/describe": (
-        "scripts/conformance-frozen/sparql-conformance-corpus-describe.sha256"
-    ),
-    "crates/sparql-conformance/entailment-suite/w3c-owl2": (
-        "scripts/conformance-frozen/sparql-conformance-w3c-owl2.sha256"
-    ),
-    "crates/sparql-conformance/entailment-suite/w3c-owl2-rl": (
-        "scripts/conformance-frozen/sparql-conformance-w3c-owl2-rl.sha256"
-    ),
-    "crates/sparql-conformance/suite/w3c-sparql11": (
-        "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql11.sha256"
-    ),
-    "crates/sparql-conformance/suite/w3c-sparql12": (
-        "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql12.sha256"
-    ),
-    "crates/rdf/tests/corpus/w3c": (
-        "scripts/conformance-frozen/rdf-tests-corpus-w3c.sha256"
-    ),
-    "crates/jsonschema/tests/suite": (
-        "scripts/conformance-frozen/jsonschema-suite.sha256"
-    ),
-    "crates/jsonschema/tests/metaschemas": (
-        "scripts/conformance-frozen/jsonschema-metaschemas.sha256"
-    ),
-    "crates/iri/unicode": "scripts/conformance-frozen/iri-unicode.sha256",
-    "crates/lex/data/html": "scripts/conformance-frozen/lex-html.sha256",
-    "crates/text/lexicons/icu-78.3": (
-        "scripts/conformance-frozen/text-icu-78.3.sha256"
-    ),
-    "crates/text/tests/stemming_vectors": (
-        "scripts/conformance-frozen/text-stemming-vectors.sha256"
-    ),
-    # Frozen independent binary-oracle answers are data, not implementation code.
-    "crates/text/tests/phonetic_vectors": (
-        "scripts/conformance-frozen/text-phonetic-vectors.sha256"
-    ),
-}
+GUARDED_ROOTS: dict[str, str] = tomllib.loads(
+    (Path(__file__).resolve().parent / "conformance-frozen/roots.toml").read_text()
+)["roots"]
 
 
 def repo_root() -> Path:
