@@ -61,9 +61,9 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 | surface | allocations per focus node |
 |---|---:|
 | `sh:sparql` constraint | 40 |
-| custom `sh:ask` component | 86 |
+| custom `sh:ask` component | 78 |
 | custom `sh:select` component | 48 |
-| `sh:expression` function call | 97 |
+| `sh:expression` function call | 101 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,10 +74,10 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 61 |
-| custom `sh:ask` component, governed | 114 |
-| custom `sh:select` component, governed | 69 |
-| `sh:expression` function call, governed | 134 |
+| `sh:sparql` constraint, governed | 58 |
+| custom `sh:ask` component, governed | 98 |
+| custom `sh:select` component, governed | 66 |
+| `sh:expression` function call, governed | 126 |
 
 Until that second table existed the governed lane's per-focus-node term was
 measured by nothing at all, so a regression in it was invisible to every pin in
@@ -515,6 +515,19 @@ and terms on one shared stack whose first thirty-two pending nodes live inline, 
 on these fixtures it allocates nothing at all: 47 / 106 / 60 / 119 ungoverned,
 64 / 128 / 77 / 144 governed, and 212, unchanged, on the `&str`-door `sh:ask` fallback
 lane.
+
+The twelfth: every pre-binding lane now takes one rewrite, the seed joined at the
+core and then an expression walk that writes each value where the seed does not
+reach. Measured per run, that walk rebuilt every pattern it visited, and on the
+single-row `SELECT (f(?a0, ?a1) AS ?result) WHERE {}` a SHACL scalar call runs per
+focus node, it rose the governed `sh:expression` term from 126 to 134. The walk is
+needed only below a `GROUP BY`, a sub-`SELECT`, a `FILTER` or `BIND` inside a group,
+an `OPTIONAL` or `MINUS` right arm, a `LATERAL` or `SERVICE` operand, an `EXISTS`
+body or a property-function call; a query with none of them reads every pre-bound
+variable from the seeded row, so it now takes the seed alone. That restored the
+`sh:expression` term and lowered the others: 40 / 78 / 48 / 101 ungoverned,
+58 / 98 / 66 / 126 governed, and 200 on the `&str`-door `sh:ask` fallback lane.
+`substitute::seed_fast_path_tests` holds the fast path to the walk's answers.
 
 An id is meaningful only against the dataset that minted it, so the door makes a
 cross-dataset binding impossible rather than merely refused: the id and the view

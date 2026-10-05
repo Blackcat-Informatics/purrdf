@@ -2735,6 +2735,19 @@ impl NativeSparqlEngine {
     /// which is what lets one prepared execution ask a producer a point question per
     /// run rather than scan it.
     ///
+    /// # Pre-bound variables on the engine lanes
+    ///
+    /// A parameter, like a request's substitution, is one value for the whole
+    /// evaluation, at every depth. A query that ASSIGNS one — `BIND(… AS ?p)` or
+    /// `(… AS ?p)`, at any depth — is refused here
+    /// ([`purrdf_sparql_algebra::Query::assigned_prebound`]). Every other construct
+    /// answers by join semantics: `VALUES ?p { … }` keeps only the rows that agree with
+    /// the bound value (none, when it lists only others), and `MINUS` subtracts with
+    /// `?p` bound on both sides. That is the answer rdflib's `initBindings` gives. The
+    /// SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,
+    /// Appendix A forbids `MINUS` and a `VALUES` over a pre-bound name in a SHACL
+    /// query, and `purrdf-shapes` refuses both when a shapes graph loads.
+    ///
     /// # Errors
     ///
     /// [`RdfDiagnostic`] if `query` does not parse or is refused admission, or if
@@ -3674,6 +3687,9 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
 /// Extensions, Appendix A) — so both values evaluate identically: a prepared
 /// execution's parameters, a request's substitutions, SHACL-SPARQL and every other
 /// caller share one meaning, one admission and one answer.
+#[deprecated(
+    note = "every lane applies the SHACL pre-binding rewrite; both values evaluate identically"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShaclPrebinding {
     /// The SHACL pre-binding lane: `sh:sparql` constraint and component bodies,
@@ -3728,19 +3744,21 @@ pub enum ShaclPrebinding {
 /// stays open:
 ///
 /// ```
-/// use purrdf_sparql_eval::{ExtensionEnv, QueryOptions, ShaclPrebinding};
+/// use purrdf_sparql_eval::{ExtensionEnv, QueryOptions};
 ///
 /// let env = ExtensionEnv::empty();
 /// let options = QueryOptions::new()
 ///     .with_env(env)
-///     .with_prebinding(ShaclPrebinding::Applied)
+///     .with_declared_prebound(&["this"])
 ///     .with_call_depth(3);
-/// assert_eq!(options.prebinding, ShaclPrebinding::Applied);
+/// assert_eq!(options.declared_prebound, ["this"]);
 /// assert_eq!(options.call_depth, 3);
 /// // Fields left unset keep `QueryOptions::EMPTY`'s values.
 /// assert!(options.remote.is_none());
 /// assert!(options.load.is_none());
 /// ```
+// The deprecated `prebinding` field stays for compatibility.
+#[allow(deprecated)]
 #[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct QueryOptions<'a> {
@@ -3880,6 +3898,8 @@ impl<'a> QueryOptions<'a> {
     }
 }
 
+// `EMPTY` sets the deprecated `prebinding` field it still carries.
+#[allow(deprecated)]
 impl QueryOptions<'_> {
     /// Configure nothing: no declared pre-bound names, every registry the
     /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
@@ -3916,6 +3936,8 @@ impl Default for QueryOptions<'_> {
 impl<'a> QueryOptions<'a> {
     /// Set the pre-binding lane the request names (see [`ShaclPrebinding`]); every lane
     /// takes the same rewrite.
+    #[deprecated(note = "every lane applies the SHACL pre-binding rewrite; the lane has no effect")]
+    #[allow(deprecated)]
     #[must_use]
     pub const fn with_prebinding(mut self, prebinding: ShaclPrebinding) -> Self {
         self.prebinding = prebinding;
@@ -4752,6 +4774,8 @@ fn resolve_governed<D: DatasetView + Sync>(
 }
 
 #[cfg(test)]
+// The compatibility tests still name both `ShaclPrebinding` values.
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermValue};

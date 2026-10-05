@@ -1702,6 +1702,15 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
     // list — it moves each `(Variable, GroundTerm)` into the seed's `Values` row —
     // and the walk that reads these runs after it, in that order, for the reason
     // `apply_probes` gives.
+    if seed_reaches_every_read(&query) {
+        return apply_probes(query, probes);
+    }
+    walk_shacl_probes(query, probes)
+}
+
+/// [`apply_shacl_probes`] without its seed-only fast path: the seed, then the
+/// expression walk that writes each value where the seed does not reach.
+fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     let expr_subs = ExprSubs(probes.clone());
 
     let mut query = apply_probes(query, probes);
@@ -1709,6 +1718,84 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
         substitute_in_graph_pattern(pattern, &expr_subs, WalkScope::Descent);
     });
     query
+}
+
+/// Whether the seed [`apply_probes`] joins at the core already reaches every place
+/// the query can read a pre-bound variable, so the expression walk would change no
+/// answer.
+///
+/// The walk exists for the places a joined seed does not reach: a `GROUP BY` (which
+/// keeps only its keys), a sub-`SELECT` (whose projection hides the outer row), a
+/// `FILTER` or `BIND` inside a group (which sees only that group's rows), the right
+/// arm of an `OPTIONAL` or `MINUS`, a `LATERAL` or `SERVICE` operand, an `EXISTS`
+/// body, and a property-function call's argument. A query with none of them
+/// — the single-row `SELECT (f(?a0, ?a1) AS ?result) WHERE {}` a SHACL scalar call
+/// runs per focus node is the common case — reads every pre-bound variable from the
+/// seeded row, so it answers alike with the seed alone and skips the walk's rebuild.
+fn seed_reaches_every_read(query: &Query) -> bool {
+    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, walk_pre_post};
+    // The wrappers above the core — the ones `map_core_pattern_mut` descends to place
+    // the seed beneath them — read the seeded row. Below the first other node, only
+    // nodes that match or combine rows without reading an expression are passed: a
+    // `FILTER` or `BIND` inside a group sees that group's rows alone, and a solution
+    // modifier there is a sub-`SELECT`.
+    //
+    // The query's own modifiers wrap its own projection; a second projection, or a
+    // modifier met after a `FILTER`/`BIND` wrapper, is a sub-`SELECT`'s.
+    let mut in_head = true;
+    let mut projected = false;
+    let mut below_modifiers = false;
+    walk_pre_post(NodeRef::Pattern(query.pattern()), |visit, node| {
+        if visit == Visit::Exit {
+            return Flow::Descend;
+        }
+        match node {
+            NodeRef::Expr(Expression::Exists(_)) => Flow::Stop,
+            NodeRef::Pattern(GraphPattern::Project { .. }) => {
+                if in_head && !projected && !below_modifiers {
+                    projected = true;
+                    Flow::Descend
+                } else {
+                    Flow::Stop
+                }
+            }
+            NodeRef::Pattern(
+                GraphPattern::Distinct { .. }
+                | GraphPattern::Reduced { .. }
+                | GraphPattern::Slice { .. }
+                | GraphPattern::OrderBy { .. },
+            ) => {
+                // Above or beneath the query's own projection; a sub-`SELECT`'s
+                // modifiers sit under a second `Project`, which stops the walk.
+                if in_head && !below_modifiers {
+                    Flow::Descend
+                } else {
+                    Flow::Stop
+                }
+            }
+            NodeRef::Pattern(
+                GraphPattern::Extend { .. }
+                | GraphPattern::Filter { .. }
+                | GraphPattern::Unfold { .. },
+            ) => {
+                below_modifiers = true;
+                if in_head { Flow::Descend } else { Flow::Stop }
+            }
+            NodeRef::Pattern(
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Join { .. }
+                | GraphPattern::Union { .. }
+                | GraphPattern::Graph { .. }
+                | GraphPattern::Values { .. },
+            ) => {
+                in_head = false;
+                Flow::Descend
+            }
+            NodeRef::Pattern(_) => Flow::Stop,
+            _ => Flow::Descend,
+        }
+    })
 }
 
 /// What each pre-bound variable becomes in an EXPRESSION position, keyed by the
@@ -3666,6 +3753,131 @@ mod tests {
 /// Every function converted from recursion has a `reference_*` twin here holding the
 /// recursive form, and each twin calls the twins of the converted functions beneath it,
 /// so a test compares whole recursive rewrites against whole work-list rewrites.
+#[cfg(test)]
+mod seed_fast_path_tests {
+    use super::*;
+    use crate::eval::{EvalCtx, Outcome, evaluate_query};
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_sparql_algebra::SparqlParser;
+
+    const P: &str = "http://example.org/p";
+
+    /// `ex:a ex:p ex:o1, ex:o2 . ex:b ex:p ex:o3 .`, every row of `query` with `?this`
+    /// pre-bound to `ex:a` by `rewrite`, sorted.
+    fn answers(
+        query: &str,
+        rewrite: fn(Query, Vec<(Variable, GroundTerm)>) -> Query,
+    ) -> Vec<String> {
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_iri(P);
+        for (subject, object) in [("a", "o1"), ("a", "o2"), ("b", "o3")] {
+            let s = builder.intern_iri(&format!("http://example.org/{subject}"));
+            let o = builder.intern_iri(&format!("http://example.org/{object}"));
+            builder.push_quad(s, p, o, None);
+        }
+        let dataset = builder.freeze().expect("freeze");
+        let parsed = SparqlParser::new()
+            .with_prebound_variables(["this"])
+            .parse_query(query)
+            .expect("parse");
+        let probes = vec![(
+            Variable::new("this"),
+            GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/a")),
+        )];
+        let rewritten = rewrite(parsed, probes);
+        let mut ctx = EvalCtx::new(&dataset);
+        let Outcome::Solutions(sequence) = evaluate_query(&rewritten, &mut ctx).expect("eval")
+        else {
+            panic!("{query}: expected solutions");
+        };
+        let mut rows: Vec<String> = sequence
+            .rows
+            .iter()
+            .map(|row| {
+                let cells: Vec<Option<TermValue>> = row
+                    .iter()
+                    .map(|cell| cell.map(|term| ctx.scratch.value_of(ctx.dataset, term)))
+                    .collect();
+                format!("{cells:?}")
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    /// **The seed alone is taken only where it answers as the walk does.** Each query
+    /// the fast path takes answers exactly the rows the full walk gives it; each query
+    /// with a place the seed cannot reach — a `FILTER` or `BIND` inside a group, a
+    /// sub-`SELECT` (under a `FILTER` too), `OPTIONAL`, `MINUS`, `GROUP BY`, `EXISTS`,
+    /// `LATERAL` — takes the walk, and where the seed alone would answer differently
+    /// that difference is shown, which is why the walk exists.
+    #[test]
+    fn the_seed_alone_is_taken_only_where_it_answers_as_the_walk() {
+        let seeded = [
+            "SELECT (CONTAINS(STR(?this), \"a\") AS ?r) WHERE {}".to_owned(),
+            format!("SELECT ?o WHERE {{ ?this <{P}> ?o }}"),
+            format!("SELECT ?o WHERE {{ {{ ?this <{P}> ?o }} UNION {{ ?s <{P}> ?o }} }}"),
+            format!("SELECT (STR(?this) AS ?t) ?o WHERE {{ ?s <{P}> ?o FILTER(?s = ?this) }}"),
+            format!("SELECT DISTINCT ?o WHERE {{ ?this <{P}> ?o }} ORDER BY ?o LIMIT 1"),
+            format!("SELECT ?o WHERE {{ VALUES ?o {{ <http://example.org/o1> }} ?this <{P}> ?o }}"),
+        ];
+        for query in &seeded {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(
+                seed_reaches_every_read(&parsed),
+                "{query}: takes the seed alone"
+            );
+            assert_eq!(
+                answers(query, apply_probes),
+                answers(query, walk_shacl_probes),
+                "{query}: the seed alone answers as the walk"
+            );
+        }
+        let walked = [
+            format!(
+                "SELECT ?o WHERE {{ {{ ?s <{P}> ?o FILTER(?s = ?this) }} UNION {{ ?s <{P}> ?o FILTER(false) }} }}"
+            ),
+            format!(
+                "SELECT ?x WHERE {{ {{ ?s <{P}> ?o BIND(?this AS ?x) }} UNION {{ ?s <{P}> ?o FILTER(false) }} }}"
+            ),
+            format!(
+                "SELECT ?x WHERE {{ {{ SELECT ?x WHERE {{ ?x <{P}> ?o }} }} FILTER(?x = ?this) }}"
+            ),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?o MINUS {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?this (COUNT(*) AS ?c) WHERE {{ ?this <{P}> ?o }}"),
+        ];
+        // Shapes the walk takes although the seed happens to answer these alike: the
+        // fast path is decided by the shape, never by a particular query's luck.
+        let conservative = [
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?x OPTIONAL {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?o FILTER EXISTS {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?x LATERAL {{ ?this <{P}> ?o }} }}"),
+        ];
+        for query in &conservative {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(!seed_reaches_every_read(&parsed), "{query}: takes the walk");
+        }
+        for query in &walked {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(!seed_reaches_every_read(&parsed), "{query}: takes the walk");
+            assert_ne!(
+                answers(query, apply_probes),
+                answers(query, walk_shacl_probes),
+                "{query}: the seed alone would answer differently"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod walk_tests {
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermBox};

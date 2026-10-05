@@ -56,9 +56,9 @@
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
 //! | `sh:sparql` constraint | 2,695 | 40 | 1,277,672 | 3,119 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 86 | 16,156 | 6,555 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 78 | 16,156 | 6,555 |
 //! | custom `sh:select` component | 2,738 | 48 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 97 | 13,393 | 6,744 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 101 | 13,393 | 6,744 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
@@ -517,7 +517,7 @@ const CASES: &[SparqlCase] = &[
             "        }\"\"\" ] .\n",
         ),
         per_focus_node: 40,
-        governed_per_focus_node: 61,
+        governed_per_focus_node: 58,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -536,12 +536,12 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 86,
+        per_focus_node: 78,
         // The validator's `&&` is one node holding its two operands in one vector,
         // where the binary node boxed each: the governed lane's per-run copy of the
         // substituted query allocates once less for it, on each of the two value
         // nodes.
-        governed_per_focus_node: 114,
+        governed_per_focus_node: 98,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -565,7 +565,7 @@ const CASES: &[SparqlCase] = &[
             "    ex:selectParam true .\n",
         ),
         per_focus_node: 48,
-        governed_per_focus_node: 69,
+        governed_per_focus_node: 66,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -582,13 +582,8 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 97,
-        // 126 before every pre-binding lane took the one rewrite: the governed door
-        // now runs the full pre-binding walk (pushdown, expression walk and the
-        // carry past any `GROUP BY`) where it ran a bare seed join, which costs
-        // eight allocations per focus node and is what makes its answers those
-        // of every other lane.
-        governed_per_focus_node: 134,
+        per_focus_node: 101,
+        governed_per_focus_node: 126,
         governed_entry: 41,
         footprint_is_boundable: true,
         results_per_violation: 1,
@@ -1373,7 +1368,9 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// rewritten trees (per run: the node rows, the expression slots and the shared
 /// shape), 4 to the filter's forked worker context, 2 to compiling the filter's
 /// program, and the rest to the engine entry and the SHACL side's value terms.
-const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 212;
+/// That trace was taken at 212; a query the seed alone reaches now skips the
+/// rewrite's expression walk, which took 12 of the rewrite's share.
+const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 200;
 
 /// One dataset and one validator for [`ASK_FALLBACK_SHAPES`], built the same
 /// way [`Fixture::build`] builds each of [`CASES`]'s entries.

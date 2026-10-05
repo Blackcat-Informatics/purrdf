@@ -1550,41 +1550,36 @@ fn sparql_rule_execution(
             // Polled between focus nodes as well as inside each CONSTRUCT, as on the
             // triple rule execution.
             let governors = crate::sparql::current_governors();
-            crate::sparql::with_cached_execution(
-                run.construct,
-                &names,
-                purrdf_sparql_eval::ShaclPrebinding::Applied,
-                |execution| {
-                    let first = crate::sparql::bind_shape_context(
+            crate::sparql::with_cached_execution(run.construct, &names, |execution| {
+                let first = crate::sparql::bind_shape_context(
+                    execution,
+                    THIS_SLOT + 1,
+                    run.shapes_graph_iri,
+                    run.shape,
+                )?;
+                for (slot, (_, value)) in (first..).zip(run.parameters) {
+                    execution.bind(slot, value.to_term_value())?;
+                }
+                for (focus, selected) in focus_nodes.iter().zip(selected) {
+                    let execution_number = mint();
+                    if !*selected {
+                        continue;
+                    }
+                    crate::sparql::poll_between_evaluations(governors.as_deref())?;
+                    let tag = mint_tag(Some(focus), execution_number);
+                    execution.bind(THIS_SLOT, focus.to_term_value())?;
+                    let graph = crate::sparql::run_bound_construct_with_shacl_prebinding_view(
+                        data.sparql_view(),
                         execution,
-                        THIS_SLOT + 1,
-                        run.shapes_graph_iri,
-                        run.shape,
+                        Some(tag.as_str()),
                     )?;
-                    for (slot, (_, value)) in (first..).zip(run.parameters) {
-                        execution.bind(slot, value.to_term_value())?;
-                    }
-                    for (focus, selected) in focus_nodes.iter().zip(selected) {
-                        let execution_number = mint();
-                        if !*selected {
-                            continue;
-                        }
-                        crate::sparql::poll_between_evaluations(governors.as_deref())?;
-                        let tag = mint_tag(Some(focus), execution_number);
-                        execution.bind(THIS_SLOT, focus.to_term_value())?;
-                        let graph = crate::sparql::run_bound_construct_with_shacl_prebinding_view(
-                            data.sparql_view(),
-                            execution,
-                            Some(tag.as_str()),
-                        )?;
-                        read_constructed(&graph, out);
-                    }
-                    for _ in focus_nodes.len()..eligible {
-                        mint();
-                    }
-                    Ok(())
-                },
-            )
+                    read_constructed(&graph, out);
+                }
+                for _ in focus_nodes.len()..eligible {
+                    mint();
+                }
+                Ok(())
+            })
         }
         None => {
             // "Execute the query Q without any pre-binding" — a template instance's
@@ -1594,24 +1589,19 @@ fn sparql_rule_execution(
                 .iter()
                 .map(|(name, _)| name.as_str())
                 .collect();
-            crate::sparql::with_cached_execution(
-                run.construct,
-                &names,
-                purrdf_sparql_eval::ShaclPrebinding::Applied,
-                |execution| {
-                    for (slot, (_, value)) in run.parameters.iter().enumerate() {
-                        execution.bind(slot, value.to_term_value())?;
-                    }
-                    let tag = mint_tag(None, mint());
-                    let graph = crate::sparql::run_bound_construct_with_shacl_prebinding_view(
-                        data.sparql_view(),
-                        execution,
-                        Some(tag.as_str()),
-                    )?;
-                    read_constructed(&graph, out);
-                    Ok(())
-                },
-            )
+            crate::sparql::with_cached_execution(run.construct, &names, |execution| {
+                for (slot, (_, value)) in run.parameters.iter().enumerate() {
+                    execution.bind(slot, value.to_term_value())?;
+                }
+                let tag = mint_tag(None, mint());
+                let graph = crate::sparql::run_bound_construct_with_shacl_prebinding_view(
+                    data.sparql_view(),
+                    execution,
+                    Some(tag.as_str()),
+                )?;
+                read_constructed(&graph, out);
+                Ok(())
+            })
         }
     }
 }

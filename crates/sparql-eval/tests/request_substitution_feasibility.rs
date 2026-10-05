@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// The pre-binding lane is deprecated and inert; these tests still name it.
+#![allow(deprecated)]
 
 //! A request's substitutions are admitted as bound, on every request door, exactly as
 //! a prepared execution's declared parameters are.
@@ -787,57 +789,83 @@ fn a_call_a_lateral_drives_is_admitted_bound() {
     }
 }
 
-/// **Every right operand is written into, and both lanes answer it alike.** An
+/// **Every right operand is written into, and answers its own rows.** An
 /// `OPTIONAL`'s right arm and a `MINUS`'s right arm — at the top, or inside a
 /// `LATERAL`'s right side — a sub-`SELECT` inside a `LATERAL` that does not project
-/// `?q`, and one whose rows a `LIMIT` cuts: the one pre-binding rewrite writes the
-/// substituted value into the call in each, so the bound-only relation is admitted,
-/// invoked with exactly that value, and the two lanes answer the same rows.
+/// `?q`, and one whose rows a `LIMIT` cuts: the pre-binding rewrite writes the
+/// substituted value into the call in each, so the bound-only relation is admitted
+/// and invoked with exactly that value, and each shape answers the rows SHACL
+/// pre-binding gives it — the query with `?q` replaced by the value.
+///
+/// Per shape, with [`HELD`] left rows and the value's two table rows: an `OPTIONAL`
+/// extends every left row by both outputs; a `MINUS` whose right side shares no
+/// variable with the left removes nothing, so `?out` stays unbound; a sub-`SELECT`
+/// answers both outputs per left row, or the first alone under `LIMIT 1`.
 #[test]
-fn every_right_operand_is_written_into_and_both_lanes_answer_alike() {
+fn every_right_operand_is_written_into_and_answers_its_own_rows() {
     let held = holds();
     let call = format!("?q <{REL}> ?out");
     let other = format!("?h2 <{EX}holds> ?v2");
-    let shapes = [
-        format!("SELECT ?q ?out WHERE {{ {held} OPTIONAL {{ {call} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} MINUS {{ {call} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ OPTIONAL {{ {call} }} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ {other} MINUS {{ {call} }} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?out WHERE {{ {call} }} }} }}"),
-        format!(
-            "SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} LIMIT 1 \
-             }} }}"
+    // The query, and its rows per left row as (copies, the outputs each copy carries).
+    let shapes: [(String, usize, &[Option<u32>]); 6] = [
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} OPTIONAL {{ {call} }} }}"),
+            1,
+            &[Some(1), Some(2)],
+        ),
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} MINUS {{ {call} }} }}"),
+            1,
+            &[None],
+        ),
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ OPTIONAL {{ {call} }} }} }}"),
+            1,
+            &[Some(1), Some(2)],
+        ),
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ {other} MINUS {{ {call} }} }} }}"),
+            HELD,
+            &[None],
+        ),
+        (
+            format!(
+                "SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?out WHERE {{ {call} }} }} }}"
+            ),
+            1,
+            &[Some(1), Some(2)],
+        ),
+        (
+            format!(
+                "SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} \
+                 LIMIT 1 }} }}"
+            ),
+            1,
+            &[Some(1)],
         ),
     ];
     let (env, invocations) = relations();
-    let data = dataset();
-    for query in &shapes {
+    for (query, copies, outputs) in &shapes {
         for kind in KINDS {
             let value = kind.term("alpha");
-            let context = format!("{query} ?q = {}:alpha", kind.tag());
-            let substitutions = [("q".to_owned(), value.clone())];
-            let mut answers = Vec::new();
-            for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
-                let answer = request(
-                    &NativeSparqlEngine::new(),
-                    &data,
-                    &env,
-                    Door::OptionsView,
-                    lane,
-                    query,
-                    &substitutions,
-                )
-                .unwrap_or_else(|message| panic!("{context} on {lane:?}: {message}"));
-                for invocation in drain(&invocations) {
-                    assert_eq!(
-                        invocation,
-                        ("bf".to_owned(), Some(value.clone())),
-                        "{context} on {lane:?}: bound, with the substituted value"
-                    );
+            let mut expected = Vec::new();
+            for _ in 0..HELD * copies {
+                for output in *outputs {
+                    expected.push(vec![
+                        Some(value.clone()),
+                        output.map(|n| kind.output("alpha", n)),
+                    ]);
                 }
-                answers.push(answer);
             }
-            assert_eq!(answers[0], answers[1], "{context}: the lanes answer alike");
+            admitted_bound_everywhere(
+                &env,
+                &invocations,
+                ShaclPrebinding::Applied,
+                query,
+                &value,
+                &expected,
+                &format!("{query} ?q = {}:alpha", kind.tag()),
+            );
         }
     }
 }
