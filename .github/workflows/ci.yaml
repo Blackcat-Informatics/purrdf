@@ -811,7 +811,8 @@ jobs:
           if [ "${{ matrix.config }}" = wasm32 ]; then
             export CARGO_BUILD_JOBS=1
           fi
-          make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 --report target/asm-reports/${{ matrix.config }}.json"
+          # Manual runs qualify fresh WASM Cargo and reader contexts.
+          make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 ${{ github.event_name == 'workflow_dispatch' && startsWith(matrix.config, 'wasm32') && '--fresh' || '' }} --report target/asm-reports/${{ matrix.config }}.json"
       - name: Upload checked evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
