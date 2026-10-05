@@ -891,12 +891,13 @@ impl MutableDataset {
     /// — into dense [`TermId`]s. `MutTermId`/`DeltaTermId` never leak past this point.
     ///
     /// The shared typed importer re-interns surviving RDF rows, retaining the
-    /// statement tables and the base's declared empty graphs that no mutation
-    /// emptied; a named graph left without a row is dropped (see
-    /// [`Self::withdraw_graph_declaration`]). Suppressed statement rows stay
-    /// absent. Removing a reifier declaration demotes its surviving annotations to
-    /// ordinary quads when no other declaration remains in that graph. Non-RDF
-    /// sidecars remain owned by the original base.
+    /// statement tables and surviving named-graph declarations. In
+    /// [`GraphExistenceMode::Implicit`], last-row removal withdraws the graph;
+    /// [`GraphExistenceMode::RememberEmpty`] retains its slot until explicit
+    /// [`Self::withdraw_graph_declaration`]. Suppressed statement rows stay absent.
+    /// Removing a reifier declaration demotes its surviving annotations to ordinary
+    /// quads when no other declaration remains in that graph. Non-RDF sidecars
+    /// remain owned by the original base.
     ///
     /// Source LOCATIONS of the surviving base quads are carried too: a base quad is
     /// pushed in base order (so a base ordinal maps to a running new ordinal), and its

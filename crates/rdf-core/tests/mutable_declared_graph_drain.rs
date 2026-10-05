@@ -184,3 +184,78 @@ fn remembered_slot_drain_has_no_per_row_allocation() {
         assert!(!mutable.has_named_graph(&graph));
     }
 }
+
+fn measured_named_capability(view: &impl purrdf_core::DatasetView) -> (bool, u64) {
+    let window = CurrentThreadWindow::open();
+    let present = std::hint::black_box(view).capabilities().named_graphs;
+    (present, window.close().requested_bytes)
+}
+
+#[test]
+fn named_graph_capability_reads_do_not_allocate_the_registry() {
+    use purrdf_core::DatasetView;
+
+    const BASE_GRAPHS: usize = 512;
+    let mut builder = RdfDatasetBuilder::new();
+    for index in 0..BASE_GRAPHS {
+        let graph = builder.intern_iri(&format!("{EX}cap-{index}"));
+        builder.declare_named_graph(graph);
+    }
+    let mut mutable = MutableDataset::new_with_graph_existence(
+        builder.freeze().expect("empty base graph declarations"),
+        GraphExistenceMode::RememberEmpty,
+    );
+    let delta_graph = iri("cap-delta");
+    mutable
+        .create_named_graph(delta_graph.clone())
+        .expect("delta declaration");
+    // This base graph also occurs in the delta layer. Enumeration must keep one
+    // ordered ID for it, while the capability only needs an existence probe.
+    let row = QuadValues::quad(iri("cap-s"), iri("cap-p"), iri("cap-o"), iri("cap-0"));
+    assert!(mutable.insert(row.clone()).expect("delta row"));
+    let retained = mutable.snapshot_view().expect("populated snapshot");
+    let ids: Vec<_> = retained.named_graphs().collect();
+    assert_eq!(ids.len(), BASE_GRAPHS + 1);
+    assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+    let mut actual_names: Vec<_> = ids.iter().map(|&id| retained.term_value(id)).collect();
+    actual_names.sort();
+    let mut expected_names: Vec<_> = (0..BASE_GRAPHS)
+        .map(|index| iri(&format!("cap-{index}")))
+        .chain([delta_graph.clone()])
+        .collect();
+    expected_names.sort();
+    assert_eq!(actual_names, expected_names);
+    assert_eq!(retained.quads().count(), 1);
+    let initial = measured_named_capability(&retained);
+
+    // Declaration withdrawal keeps populated graphs, so remove the row first.
+    assert!(mutable.remove(&row));
+    mutable.withdraw_named_graph_declarations();
+    let empty = mutable.snapshot_view().expect("withdrawn snapshot");
+    assert_eq!(empty.quads().count(), 0);
+    assert_eq!(empty.named_graphs().count(), 0);
+    let withdrawn = measured_named_capability(&empty);
+    let old = measured_named_capability(&retained);
+    assert_eq!(retained.quads().count(), 1);
+    assert_eq!(retained.named_graphs().count(), BASE_GRAPHS + 1);
+
+    assert!(
+        mutable
+            .create_named_graph(delta_graph)
+            .expect("restored declaration")
+    );
+    let restored = mutable.snapshot_view().expect("restored snapshot");
+    assert_eq!(restored.quads().count(), 0);
+    assert_eq!(restored.named_graphs().count(), 1);
+    let restored = measured_named_capability(&restored);
+    let observations = [initial, withdrawn, old, restored];
+    assert_eq!(
+        observations.map(|(present, _)| present),
+        [true, false, true, true]
+    );
+    assert_eq!(
+        observations.map(|(_, requested)| requested),
+        [0; 4],
+        "capability reads allocate neither a registry nor its replay order"
+    );
+}

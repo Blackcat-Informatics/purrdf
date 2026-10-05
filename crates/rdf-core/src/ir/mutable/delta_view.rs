@@ -238,6 +238,14 @@ impl DeltaDatasetView {
         self.withdrawn_graphs.contains(&graph)
     }
 
+    fn effective_named_graphs(&self) -> impl Iterator<Item = DeltaViewId> + '_ {
+        self.base
+            .named_graphs()
+            .filter(|&graph| !self.is_withdrawn_graph(graph))
+            .map(DeltaViewId::Base)
+            .chain(self.delta.named_graphs().map(|id| self.delta_id(id)))
+    }
+
     fn has_reifier(&self, subject: DeltaViewId, graph: Option<DeltaViewId>) -> bool {
         self.reifier_quads_of(subject).any(|q| q.g == graph)
     }
@@ -630,7 +638,7 @@ impl DatasetView for DeltaDatasetView {
 
     fn capabilities(&self) -> RdfStoreCapabilities {
         let mut capabilities = self.base.capabilities().union(self.delta.capabilities());
-        capabilities.named_graphs = self.named_graphs().next().is_some();
+        capabilities.named_graphs = self.effective_named_graphs().next().is_some();
         capabilities
     }
 
@@ -874,11 +882,7 @@ impl DatasetView for DeltaDatasetView {
     }
 
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
-        self.base
-            .named_graphs()
-            .filter(|&graph| !self.is_withdrawn_graph(graph))
-            .map(DeltaViewId::Base)
-            .chain(self.delta.named_graphs().map(|id| self.delta_id(id)))
+        self.effective_named_graphs()
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
