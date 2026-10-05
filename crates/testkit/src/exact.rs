@@ -17,7 +17,14 @@
 //!   `10^-scale`, ties toward zero (XPath F&O 3.1 §19.1.2.3's float-to-decimal cast);
 //! * [`Rational::truncate_toward_zero`]: to the integer obtained by discarding the
 //!   fractional part, or `None` outside `i128` (XPath F&O 3.1 §19.1.2.4's cast to
-//!   `xs:integer`).
+//!   `xs:integer`);
+//! * [`Rational::truncate_at_scale`]: to `scale` fractional digits toward zero, as
+//!   that mantissa, or `None` outside `i128` — the step of the `xs:decimal`
+//!   precision rule.
+//!
+//! [`Rational::add`], [`Rational::sub`], [`Rational::mul`] and [`Rational::div`] are
+//! exact, and [`Rational::cmp_value`] is the exact order, so an arithmetic result or a
+//! comparison is checked against the value itself rather than another rounding of it.
 //!
 //! The arithmetic is schoolbook and slow by design: it has to be obviously right, not
 //! fast, and it shares no code with any implementation it checks.
@@ -424,6 +431,97 @@ impl Rational {
         self.negative == other.negative && left == right
     }
 
+    /// The arithmetic order of the two values (the signs of zeros aside).
+    #[must_use]
+    pub fn cmp_value(&self, other: &Self) -> Ordering {
+        let sign = |r: &Self| match (r.numerator.is_zero(), r.negative) {
+            (true, _) => 0_i8,
+            (false, true) => -1,
+            (false, false) => 1,
+        };
+        match sign(self).cmp(&sign(other)) {
+            Ordering::Equal if sign(self) == 0 => Ordering::Equal,
+            Ordering::Equal => {
+                let magnitude = self.cmp_magnitude(other);
+                if self.negative {
+                    magnitude.reverse()
+                } else {
+                    magnitude
+                }
+            }
+            decided => decided,
+        }
+    }
+
+    /// `-self`.
+    #[must_use]
+    pub fn neg(&self) -> Self {
+        Self::new(
+            !self.negative,
+            self.numerator.clone(),
+            self.denominator.clone(),
+        )
+    }
+
+    /// `self + other`, exactly.
+    #[must_use]
+    pub fn add(&self, other: &Self) -> Self {
+        let left = self.numerator.mul(&other.denominator);
+        let right = other.numerator.mul(&self.denominator);
+        let denominator = self.denominator.mul(&other.denominator);
+        if self.negative == other.negative {
+            return Self::new(self.negative, left.add(&right), denominator);
+        }
+        if left >= right {
+            Self::new(self.negative, left.sub(&right), denominator)
+        } else {
+            Self::new(other.negative, right.sub(&left), denominator)
+        }
+    }
+
+    /// `self - other`, exactly.
+    #[must_use]
+    pub fn sub(&self, other: &Self) -> Self {
+        self.add(&other.neg())
+    }
+
+    /// `self × other`, exactly.
+    #[must_use]
+    pub fn mul(&self, other: &Self) -> Self {
+        Self::new(
+            self.negative != other.negative,
+            self.numerator.mul(&other.numerator),
+            self.denominator.mul(&other.denominator),
+        )
+    }
+
+    /// `self ÷ other`, exactly.
+    ///
+    /// # Panics
+    ///
+    /// When `other` is zero.
+    #[must_use]
+    pub fn div(&self, other: &Self) -> Self {
+        Self::new(
+            self.negative != other.negative,
+            self.numerator.mul(&other.denominator),
+            self.denominator.mul(&other.numerator),
+        )
+    }
+
+    /// `trunc(self × 10^scale)` — the value truncated toward zero to `scale`
+    /// fractional digits, as that many-digit mantissa — when it fits an `i128`.
+    #[must_use]
+    pub fn truncate_at_scale(&self, scale: u32) -> Option<i128> {
+        let (whole, _) = self.numerator.mul_pow10(scale).div_rem(&self.denominator);
+        let magnitude = whole.to_u128()?;
+        if self.negative {
+            0_i128.checked_sub_unsigned(magnitude)
+        } else {
+            i128::try_from(magnitude).ok()
+        }
+    }
+
     /// The magnitude compared with `2^exponent`.
     fn cmp_pow2(&self, exponent: i64) -> Ordering {
         if exponent >= 0 {
@@ -573,13 +671,7 @@ impl Rational {
     /// `i128`, or `None` when that integer does not fit one.
     #[must_use]
     pub fn truncate_toward_zero(&self) -> Option<i128> {
-        let (whole, _) = self.numerator.div_rem(&self.denominator);
-        let magnitude = whole.to_u128()?;
-        if self.negative {
-            0_i128.checked_sub_unsigned(magnitude)
-        } else {
-            i128::try_from(magnitude).ok()
-        }
+        self.truncate_at_scale(0)
     }
 
     /// The nearest multiple of `10^-scale`, ties toward zero, keeping this value's

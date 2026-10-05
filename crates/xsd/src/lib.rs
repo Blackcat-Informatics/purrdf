@@ -79,15 +79,58 @@
 //!   `gYearMonth`/`gMonthDay` (tz-indeterminate partial order);
 //! * binary: `hexBinary`/`base64Binary` (hand-rolled codecs — still zero-dep).
 //!
-//! Integer and decimal are
-//! `i128`-bounded (decimal scale ≤ 18); lexicals beyond that domain hard-fail on
-//! range rather than promoting to arbitrary precision. [`bigint::BigInt`] is the
-//! one deliberate exception: not a literal value space at all, it exists purely
-//! so a caller ACCUMULATING many `i128`-bounded integers (SPARQL `SUM`/`AVG`
-//! over a group) can keep the exact running total even where the total itself
-//! would overflow `i128`, since `xsd:integer`'s value space has no such bound —
-//! see its module docs for why a running total can need one when no individual
-//! value ever does.
+//! Integer and decimal arithmetic is bounded; the bounds are the conformance
+//! contract below.
+//!
+//! # Numeric limits (the conformance contract)
+//!
+//! XSD 1.1 Part 2 lets a processor limit the `xsd:integer` and `xsd:decimal` value
+//! spaces, provided it supports at least sixteen decimal digits (§5.4, *partial
+//! implementation of infinite datatypes*) and documents its limits. These are this
+//! crate's:
+//!
+//! * **`xsd:integer`** and every integer-family datatype compute in `i128`:
+//!   `−2^127 ..= 2^127 − 1`, thirty-eight full decimal digits.
+//! * **`xsd:decimal`** computes as an `i128` mantissa with at most **18** fractional
+//!   digits: magnitudes below `2^127`, and thirty-eight significant digits whenever no
+//!   more than eighteen of them follow the point.
+//!
+//! Both exceed XSD's sixteen-digit minimum. Inside them every operation is exact,
+//! except the roundings XPath and XQuery Functions and Operators 3.1 explicitly
+//! permits:
+//!
+//! * an `xs:decimal` result with more digits than the representation retains is
+//!   **truncated toward zero at the finest scale ≤ 18 whose mantissa fits** — the
+//!   implementation-defined precision of F&O §4.2 for `+`, `−`, `×` and `÷`
+//!   ([`numeric_add`], [`numeric_sub`], [`numeric_mul`], [`numeric_div`]) and for a
+//!   mean ([`decimal_mean`]);
+//! * a cast or promotion to `xsd:float`/`xsd:double` rounds to nearest, ties to even,
+//!   once (F&O §19.1.2.2, XSD `floatingPointRound`), from an exact value of any size
+//!   ([`Decimal::to_f64`], [`DecimalDigits::to_f64`]);
+//! * a cast from `xsd:float`/`xsd:double` to `xsd:decimal` takes the closest
+//!   representable decimal (F&O §19.1.2.3, [`Decimal::from_f64_closest`]).
+//!
+//! Every other limit is a **typed error**, never a silently wrapped, rounded or
+//! saturated value — [`XsdError::code`] names its F&O code:
+//!
+//! * an arithmetic result whose integer part exceeds the bounds is
+//!   `err:FOAR0002` ([`ErrorCode::Foar0002`]);
+//! * an `xsd:integer` lexical form past `i128` is `err:FOCA0003`, an `xsd:decimal`
+//!   one past the mantissa `err:FOCA0001`, and one with more than eighteen fractional
+//!   digits `err:FOCA0006` ([`parse`]).
+//!
+//! **A literal past the bounds is still a value.** Its lexical form round-trips
+//! untouched (the IR keeps literals lexical-verbatim), and the operations that need
+//! no arithmetic are exact for an `xsd:integer`/`xsd:decimal` literal of any length
+//! and scale: ordering, value equality and the conversions to `xsd:float`/`xsd:double`
+//! ([`DecimalDigits`], [`LiteralValue`], [`literal_cmp`], [`literal_equal`],
+//! [`literal_total_cmp`]). Only arithmetic over it is refused, with the error above.
+//!
+//! [`bigint::BigInt`] is not a value space either: it exists so a caller
+//! ACCUMULATING many bounded values (SPARQL `SUM`/`AVG` over a group) can keep the
+//! exact running total even where the total would overflow the bounds — see its
+//! module docs for why a running total can need one when no individual value ever
+//! does.
 //!
 //! # Datatype-range satisfiability
 //!
@@ -124,8 +167,8 @@
 //! # Hard-fail
 //!
 //! Malformed lexical input is a hard error ([`XsdError`]), never a silent default.
-//! Out-of-range integer/decimal lexicals fail rather than saturate (this crate is
-//! `i128`-bounded).
+//! Out-of-range integer/decimal lexicals fail rather than saturate; see *Numeric
+//! limits* above for the typed error each limit raises.
 //!
 //! # Examples
 //!
@@ -171,6 +214,7 @@
 pub mod bigint;
 pub mod binary;
 pub mod datatype;
+pub mod decimal_digits;
 mod decimal_float;
 pub mod ieee;
 pub mod json_number;
@@ -187,11 +231,15 @@ pub mod wide;
 pub use bigint::BigInt;
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
 pub use datatype::{XSD_NS, XsdDatatype};
+pub use decimal_digits::{
+    DecimalDigits, LiteralValue, literal_cmp, literal_equal, literal_total_cmp,
+};
+#[allow(deprecated)]
+pub use numeric::bigint_avg_decimal_lexical;
 pub use numeric::{
-    Decimal, bigint_avg_decimal, bigint_avg_decimal_lexical, numeric_abs, numeric_add,
-    numeric_ceil, numeric_cmp, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
-    numeric_total_cmp, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10,
-    parse_float_xsd10,
+    Decimal, bigint_avg_decimal, decimal_mean, numeric_abs, numeric_add, numeric_ceil, numeric_cmp,
+    numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub, numeric_total_cmp,
+    numeric_unary_minus, numeric_unary_plus, parse_double_xsd10, parse_float_xsd10,
 };
 pub use ops::{
     effective_boolean_value, value_add, value_cmp, value_div, value_eq, value_equal, value_mul,
@@ -206,4 +254,4 @@ pub use temporal::{
     civil_from_days, datetime_epoch, datetime_from_unix_seconds, days_from_civil, days_in_month,
     duration_equal, is_leap,
 };
-pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};
+pub use value::{ErrorCode, XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

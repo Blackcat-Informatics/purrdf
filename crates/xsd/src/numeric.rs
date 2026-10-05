@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
 use crate::ieee;
-use crate::value::{XsdError, XsdValue};
+use crate::value::{XsdError, XsdValue, reason};
 
 /// An exact decimal: `value = mantissa × 10^(-scale)`, `i128`-backed (scale
 /// bounded so the mantissa stays in `i128`).
@@ -19,8 +19,10 @@ pub struct Decimal {
     scale: u8,
 }
 
-/// Max fractional digits we retain; keeps the mantissa within `i128` headroom.
-const MAX_DECIMAL_SCALE: u8 = 18;
+/// The most fractional digits the bounded `xsd:decimal` representation holds — one
+/// half of its documented limit, the other being the `i128` mantissa (see the crate
+/// docs, *Numeric limits*).
+pub(crate) const MAX_DECIMAL_SCALE: u8 = 18;
 
 impl Decimal {
     /// Construct from raw mantissa + scale (internal/testing).
@@ -123,6 +125,36 @@ impl Decimal {
         } else {
             mantissa
         }))
+    }
+
+    /// [`Self::from_f64_closest`] with its two refusals typed: `NaN` and the
+    /// infinities are [`crate::ErrorCode::Foca0002`] (no decimal value), a magnitude
+    /// of `2^127` or more is [`crate::ErrorCode::Foca0001`] (too large for the bounded
+    /// decimal) — the `xs:float`/`xs:double` to `xs:decimal` cast of XPath F&O 3.1
+    /// §19.1.2.3, whose "closest representable" rounding is the only rounding it does.
+    ///
+    /// # Errors
+    ///
+    /// As above, both [`XsdError::OutOfRange`].
+    ///
+    /// ```rust
+    /// use purrdf_xsd::{Decimal, ErrorCode};
+    ///
+    /// assert_eq!(Decimal::try_from_f64(0.5)?.canonical_lexical(), "0.5");
+    /// assert_eq!(Decimal::try_from_f64(f64::NAN).unwrap_err().code(), Some(ErrorCode::Foca0002));
+    /// assert_eq!(Decimal::try_from_f64(1e39).unwrap_err().code(), Some(ErrorCode::Foca0001));
+    /// # Ok::<(), purrdf_xsd::XsdError>(())
+    /// ```
+    pub fn try_from_f64(value: f64) -> Result<Self, XsdError> {
+        Self::from_f64_closest(value).ok_or_else(|| XsdError::OutOfRange {
+            datatype: XsdDatatype::Decimal,
+            lexical: canonical_double(value),
+            reason: if value.is_finite() {
+                reason::DECIMAL_TOO_LARGE
+            } else {
+                reason::NOT_A_DECIMAL
+            },
+        })
     }
 
     /// The mantissa (signed significant digits).
@@ -343,7 +375,7 @@ pub fn parse_integer(s: &str) -> Result<i128, XsdError> {
     s.parse::<i128>().map_err(|_| XsdError::OutOfRange {
         datatype: dt,
         lexical: s.to_string(),
-        reason: "integer magnitude exceeds i128",
+        reason: reason::INTEGER_TOO_LARGE,
     })
 }
 
@@ -367,7 +399,7 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
     let value = lexical.parse::<i128>().map_err(|_| XsdError::OutOfRange {
         datatype,
         lexical: lexical.to_string(),
-        reason: "integer magnitude exceeds i128",
+        reason: reason::INTEGER_TOO_LARGE,
     })?;
 
     // Now range-check against the datatype's inclusive bounds.
@@ -377,7 +409,7 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
         return Err(XsdError::OutOfRange {
             datatype,
             lexical: lexical.to_string(),
-            reason: "value outside datatype range",
+            reason: reason::OUTSIDE_DATATYPE,
         });
     }
     Ok(value)
@@ -406,11 +438,20 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
     {
         return Err(XsdError::invalid(dt, s, "non-digit character"));
     }
+    // Trailing fractional zeros change the spelling, not the value: `0.1` written with
+    // nineteen fractional digits is still `0.1`, which the representation holds, so
+    // only significant digits past the eighteenth are a precision limit.
+    let frac_str = if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
+        let significant = frac_str.trim_end_matches('0');
+        &frac_str[..significant.len().max(usize::from(MAX_DECIMAL_SCALE))]
+    } else {
+        frac_str
+    };
     if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
         return Err(XsdError::OutOfRange {
             datatype: dt,
             lexical: s.to_string(),
-            reason: "decimal scale exceeds 18",
+            reason: reason::DECIMAL_TOO_PRECISE,
         });
     }
 
@@ -419,7 +460,7 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
     let out_of_range = || XsdError::OutOfRange {
         datatype: dt,
         lexical: s.to_string(),
-        reason: "integer magnitude exceeds i128",
+        reason: reason::DECIMAL_TOO_LARGE,
     };
     // The magnitude is read unsigned so that `i128::MIN`, whose magnitude is one past
     // `i128::MAX`, is a mantissa like any other (it is the value `xsd:decimal` of the
@@ -429,12 +470,7 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
     } else {
         digits_trimmed.parse::<u128>().map_err(|_| out_of_range())?
     };
-    let mantissa = if neg {
-        0i128.checked_sub_unsigned(magnitude)
-    } else {
-        i128::try_from(magnitude).ok()
-    }
-    .ok_or_else(out_of_range)?;
+    let mantissa = signed(neg, magnitude).ok_or_else(out_of_range)?;
     // `frac_str.len() <= MAX_DECIMAL_SCALE <= u8::MAX`, so the cast cannot truncate.
     Ok(Decimal::from_parts(mantissa, frac_str.len() as u8))
 }
@@ -711,7 +747,7 @@ pub fn numeric_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
 /// for the values that actually have short binary expansions, which is what keeps
 /// [`exact_vs_ieee`]'s `u128` fast path reachable instead of pushed onto
 /// [`crate::BigInt`] by 52 trailing zero bits nobody needs.
-fn dyadic_magnitude(value: f64) -> (u64, i32) {
+pub(crate) fn dyadic_magnitude(value: f64) -> (u64, i32) {
     const SIGNIFICAND_BITS: u32 = 52;
     let bits = value.abs().to_bits();
     // The IEEE-754 binary64 fields: an 11-bit biased exponent above a 52-bit
@@ -913,7 +949,7 @@ fn int_binop(
         .ok_or_else(|| XsdError::OutOfRange {
             datatype: XsdDatatype::Integer,
             lexical: "overflow in integer arithmetic".to_string(),
-            reason: "integer arithmetic overflow",
+            reason: reason::INTEGER_OVERFLOW,
         })
 }
 
@@ -951,9 +987,106 @@ pub(crate) fn integer_to_decimal(value: i128) -> Decimal {
     Decimal::from_parts(value, 0)
 }
 
+// ── The decimal precision rule ──────────────────────────────────────────────
+
+/// A non-negative 256-bit magnitude, `high · 2^128 + low`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct U256 {
+    high: u128,
+    low: u128,
+}
+
+impl U256 {
+    /// `a × b`, exactly.
+    const fn product(a: u128, b: u128) -> Self {
+        let (high, low) = crate::wide::wide_mul(a, b);
+        Self { high, low }
+    }
+
+    /// `self + other`; the callers' magnitudes stay far below `2^255`.
+    const fn plus(self, other: Self) -> Self {
+        let (low, carry) = self.low.overflowing_add(other.low);
+        Self {
+            high: self.high + other.high + carry as u128,
+            low,
+        }
+    }
+
+    /// `self − other`, for `self ≥ other`.
+    const fn minus(self, other: Self) -> Self {
+        let (low, borrow) = self.low.overflowing_sub(other.low);
+        Self {
+            high: self.high - other.high - borrow as u128,
+            low,
+        }
+    }
+
+    /// `⌊self / divisor⌋` when it fits a `u128`.
+    const fn quotient(self, divisor: u128) -> Option<u128> {
+        if self.high >= divisor {
+            return None;
+        }
+        Some(crate::wide::div_wide(self.high, self.low, divisor))
+    }
+}
+
+/// The exact decimal `±magnitude / 10^scale` (`scale ≤ 36`) in the bounded
+/// representation: unchanged when it fits at its own scale (capped at
+/// [`MAX_DECIMAL_SCALE`]), otherwise truncated toward zero at the finest coarser scale
+/// whose mantissa fits `i128` — XPath F&O 3.1 §4.2's implementation-defined precision
+/// for `xs:decimal` arithmetic, the rule [`decimal_div_raw`] follows. `None` only when
+/// even the integer part does not fit: an overflow (`err:FOAR0002`).
+fn bounded_decimal(negative: bool, magnitude: U256, scale: u32) -> Option<Decimal> {
+    let finest = scale.min(u32::from(MAX_DECIMAL_SCALE));
+    for target in (0..=finest).rev() {
+        // `scale − target ≤ 36` and `10^36 < 2^120`.
+        let divisor = 10_u128.pow(scale - target);
+        if let Some(mantissa) = magnitude
+            .quotient(divisor)
+            .and_then(|m| signed(negative, m))
+        {
+            return Some(Decimal::from_parts(mantissa, target as u8));
+        }
+    }
+    None
+}
+
+/// `±magnitude` as an `i128`, the magnitude of `i128::MIN` included.
+pub(crate) fn signed(negative: bool, magnitude: u128) -> Option<i128> {
+    if negative {
+        0_i128.checked_sub_unsigned(magnitude)
+    } else {
+        i128::try_from(magnitude).ok()
+    }
+}
+
+/// `a ± b` (`subtract` selects the sign of `b`), exact in 256 bits, then
+/// [`bounded_decimal`].
+fn decimal_sum_wide(a: &Decimal, b: &Decimal, subtract: bool) -> Option<Decimal> {
+    let scale = a.scale().max(b.scale());
+    let widen = |d: &Decimal| {
+        U256::product(
+            d.mantissa().unsigned_abs(),
+            10_u128.pow(u32::from(scale - d.scale())),
+        )
+    };
+    let (a_neg, a_mag) = (a.mantissa() < 0, widen(a));
+    let (b_neg, b_mag) = ((b.mantissa() < 0) != subtract, widen(b));
+    let (negative, magnitude) = if a_neg == b_neg {
+        (a_neg, a_mag.plus(b_mag))
+    } else if a_mag >= b_mag {
+        (a_neg, a_mag.minus(b_mag))
+    } else {
+        (b_neg, b_mag.minus(a_mag))
+    };
+    bounded_decimal(negative, magnitude, u32::from(scale))
+}
+
 /// `op:numeric-add` — the numeric-TIER `+` operator only. Follows the numeric
 /// promotion tower: `integer ⊂ decimal ⊂ float ⊂ double`. Integer addition is
-/// exact (`i128`); decimal addition is exact within the representable range;
+/// exact (`i128`); decimal addition is exact wherever the sum is representable and
+/// otherwise truncated toward zero at the finest scale that holds it (the precision
+/// rule of the crate docs' *Numeric limits*);
 /// float/double are IEEE: the sum correctly rounded once into binary32/binary64 on
 /// every target, the x87 included ([`crate::ieee`]). `numeric_sub`, `numeric_mul`
 /// and `numeric_div` hold the same law.
@@ -1022,15 +1155,40 @@ pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     }
 }
 
+/// `op:numeric-add` over two decimals: exact whenever the sum is representable,
+/// otherwise truncated toward zero at the finest scale that holds it, and an overflow
+/// (`err:FOAR0002`) only when the integer part does not fit — see
+/// [`bounded_decimal`] for the precision rule.
 fn decimal_add(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
-    let result = align_decimals(a, b)
-        .and_then(|(am, bm, scale)| am.checked_add(bm).map(|mantissa| (mantissa, scale)));
-    let (result, scale) = result.ok_or_else(|| XsdError::OutOfRange {
+    decimal_sum(a, b, false).map(XsdValue::Decimal)
+}
+
+/// `a + b` (or `a − b` when `subtract`), under the precision rule of
+/// [`bounded_decimal`]. The common case — aligned mantissas whose sum fits `i128` —
+/// is two machine operations; the 256-bit route runs only when it does not.
+fn decimal_sum(a: &Decimal, b: &Decimal, subtract: bool) -> Result<Decimal, XsdError> {
+    let fast = align_decimals(a, b).and_then(|(am, bm, scale)| {
+        if subtract {
+            am.checked_sub(bm)
+        } else {
+            am.checked_add(bm)
+        }
+        .map(|mantissa| Decimal::from_parts(mantissa, scale))
+    });
+    if let Some(sum) = fast {
+        return Ok(sum);
+    }
+    decimal_sum_wide(a, b, subtract).ok_or_else(decimal_overflow)
+}
+
+/// The typed `err:FOAR0002` a decimal operation reports when the integer part of its
+/// exact result does not fit the `i128` mantissa.
+fn decimal_overflow() -> XsdError {
+    XsdError::OutOfRange {
         datatype: XsdDatatype::Decimal,
         lexical: String::new(),
-        reason: "decimal addition overflow",
-    })?;
-    Ok(XsdValue::Decimal(Decimal::from_parts(result, scale)))
+        reason: reason::DECIMAL_OVERFLOW,
+    }
 }
 
 /// `op:numeric-subtract` — the numeric-TIER `-` operator only. Same promotion
@@ -1073,15 +1231,9 @@ pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     }
 }
 
+/// `op:numeric-subtract` over two decimals, under [`decimal_add`]'s precision rule.
 fn decimal_sub(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
-    let result = align_decimals(a, b)
-        .and_then(|(am, bm, scale)| am.checked_sub(bm).map(|mantissa| (mantissa, scale)));
-    let (result, scale) = result.ok_or_else(|| XsdError::OutOfRange {
-        datatype: XsdDatatype::Decimal,
-        lexical: String::new(),
-        reason: "decimal subtraction overflow",
-    })?;
-    Ok(XsdValue::Decimal(Decimal::from_parts(result, scale)))
+    decimal_sum(a, b, true).map(XsdValue::Decimal)
 }
 
 /// `op:numeric-multiply` — the numeric-TIER `*` operator only. Same promotion
@@ -1090,12 +1242,13 @@ fn decimal_sub(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
 /// unknown family (it also accepts `xsd:duration × xsd:integer|xsd:decimal`,
 /// which this function does not).
 ///
-/// Decimal multiplication: `new_mantissa = a.mantissa × b.mantissa`,
-/// `new_scale = a.scale + b.scale`. If `new_scale > MAX_DECIMAL_SCALE`, the result
-/// is rounded (truncated toward zero) to scale 18. Mantissa overflow → `OutOfRange`.
+/// Decimal multiplication forms the exact product (`a.scale + b.scale` fractional
+/// digits, in 256 bits) and keeps it whole when it is representable; otherwise it is
+/// truncated toward zero at the finest scale ≤ 18 whose mantissa fits `i128` — the
+/// precision rule every decimal operator follows (the crate docs, *Numeric limits*).
 ///
-/// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
-/// operand is not numeric.
+/// Returns `Err(OutOfRange)` (`err:FOAR0002`) when the integer part of the result
+/// does not fit, `Err(TypeMismatch)` if either operand is not numeric.
 pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
@@ -1137,29 +1290,23 @@ fn decimal_mul(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
 /// `Decimal` rather than a wrapped `XsdValue`. Shared with `temporal.rs` (duration ×
 /// numeric, XPath F&O `op:multiply-yearMonthDuration`/`op:multiply-dayTimeDuration`).
 pub(crate) fn decimal_mul_raw(a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
-    let new_mantissa =
-        a.mantissa()
-            .checked_mul(b.mantissa())
-            .ok_or_else(|| XsdError::OutOfRange {
-                datatype: XsdDatatype::Decimal,
-                lexical: String::new(),
-                reason: "decimal multiplication overflow",
-            })?;
     let raw_scale = u32::from(a.scale()) + u32::from(b.scale());
-    if raw_scale <= u32::from(MAX_DECIMAL_SCALE) {
-        Ok(Decimal::from_parts(new_mantissa, raw_scale as u8))
-    } else {
-        // Truncate toward zero to MAX_DECIMAL_SCALE fractional digits.
-        // SAFETY: excess ≤ 36 (max raw_scale is 36); 10^excess ≤ 10^36 < i128::MAX.
-        // But we cannot represent 10^36 in i128 (i128::MAX ≈ 1.70×10^38 > 10^36),
-        // however 10^38 > i128::MAX, so we need to be careful.
-        // excess ≤ raw_scale - 0 ≤ 18 + 18 = 36; 10^36 ≈ 1×10^36 < 1.70×10^38 = i128::MAX.
-        // So 10i128.pow(excess) does not overflow for excess ≤ 36.
+    if let Some(product) = a.mantissa().checked_mul(b.mantissa()) {
+        if raw_scale <= u32::from(MAX_DECIMAL_SCALE) {
+            // `raw_scale ≤ 18`, so the cast cannot truncate.
+            return Ok(Decimal::from_parts(product, raw_scale as u8));
+        }
+        // Truncate toward zero to 18 fractional digits; `excess ≤ 18` and the
+        // quotient of an `i128` by a positive power of ten always fits.
         let excess = raw_scale - u32::from(MAX_DECIMAL_SCALE);
-        let divisor = 10i128.pow(excess);
-        let truncated = new_mantissa / divisor;
-        Ok(Decimal::from_parts(truncated, MAX_DECIMAL_SCALE))
+        return Ok(Decimal::from_parts(
+            product / 10i128.pow(excess),
+            MAX_DECIMAL_SCALE,
+        ));
     }
+    let negative = (a.mantissa() < 0) != (b.mantissa() < 0);
+    let magnitude = U256::product(a.mantissa().unsigned_abs(), b.mantissa().unsigned_abs());
+    bounded_decimal(negative, magnitude, raw_scale).ok_or_else(decimal_overflow)
 }
 
 /// `op:numeric-divide` — the numeric-TIER `/` operator only. Integer ÷ integer
@@ -1307,13 +1454,7 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
     let vs = i32::from(divisor.scale());
     let ds = i32::from(dividend.scale());
     let negative = (dm < 0) != (vm < 0);
-    let fits = |magnitude: u128| {
-        if negative {
-            0_i128.checked_sub_unsigned(magnitude)
-        } else {
-            i128::try_from(magnitude).ok()
-        }
-    };
+    let fits = |magnitude: u128| signed(negative, magnitude);
     let (numerator, denominator) = (dm.unsigned_abs(), vm.unsigned_abs());
     for scale in (0..=MAX_DECIMAL_SCALE).rev() {
         let shift = i32::from(scale) + vs - ds;
@@ -1328,41 +1469,89 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
             return Ok(Decimal::from_parts(mantissa, scale));
         }
     }
-    Err(XsdError::OutOfRange {
-        datatype: XsdDatatype::Decimal,
-        lexical: String::new(),
-        reason: "decimal quotient exceeds the i128 mantissa at every scale",
-    })
+    Err(decimal_overflow())
 }
 
-/// `op:numeric-divide` for an integer `SUM` fold's running total (`dividend`)
-/// once it has grown past `i128` (see [`crate::bigint::BigInt`]'s module docs
-/// for why that can happen), divided by the folded row `count`. This is
-/// `AVG`'s finish for exactly that case — `decimal_div_raw`'s
-/// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape (same target scale, same
-/// truncate-toward-zero) computed over an arbitrary-precision dividend instead
-/// of an `i128` one, without `decimal_div_raw`'s descent to a coarser scale.
+/// The mean of an exact running total: `sum / 10^scale` divided by the folded row
+/// `count`, as ONE representable `xsd:decimal` — `AVG`'s finish.
 ///
-/// `None` when the resulting MANTISSA does not fit `i128` — `xsd:decimal`'s
-/// [`Decimal`] representation is deliberately `i128`-mantissa-bounded (this
-/// crate's documented design, unchanged by this function). Scaling to `MAX_DECIMAL_SCALE` (18) fractional
-/// digits BEFORE dividing multiplies the required headroom by 18 decimal
-/// digits, so this fails far more readily than the bare integer quotient
-/// would: an escaped-`i128` `dividend` needs a `count` on the order of
-/// `10^18` or larger before the scaled quotient's mantissa fits back inside
-/// `i128` (see `bigint_avg_answers_when_the_dividend_exceeds_i128_but_the_quotient_does_not`
-/// in this module's tests for a worked case) — a plausible `GROUP BY` row
-/// count for some workloads, but not for a small one. In particular, an
-/// ordinary-looking quotient like `(i128::MAX + i128::MAX) / 2` — mathematically
-/// exactly `i128::MAX`, an entirely ordinary integer — still returns `None`
-/// here purely because of the forced scale-18 representation: at scale 18,
-/// `i128::MAX`'s mantissa alone needs roughly 56 decimal digits, far past
-/// `i128`'s ~38-digit ceiling. Callers that must answer even then use
-/// [`bigint_avg_decimal_lexical`], which has no such bound (see its doc for
-/// why bypassing [`Decimal`] entirely is safe there).
+/// The precision rule is [`numeric_div`]'s: the quotient truncated toward zero at the
+/// finest scale ≤ 18 whose mantissa fits the `i128` the value space holds. So
+/// whenever the total itself is a bounded value, the answer is exactly
+/// `numeric_div(total, count)` — `AVG` agrees with `SUM / COUNT` — and when the total
+/// has outgrown the bounded representation (a running sum of many values can, though
+/// no single value does; see [`crate::bigint::BigInt`]), the mean is still answered
+/// whenever it is representable. `sum` and `scale` are the total's mantissa and
+/// fractional digits with no bound at all: an `xsd:integer` total is `scale` 0, an
+/// `xsd:decimal` one the largest scale among its operands.
 ///
-/// `count` must be nonzero; `AVG`'s one caller only reaches this with a folded
-/// row count, which is never zero for a non-empty group.
+/// # Errors
+///
+/// [`XsdError::OutOfRange`] (`err:FOAR0002`) when even the integer part of the mean
+/// exceeds `i128` — possible only when the operands themselves lie past the bounded
+/// representation — and [`XsdError::DivisionByZero`] for a zero `count`.
+///
+/// ```rust
+/// use purrdf_xsd::{BigInt, decimal_mean};
+///
+/// // {i128::MAX, i128::MAX - 1}: the total overflows i128, the mean MAX - 0.5 does
+/// // not — at scale 0, where it truncates toward zero.
+/// let mut sum = BigInt::from_i128(i128::MAX);
+/// sum.add_i128(i128::MAX - 1);
+/// let mean = decimal_mean(&sum, 0, 2)?;
+/// assert_eq!(mean.canonical_lexical(), (i128::MAX - 1).to_string());
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+pub fn decimal_mean(
+    sum: &crate::bigint::BigInt,
+    scale: u32,
+    count: u64,
+) -> Result<Decimal, XsdError> {
+    if count == 0 {
+        return Err(XsdError::DivisionByZero {
+            datatype: XsdDatatype::Decimal,
+        });
+    }
+    // The mantissa at target scale `t` is trunc(sum × 10^(t − scale) / count).
+    for target in (0..=MAX_DECIMAL_SCALE).rev() {
+        let shift = i64::from(target) - i64::from(scale);
+        let scaled = if shift >= 0 {
+            // `shift ≤ 18`.
+            sum.mul_pow10(shift.unsigned_abs() as u32)
+        } else {
+            // ⌊⌊n / 10^k⌋ / c⌋ = ⌊n / (10^k · c)⌋ for positive integers.
+            div_pow10_truncated(sum, u32::try_from(shift.unsigned_abs()).unwrap_or(u32::MAX))
+        };
+        let (quotient, _) = scaled
+            .div_rem_u64(count)
+            .expect("count is non-zero, checked above");
+        if let Some(mantissa) = quotient.to_i128() {
+            return Ok(Decimal::from_parts(mantissa, target));
+        }
+    }
+    Err(decimal_overflow())
+}
+
+/// `value / 10^exp`, truncated toward zero, in steps of at most `10^19` (the largest
+/// power of ten a `u64` divisor holds).
+fn div_pow10_truncated(value: &crate::bigint::BigInt, mut exp: u32) -> crate::bigint::BigInt {
+    let mut out = value.clone();
+    while exp > 0 && !out.is_zero() {
+        let step = exp.min(19);
+        out = out
+            .div_rem_u64(10_u64.pow(step))
+            .expect("a power of ten is non-zero")
+            .0;
+        exp -= step;
+    }
+    out
+}
+
+/// `op:numeric-divide` of an integer `SUM` fold's arbitrary-precision running total
+/// (`dividend`) by the folded row `count` — [`decimal_mean`] at scale 0, wrapped as an
+/// [`XsdValue`]: the quotient truncated toward zero at the finest scale ≤ 18 whose
+/// mantissa fits `i128`, exactly as [`numeric_div`] truncates. `None` only when the
+/// integer part of the quotient itself exceeds `i128`.
 ///
 /// # Panics
 ///
@@ -1373,41 +1562,25 @@ pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Optio
         count != 0,
         "AVG's divisor is a folded row count, never zero"
     );
-    let scaled = dividend.mul_pow10(u32::from(MAX_DECIMAL_SCALE));
-    let (quotient, _remainder) = scaled
-        .div_rem_u64(count)
-        .expect("count != 0 was just asserted");
-    let mantissa = quotient.to_i128()?;
-    Some(XsdValue::Decimal(Decimal::from_parts(
-        mantissa,
-        MAX_DECIMAL_SCALE,
-    )))
+    decimal_mean(dividend, 0, count).ok().map(XsdValue::Decimal)
 }
 
-/// `AVG`'s finish for an escaped-`i128` running total whose scale-`MAX_DECIMAL_SCALE`
-/// quotient mantissa has ALSO escaped `i128` — the case [`bigint_avg_decimal`]
-/// answers `None` for. Computes the IDENTICAL exact scale-18 quotient
-/// [`bigint_avg_decimal`] does (same scale-then-divide, same truncate-toward-zero),
-/// but renders it as raw canonical `xsd:decimal` lexical TEXT via
-/// [`crate::bigint::BigInt::to_decimal_lexical`] instead of constructing an
-/// in-memory [`Decimal`] — bypassing `xsd:decimal`'s `i128`-mantissa bound
-/// entirely rather than moving it. This is safe for the same reason the crate
-/// already accepts the analogous asymmetry for `SUM`: a fold's FINISH is allowed
-/// to emit a wider literal than any single parsed `xsd:decimal`/`xsd:integer`
-/// INPUT could ever produce (see [`crate::bigint::BigInt::to_decimal_string`]'s
-/// doc and its `SUM`-side caller, `purrdf-sparql-eval`'s `int_sum_value`, which
-/// makes the identical choice for a pure-integer running total that exceeds
-/// `i128`). No representation this function produces is ever fed back through
-/// [`Decimal`]'s arithmetic — the IEEE (`float`/`double`) families and the rest
-/// of the numeric promotion tower are untouched by this function's existence.
+/// The canonical `xsd:decimal` lexical TEXT of `dividend × 10^18 / count`, truncated
+/// toward zero at scale 18 with no bound on its magnitude.
 ///
-/// Always succeeds: `BigInt` has no magnitude bound beyond available memory, so
-/// unlike [`bigint_avg_decimal`] this has no `None` case at all.
+/// This renders a numeral that need not lie in the bounded `xsd:decimal` value space
+/// — a literal no operator of this crate can read back — and its precision differs
+/// from [`numeric_div`]'s, so an `AVG` computed through it disagrees with
+/// `SUM / COUNT`. Use [`decimal_mean`], which answers one representable decimal under
+/// `numeric_div`'s precision rule.
 ///
 /// # Panics
 ///
-/// If `count == 0` — the caller's contract, not a runtime input (identical to
-/// [`bigint_avg_decimal`]).
+/// If `count == 0` — the caller's contract, not a runtime input.
+#[deprecated(
+    since = "3.1.0",
+    note = "renders a numeral outside the bounded xsd:decimal value space; use decimal_mean"
+)]
 #[must_use]
 pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) -> String {
     assert!(
@@ -1422,7 +1595,8 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
 }
 
 /// `op:numeric-unary-minus` — the numeric-TIER unary `-` only. Negates the
-/// value, preserving its type.
+/// value, preserving its numeric type (an integer-family operand of a derived type
+/// answers `xsd:integer`).
 ///
 /// See [`numeric_add`]'s doc for why [`crate::ops::value_unary_minus`], not
 /// this function, is the SPARQL-facing entry point for an `XsdValue` of
@@ -1436,16 +1610,20 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_unary_minus(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        XsdValue::Integer { value, datatype } => value
+        // The result is an `xsd:integer` whatever integer-family type the operand
+        // has (XPath F&O 3.1 §4.2): the negation of an `xsd:unsignedByte` is not
+        // one, and keeping the subtype would mint a literal outside its own value
+        // space.
+        XsdValue::Integer { value, .. } => value
             .checked_neg()
             .map(|v| XsdValue::Integer {
                 value: v,
-                datatype: *datatype,
+                datatype: XsdDatatype::Integer,
             })
             .ok_or_else(|| XsdError::OutOfRange {
-                datatype: *datatype,
+                datatype: XsdDatatype::Integer,
                 lexical: value.to_string(),
-                reason: "integer unary minus overflow (i128::MIN has no positive counterpart)",
+                reason: reason::INTEGER_OVERFLOW,
             }),
         XsdValue::Decimal(d) => {
             // Decimal negation negates the mantissa. A mantissa of i128::MIN (a
@@ -1458,7 +1636,7 @@ pub fn numeric_unary_minus(a: &XsdValue) -> Result<XsdValue, XsdError> {
                 .ok_or_else(|| XsdError::OutOfRange {
                     datatype: XsdDatatype::Decimal,
                     lexical: d.canonical_lexical(),
-                    reason: "decimal unary minus overflow (mantissa is i128::MIN)",
+                    reason: reason::DECIMAL_OVERFLOW,
                 })
         }
         XsdValue::Float(f) => Ok(XsdValue::Float(-f)),
@@ -1487,21 +1665,24 @@ pub fn numeric_unary_plus(a: &XsdValue) -> Result<XsdValue, XsdError> {
 
 // ── Numeric math functions (SPARQL §17.4.4 / XPath fn:abs, fn:ceiling, etc.) ──
 
-/// SPARQL `fn:abs` — absolute value, preserving the operand's numeric type.
+/// SPARQL `fn:abs` — absolute value, preserving the operand's numeric type (an
+/// integer-family operand of a derived type answers `xsd:integer`, F&O 3.1 §4.4.1).
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_abs(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        XsdValue::Integer { value, datatype } => value
+        // An integer-family operand of a derived type answers `xsd:integer`
+        // (F&O 3.1 §4.4.1): `abs` of an `xsd:negativeInteger` is not one.
+        XsdValue::Integer { value, .. } => value
             .checked_abs()
             .map(|v| XsdValue::Integer {
                 value: v,
-                datatype: *datatype,
+                datatype: XsdDatatype::Integer,
             })
             .ok_or_else(|| XsdError::OutOfRange {
-                datatype: *datatype,
+                datatype: XsdDatatype::Integer,
                 lexical: value.to_string(),
-                reason: "abs overflow (i128::MIN has no positive counterpart)",
+                reason: reason::INTEGER_OVERFLOW,
             }),
         XsdValue::Decimal(d) => d
             .mantissa()
@@ -1510,7 +1691,7 @@ pub fn numeric_abs(a: &XsdValue) -> Result<XsdValue, XsdError> {
             .ok_or_else(|| XsdError::OutOfRange {
                 datatype: XsdDatatype::Decimal,
                 lexical: d.canonical_lexical(),
-                reason: "abs overflow (mantissa is i128::MIN)",
+                reason: reason::DECIMAL_OVERFLOW,
             }),
         XsdValue::Float(f) => Ok(XsdValue::Float(f.abs())),
         XsdValue::Double(d) => Ok(XsdValue::Double(d.abs())),
@@ -1527,8 +1708,13 @@ pub fn numeric_abs(a: &XsdValue) -> Result<XsdValue, XsdError> {
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_ceil(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        // Integer is already an integer; ceiling is identity.
-        XsdValue::Integer { .. } => Ok(a.clone()),
+        // Integer is already an integer; ceiling is the identity on the value, and
+        // the result is an `xsd:integer` (F&O 3.1 §4.4.2: a derived-type operand
+        // answers its base numeric type).
+        XsdValue::Integer { value, .. } => Ok(XsdValue::Integer {
+            value: *value,
+            datatype: XsdDatatype::Integer,
+        }),
         XsdValue::Decimal(d) => {
             // ceiling(n.frac) = whole_part + (if frac > 0 { 1 } else { 0 })
             let whole = d.whole_part();
@@ -1537,7 +1723,7 @@ pub fn numeric_ceil(a: &XsdValue) -> Result<XsdValue, XsdError> {
                 whole.checked_add(1).ok_or_else(|| XsdError::OutOfRange {
                     datatype: XsdDatatype::Decimal,
                     lexical: d.canonical_lexical(),
-                    reason: "ceiling overflow",
+                    reason: reason::DECIMAL_OVERFLOW,
                 })?
             } else {
                 whole
@@ -1559,8 +1745,12 @@ pub fn numeric_ceil(a: &XsdValue) -> Result<XsdValue, XsdError> {
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_floor(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        // Integer is already an integer; floor is identity.
-        XsdValue::Integer { .. } => Ok(a.clone()),
+        // Integer is already an integer; floor is the identity on the value, as an
+        // `xsd:integer` (F&O 3.1 §4.4.3).
+        XsdValue::Integer { value, .. } => Ok(XsdValue::Integer {
+            value: *value,
+            datatype: XsdDatatype::Integer,
+        }),
         XsdValue::Decimal(d) => {
             // floor(n.frac) = whole_part - (if frac < 0 { 1 } else { 0 })
             let whole = d.whole_part();
@@ -1569,7 +1759,7 @@ pub fn numeric_floor(a: &XsdValue) -> Result<XsdValue, XsdError> {
                 whole.checked_sub(1).ok_or_else(|| XsdError::OutOfRange {
                     datatype: XsdDatatype::Decimal,
                     lexical: d.canonical_lexical(),
-                    reason: "floor overflow",
+                    reason: reason::DECIMAL_OVERFLOW,
                 })?
             } else {
                 whole
@@ -1593,8 +1783,12 @@ pub fn numeric_floor(a: &XsdValue) -> Result<XsdValue, XsdError> {
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        // Integer is already integral; round is identity.
-        XsdValue::Integer { .. } => Ok(a.clone()),
+        // Integer is already integral; round is the identity on the value, as an
+        // `xsd:integer` (F&O 3.1 §4.4.4).
+        XsdValue::Integer { value, .. } => Ok(XsdValue::Integer {
+            value: *value,
+            datatype: XsdDatatype::Integer,
+        }),
         XsdValue::Decimal(d) => {
             // XPath fn:round: half-values round toward +infinity.
             // For positive: round-half-up. For negative: round-half toward zero (not
@@ -1627,13 +1821,13 @@ pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
                 whole.checked_add(1).ok_or_else(|| XsdError::OutOfRange {
                     datatype: XsdDatatype::Decimal,
                     lexical: d.canonical_lexical(),
-                    reason: "round overflow",
+                    reason: reason::DECIMAL_OVERFLOW,
                 })?
             } else if frac_m < -threshold {
                 whole.checked_sub(1).ok_or_else(|| XsdError::OutOfRange {
                     datatype: XsdDatatype::Decimal,
                     lexical: d.canonical_lexical(),
-                    reason: "round overflow",
+                    reason: reason::DECIMAL_OVERFLOW,
                 })?
             } else {
                 whole
@@ -2525,33 +2719,32 @@ mod tests {
     }
 
     #[test]
-    fn bigint_avg_poisons_when_the_mantissa_still_does_not_fit_i128() {
-        // dividend = 2 * i128::MAX, divided by 2: the mathematically exact quotient
-        // (i128::MAX) is an ordinary integer, but `bigint_avg_decimal`'s result type
-        // is the `i128`-mantissa `Decimal`, and its mantissa must hold BOTH the
-        // integer part AND 18 fractional digits — `i128::MAX` scaled to 18
-        // fractional digits does not fit `i128` either. This is `xsd:decimal`'s own
-        // documented bound (`Decimal`'s deliberate, unchanged design), not a
-        // limitation `BigInt` introduces, and it already applied — for the same
-        // reason — to sufficiently large in-range `AVG`s before this module existed.
-        //
-        // `bigint_avg_decimal` genuinely has no answer here (there is no `i128`
-        // mantissa to return); [`bigint_avg_decimal_lexical`] is the escape hatch
-        // that answers this exact case by rendering the exact result as text
-        // instead — see the next test.
+    fn bigint_avg_descends_to_the_finest_scale_that_fits() {
+        // dividend = 2 * i128::MAX, divided by 2: the exact quotient is i128::MAX,
+        // whose scale-18 mantissa does not fit i128 — so the mean is answered at the
+        // finest scale that does hold it, scale 0, exactly as `numeric_div` answers.
         let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
         dividend.add_i128(i128::MAX);
-        assert!(bigint_avg_decimal(&dividend, 2).is_none());
+        let avg = bigint_avg_decimal(&dividend, 2).expect("the mean i128::MAX fits");
+        assert_eq!(as_decimal(&avg).canonical_lexical(), i128::MAX.to_string());
+        assert_eq!(as_decimal(&avg).scale(), 0);
+        // A mean whose integer part alone exceeds i128 is an overflow, typed.
+        let mut huge = crate::bigint::BigInt::from_i128(i128::MAX);
+        huge.add_i128(i128::MAX);
+        huge.add_i128(i128::MAX);
+        let error = decimal_mean(&huge, 0, 1).expect_err("3 * i128::MAX does not fit");
+        assert_eq!(error.code(), Some(crate::ErrorCode::Foar0002));
+        // A zero count is a division by zero, typed — never a panic.
+        assert_eq!(
+            decimal_mean(&huge, 0, 0).expect_err("a zero count").code(),
+            Some(crate::ErrorCode::Foar0001)
+        );
     }
 
+    /// The deprecated text rendering still renders exactly what it always did.
     #[test]
-    fn bigint_avg_decimal_lexical_answers_exactly_where_bigint_avg_decimal_poisons() {
-        // Same fixture as the test above (dividend = 2 * i128::MAX, count = 2):
-        // `bigint_avg_decimal` has no `i128`-mantissa `Decimal` to return, but the
-        // exact scale-18 quotient is perfectly representable as TEXT, with no
-        // magnitude bound at all — `170141183460469231731687303715884105727` (i.e.
-        // `i128::MAX`) followed by 18 zero fractional digits, trimmed to an
-        // integer-valued canonical form per XSD 1.1 §E.1 `decimalCanonicalMap`.
+    #[allow(deprecated)]
+    fn bigint_avg_decimal_lexical_still_renders_its_scale_18_text() {
         let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
         dividend.add_i128(i128::MAX);
         let lexical = bigint_avg_decimal_lexical(&dividend, 2);
@@ -2575,24 +2768,32 @@ mod tests {
     }
 
     /// Aligning a large scale-0 mantissa to scale 18 leaves `i128` before the
-    /// addition does: `1e30 + 1e-18` needs the mantissa `1e48`. That is an
-    /// `OutOfRange` overflow (it used to panic under overflow checks and wrap
-    /// to a wrong sum without them); the neighbouring `1e19 + 1e-18` (mantissa
-    /// `1e37`) still fits and must still add exactly — for `-` too.
+    /// addition does: `1e30 + 1e-18` needs the mantissa `1e48`. The integer part
+    /// fits, so it is not an overflow: the sum keeps every digit the representation
+    /// holds and truncates the rest toward zero (F&O §4.2's precision rule, the one
+    /// division follows). The neighbouring `1e19 + 1e-18` (mantissa `1e37`) still
+    /// fits and adds exactly — for `-` too.
     #[test]
-    fn decimal_alignment_overflow_is_out_of_range_and_its_neighbour_adds() {
+    fn decimal_alignment_overflow_truncates_and_its_neighbour_adds_exactly() {
         let tiny = dec_val("0.000000000000000001");
         let huge = dec_val("1000000000000000000000000000000");
-        for result in [
-            numeric_add(&huge, &tiny),
-            numeric_add(&tiny, &huge),
-            numeric_sub(&huge, &tiny),
-            numeric_add(&int_val(10i128.pow(30)), &tiny),
+        for (result, want) in [
+            (numeric_add(&huge, &tiny), "1000000000000000000000000000000"),
+            (numeric_add(&tiny, &huge), "1000000000000000000000000000000"),
+            (
+                numeric_sub(&huge, &tiny),
+                "999999999999999999999999999999.99999999",
+            ),
+            (
+                numeric_sub(&tiny, &huge),
+                "-999999999999999999999999999999.99999999",
+            ),
+            (
+                numeric_add(&int_val(10i128.pow(30)), &tiny),
+                "1000000000000000000000000000000",
+            ),
         ] {
-            assert!(
-                matches!(result, Err(XsdError::OutOfRange { .. })),
-                "expected OutOfRange, got {result:?}"
-            );
+            assert_eq!(result.unwrap().canonical_lexical(), want);
         }
         let fits = dec_val("10000000000000000000");
         assert_eq!(
@@ -2602,6 +2803,16 @@ mod tests {
         assert_eq!(
             numeric_sub(&fits, &tiny).unwrap().canonical_lexical(),
             "9999999999999999999.999999999999999999"
+        );
+        // Only an integer part past the mantissa is an overflow.
+        let max = dec_val("170141183460469231731687303715884105727");
+        let overflow = numeric_add(&max, &dec_val("1")).unwrap_err();
+        assert_eq!(overflow.code(), Some(crate::ErrorCode::Foar0002));
+        assert_eq!(
+            numeric_add(&max, &dec_val("0.9"))
+                .unwrap()
+                .canonical_lexical(),
+            "170141183460469231731687303715884105727"
         );
     }
 

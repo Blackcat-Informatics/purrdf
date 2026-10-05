@@ -44,6 +44,13 @@ purrdf-lex = { workspace = true }
 # from the packaged manifest.
 purrdf-testkit = { workspace = true }
 
+# The bounded numeric contract's answers on both targets: natively under
+# `cargo test`, and on wasm32-unknown-unknown in Node through
+# scripts/wasm-test-runner.sh (`make wasm-test`), against one pinned digest.
+[[test]]
+name = "bounded_wasm"
+harness = false
+
 [[bench]]
 name = "lexical"
 harness = false

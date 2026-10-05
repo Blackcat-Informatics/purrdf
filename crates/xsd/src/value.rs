@@ -333,6 +333,137 @@ impl XsdError {
             reason,
         }
     }
+
+    /// The XPath and XQuery Functions and Operators 3.1 error this failure is, for the
+    /// numeric operations and the lexical mappings; `None` for a failure F&O gives no
+    /// numeric code (an indeterminate result, a temporal range).
+    ///
+    /// Every limit of the bounded numeric representation reports one of these — never
+    /// a silently rounded, wrapped or saturated value (see the crate docs, *Numeric
+    /// limits*):
+    ///
+    /// * [`ErrorCode::Foar0002`] — an `xsd:integer`/`xsd:decimal` arithmetic result
+    ///   (`+ − × ÷`, unary minus, `abs`, `ceiling`, `floor`, `round`, a mean) whose
+    ///   integer part exceeds `i128`;
+    /// * [`ErrorCode::Foca0003`] — an `xsd:integer` lexical form past `i128`;
+    /// * [`ErrorCode::Foca0001`] — an `xsd:decimal` lexical form, or a float/double
+    ///   cast to decimal, whose magnitude exceeds the `i128` mantissa;
+    /// * [`ErrorCode::Foca0006`] — an `xsd:decimal` lexical form with more than 18
+    ///   fractional digits;
+    /// * [`ErrorCode::Foca0002`] — `NaN` or an infinity cast to `xsd:decimal`;
+    /// * [`ErrorCode::Forg0001`] — a malformed lexical form, or a derived-type value
+    ///   outside its facets (`xsd:byte` of `300`);
+    /// * [`ErrorCode::Foar0001`] — exact division by zero;
+    /// * [`ErrorCode::Xpty0004`] — an operand of the wrong type.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::{ErrorCode, XsdDatatype, numeric_add, parse};
+    ///
+    /// let big = parse("100000000000000000000000000000000000000000", XsdDatatype::Integer);
+    /// assert_eq!(big.unwrap_err().code(), Some(ErrorCode::Foca0003));
+    /// let max = parse(&i128::MAX.to_string(), XsdDatatype::Integer)?;
+    /// let one = parse("1", XsdDatatype::Integer)?;
+    /// assert_eq!(numeric_add(&max, &one).unwrap_err().code(), Some(ErrorCode::Foar0002));
+    /// # Ok::<(), purrdf_xsd::XsdError>(())
+    /// ```
+    #[must_use]
+    pub fn code(&self) -> Option<ErrorCode> {
+        match self {
+            Self::InvalidLexical { .. } => Some(ErrorCode::Forg0001),
+            Self::OutOfRange {
+                datatype, reason, ..
+            } => reason::classify(*datatype, reason),
+            Self::DivisionByZero { .. } => Some(ErrorCode::Foar0001),
+            Self::TypeMismatch { .. } => Some(ErrorCode::Xpty0004),
+            Self::Indeterminate { .. } => None,
+        }
+    }
+}
+
+/// An error code of XPath and XQuery Functions and Operators 3.1 (Appendix C), as
+/// [`XsdError::code`] reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ErrorCode {
+    /// `err:FOAR0001`: division by zero.
+    Foar0001,
+    /// `err:FOAR0002`: numeric operation overflow/underflow.
+    Foar0002,
+    /// `err:FOCA0001`: input value too large for decimal.
+    Foca0001,
+    /// `err:FOCA0002`: invalid lexical value (here: `NaN` or an infinity cast to
+    /// decimal).
+    Foca0002,
+    /// `err:FOCA0003`: input value too large for integer.
+    Foca0003,
+    /// `err:FOCA0006`: string to be cast to decimal has too many digits of precision.
+    Foca0006,
+    /// `err:FORG0001`: invalid value for cast/constructor.
+    Forg0001,
+    /// `err:XPTY0004`: type error — an operand of the wrong type.
+    Xpty0004,
+}
+
+impl ErrorCode {
+    /// The code as F&O writes it, `err:` prefix included (`"err:FOAR0002"`).
+    #[must_use]
+    pub const fn qname(self) -> &'static str {
+        match self {
+            Self::Foar0001 => "err:FOAR0001",
+            Self::Foar0002 => "err:FOAR0002",
+            Self::Foca0001 => "err:FOCA0001",
+            Self::Foca0002 => "err:FOCA0002",
+            Self::Foca0003 => "err:FOCA0003",
+            Self::Foca0006 => "err:FOCA0006",
+            Self::Forg0001 => "err:FORG0001",
+            Self::Xpty0004 => "err:XPTY0004",
+        }
+    }
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.qname())
+    }
+}
+
+/// The stable `reason` of every [`XsdError::OutOfRange`] a numeric limit produces —
+/// one string per F&O error it classifies as ([`classify`]), so the code is a pure
+/// function of the error and never of where it was raised.
+pub(crate) mod reason {
+    use super::ErrorCode;
+    use crate::datatype::XsdDatatype;
+
+    /// An `xsd:integer` lexical form past `i128` (`err:FOCA0003`).
+    pub(crate) const INTEGER_TOO_LARGE: &str = "integer magnitude exceeds i128";
+    /// An `xsd:decimal` magnitude past the `i128` mantissa (`err:FOCA0001`).
+    pub(crate) const DECIMAL_TOO_LARGE: &str = "decimal magnitude exceeds the i128 mantissa";
+    /// An `xsd:decimal` lexical form with more than 18 fractional digits
+    /// (`err:FOCA0006`).
+    pub(crate) const DECIMAL_TOO_PRECISE: &str = "decimal scale exceeds 18";
+    /// A derived-type value outside its facets (`err:FORG0001`).
+    pub(crate) const OUTSIDE_DATATYPE: &str = "value outside datatype range";
+    /// `NaN` or an infinity cast to `xsd:decimal` (`err:FOCA0002`).
+    pub(crate) const NOT_A_DECIMAL: &str = "NaN and the infinities have no decimal value";
+    /// An `xsd:integer` operation whose result exceeds `i128` (`err:FOAR0002`).
+    pub(crate) const INTEGER_OVERFLOW: &str = "integer arithmetic overflow";
+    /// An `xsd:decimal` operation whose result's integer part exceeds the `i128`
+    /// mantissa (`err:FOAR0002`).
+    pub(crate) const DECIMAL_OVERFLOW: &str = "decimal arithmetic overflow";
+
+    /// The F&O code of an [`super::XsdError::OutOfRange`] with this `reason`.
+    pub(crate) fn classify(datatype: XsdDatatype, reason: &str) -> Option<ErrorCode> {
+        Some(match reason {
+            INTEGER_OVERFLOW | DECIMAL_OVERFLOW => ErrorCode::Foar0002,
+            INTEGER_TOO_LARGE if datatype == XsdDatatype::Decimal => ErrorCode::Foca0001,
+            INTEGER_TOO_LARGE => ErrorCode::Foca0003,
+            DECIMAL_TOO_LARGE => ErrorCode::Foca0001,
+            DECIMAL_TOO_PRECISE => ErrorCode::Foca0006,
+            NOT_A_DECIMAL => ErrorCode::Foca0002,
+            OUTSIDE_DATATYPE => ErrorCode::Forg0001,
+            _ => return None,
+        })
+    }
 }
 
 impl std::fmt::Display for XsdError {
