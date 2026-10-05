@@ -598,7 +598,23 @@ pub fn query_eval_dataset(
     case: &SparqlTestCase,
     query_text: &str,
 ) -> Result<Arc<RdfDataset>, String> {
-    let mut dataset = load_dataset(case)?;
+    // The older W3C dataset cases declare their source files in FROM clauses,
+    // without qt:data/qt:graphData. Supply those documents under the parsed IRIs;
+    // the unchanged evaluator applies its own active-dataset selection/merge.
+    let query = SparqlParser::new()
+        .with_base_iri(&case.base)
+        .parse_query_with(query_text, &query_eval_parser_options())
+        .map_err(|error| format!("parse dataset clauses for {}: {error}", case.iri))?;
+    let mut loaded = case.clone();
+    let workspace = purrdf_testkit::paths::workspace_root();
+    for source in query.dataset().default.iter().chain(&query.dataset().named) {
+        let iri = source.as_str();
+        if !loaded.graph_data.iter().any(|(graph, _)| graph == iri) {
+            let path = crate::manifest::fixture_path(&workspace, &case.base, iri)?;
+            loaded.graph_data.push((iri.to_owned(), path));
+        }
+    }
+    let mut dataset = load_dataset(&loaded)?;
     // OWL-Direct is query-directed: augment the RAW dataset with the DL
     // entailments its basic graph pattern needs, then hand the augmented
     // dataset to the UNMODIFIED engine (whose simple-entailment answers then

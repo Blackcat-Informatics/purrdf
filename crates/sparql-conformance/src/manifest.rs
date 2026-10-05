@@ -94,10 +94,9 @@ pub enum ExpectedResult {
     Srj(PathBuf),
     /// A graph (`CONSTRUCT`/`DESCRIBE`) — compared as canonical N-Quads.
     Graph(PathBuf),
-    /// A Turtle-encoded `rs:ResultSet` description of a SELECT solution sequence
-    /// (`rs:resultVariable`/`rs:solution`/`rs:binding`/`rs:variable`/`rs:value`) —
-    /// compared as a solution multiset, not a graph.
-    ResultSetTurtle(PathBuf),
+    /// A Turtle or RDF/XML `rs:ResultSet`: ASK boolean or SELECT rows,
+    /// with `rs:index` defining the expected order when present.
+    ResultSetRdf(PathBuf),
     /// An UPDATE post-state: the expected default-graph data (`ut:data`) and
     /// named graphs (`ut:graphData`), compared to the mutated dataset as
     /// canonical N-Quads. Empty vectors denote an empty expected dataset.
@@ -200,6 +199,9 @@ pub struct SparqlTestCase {
     pub aggregate_namespace: Option<String>,
     /// The expected result.
     pub expected: ExpectedResult,
+    /// `mf:LaxCardinality`: each expected solution occurs at least once and
+    /// no more often than in the expected file (the W3C REDUCED test rule).
+    pub lax_cardinality: bool,
 }
 
 /// The greatest `mf:include` nesting depth [`load`] will follow.
@@ -420,7 +422,7 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
          PREFIX qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#>\n\
          PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
          PREFIX purrdf: <{MF_EXT_NS}>\n\
-         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?aggNs ?cdfQuery ?cdfFormat WHERE {{\n\
+         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?cardinality ?aggNs ?cdfQuery ?cdfFormat WHERE {{\n\
          ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
          ?test rdf:type ?type ; mf:name ?name ; mf:action ?act .\n\
          OPTIONAL {{ ?act qt:query ?query }}\n\
@@ -430,6 +432,7 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
          OPTIONAL {{ ?act qt:constructDataFile ?cdf . ?cdf qt:query ?cdfQuery ; qt:format ?cdfFormat }}\n\
          OPTIONAL {{ ?act purrdf:aggregateNamespace ?aggNs }}\n\
          OPTIONAL {{ ?test mf:result ?result }}\n\
+         OPTIONAL {{ ?test mf:resultCardinality ?cardinality }}\n\
          }}"
     );
 
@@ -455,7 +458,14 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
                 regime: None,
                 aggregate_namespace: None,
                 expected: ExpectedResult::None,
+                lax_cardinality: false,
             });
+        if let Some(cardinality) = iri_of(row, "cardinality") {
+            if cardinality != format!("{MF}LaxCardinality") {
+                return Err(format!("unsupported result cardinality {cardinality}"));
+            }
+            entry.lax_cardinality = true;
+        }
         // A test may carry several rdf:type values; prefer a recognized kind.
         if entry.kind == TestKind::Unknown && kind != TestKind::Unknown {
             entry.kind = kind;
@@ -1023,15 +1033,23 @@ impl BaseResolver {
     /// that could never open, so the failure surfaced later as an unreadable
     /// fixture instead of here as the unresolvable reference it is.
     fn path(&self, iri: &str) -> Result<PathBuf, String> {
-        let relative = iri.strip_prefix(BASE_ROOT).ok_or_else(|| {
-            format!(
-                "manifest based at {} references <{iri}>, which is outside the sentinel space \
-                 {BASE_ROOT} and therefore names no file in this workspace",
-                self.base
-            )
-        })?;
-        Ok(paths::resolve(&self.workspace_root, relative))
+        fixture_path(&self.workspace_root, &self.base, iri)
     }
+}
+
+/// Map a resolved fixture IRI to its repository file, for manifest and FROM sources.
+pub(crate) fn fixture_path(
+    workspace_root: &Path,
+    base: &str,
+    iri: &str,
+) -> Result<PathBuf, String> {
+    let relative = iri.strip_prefix(BASE_ROOT).ok_or_else(|| {
+        format!(
+            "manifest based at {base} references <{iri}>, which is outside the sentinel space \
+                 {BASE_ROOT} and therefore names no file in this workspace",
+        )
+    })?;
+    Ok(paths::resolve(workspace_root, relative))
 }
 
 /// Resolve an OPTIONAL file IRI, keeping "no such column bound" (`None`) distinct
@@ -1066,13 +1084,13 @@ fn classify(type_term: Option<&TermValue>) -> TestKind {
     }
 }
 
-/// The `rs:` (SPARQL result-set) vocabulary namespace: a Turtle file describing
-/// an `rs:ResultSet` encodes a SELECT solution sequence, not a graph, so it
-/// must be routed to [`ExpectedResult::ResultSetTurtle`] rather than
+/// The `rs:` vocabulary namespace: a Turtle or RDF/XML document describing
+/// an `rs:ResultSet` encodes SELECT rows or an ASK boolean, so it
+/// must be routed to [`ExpectedResult::ResultSetRdf`] rather than
 /// [`ExpectedResult::Graph`]. See [`crate::rs_resultset`].
 const RS_NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#";
 
-/// Classify a result file by extension; a `.ttl` file is additionally content-
+/// Classify a result file by extension; `.ttl` and `.rdf` are additionally content-
 /// sniffed for the `rs:ResultSet` encoding (a plain substring check — the real
 /// parse in [`crate::rs_resultset`] validates the shape and errors loudly on a
 /// false positive, so this is a routing hint, not the correctness boundary).
@@ -1081,8 +1099,8 @@ fn classify_result(path: &Path) -> ExpectedResult {
         Some("srx") => ExpectedResult::Srx(path.to_path_buf()),
         Some("srj") => ExpectedResult::Srj(path.to_path_buf()),
         Some("err") => ExpectedResult::EvalError(path.to_path_buf()),
-        Some("ttl") if is_rs_resultset_turtle(path) => {
-            ExpectedResult::ResultSetTurtle(path.to_path_buf())
+        Some("ttl" | "rdf") if is_rs_resultset(path) => {
+            ExpectedResult::ResultSetRdf(path.to_path_buf())
         }
         Some("ttl" | "nt" | "nq" | "rdf") => ExpectedResult::Graph(path.to_path_buf()),
         _ => ExpectedResult::Unsupported(path.to_path_buf()),
@@ -1090,10 +1108,10 @@ fn classify_result(path: &Path) -> ExpectedResult {
 }
 
 /// Whether `path` textually mentions the `rs:ResultSet` type IRI. Cheap and
-/// content-based (not extension-based) because the W3C suite ships `.ttl`
+/// content-based because the W3C suite ships Turtle and RDF/XML
 /// result files in both shapes (plain CONSTRUCT graphs and `rs:ResultSet`
 /// solution descriptions) under the same extension.
-fn is_rs_resultset_turtle(path: &Path) -> bool {
+fn is_rs_resultset(path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
     };

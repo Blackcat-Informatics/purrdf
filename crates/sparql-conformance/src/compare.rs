@@ -220,20 +220,37 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
             },
         ) => {
             let expected = read_solutions(path, matches!(case.expected, ExpectedResult::Srj(_)))?;
-            compare_solutions(variables, rows, &expected, ordered)
+            compare_case_solutions(case, variables, rows, &expected, ordered)
         }
-        (
-            ExpectedResult::ResultSetTurtle(path),
-            SparqlResult::Solutions {
-                variables, rows, ..
-            },
-        ) => {
-            let expected = crate::rs_resultset::parse(
+        (ExpectedResult::ResultSetRdf(path), result) => {
+            let expected = crate::rs_resultset::parse_result(
                 &case.base,
+                crate::run::data_media_type(path),
                 &std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?,
             )
             .map_err(|e| format!("parse expected rs:ResultSet {}: {e}", path.display()))?;
-            compare_solutions(variables, rows, &expected, ordered)
+            match (expected, result) {
+                (
+                    crate::rs_resultset::RdfResult::Boolean(expected),
+                    SparqlResult::Boolean(actual),
+                ) => {
+                    if expected == *actual {
+                        Ok(())
+                    } else {
+                        Err(format!("ASK mismatch: expected {expected}, got {actual}"))
+                    }
+                }
+                (
+                    crate::rs_resultset::RdfResult::Solutions {
+                        solutions,
+                        ordered: indexed,
+                    },
+                    SparqlResult::Solutions {
+                        variables, rows, ..
+                    },
+                ) => compare_case_solutions(case, variables, rows, &solutions, indexed),
+                _ => Err("DAWG RDF result kind differs from the query result".to_owned()),
+            }
         }
         (ExpectedResult::Graph(path), SparqlResult::Graph(actual)) => {
             let expected_bytes =
@@ -259,6 +276,70 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
             actual.query_form()
         )),
     }
+}
+
+/// Apply the manifest's explicit REDUCED cardinality rule, otherwise exact equality.
+fn compare_case_solutions(
+    case: &SparqlTestCase,
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+    expected: &ParsedSolutions,
+    ordered: bool,
+) -> Result<(), String> {
+    if !case.lax_cardinality {
+        return compare_solutions(variables, rows, expected, ordered);
+    }
+    // The W3C test-case rules require each solution at least once and no more
+    // often than its expected multiplicity. Match distinct rows with ONE global
+    // blank-node bijection: ordered prefix comparison pins each chosen row pair,
+    // so per-row aliases cannot conceal inconsistent cross-row coreference.
+    // <https://www.w3.org/2009/sparql/docs/tests/README.html>
+    let actual = row_multiplicities(rows);
+    let wanted = row_multiplicities(&expected.rows);
+    if actual.len() != wanted.len() {
+        return Err("REDUCED result has missing or extra distinct solutions".to_owned());
+    }
+    let actual_rows: Vec<_> = actual.iter().map(|(row, _)| (*row).clone()).collect();
+    let mut pending = vec![Vec::<usize>::new()];
+    while let Some(selected) = pending.pop() {
+        let at = selected.len();
+        if at == actual.len() {
+            return Ok(());
+        }
+        for (candidate, &(row, maximum)) in wanted.iter().enumerate() {
+            if selected.contains(&candidate) || actual[at].1 > maximum {
+                continue;
+            }
+            let mut paired: Vec<_> = selected
+                .iter()
+                .map(|&index| wanted[index].0.clone())
+                .collect();
+            paired.push(row.clone());
+            let paired = ParsedSolutions {
+                variables: expected.variables.clone(),
+                rows: paired,
+            };
+            if compare_solutions(variables, &actual_rows[..=at], &paired, true).is_ok() {
+                let mut next = selected.clone();
+                next.push(candidate);
+                pending.push(next);
+            }
+        }
+    }
+    Err("REDUCED multiplicities or global blank-node correspondence differ".to_owned())
+}
+
+/// Group equal rows without changing the identity of their value blank nodes.
+fn row_multiplicities(rows: &[Vec<Option<TermValue>>]) -> Vec<(&Vec<Option<TermValue>>, usize)> {
+    let mut groups: Vec<(&Vec<Option<TermValue>>, usize)> = Vec::new();
+    for row in rows {
+        if let Some((_, count)) = groups.iter_mut().find(|(value, _)| *value == row) {
+            *count += 1;
+        } else {
+            groups.push((row, 1));
+        }
+    }
+    groups
 }
 
 /// Compare a native solution sequence against the expected one under W3C
@@ -287,9 +368,17 @@ fn compare_solutions(
             "multiset"
         };
         Err(format!(
-            "solution {mode} mismatch: {} expected rows vs {} actual rows",
+            "solution {mode} mismatch: {} expected rows vs {} actual rows; first canonical difference: {}",
             expected.rows.len(),
-            rows.len()
+            rows.len(),
+            actual_canon
+                .lines()
+                .zip(expected_canon.lines())
+                .find(|(actual, expected)| actual != expected)
+                .map_or_else(
+                    || "one result's canonical graph ends earlier".to_owned(),
+                    |(actual, expected)| format!("expected {expected} / actual {actual}")
+                )
         ))
     }
 }
@@ -322,7 +411,8 @@ use purrdf_core::datatype::XSD_INTEGER;
 /// set is one dataset canonicalized once, RDFC-1.0 must find a SINGLE bijection
 /// mapping every blank node across every row simultaneously — so a result whose
 /// blanks only line up row-by-row (but not globally) is correctly UNEQUAL.
-/// Value blank nodes are interned in [`VALUE_SCOPE`] keyed by `(label, scope)`,
+/// Value blank nodes are interned in [`VALUE_SCOPE`] under an injective encoding
+/// of their original `(scope, label)`,
 /// so a blank shared across rows keeps one [`TermId`] and its coreference is
 /// preserved; two structurally-identical rows produce two automorphic solution
 /// blanks that RDFC-1.0 still emits as two lines, preserving multiplicity.
@@ -356,6 +446,12 @@ fn encode_solution_set(
                 let object = intern_term_value(&mut builder, term);
                 builder.push_quad(solution, predicate, object, None);
             }
+        }
+        if !ordered && row.iter().all(Option::is_none) {
+            // A wholly unbound solution still has a multiplicity. Without a
+            // statement the synthetic solution node would vanish from RDF.
+            let empty = builder.intern_iri(&format!("{CONFORMANCE_NS}empty"));
+            builder.push_quad(solution, empty, empty, None);
         }
         if ordered {
             let ordinal = builder.intern_literal(RdfLiteral {
@@ -396,13 +492,10 @@ pub fn canonical_solutions(
 /// Intern one [`TermValue`] into `builder`, recursively for triple terms.
 ///
 /// Every value blank node — top-level or nested in a triple term — is interned
-/// under the single shared [`VALUE_SCOPE`], keyed by its label, so a blank with
-/// the same label in two different rows resolves to ONE [`TermId`] and its
-/// coreference across the whole result set is preserved through
-/// canonicalization. (Result blank nodes are single-scope in practice: both the
-/// engine and the SRX/SRJ/`rs:ResultSet` readers mint them in the default
-/// scope, so forcing one scope here cannot merge two originally-distinct
-/// blanks.)
+/// under the single shared [`VALUE_SCOPE`], keyed by both its original scope
+/// and label. A scoped blank shared across rows keeps ONE [`TermId`], while
+/// equal labels from different source documents remain distinct. Canonicalization
+/// then normalizes those opaque identities with one global bijection.
 ///
 /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
 /// predicate and object, each fully before the next, then the triple itself.
@@ -413,7 +506,9 @@ fn intern_term_value(builder: &mut RdfDatasetBuilder, term: &TermValue) -> TermI
         |builder, term| {
             Ok::<_, Infallible>(Nested::Leaf(match term {
                 TermValue::Iri(iri) => builder.intern_iri(iri),
-                TermValue::Blank { label, .. } => builder.intern_blank(label, VALUE_SCOPE),
+                TermValue::Blank { label, scope } => {
+                    builder.intern_blank(&format!("{}:{label}", scope.0), VALUE_SCOPE)
+                }
                 TermValue::Literal {
                     lexical_form,
                     datatype,
@@ -477,6 +572,7 @@ mod tests {
             regime: None,
             aggregate_namespace: None,
             expected,
+            lax_cardinality: false,
         }
     }
 
@@ -598,6 +694,40 @@ mod tests {
             one(blank("b0")),
             one(blank("totally-different")),
             "blank-node label must not affect equality"
+        );
+    }
+
+    #[test]
+    fn equal_labels_from_different_source_scopes_remain_distinct() {
+        let variables = vec!["x".to_owned(), "y".to_owned()];
+        let scoped = |scope| TermValue::Blank {
+            label: "same".to_owned(),
+            scope: BlankScope(scope),
+        };
+        let actual = vec![vec![Some(scoped(3)), Some(scoped(4))]];
+        let distinct = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![vec![Some(blank("a")), Some(blank("b"))]],
+        };
+        assert!(compare_solutions(&variables, &actual, &distinct, false).is_ok());
+        let aliased = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![vec![Some(blank("a")), Some(blank("a"))]],
+        };
+        assert!(compare_solutions(&variables, &actual, &aliased, false).is_err());
+    }
+
+    #[test]
+    fn unbound_solution_multiplicity_is_observable() {
+        let variables = vec!["x".to_owned()];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![vec![None]],
+        };
+        assert!(compare_solutions(&variables, &[], &expected, false).is_err());
+        assert!(compare_solutions(&variables, &[vec![None]], &expected, false).is_ok());
+        assert!(
+            compare_solutions(&variables, &[vec![None], vec![None]], &expected, false).is_err()
         );
     }
 
@@ -728,6 +858,85 @@ mod tests {
         // Same rows, opposite order, compare EQUAL when unordered.
         assert!(compare_solutions(&vars, &two_rows, &reversed_expected, false).is_ok());
     }
+
+    #[test]
+    fn lax_cardinality_accepts_only_the_declared_multiplicity_range() {
+        let mut case = case_with(ExpectedResult::None);
+        case.lax_cardinality = true;
+        let variables = vec!["x".to_owned()];
+        let a = vec![Some(TermValue::simple_literal("a"))];
+        let b = vec![Some(TermValue::simple_literal("b"))];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![a.clone(), a.clone(), a.clone(), b.clone()],
+        };
+        for count in 1..=3 {
+            let mut rows = vec![a.clone(); count];
+            rows.push(b.clone());
+            assert!(compare_case_solutions(&case, &variables, &rows, &expected, false).is_ok());
+        }
+        for rows in [
+            vec![a.clone()],
+            vec![a.clone(), a.clone(), a.clone(), a.clone(), b.clone()],
+            vec![a.clone(), b.clone(), b.clone()],
+            vec![a, b, vec![None]],
+        ] {
+            assert!(compare_case_solutions(&case, &variables, &rows, &expected, false).is_err());
+        }
+    }
+
+    #[test]
+    fn lax_cardinality_preserves_global_blank_coreference_and_count_correspondence() {
+        let mut case = case_with(ExpectedResult::None);
+        case.lax_cardinality = true;
+        let variables = vec!["x".to_owned(), "y".to_owned()];
+        let expected_first = vec![Some(blank("a")), Some(blank("b"))];
+        let expected_second = vec![Some(blank("a")), Some(blank("c"))];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![expected_first.clone(), expected_first, expected_second],
+        };
+        let first = vec![Some(blank("renamed")), Some(blank("one"))];
+        let second = vec![Some(blank("renamed")), Some(blank("two"))];
+        assert!(
+            compare_case_solutions(
+                &case,
+                &variables,
+                &[first.clone(), first.clone(), second],
+                &expected,
+                false
+            )
+            .is_ok()
+        );
+        let inconsistent = vec![Some(blank("other")), Some(blank("two"))];
+        assert!(
+            compare_case_solutions(&case, &variables, &[first, inconsistent], &expected, false)
+                .is_err()
+        );
+        // Pin row identities with a ground cell so a valid bijection cannot swap
+        // the expected multiplicities between otherwise symmetric blank rows.
+        let actual_rows = vec![
+            vec![Some(blank("one")), Some(TermValue::simple_literal("a"))],
+            vec![Some(blank("two")), Some(TermValue::simple_literal("b"))],
+        ];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![
+                actual_rows[0].clone(),
+                actual_rows[1].clone(),
+                actual_rows[1].clone(),
+            ],
+        };
+        let swapped_counts = vec![
+            actual_rows[0].clone(),
+            actual_rows[0].clone(),
+            actual_rows[1].clone(),
+        ];
+        assert!(
+            compare_case_solutions(&case, &variables, &swapped_counts, &expected, false).is_err()
+        );
+        assert!(compare_case_solutions(&case, &variables, &actual_rows, &expected, false).is_ok());
+    }
 }
 
 #[cfg(test)]
@@ -738,7 +947,7 @@ mod term_walk_tests {
     use purrdf_core::term_fixture::TermShape;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermId, TermValue};
 
-    use super::{VALUE_SCOPE, intern_term_value};
+    use super::intern_term_value;
 
     fn reference(builder: &mut RdfDatasetBuilder, term: &TermValue) -> TermId {
         match term {
@@ -748,7 +957,9 @@ mod term_walk_tests {
                 let o = reference(builder, o);
                 builder.intern_triple(s, p, o)
             }
-            TermValue::Blank { label, .. } => builder.intern_blank(label, VALUE_SCOPE),
+            // Keep source identity directly in this independent reference. The
+            // production encoder reserves its own scope with opaque labels.
+            TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
             TermValue::Literal {
                 lexical_form,
                 datatype,
