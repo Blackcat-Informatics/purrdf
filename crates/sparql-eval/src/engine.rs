@@ -1849,7 +1849,8 @@ impl NativeSparqlEngine {
     ) -> Result<GovernedUpdateOutcome, RdfDiagnostic> {
         let update = self.parse_update(&request, options.env)?;
         let state = Arc::new(GovernorState::new(governors));
-        let mut m = MutableDataset::new(Arc::clone(dataset));
+        let mut m =
+            MutableDataset::new_with_graph_existence(Arc::clone(dataset), options.graph_existence);
         let cfg = crate::update::UpdateEvalConfig {
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
@@ -1947,7 +1948,8 @@ impl NativeSparqlEngine {
         // Atomicity is structural: branch a COW MutableDataset off the frozen base,
         // apply every op to the delta, and only on FULL success freeze back. Any
         // error drops `m` and leaves `*dataset` untouched.
-        let mut m = MutableDataset::new(Arc::clone(dataset));
+        let mut m =
+            MutableDataset::new_with_graph_existence(Arc::clone(dataset), options.graph_existence);
         let cfg = crate::update::UpdateEvalConfig {
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
@@ -3768,6 +3770,10 @@ pub enum ShaclPrebinding {
 #[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct QueryOptions<'a> {
+    /// The named-graph lifetime policy for this request's UPDATE branch.
+    /// Queries read the existing graph registry independently of this policy.
+    /// [`purrdf_core::GraphExistenceMode::Implicit`] preserves the default behavior.
+    pub graph_existence: purrdf_core::GraphExistenceMode,
     /// Which substitution rewrite to apply (see [`ShaclPrebinding`]).
     pub prebinding: ShaclPrebinding,
     /// The SHACL-AF function registry in scope.
@@ -3859,6 +3865,7 @@ pub struct QueryOptions<'a> {
 impl std::fmt::Debug for QueryOptions<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QueryOptions")
+            .field("graph_existence", &self.graph_existence)
             .field("prebinding", &self.prebinding)
             .field("functions", &self.functions)
             .field("env", &self.env)
@@ -3899,6 +3906,7 @@ impl QueryOptions<'_> {
     /// depth, no `SERVICE` source, and the engine's own `LOAD` resolver. What every
     /// entry did before it took options.
     pub const EMPTY: Self = Self {
+        graph_existence: purrdf_core::GraphExistenceMode::Implicit,
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::BoundFunctionRegistry::EMPTY,
         env: crate::extension_env::ExtensionEnv::empty(),
@@ -3926,6 +3934,17 @@ impl Default for QueryOptions<'_> {
 }
 
 impl<'a> QueryOptions<'a> {
+    /// Select the named-graph lifetime policy used by either UPDATE entry point.
+    /// Frozen graph presence and ordinary query evaluation remain unchanged.
+    #[must_use]
+    pub const fn with_graph_existence(
+        mut self,
+        graph_existence: purrdf_core::GraphExistenceMode,
+    ) -> Self {
+        self.graph_existence = graph_existence;
+        self
+    }
+
     /// Set which substitution rewrite applies (see [`ShaclPrebinding`]).
     #[must_use]
     pub const fn with_prebinding(mut self, prebinding: ShaclPrebinding) -> Self {

@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-05T12:35:22-06:00\n"
+"POT-Creation-Date: 2026-10-05T15:40:58-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -5322,8 +5322,8 @@ msgstr ""
 #: src/project/diagnostic-codes.md:50 src/project/diagnostic-codes.md:77
 #: src/project/diagnostic-codes.md:94 src/project/diagnostic-codes.md:105
 #: src/project/diagnostic-codes.md:126 src/project/diagnostic-codes.md:148
-#: src/project/diagnostic-codes.md:197 src/project/diagnostic-codes.md:207
-#: src/project/diagnostic-codes.md:217
+#: src/project/diagnostic-codes.md:198 src/project/diagnostic-codes.md:208
+#: src/project/diagnostic-codes.md:218
 msgid "Code"
 msgstr "代码"
 
@@ -21657,16 +21657,16 @@ msgstr ""
 #: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
 #: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
 #: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:126
-#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:197
-#: src/project/diagnostic-codes.md:207 src/project/diagnostic-codes.md:217
+#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:198
+#: src/project/diagnostic-codes.md:208 src/project/diagnostic-codes.md:218
 msgid "Meaning"
 msgstr "含义"
 
 #: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
 #: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
 #: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:126
-#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:197
-#: src/project/diagnostic-codes.md:207 src/project/diagnostic-codes.md:217
+#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:198
+#: src/project/diagnostic-codes.md:208 src/project/diagnostic-codes.md:218
 msgid "Remedy"
 msgstr "补救办法"
 
@@ -21989,7 +21989,7 @@ msgid "A term in an IRI-only position (the predicate) is not an IRI."
 msgstr "只允许 IRI 的位置（谓词）上的项不是 IRI。"
 
 #: src/project/diagnostic-codes.md:66 src/project/diagnostic-codes.md:108
-#: src/project/diagnostic-codes.md:130 src/project/diagnostic-codes.md:191
+#: src/project/diagnostic-codes.md:130 src/project/diagnostic-codes.md:192
 msgid "Use an IRI predicate."
 msgstr "使用 IRI 谓词。"
 
@@ -23289,60 +23289,79 @@ msgid "Name a single destination graph."
 msgstr "指定单个目标图。"
 
 #: src/project/diagnostic-codes.md:190
+msgid "`native-sparql-update-graph-missing`"
+msgstr "`native-sparql-update-graph-missing`"
+
+#: src/project/diagnostic-codes.md:190
+msgid ""
+"An UPDATE selected `RememberEmpty` and its named input graph does not exist. "
+"`CLEAR`, `DROP`, `ADD`, `COPY` and `MOVE` refuse this input before changing "
+"the destination; `SILENT` leaves the operation unchanged. Self `COPY` and "
+"`MOVE` are unconditional no-ops."
+msgstr ""
+"UPDATE 选择了 `RememberEmpty`，但其命名的输入图不存在。`CLEAR`、`DROP`、"
+"`ADD`、`COPY` 和 `MOVE` 会在更改目标图之前拒绝该输入；`SILENT` 保持本次操作"
+"的状态不变。以自身为目标的 `COPY` 和 `MOVE` 无条件地不做任何操作。"
+
+#: src/project/diagnostic-codes.md:190
+msgid "Create or load the input graph, or use `SILENT`."
+msgstr "创建或加载输入图，或使用 `SILENT`。"
+
+#: src/project/diagnostic-codes.md:191
 msgid "`native-sparql-subst-iri`"
 msgstr "`native-sparql-subst-iri`"
 
-#: src/project/diagnostic-codes.md:190
+#: src/project/diagnostic-codes.md:191
 msgid "A substitution value is not a valid IRI."
 msgstr "某个替换值不是有效的 IRI。"
 
-#: src/project/diagnostic-codes.md:190
+#: src/project/diagnostic-codes.md:191
 msgid "Supply a valid IRI."
 msgstr "提供一个有效的 IRI。"
 
-#: src/project/diagnostic-codes.md:191
+#: src/project/diagnostic-codes.md:192
 msgid "`native-sparql-subst-triple-predicate`"
 msgstr "`native-sparql-subst-triple-predicate`"
 
-#: src/project/diagnostic-codes.md:191
+#: src/project/diagnostic-codes.md:192
 msgid "A substituted quoted triple has a predicate that is not an IRI."
 msgstr "某个被替换的引用三元组的谓词不是 IRI。"
 
-#: src/project/diagnostic-codes.md:192
+#: src/project/diagnostic-codes.md:193
 msgid "`native-sparql-subst-literal-datatype`"
 msgstr "`native-sparql-subst-literal-datatype`"
 
-#: src/project/diagnostic-codes.md:192
+#: src/project/diagnostic-codes.md:193
 msgid "A substituted literal's datatype is not an IRI."
 msgstr "被替换的字面量的数据类型不是 IRI。"
 
-#: src/project/diagnostic-codes.md:192
+#: src/project/diagnostic-codes.md:193
 msgid "Use an IRI datatype."
 msgstr "使用 IRI 数据类型。"
 
-#: src/project/diagnostic-codes.md:193
+#: src/project/diagnostic-codes.md:194
 msgid "`native-sparql-subst-langtag`"
 msgstr "`native-sparql-subst-langtag`"
 
-#: src/project/diagnostic-codes.md:193
+#: src/project/diagnostic-codes.md:194
 msgid ""
 "A pre-bound literal's language tag is not one the lexing profile accepts."
 msgstr "预绑定字面量的语言标签不是该词法 profile 所接受的。"
 
-#: src/project/diagnostic-codes.md:193
+#: src/project/diagnostic-codes.md:194
 msgid "Supply a well-formed language tag."
 msgstr "提供一个良构的语言标签。"
 
-#: src/project/diagnostic-codes.md:195
+#: src/project/diagnostic-codes.md:196
 msgid "`reasoning-*` — SPARQL under an entailment regime (`purrdf`)"
 msgstr ""
 "`reasoning-*`——在蕴涵机制（entailment regime）下执行的 SPARQL（`purrdf`）"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:200
 msgid "`reasoning-closure-relation-witness`"
 msgstr "`reasoning-closure-relation-witness`"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:200
 msgid ""
 "Property-function relations derived from the closure cannot be combined with "
 "an OWL Direct-Semantics run whose restricted chase minted existential "
@@ -23353,7 +23372,7 @@ msgstr ""
 "Direct-Semantics 运行组合使用：遍历闭包的关系可能返回一个生成的空节点，而该机"
 "制的作用域图并不包含它。"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:200
 msgid ""
 "Query under a regime that mints no witnesses (`rdf`, `rdfs`, `owl-rl`, `d`, "
 "`rif`, `simple`), or drop the dataset-derived relations from the call."
@@ -23361,98 +23380,98 @@ msgstr ""
 "在不生成见证的机制（`rdf`、`rdfs`、`owl-rl`、`d`、`rif`、`simple`）下查询，或"
 "从该调用中去掉由数据集派生的关系。"
 
-#: src/project/diagnostic-codes.md:200
+#: src/project/diagnostic-codes.md:201
 msgid "`reasoning-closure-relation-rebuild`"
 msgstr "`reasoning-closure-relation-rebuild`"
 
-#: src/project/diagnostic-codes.md:200
+#: src/project/diagnostic-codes.md:201
 msgid "Rebuilding the property-function relations over the closure failed."
 msgstr "在推理闭包上重建属性函数关系失败。"
 
-#: src/project/diagnostic-codes.md:200
+#: src/project/diagnostic-codes.md:201
 msgid "The relation builder's own error is in the message."
 msgstr "关系构建器自身的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:202
+#: src/project/diagnostic-codes.md:203
 msgid "`statements-*` — statement-metadata ingestion (`purrdf-rdf`)"
 msgstr "`statements-*`——陈述元数据的摄入（`purrdf-rdf`）"
 
-#: src/project/diagnostic-codes.md:204
+#: src/project/diagnostic-codes.md:205
 msgid ""
 "These arise when a document's `rdf:reifies` and `owl:Axiom` statements are "
 "read into the statement layer."
 msgstr ""
 "当把文档的 `rdf:reifies` 与 `owl:Axiom` 陈述读入陈述层时，会出现这些代码。"
 
-#: src/project/diagnostic-codes.md:209
+#: src/project/diagnostic-codes.md:210
 msgid "`statements-turtle-parse`"
 msgstr "`statements-turtle-parse`"
 
-#: src/project/diagnostic-codes.md:209
+#: src/project/diagnostic-codes.md:210
 msgid "The statement-metadata Turtle failed to parse."
 msgstr "陈述元数据 Turtle 解析失败。"
 
-#: src/project/diagnostic-codes.md:209
+#: src/project/diagnostic-codes.md:210
 msgid "Fix the Turtle."
 msgstr "修正该 Turtle。"
 
-#: src/project/diagnostic-codes.md:210
+#: src/project/diagnostic-codes.md:211
 msgid "`statements-non-iri`"
 msgstr "`statements-non-iri`"
 
-#: src/project/diagnostic-codes.md:210
+#: src/project/diagnostic-codes.md:211
 msgid "A term that must be an IRI in this context is not one."
 msgstr "在此上下文中必须是 IRI 的某个项不是 IRI。"
 
-#: src/project/diagnostic-codes.md:210
+#: src/project/diagnostic-codes.md:211
 msgid "Use an IRI."
 msgstr "使用 IRI。"
 
-#: src/project/diagnostic-codes.md:211
+#: src/project/diagnostic-codes.md:212
 msgid "`statements-reifies-non-triple`"
 msgstr "`statements-reifies-non-triple`"
 
-#: src/project/diagnostic-codes.md:211
+#: src/project/diagnostic-codes.md:212
 msgid "The object of `rdf:reifies` is not a triple term."
 msgstr "`rdf:reifies` 的宾语不是三元组项。"
 
-#: src/project/diagnostic-codes.md:211
+#: src/project/diagnostic-codes.md:212
 msgid "Reify a triple term."
 msgstr "对一个三元组项进行具体化。"
 
-#: src/project/diagnostic-codes.md:212
+#: src/project/diagnostic-codes.md:213
 msgid "`statements-malformed-axiom`"
 msgstr "`statements-malformed-axiom`"
 
-#: src/project/diagnostic-codes.md:212
+#: src/project/diagnostic-codes.md:213
 msgid "An `owl:Axiom` lacks its source, property or target."
 msgstr "某个 `owl:Axiom` 缺少其源、属性或目标。"
 
-#: src/project/diagnostic-codes.md:212
+#: src/project/diagnostic-codes.md:213
 msgid "Complete the axiom."
 msgstr "补全该公理。"
 
-#: src/project/diagnostic-codes.md:213
+#: src/project/diagnostic-codes.md:214
 msgid "`statements-conflicting-structural`"
 msgstr "`statements-conflicting-structural`"
 
-#: src/project/diagnostic-codes.md:213
+#: src/project/diagnostic-codes.md:214
 msgid "One subject carries two different values for a structural field."
 msgstr "同一个主语在某个结构字段上带有两个不同的值。"
 
-#: src/project/diagnostic-codes.md:213
+#: src/project/diagnostic-codes.md:214
 msgid "Keep one value."
 msgstr "只保留一个值。"
 
-#: src/project/diagnostic-codes.md:215
+#: src/project/diagnostic-codes.md:216
 msgid "Other single-code families"
 msgstr "其他单代码族"
 
-#: src/project/diagnostic-codes.md:219
+#: src/project/diagnostic-codes.md:220
 msgid "`sssom-tsv-parse`"
 msgstr "`sssom-tsv-parse`"
 
-#: src/project/diagnostic-codes.md:219
+#: src/project/diagnostic-codes.md:220
 msgid ""
 "An SSSOM TSV document is malformed: a missing or unreadable header row, a "
 "malformed `curie_map` entry or set comment, a malformed row, or a non-"
@@ -23461,15 +23480,15 @@ msgstr ""
 "某个 SSSOM TSV 文档格式错误：缺少表头行或表头行不可读、`curie_map` 条目或集合"
 "注释格式错误、某行格式错误，或置信度不是数值；位置信息指明所在行。"
 
-#: src/project/diagnostic-codes.md:219
+#: src/project/diagnostic-codes.md:220
 msgid "Fix the TSV at the reported line."
 msgstr "在所报告的行修正该 TSV。"
 
-#: src/project/diagnostic-codes.md:220
+#: src/project/diagnostic-codes.md:221
 msgid "`content-id-scheme`"
 msgstr "`content-id-scheme`"
 
-#: src/project/diagnostic-codes.md:220
+#: src/project/diagnostic-codes.md:221
 msgid ""
 "A content-id scheme prefix is invalid: empty, non-ASCII, or ending in a "
 "hexadecimal digit (which would make it ambiguous with the 64-hex-character "
@@ -23478,17 +23497,17 @@ msgstr ""
 "某个内容 id 的 scheme 前缀无效：为空、含非 ASCII 字符，或以十六进制数字结尾"
 "（这会使它与 64 个十六进制字符的尾部产生歧义）。"
 
-#: src/project/diagnostic-codes.md:220
+#: src/project/diagnostic-codes.md:221
 msgid ""
 "Choose a prefix that is non-empty ASCII and does not end in `0-9`, `a-f` or "
 "`A-F`."
 msgstr "选择一个非空、纯 ASCII 且不以 `0-9`、`a-f` 或 `A-F` 结尾的前缀。"
 
-#: src/project/diagnostic-codes.md:222
+#: src/project/diagnostic-codes.md:223
 msgid "Where the code reaches you"
 msgstr "代码在何处呈现给调用方"
 
-#: src/project/diagnostic-codes.md:224
+#: src/project/diagnostic-codes.md:225
 msgid ""
 "**Rust** — `RdfDiagnostic::code` on the returned error; its `Display` form "
 "is `<severity> <code>: <message>`."
@@ -23496,7 +23515,7 @@ msgstr ""
 "**Rust**——返回错误上的 `RdfDiagnostic::code`；其 `Display` 形式为 "
 "`<severity> <code>: <message>`。"
 
-#: src/project/diagnostic-codes.md:226
+#: src/project/diagnostic-codes.md:227
 msgid ""
 "**Python** — the `ValueError` message is that `Display` form (for example "
 "`error native-codec-parse: …`); an IRI failure is rendered as `<code>: "
@@ -23506,7 +23525,7 @@ msgstr ""
 "parse: …`）；IRI 失败则输出为 `<code>: <message>`（例如 `iri-relative-no-"
 "base: …`）。"
 
-#: src/project/diagnostic-codes.md:229
+#: src/project/diagnostic-codes.md:230
 msgid ""
 "**JavaScript** — the thrown `Error` message carries the same text, and its "
 "`code` property carries the code itself. The wasm package's own refusals "
@@ -23526,12 +23545,12 @@ msgstr ""
 "environment`（无法构建聚合注册表）、`purrdf-wasm-shacl` 与 `purrdf-wasm-"
 "shacl-product-refusal`（某个 SHACL 接口失败，或拒绝了一个预备好的产物）。"
 
-#: src/project/diagnostic-codes.md:238
+#: src/project/diagnostic-codes.md:239
 msgid ""
 "**C** — the error string returned through the C ABI carries the same text."
 msgstr "**C**——经由 C ABI 返回的错误字符串携带相同的文本。"
 
-#: src/project/diagnostic-codes.md:239
+#: src/project/diagnostic-codes.md:240
 msgid ""
 "**SARIF** — the `ruleId` of each result is the code, with a "
 "`reportingDescriptor` in the run's rule table ([`purrdf-validate`](https://"

@@ -10,17 +10,22 @@
 //!
 //! # Doctrine / boundary decisions
 //!
-//! - **Implicit graph existence.** This is a quad store: a named graph *exists* iff
-//!   it holds at least one quad. There is no empty-graph registry, so `CREATE GRAPH`
-//!   is a no-op success and `CLEAR` ≡ `DROP` (both remove every quad of the target —
-//!   the only observable state a graph has). `CLEAR`/`DROP`/`CREATE` never error,
-//!   SILENT or not (there is no missing-graph condition to fail on). The one carve-out
+//! - **Selected graph existence.** The default [`GraphExistenceMode::Implicit`]
+//!   keeps the existing row-driven policy: `CREATE GRAPH` is a no-op success and
+//!   `CLEAR` ≡ `DROP`. Missing inputs do not fail under this policy. The one carve-out
 //!   is a graph the INPUT declared empty (a TriG `GRAPH <g> {}`): it keeps existing,
 //!   through any request that does not touch it, until an operation empties it —
 //!   `DROP`/`CLEAR` of it (by name, `NAMED` or `ALL`), `MOVE` from it, `COPY`/`MOVE`
 //!   onto it from an empty source, or the removal of the last quad it was given.
 //!   Every such graph, like every graph whose last quad an operation removes, is then
 //!   gone from the request's snapshots, from `GRAPH ?g`, and from the frozen result.
+//!   [`GraphExistenceMode::RememberEmpty`] uses the same registry to retain an empty
+//!   slot after `CLEAR` or last-row removal. `CREATE` registers a slot and refuses a
+//!   duplicate; `DROP` and a `MOVE` source withdraw it. An admitted transfer or a
+//!   successful `LOAD` establishes its named destination even when empty. Missing
+//!   named inputs fail before mutation, except under `SILENT`. Self `COPY`/`MOVE`
+//!   remain unconditional no-ops; self `ADD` admits its source first in remembered
+//!   mode. The mandatory default graph is always present under either policy.
 //! - **Snapshot per WHERE op + value-space round-trip.** A `DELETE/INSERT … WHERE`
 //!   evaluates its `WHERE` against a *frozen snapshot* of the current effective set
 //!   (`m.snapshot_view()`), retaining the immutable base and freezing only its delta. Each
@@ -95,8 +100,8 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetMut, GraphMatchValue, MutableDataset, QuadValues, RdfDataset, RdfDiagnostic,
-    ResourceDimension, TermValue, TrippedGovernor,
+    DatasetMut, GraphExistenceMode, GraphMatchValue, MutableDataset, QuadValues, RdfDataset,
+    RdfDiagnostic, ResourceDimension, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_algebra::{
     GraphTarget, GraphUpdateOperation, NamedNodePattern, QuadPattern, Update, UsingClause,
@@ -490,27 +495,34 @@ fn apply_operation(
             resolver,
             cfg.governors,
         ),
-        // CLEAR ≡ DROP in a quad store with implicit graph existence (see module docs).
-        GraphUpdateOperation::Clear { target, .. } | GraphUpdateOperation::Drop { target, .. } => {
-            clear_target(target, m, cfg.governors)
+        GraphUpdateOperation::Clear { silent, target } => {
+            clear_or_drop(target, m, *silent, false, cfg.governors)
         }
-        // Graph existence is implicit, so CREATE has nothing to register: no-op success.
-        GraphUpdateOperation::Create { .. } => Ok(()),
+        GraphUpdateOperation::Drop { silent, target } => {
+            clear_or_drop(target, m, *silent, true, cfg.governors)
+        }
+        GraphUpdateOperation::Create { silent, graph } => {
+            match m.create_named_graph(named_node_to_value(graph)) {
+                Ok(_) => Ok(()),
+                Err(_) if *silent => Ok(()),
+                Err(diagnostic) => Err(diagnostic.into()),
+            }
+        }
         GraphUpdateOperation::Add {
+            silent,
             source,
             destination,
-            ..
-        } => graph_op_add(source, destination, m, cfg.governors),
+        } => graph_op_add(source, destination, m, *silent, cfg.governors),
         GraphUpdateOperation::Move {
+            silent,
             source,
             destination,
-            ..
-        } => graph_op_move(source, destination, m, cfg.governors),
+        } => graph_op_move(source, destination, m, *silent, cfg.governors),
         GraphUpdateOperation::Copy {
+            silent,
             source,
             destination,
-            ..
-        } => graph_op_copy(source, destination, m, cfg.governors),
+        } => graph_op_copy(source, destination, m, *silent, cfg.governors),
     }
 }
 
@@ -984,6 +996,7 @@ fn load(
         m.insert(rekey_graph(q, dest.as_ref()))
             .map_err(|e| iri_abort(&e))?;
     }
+    remember_destination(dest.as_ref(), m)?;
     Ok(())
 }
 
@@ -1013,7 +1026,7 @@ fn silence_or_fail(
 
 // ── CLEAR / DROP ─────────────────────────────────────────────────────────────
 
-/// Remove every quad of `target` from `m` (CLEAR ≡ DROP — see module docs).
+/// Remove every quad of `target`; implicit mode also withdraws its declarations.
 ///
 /// `CLEAR ALL` is the cheapest sentence in SPARQL to write and the most expensive to
 /// execute — its cost is the whole store — so it is charged per removed quad like every
@@ -1028,7 +1041,63 @@ fn clear_target(
     for q in &quads {
         m.remove(q);
     }
-    withdraw_declarations(target, m);
+    if m.graph_existence() == GraphExistenceMode::Implicit {
+        withdraw_declarations(target, m);
+    }
+    Ok(())
+}
+
+/// Admit a named input before any mutation. SILENT suppresses only this semantic
+/// failure; a governor trip remains a typed abort at its existing polling sites.
+fn admit_graph(
+    target: &GraphTarget,
+    m: &MutableDataset,
+    silent: bool,
+) -> Result<bool, UpdateAbort> {
+    if m.graph_existence() == GraphExistenceMode::RememberEmpty
+        && let GraphTarget::Named(name) = target
+        && !m.has_named_graph(&named_node_to_value(name))
+    {
+        if silent {
+            return Ok(false);
+        }
+        return Err(RdfDiagnostic::error(
+            "native-sparql-update-graph-missing",
+            format!("the named graph <{}> does not exist", name.as_str()),
+        )
+        .into());
+    }
+    Ok(true)
+}
+
+fn clear_or_drop(
+    target: &GraphTarget,
+    m: &mut MutableDataset,
+    silent: bool,
+    drop_graph: bool,
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
+    if !admit_graph(target, m, silent)? {
+        return Ok(());
+    }
+    clear_target(target, m, governors)?;
+    if drop_graph && m.graph_existence() == GraphExistenceMode::RememberEmpty {
+        withdraw_declarations(target, m);
+    }
+    Ok(())
+}
+
+/// An admitted empty transfer or successful LOAD creates its named destination
+/// in remembered mode, through the same idempotent declaration home as row ingress.
+fn remember_destination(
+    destination: Option<&TermValue>,
+    m: &mut MutableDataset,
+) -> Result<(), UpdateAbort> {
+    if m.graph_existence() == GraphExistenceMode::RememberEmpty
+        && let Some(graph) = destination
+    {
+        m.declare_named_graph(graph.clone())?;
+    }
     Ok(())
 }
 
@@ -1051,10 +1120,15 @@ fn graph_op_add(
     source: &GraphTarget,
     destination: &GraphTarget,
     m: &mut MutableDataset,
+    silent: bool,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
-    // SPARQL §3.2.5: ADD where source ≡ destination is a no-op.
-    if source == destination {
+    // Retain the implicit-mode self no-op. Remembered ADD admits the input first,
+    // including an absent self target, under the selected missing-input policy.
+    if source == destination && m.graph_existence() == GraphExistenceMode::Implicit {
+        return Ok(());
+    }
+    if !admit_graph(source, m, silent)? || source == destination {
         return Ok(());
     }
     let src = quads_of_target(source, m);
@@ -1064,6 +1138,7 @@ fn graph_op_add(
         m.insert(rekey_graph(q, dest.as_ref()))
             .map_err(|e| iri_abort(&e))?;
     }
+    remember_destination(dest.as_ref(), m)?;
     Ok(())
 }
 
@@ -1072,10 +1147,14 @@ fn graph_op_copy(
     source: &GraphTarget,
     destination: &GraphTarget,
     m: &mut MutableDataset,
+    silent: bool,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
     // SPARQL §3.2.4: COPY where source ≡ destination is a no-op.
     if source == destination {
+        return Ok(());
+    }
+    if !admit_graph(source, m, silent)? {
         return Ok(());
     }
     let dest = graph_target_value(destination)?;
@@ -1087,6 +1166,7 @@ fn graph_op_copy(
         m.insert(rekey_graph(q, dest.as_ref()))
             .map_err(|e| iri_abort(&e))?;
     }
+    remember_destination(dest.as_ref(), m)?;
     Ok(())
 }
 
@@ -1096,6 +1176,7 @@ fn graph_op_move(
     source: &GraphTarget,
     destination: &GraphTarget,
     m: &mut MutableDataset,
+    silent: bool,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
     // SPARQL §3.2.6: MOVE where source ≡ destination is a no-op. This guard is also
@@ -1103,6 +1184,9 @@ fn graph_op_move(
     // trailing source-removal below would re-suppress the just-inserted quads and
     // empty the graph.
     if source == destination {
+        return Ok(());
+    }
+    if !admit_graph(source, m, silent)? {
         return Ok(());
     }
     let dest = graph_target_value(destination)?;
@@ -1119,6 +1203,7 @@ fn graph_op_move(
     for q in &src {
         m.remove(q);
     }
+    remember_destination(dest.as_ref(), m)?;
     withdraw_declarations(source, m);
     Ok(())
 }
@@ -1389,6 +1474,15 @@ mod tests {
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         eval_update(&parse(text), m, None, &cfg).expect("update applies");
+    }
+
+    #[test]
+    fn remembered_create_registers_an_empty_graph() {
+        let base = mut_with(&[]).freeze().expect("empty base");
+        let mut mutable =
+            MutableDataset::new_with_graph_existence(base, GraphExistenceMode::RememberEmpty);
+        run("CREATE GRAPH ex:new", &mut mutable);
+        assert!(mutable.has_named_graph(&iri("new")));
     }
 
     #[test]
