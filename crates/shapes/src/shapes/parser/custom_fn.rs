@@ -427,7 +427,10 @@ impl Parser<'_> {
             // a legitimate shared sub-expression look like a cycle.
             let saved = std::mem::take(&mut self.in_flight);
             self.in_flight.insert(InFlight::NodeExpr(id));
-            let parsed = self.parse_node_expr(body_node);
+            // The body runs with the function's arguments bound under their names.
+            let arguments = func.params.iter().map(ArgKey::variable_name).collect();
+            let parsed =
+                self.with_node_expr_scope(arguments, |parser| parser.parse_node_expr(body_node));
             self.in_flight = saved;
             let body = parsed.map_err(|e| {
                 format!(

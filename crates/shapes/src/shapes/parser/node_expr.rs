@@ -25,6 +25,21 @@ use crate::shapes::{
 use super::annotations::Annotated;
 
 impl Parser<'_> {
+    /// Run `parse` with `names` added to the variables a node expression's context
+    /// binds when it runs ([`Parser::node_expr_scope`]), and remove them after,
+    /// whatever `parse` returns.
+    pub(crate) fn with_node_expr_scope<T>(
+        &mut self,
+        names: Vec<String>,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let depth = self.node_expr_scope.len();
+        self.node_expr_scope.extend(names);
+        let out = parse(self);
+        self.node_expr_scope.truncate(depth);
+        out
+    }
+
     /// Parse all constraints declared directly on a shape node.
     ///
     /// Does NOT include `sh:property` sub-shapes (handled separately).
@@ -570,7 +585,12 @@ impl Parser<'_> {
         let mut expr_nodes: Vec<Term> = self.objects_of(id, sh::EXPRESSION);
         crate::term::sort_terms_canonical(&mut expr_nodes);
         for expr_node in expr_nodes {
-            let expr = self.parse_node_expr(&expr_node)?;
+            // Evaluated with the value node bound as `value` (SHACL 1.2 Node
+            // Expressions §7.1).
+            let expr = self
+                .with_node_expr_scope(vec![crate::expression::VALUE_VAR.to_owned()], |parser| {
+                    parser.parse_node_expr(&expr_node)
+                })?;
 
             let messages = self.messages_of(&expr_node)?;
             let severity = self.severity_of(&expr_node)?;
@@ -1730,7 +1750,9 @@ impl Parser<'_> {
                     )
                 };
                 let parsed = SparqlParser::new()
-                    .with_prebound_variables(crate::sparql::node_expression_prebound_names(&query))
+                    .with_prebound_variables(crate::sparql::node_expression_prebound_names(
+                        &self.node_expr_scope,
+                    ))
                     .parse_query(&query)
                     .map_err(|e| {
                         format!("{key} node expression on {node} has an unparsable query: {e}")

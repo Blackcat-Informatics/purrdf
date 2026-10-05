@@ -2309,23 +2309,18 @@ pub(crate) fn push_shape_context(
 pub(crate) const THIS_AND_SHAPE_CONTEXT: [&str; 3] = ["this", "shapesGraph", "currentShape"];
 
 /// The names a node expression's query may find pre-bound when it runs: `$this`,
-/// the shape context, and every variable `text` spells.
+/// the shape context, and `scope` — the names the expression's context binds
+/// (`value` inside an `sh:expression` constraint, a custom function's argument
+/// names inside its body, a free evaluation's caller scope; see
+/// `Parser::node_expr_scope`).
 ///
-/// A node expression runs with its focus node as `$this` and with whatever scope
-/// its context supplies — a custom function's `$arg0`, `$arg1`, …, or a named
-/// parameter's local name (SHACL 1.2 SPARQL Extensions §7.2) — and that scope is
-/// known only where the expression is evaluated. So the load-time parse declares
-/// every name the text could have bound for it; the evaluation then parses with
-/// exactly the names it binds, and the grouping check holds there in full. A text
-/// the lexer refuses gets the fixed names only, and the parse reports the refusal.
-pub(crate) fn node_expression_prebound_names(text: &str) -> Vec<&str> {
+/// A load-time parse declares exactly these to the grouping check
+/// (`SparqlParser::with_prebound_variables`), never every variable the text spells:
+/// a variable nothing can bind is a per-row value, and reading it outside an
+/// aggregate is refused at load exactly as it is in `sh:sparql`.
+pub(crate) fn node_expression_prebound_names(scope: &[String]) -> Vec<&str> {
     let mut names: Vec<&str> = THIS_AND_SHAPE_CONTEXT.to_vec();
-    if let Ok(tokens) = purrdf_sparql_algebra::lexer::tokenize(text) {
-        names.extend(tokens.iter().filter_map(|spanned| match spanned.token {
-            purrdf_sparql_algebra::lexer::Token::Variable(name) => Some(name),
-            _ => None,
-        }));
-    }
+    names.extend(scope.iter().map(String::as_str));
     names
 }
 

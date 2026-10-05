@@ -120,11 +120,12 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<NodeExprEvaluation, Shap
             )));
         }
     }
-    let (shapes, mut exprs) = crate::shapes::from_dataset_with_node_expressions(
+    let (shapes, mut exprs) = crate::shapes::from_dataset_with_scoped_node_expressions(
         request.shapes,
         request.prefixes,
         None,
         std::slice::from_ref(request.root),
+        &names,
         request.imports,
     )?;
     let expr = exprs
