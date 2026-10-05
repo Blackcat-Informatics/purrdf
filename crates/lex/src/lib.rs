@@ -104,6 +104,11 @@
 //!   of its value (a JSON object's members, a GTS graph's metadata).
 //! * **Message errors** — [`message_error!`], the one declaration of an error
 //!   type whose whole content is a human-readable message.
+//! * **Diagnostic presentations** — [`diagnostic`], a diagnostic's stable
+//!   message identity and exact typed arguments
+//!   ([`diagnostic::DiagnosticPresentation`]), checked against its English
+//!   template and rendered once, with a JSON record whose integers survive
+//!   binary64 hosts.
 //!
 //! # Examples
 //!
@@ -134,6 +139,7 @@ pub mod assoc;
 pub mod cbor;
 pub mod constructors;
 pub mod crockford;
+pub mod diagnostic;
 pub mod html;
 pub mod iri_escape;
 pub mod json;

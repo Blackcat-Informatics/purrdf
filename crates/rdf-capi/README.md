@@ -113,6 +113,20 @@ exact logical anchors. It remains valid until `purrdf_error_free(error)`. This
 accessor is included in the ABI 0.8.0 surface; existing status and
 English-message functions retain their signatures.
 
+A SPARQL parse refusal from `purrdf_query`, `purrdf_query_json`,
+`purrdf_query_governed`, `purrdf_query_entailment_governed` or
+`purrdf_update_governed` (status
+`PURRDF_STATUS_QUERY_ERROR`, code `native-sparql-query-parse` or
+`native-sparql-update-parse`) carries the parser's condition in the record's
+`presentation` object. Its `messageId` is one of `sparql-parse-lex`,
+`sparql-parse-syntax`, `sparql-parse-unsupported`, `sparql-parse-iri` or
+`sparql-parse-cdt-arity`, and its typed parameters include the byte offset as
+`"at":{"kind":"unsigned","value":"5"}`. An IRI refusal that `purrdf-iri`
+raised nests that condition under `presentation.detail`, for example
+`iri-bad-percent-encoding` with a typed unsigned `offset`, so a C host can read
+the IRI failure without parsing English. The error message and the record's
+`code`, `message` and other keys are unchanged.
+
 - **No unwinding across the boundary.** Every function runs inside
   `catch_unwind`; a caught panic becomes `PURRDF_STATUS_PANIC` (never a process
   abort across FFI).

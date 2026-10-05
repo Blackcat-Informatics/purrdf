@@ -14,6 +14,51 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
   2^127 or more.
+- **SPARQL parse diagnostics:** `ParseError::presentation()` returns the parse
+  failure as a typed `DiagnosticPresentation`. Each kind of failure has a stable
+  message identity (`sparql-parse-lex`, `sparql-parse-syntax`,
+  `sparql-parse-unsupported`, `sparql-parse-iri`, `sparql-parse-cdt-arity`)
+  and exact typed arguments: byte offsets and counts as unsigned integers, and
+  reasons, IRIs and construct names as text. `Display` renders through it, and
+  its English is unchanged byte for byte. When `purrdf-iri` refused the IRI
+  in an IRI failure, its presentation nests that condition as `detail`, for
+  example `iri-bad-percent-encoding` with an unsigned `offset`, or
+  `iri-relative-no-base`. The public fields of `ParseError::Iri` are
+  unchanged.
+- **Engine parse diagnostics carry the presentation:** for query and update
+  parse failures from the native engine, `RdfDiagnostic::presentation()` now
+  returns `Some`, where it used to return `None`. `RdfDiagnostic::to_json()`
+  adds a `presentation` key to them. The message, the human `detail` (still
+  absent) and the existing keys are unchanged.
+- **`IriError::presentation()`:** an IRI failure as a typed presentation, with
+  stable `iri-*` identities, typed fields and English identical to `Display`.
+  `RdfDiagnostic::from_iri` builds through it, and its output is unchanged.
+- **C ABI:** `purrdf_error_presentation_json` now returns the `sparql-parse-*`
+  presentation, and any nested `iri-*` detail, for a SPARQL parse refusal
+  from `purrdf_query`, `purrdf_query_json`, `purrdf_query_governed`,
+  `purrdf_query_entailment_governed` and `purrdf_update_governed`. Byte offsets
+  are typed unsigned decimal strings. Status codes and error messages are
+  unchanged.
+- **Python:** every `ValueError` raised by `query`, `query_governed`,
+  `query_entailment_governed`, `prepare`, `update` and `update_governed`
+  gains `message_id` and `presentation` attributes. The presentation is a
+  dict of typed parameters with exact `int` offsets and a nested `detail`.
+  Both attributes are `None` when the failure has no typed presentation, as
+  for an argument refusal or an unknown entailment regime. The exception
+  type, message and `args` are unchanged.
+- **WebAssembly:** an error thrown or rejected for a SPARQL failure gains a
+  `presentation` property holding `messageId`, typed `parameters` and an
+  optional `detail`. The TypeScript declarations add `DiagnosticPresentation`,
+  `DiagnosticParameterValue` and an optional `PurrdfError.presentation`. The
+  `message` and `code` are unchanged, and the property is absent when the
+  failure has no typed presentation.
+- **Diagnostic presentations in `purrdf-lex`:** `DiagnosticValue`,
+  `DiagnosticParameter`, `DiagnosticPresentation` and
+  `DiagnosticPresentationError` now live in `purrdf_lex::diagnostic`, so crates
+  below `purrdf-core` can build presentations. `purrdf_core::diagnostic` and the
+  `purrdf_core` crate root re-export the same types, so existing paths and
+  matches keep compiling.
+
 - **core:** `loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED`, a runtime loss code. The
   loss registry and `generated/transcode-loss-matrix.json` list it for every
   syntax pair whose source can write an empty named graph and whose target

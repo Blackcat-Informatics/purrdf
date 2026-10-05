@@ -1197,6 +1197,58 @@ int main(int argc, char **argv) {
           "IRI producer retains typed offset without parsing English");
     purrdf_error_free(bad_error);
 
+    /* SPARQL parse refusals carry the parser's typed condition: a stable
+     * sparql-parse-* identity, the byte offset as a typed unsigned integer, and an
+     * IRI refusal's purrdf-iri condition as nested typed detail. */
+    int32_t parse_kind = -1;
+    PurrdfRowCursor *parse_rows = NULL;
+    PurrdfDataset *parse_graph = NULL;
+    uint8_t parse_boolean = 0;
+    bad_error = NULL;
+    rc = purrdf_query(dataset, "ASK {", NULL, &parse_kind, &parse_rows,
+                      &parse_graph, &parse_boolean, &bad_error);
+    CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
+          "malformed query refused");
+    const char *query_record = purrdf_error_presentation_json(bad_error);
+    CHECK(query_record != NULL &&
+              strstr(query_record, "\"messageId\":\"sparql-parse-syntax\"") != NULL,
+          "query refusal carries sparql-parse-syntax");
+    CHECK(strstr(query_record, "\"at\":{\"kind\":\"unsigned\",\"value\":\"5\"}") != NULL,
+          "query refusal carries a typed unsigned at");
+    purrdf_error_free(bad_error);
+
+    bad_error = NULL;
+    rc = purrdf_query(dataset, "SELECT * WHERE { <http://example.org/%zz> ?p ?o }",
+                      NULL, &parse_kind, &parse_rows, &parse_graph, &parse_boolean,
+                      &bad_error);
+    CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
+          "query with a malformed IRI refused");
+    query_record = purrdf_error_presentation_json(bad_error);
+    CHECK(query_record != NULL &&
+              strstr(query_record, "\"messageId\":\"sparql-parse-iri\"") != NULL &&
+              strstr(query_record, "\"messageId\":\"iri-bad-percent-encoding\"") != NULL,
+          "IRI refusal carries sparql-parse-iri with the typed IRI cause");
+    CHECK(strstr(query_record, "\"offset\":{\"kind\":\"unsigned\",\"value\":\"19\"}") != NULL,
+          "IRI cause carries a typed unsigned offset");
+    purrdf_error_free(bad_error);
+
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "parse-refusal governor initializer");
+    int32_t parse_outcome = -1;
+    PurrdfGovernorEvidence parse_evidence;
+    bad_error = NULL;
+    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, &governors,
+                                &parse_outcome, &parse_evidence, &bad_error);
+    CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
+          "malformed governed update refused");
+    const char *update_record = purrdf_error_presentation_json(bad_error);
+    CHECK(update_record != NULL &&
+              strstr(update_record, "\"messageId\":\"sparql-parse-syntax\"") != NULL,
+          "update refusal carries sparql-parse-syntax");
+    CHECK(strstr(update_record, "\"at\":{\"kind\":\"unsigned\",\"value\":\"14\"}") != NULL,
+          "update refusal carries a typed unsigned at");
+    purrdf_error_free(bad_error);
+
     /* ── entailment: the tri-host golden vector, and the reasoning services ── */
     int golden_cases = check_golden_vector(argv[3]);
     CHECK(golden_cases > 0, "the committed entailment golden vector runs through the C ABI");

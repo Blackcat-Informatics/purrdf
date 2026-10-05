@@ -1321,6 +1321,38 @@ export class ServiceCatalog {
  */
 export interface PurrdfError extends Error {
   readonly code: string;
+  /**
+   * The failure's typed condition, when it carries one. A SPARQL parse failure
+   * (`code` `native-sparql-query-parse` or `native-sparql-update-parse`) carries its
+   * `sparql-parse-*` identity and typed parameters, so its kind and byte offset are read
+   * without parsing `message`. `undefined` for a failure without a typed presentation.
+   */
+  readonly presentation?: DiagnosticPresentation;
+}
+
+/**
+ * One typed argument of a `DiagnosticPresentation`. Integers are exact decimal strings,
+ * so a 64-bit offset survives a binary64 `number`.
+ */
+export type DiagnosticParameterValue =
+  | { readonly kind: "text"; readonly value: string }
+  | { readonly kind: "unsigned"; readonly value: string }
+  | { readonly kind: "signed"; readonly value: string }
+  | { readonly kind: "boolean"; readonly value: boolean }
+  | { readonly kind: "character"; readonly value: string };
+
+/**
+ * A failure's typed condition: its stable `messageId` (`sparql-parse-lex`,
+ * `sparql-parse-syntax`, `sparql-parse-unsupported`, `sparql-parse-iri`,
+ * `sparql-parse-cdt-arity`, …), its named typed `parameters`, and, when present, a
+ * nested `detail` of the same shape: an IRI refusal's own `iri-*` condition, such as
+ * `iri-bad-percent-encoding` with its unsigned `offset`. The same record the C ABI's
+ * `purrdf_error_presentation_json` returns under `presentation`.
+ */
+export interface DiagnosticPresentation {
+  readonly messageId: string;
+  readonly parameters: { readonly [name: string]: DiagnosticParameterValue };
+  readonly detail?: DiagnosticPresentation;
 }
 
 /**
