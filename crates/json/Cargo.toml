@@ -34,14 +34,13 @@ purrdf-alloc-probe.workspace = true
 purrdf-rdf.workspace = true
 purrdf-sparql-eval.workspace = true
 # The shared test support, and the `harness = false` runner `tests/roundtrip.rs`
-# runs on, natively and on wasm32-unknown-unknown alike. Path-only and
+# runs on natively. Path-only and
 # unpublished, so it is stripped from the packaged manifest; wasm32-clean, so it
 # needs no target gate.
 purrdf-testkit.workspace = true
 
-# The frozen corpus crossed through the production RDF codecs, on every target:
-# `harness = false` on the shared runner, so `make wasm-test` runs the same named
-# cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs natively.
+# The complete native frozen corpus through the production RDF codecs.
+# Release-crate WASM compilation is qualified separately by `make wasm`.
 [[test]]
 name = "roundtrip"
 harness = false

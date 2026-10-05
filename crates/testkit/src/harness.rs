@@ -517,6 +517,10 @@ impl Conclusion {
 ///
 /// On wasm32 the status is also reported to the runner's host, which is where
 /// the runner reads it; see the [module documentation](self).
+///
+/// `PURRDF_TEST_REQUIRE_EXACT=1` requires a nonempty exact selection and refuses
+/// a run unless every requested filter executes one case. The focused WASM lane
+/// sets this after its runner preflight. Unset or `0` keeps libtest's defaults.
 pub fn main(trials: impl IntoIterator<Item = Trial>) -> ExitCode {
     let status = main_status(trials);
     platform::report_exit(status);
@@ -530,6 +534,28 @@ fn main_status(trials: impl IntoIterator<Item = Trial>) -> u8 {
         Ok(arguments) => arguments,
         Err(error) => {
             platform::print_error(&format!("error: {error}\n"));
+            return ERROR_EXIT_CODE;
+        }
+    };
+    let expected = match platform::env_var("PURRDF_TEST_REQUIRE_EXACT").as_deref() {
+        None | Some("0") => None,
+        Some("1")
+            if arguments.action == Action::Run
+                && arguments.exact
+                && !arguments.filters.is_empty() =>
+        {
+            Some(arguments.filters.len())
+        }
+        Some("1") => {
+            platform::print_error(
+                "error: PURRDF_TEST_REQUIRE_EXACT requires --exact and nonempty filters to run\n",
+            );
+            return ERROR_EXIT_CODE;
+        }
+        Some(value) => {
+            platform::print_error(&format!(
+                "error: PURRDF_TEST_REQUIRE_EXACT is `{value}`, expected 0 or 1\n"
+            ));
             return ERROR_EXIT_CODE;
         }
     };
@@ -552,7 +578,18 @@ fn main_status(trials: impl IntoIterator<Item = Trial>) -> u8 {
     let mut out = Console::new();
     match run_to(&arguments, trials, &mut out, color) {
         Ok(conclusion) if conclusion.has_failed() => ERROR_EXIT_CODE,
-        Ok(_) => 0,
+        Ok(conclusion) => {
+            let executed = conclusion.passed + conclusion.failed;
+            if let Some(expected) = expected
+                && executed != expected
+            {
+                platform::print_error(&format!(
+                    "error: required {expected} exact cases to execute, but {executed} executed\n"
+                ));
+                return ERROR_EXIT_CODE;
+            }
+            0
+        }
         Err(error) => {
             platform::print_error(&format!("error: {error}\n"));
             ERROR_EXIT_CODE
