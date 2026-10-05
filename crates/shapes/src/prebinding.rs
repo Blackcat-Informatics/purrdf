@@ -165,6 +165,27 @@ pub(crate) fn check_function_body(query: &Query, parameters: &[&str]) -> Result<
     }
 }
 
+/// Check a node expression's `sh:select` / `sh:sparqlExpr` query against the
+/// pre-binding restrictions, with every name its evaluation pre-binds — `$this` and
+/// the names its context binds or may bind — as the potentially pre-bound ones.
+///
+/// A node expression's query is "executed with pre-bound variables", so Appendix A's
+/// MUSTs apply to it, read as a function body's are ([`Rules::AppendixA`]): no
+/// `MINUS`, no `VALUES` that mentions a pre-bound name, no `AS ?var` for one, and no
+/// `SERVICE`. The rule is the same for every pre-bound name: `$this`, `$value` in an
+/// `sh:expression` constraint, a custom function's arguments and a free evaluation's
+/// scope names. This is the SHACL surface's predicate; the engine's lanes (prepared
+/// parameters, request substitutions) answer `VALUES` and `MINUS` by join semantics
+/// and refuse only the reassignment
+/// ([`purrdf_sparql_algebra::Query::assigned_prebound`]).
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_node_expression(query: &Query, prebound: &[&str]) -> Result<(), String> {
+    check_function_body(query, prebound)
+}
+
 /// Check a SHACL-AF `sh:construct` CONSTRUCT query (a `sh:SPARQLRule` head)
 /// against the pre-binding restrictions. The CONSTRUCT `WHERE` algebra is a
 /// solution-producing body exactly like a SELECT's, so the same rules apply; the

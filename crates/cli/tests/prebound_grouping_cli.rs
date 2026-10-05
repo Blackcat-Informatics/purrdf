@@ -322,3 +322,102 @@ fn a_free_evaluation_s_scope_names_are_bound() {
         stderr(&out)
     );
 }
+
+/// **A custom function's argument binds what its evaluation binds: `$this` alone.**
+/// The argument is evaluated where the body reads it, in the empty scope (SHACL 1.2
+/// Node Expressions §6.3), so a query inside it sees neither the call site's `$value`
+/// nor an enclosing body's `$arg0`. Load refuses a read of either in an aggregate, and
+/// lets the argument assign `?value`, which nothing binds there; the `$this`
+/// neighbour conforms through `validate`, `shacl pack` and `--shapes-product`.
+#[test]
+fn a_custom_call_argument_binds_only_what_its_empty_scope_binds() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let id = "ex:id a sh:ListParameterExpressionFunction ;\n\
+         sh:parameter [ sh:path shnex:arg0 ] ;\n\
+         sh:bodyExpression [ sh:select \"SELECT ($arg0 AS ?r) WHERE { }\" ] .\n";
+    // A function whose body passes its own `$arg0` into a nested call's argument.
+    let outer = "ex:outer a sh:ListParameterExpressionFunction ;\n\
+         sh:parameter [ sh:path shnex:arg0 ] ;\n\
+         sh:bodyExpression [ ex:id ( [ sh:select \"SELECT ((COUNT(*) > 0 && BOUND($arg0)) AS ?r) \
+         WHERE { $this <http://example.org/p> ?o }\" ] ) ] .\n";
+    let document = |functions: &str, expression: &str| {
+        shapes(&format!(
+            "{id}{functions}ex:S a sh:NodeShape ; sh:targetClass ex:T ;\n  sh:expression {expression} .\n"
+        ))
+    };
+    let argument = |select: &str| format!("[ ex:id ( [ sh:select \"{select}\" ] ) ]");
+    let pack = |name: &str, shapes: &str| {
+        let product = dir.path().join(format!("{name}.product"));
+        let out = run(&[
+            "shacl",
+            "pack",
+            "--shapes",
+            shapes,
+            "--out",
+            product.to_str().expect("utf-8 path"),
+        ]);
+        (out, product)
+    };
+    for (name, functions, expression) in [
+        (
+            "value",
+            "",
+            argument(
+                "SELECT ((COUNT(*) > 0 && BOUND($value)) AS ?r) \
+                 WHERE { $this <http://example.org/p> ?o }",
+            ),
+        ),
+        ("arg0", outer, "[ ex:outer ( true ) ]".to_owned()),
+    ] {
+        let refused = write_file(
+            dir.path(),
+            &format!("{name}.ttl"),
+            &document(functions, &expression),
+        );
+        let out = run(&["validate", "--shapes", &refused, &data]);
+        assert_ne!(code(&out), 0, "{name}: validate must refuse at load");
+        assert!(
+            stderr(&out).contains("neither a GROUP BY key"),
+            "{name}: refused at load, not aborted at evaluation: {}",
+            stderr(&out)
+        );
+        let (out, product) = pack(name, &refused);
+        assert_ne!(code(&out), 0, "{name}: pack must refuse");
+        assert!(
+            !product.exists(),
+            "{name}: a refused pack writes no product"
+        );
+    }
+    for (name, select) in [
+        (
+            "this",
+            "SELECT ((COUNT(*) > 0 && BOUND($this)) AS ?r) \
+             WHERE { $this <http://example.org/p> ?o }",
+        ),
+        ("assigns", "SELECT ?value WHERE { BIND(true AS ?value) }"),
+    ] {
+        let good = write_file(
+            dir.path(),
+            &format!("{name}.ttl"),
+            &document("", &argument(select)),
+        );
+        let out = run(&["validate", "--shapes", &good, &data]);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("shacl conforms true\n"),
+            "{name}: {}",
+            stderr(&out)
+        );
+        let (out, product) = pack(name, &good);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        let product = product.to_str().expect("utf-8 path");
+        let out = run(&["validate", "--shapes-product", product, &data]);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("shacl conforms true\n"),
+            "{name}: the restored product answers as the parsed shapes graph did: {}",
+            stderr(&out)
+        );
+    }
+}

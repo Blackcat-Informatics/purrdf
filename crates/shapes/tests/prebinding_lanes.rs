@@ -19,7 +19,19 @@
 //! context provides the variables the query reads, and a refusal at load wherever it
 //! does not. The shapes: a top-level group, a sub-`SELECT` group, an implicit group
 //! over empty input, `HAVING` and `ORDER BY` on the pre-bound variable, two pre-bound
-//! variables, a `BIND` or `AS` over a pre-bound name, and a `$currentShape` read.
+//! variables, an `OPTIONAL` arm and an `EXISTS`/`NOT EXISTS` body reading the pre-bound
+//! variable, a `BIND` or `AS` over a pre-bound name, and a `$currentShape` read.
+//!
+//! One rule is split by surface. The SHACL lanes refuse what SHACL 1.2 SPARQL
+//! Extensions, Appendix A forbids in a query with pre-bound variables — a `MINUS`, a
+//! `VALUES` over a pre-bound name, an `AS` over one — for every name they pre-bind.
+//! The engine lanes refuse only the reassignment, and answer `VALUES` and `MINUS` by
+//! join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }` with
+//! `$this` bound to `ex:a` answers no row. A row whose SHACL answer differs carries it.
+//!
+//! A refusal is compared by its kind, not merely by having happened: a reassigned
+//! pre-bound name and a variable no lane binds read in an aggregate are different
+//! refusals, and any other error is a failure of the table.
 //!
 //! Fixture IRIs are `example.org`.
 
@@ -44,7 +56,42 @@ const DATA: &str = "@prefix ex: <http://example.org/> .\n\
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Answer {
     Values(BTreeSet<String>),
-    Refused,
+    Refused(Refusal),
+}
+
+/// Why a lane refused a query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Refusal {
+    /// The query assigns a pre-bound name (`BIND(… AS ?p)` or `(… AS ?p)`).
+    Reassigns,
+    /// An aggregate query reads a variable the lane does not bind (§11.4).
+    NotAKey,
+    /// A construct Appendix A forbids in a query with pre-bound variables (`VALUES` or
+    /// `MINUS`), refused by the SHACL lanes.
+    Restricted,
+    /// Any other error, verbatim: never what a row expects.
+    Other(String),
+}
+
+/// The kind of refusal `message` states.
+fn refusal(message: &str) -> Refusal {
+    if message.contains("neither a GROUP BY key") {
+        Refusal::NotAKey
+    } else if message.contains("which is pre-bound")
+        || message.contains("assigning a potentially pre-bound variable")
+    {
+        Refusal::Reassigns
+    } else if message.contains("is not allowed in a query with pre-bound variables")
+        || message.contains("a VALUES clause that mentions the potentially pre-bound variable")
+    {
+        Refusal::Restricted
+    } else {
+        Refusal::Other(message.to_owned())
+    }
+}
+
+fn refused(message: &impl ToString) -> Answer {
+    Answer::Refused(refusal(&message.to_string()))
 }
 
 /// The lanes, in the order the table reports them.
@@ -88,8 +135,20 @@ struct Row {
     /// Extra scope bindings a free node expression's `--scope` supplies.
     node_scope: &'static [(&'static str, &'static str)],
     expected: fn() -> Answer,
+    /// What the SHACL lanes (`sh:sparql`, a node expression, `sh:expression`) answer
+    /// where it differs from the engine lanes': SHACL refuses what Appendix A forbids
+    /// (`VALUES` or `MINUS` over a pre-bound name), which the engine lanes answer by
+    /// join semantics.
+    shacl: Option<fn() -> Answer>,
     /// Lanes whose context binds fewer names than the query reads.
     unprovided: &'static [Lane],
+}
+
+impl Lane {
+    /// Whether this lane is a SHACL surface, held to Appendix A.
+    const fn is_shacl(self) -> bool {
+        matches!(self, Self::ShSparql | Self::NodeExpr | Self::ShExpression)
+    }
 }
 
 fn true_literal() -> String {
@@ -108,6 +167,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values([true_literal()]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -116,6 +176,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values(["\"http://example.org/a\"".to_owned()]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -126,6 +187,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values([true_literal()]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -135,6 +197,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values(["\"http://example.org/a\"".to_owned()]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -144,6 +207,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values([integer(2)]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -153,6 +217,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values([true_literal()]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -162,6 +227,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values([integer(2)]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -171,6 +237,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values([integer(1)]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -181,6 +248,7 @@ const ROWS: &[Row] = &[
         node_scope: &[("k", "\"5\"^^<http://www.w3.org/2001/XMLSchema#integer>")],
         expected: || values([true_literal()]),
         // A SHACL constraint binds no `$k`.
+        shacl: None,
         unprovided: &[Lane::ShSparql, Lane::ShExpression],
     },
     Row {
@@ -189,7 +257,8 @@ const ROWS: &[Row] = &[
                 $this <http://example.org/p> ?value }",
         engine_binds: &[],
         node_scope: &[],
-        expected: || Answer::Refused,
+        expected: || Answer::Refused(Refusal::Reassigns),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -199,6 +268,7 @@ const ROWS: &[Row] = &[
         engine_binds: &[],
         node_scope: &[],
         expected: || values(["<http://example.org/o3>".to_owned()]),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -207,7 +277,8 @@ const ROWS: &[Row] = &[
                 BIND(<http://example.org/b> AS $this) }",
         engine_binds: &[],
         node_scope: &[],
-        expected: || Answer::Refused,
+        expected: || Answer::Refused(Refusal::Reassigns),
+        shacl: None,
         unprovided: &[],
     },
     Row {
@@ -216,7 +287,85 @@ const ROWS: &[Row] = &[
                 $this <http://example.org/p> ?value }",
         engine_binds: &[],
         node_scope: &[],
-        expected: || Answer::Refused,
+        expected: || Answer::Refused(Refusal::Reassigns),
+        shacl: None,
+        unprovided: &[],
+    },
+    Row {
+        name: "an OPTIONAL arm reading the pre-bound variable",
+        query: "SELECT ?value WHERE { <http://example.org/b> <http://example.org/p> ?x \
+                OPTIONAL { $this <http://example.org/p> ?value } }",
+        engine_binds: &[],
+        node_scope: &[],
+        expected: || {
+            values([
+                "<http://example.org/o1>".to_owned(),
+                "<http://example.org/o2>".to_owned(),
+            ])
+        },
+        shacl: None,
+        unprovided: &[],
+    },
+    Row {
+        name: "an EXISTS body reading the pre-bound variable",
+        query: "SELECT ?value WHERE { ?s <http://example.org/p> ?value \
+                FILTER EXISTS { $this <http://example.org/p> ?value } }",
+        engine_binds: &[],
+        node_scope: &[],
+        expected: || {
+            values([
+                "<http://example.org/o1>".to_owned(),
+                "<http://example.org/o2>".to_owned(),
+            ])
+        },
+        shacl: None,
+        unprovided: &[],
+    },
+    Row {
+        name: "a NOT EXISTS body reading the pre-bound variable",
+        query: "SELECT ?value WHERE { ?s <http://example.org/p> ?value \
+                FILTER NOT EXISTS { $this <http://example.org/p> ?value } }",
+        engine_binds: &[],
+        node_scope: &[],
+        expected: || values(["<http://example.org/o3>".to_owned()]),
+        shacl: None,
+        unprovided: &[],
+    },
+    Row {
+        name: "VALUES over the pre-bound variable, disjoint from its binding",
+        query: "SELECT ?value WHERE { VALUES $this { <http://example.org/b> } \
+                $this <http://example.org/p> ?value }",
+        engine_binds: &[],
+        node_scope: &[],
+        // The engine joins: `ex:a` and `ex:b` are incompatible, so no row, as rdflib's
+        // initBindings answers.
+        expected: || values(Vec::new()),
+        shacl: Some(|| Answer::Refused(Refusal::Restricted)),
+        unprovided: &[],
+    },
+    Row {
+        name: "VALUES over the pre-bound variable, agreeing with its binding",
+        query: "SELECT ?value WHERE { VALUES $this { <http://example.org/a> } \
+                $this <http://example.org/p> ?value }",
+        engine_binds: &[],
+        node_scope: &[],
+        expected: || {
+            values([
+                "<http://example.org/o1>".to_owned(),
+                "<http://example.org/o2>".to_owned(),
+            ])
+        },
+        shacl: Some(|| Answer::Refused(Refusal::Restricted)),
+        unprovided: &[],
+    },
+    Row {
+        name: "MINUS reading the pre-bound variable",
+        query: "SELECT ?value WHERE { ?s <http://example.org/p> ?value \
+                MINUS { $this <http://example.org/p> ?value } }",
+        engine_binds: &[],
+        node_scope: &[],
+        expected: || values(["<http://example.org/o3>".to_owned()]),
+        shacl: Some(|| Answer::Refused(Refusal::Restricted)),
         unprovided: &[],
     },
     Row {
@@ -226,6 +375,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values([true_literal()]),
         // A node expression runs with no shape context.
+        shacl: None,
         unprovided: &[Lane::NodeExpr, Lane::ShExpression],
     },
 ];
@@ -246,8 +396,9 @@ fn sh_sparql(query: &str) -> Answer {
          ex:S a sh:NodeShape ; sh:targetNode ex:a ;\n\
            sh:sparql [ a sh:SPARQLConstraint ; sh:select \"\"\"{query}\"\"\" ] .\n"
     );
-    let Ok(shapes) = parse_shapes(&turtle, None) else {
-        return Answer::Refused;
+    let shapes = match parse_shapes(&turtle, None) {
+        Ok(shapes) => shapes,
+        Err(error) => return refused(&error),
     };
     let report = validate_dataset(&data(), &shapes).expect("a loaded shapes graph validates");
     values(
@@ -274,14 +425,15 @@ fn prepared(row: &Row) -> Answer {
     let engine = NativeSparqlEngine::new();
     let bindings = engine_bindings(row);
     let names: Vec<&str> = bindings.iter().map(|(name, _)| name.as_str()).collect();
-    let Ok(mut execution) = engine.prepare_execution(row.query, None, &names, QueryOptions::EMPTY)
-    else {
-        return Answer::Refused;
+    let mut execution = match engine.prepare_execution(row.query, None, &names, QueryOptions::EMPTY)
+    {
+        Ok(execution) => execution,
+        Err(error) => return refused(&error),
     };
     for (slot, (_, value)) in bindings.into_iter().enumerate() {
         execution.bind(slot, value).expect("bind");
     }
-    let Ok(answer) = engine.execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
+    let answer = engine.execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
         let InternedOutcome::Solutions(solutions) = outcome else {
             panic!("{}: expected solutions", row.name);
         };
@@ -294,17 +446,18 @@ fn prepared(row: &Row) -> Answer {
             .filter_map(|solution| solutions.cell(solution, column))
             .map(|value| node(&value))
             .collect::<Vec<_>>()
-    }) else {
-        return Answer::Refused;
-    };
-    values(answer)
+    });
+    match answer {
+        Ok(answer) => values(answer),
+        Err(error) => refused(&error),
+    }
 }
 
 /// A request binding `$this` and the row's engine bindings as substitutions.
 fn substituted(row: &Row) -> Answer {
     let dataset = data();
     let bindings = engine_bindings(row);
-    let Ok(result) = NativeSparqlEngine::new().query_with_options_view(
+    let result = match NativeSparqlEngine::new().query_with_options_view(
         &*dataset,
         SparqlRequest {
             query: row.query,
@@ -312,8 +465,9 @@ fn substituted(row: &Row) -> Answer {
             substitutions: &bindings,
         },
         QueryOptions::EMPTY,
-    ) else {
-        return Answer::Refused;
+    ) {
+        Ok(result) => result,
+        Err(error) => return refused(&error),
     };
     let SparqlResult::Solutions {
         variables, rows, ..
@@ -365,7 +519,7 @@ fn node_expr(row: &Row) -> Answer {
         imports: &purrdf_shapes::ShapesImports::new(),
     }) {
         Ok(evaluated) => values(evaluated.outputs.iter().map(ToString::to_string)),
-        Err(_) => Answer::Refused,
+        Err(error) => refused(&error),
     }
 }
 
@@ -394,7 +548,9 @@ fn every_pre_binding_lane_answers_every_query_shape_alike() {
         let expected = (row.expected)();
         for lane in LANES {
             let want = if row.unprovided.contains(&lane) {
-                Answer::Refused
+                Answer::Refused(Refusal::NotAKey)
+            } else if let (true, Some(shacl)) = (lane.is_shacl(), row.shacl) {
+                shacl()
             } else {
                 expected.clone()
             };
@@ -405,19 +561,29 @@ fn every_pre_binding_lane_answers_every_query_shape_alike() {
                 Lane::NodeExpr => node_expr(row),
                 Lane::ShExpression => {
                     // The verdict carries one bit: conforming means the one output was
-                    // `true`, so it is compared with what the answer implies.
-                    let verdict = sh_expression(row);
-                    let implied = match &want {
-                        Answer::Refused => None,
-                        Answer::Values(set) => {
-                            Some(set.len() == 1 && set.contains(&true_literal()))
+                    // `true`, so it is compared with what the answer implies. A wrong
+                    // verdict, an error where an answer was due, and the wrong refusal
+                    // are reported apart.
+                    let problem = match (sh_expression(row), &want) {
+                        (Ok(conforms), Answer::Values(set)) => {
+                            let implied = set.len() == 1 && set.contains(&true_literal());
+                            (conforms != implied).then(|| {
+                                format!("wrong verdict: conforms {conforms}, the answer implies {implied}")
+                            })
+                        }
+                        (Err(message), Answer::Values(_)) => {
+                            Some(format!("an error where an answer was due: {message}"))
+                        }
+                        (Ok(conforms), Answer::Refused(kind)) => {
+                            Some(format!("conforms {conforms}, but {kind:?} was due"))
+                        }
+                        (Err(message), Answer::Refused(kind)) => {
+                            let got = refusal(&message);
+                            (got != *kind).then(|| format!("refused {got:?}, but {kind:?} was due"))
                         }
                     };
-                    if verdict.as_ref().ok().copied() != implied {
-                        failures.push(format!(
-                            "{} on {lane:?}: verdict {verdict:?}, the answer implies {implied:?}",
-                            row.name
-                        ));
+                    if let Some(problem) = problem {
+                        failures.push(format!("{} on {lane:?}: {problem}", row.name));
                     }
                     continue;
                 }
@@ -467,4 +633,35 @@ fn a_prepared_execution_answers_alike_across_runs_and_its_memo() {
             "{subject}"
         );
     }
+}
+
+/// **`$value` in `sh:expression` is pre-bound like `$this`.** The constraint binds
+/// `value` to the value node under test, so Appendix A holds for it exactly as for
+/// `$this`: a `VALUES` over `?value` is refused at load, while a `VALUES` over a name the
+/// constraint does not bind is not.
+#[test]
+fn sh_expression_holds_value_to_the_rule_this_is_held_to() {
+    let shapes = |select: &str| {
+        format!(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix ex: <{EX}> .\n\
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ;\n\
+               sh:expression [ sh:select \"\"\"{select}\"\"\" ] .\n"
+        )
+    };
+    for name in ["value", "this"] {
+        let select =
+            format!("SELECT ?out WHERE {{ VALUES ?{name} {{ true }} BIND(true AS ?out) }}");
+        let error = parse_shapes(&shapes(&select), None)
+            .err()
+            .unwrap_or_else(|| panic!("VALUES over ?{name} must be refused at load"));
+        assert_eq!(
+            refusal(&error.to_string()),
+            Refusal::Restricted,
+            "?{name}: {error}"
+        );
+    }
+    let neighbour = "SELECT ?out WHERE { VALUES ?free { true } BIND(?free AS ?out) }";
+    let loaded = parse_shapes(&shapes(neighbour), None).expect("a VALUES over a free name loads");
+    let report = validate_dataset(&data(), &loaded).expect("it validates");
+    assert!(report.conforms, "the free VALUES answers true");
 }

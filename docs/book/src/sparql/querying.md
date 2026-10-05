@@ -123,6 +123,33 @@ Anything outside this surface — and every malformed query — is a typed
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
+## Pre-bound variables
+
+A prepared execution's parameters and a request's substitutions bind variables
+before evaluation. A pre-bound variable is one value for the whole evaluation, at
+every depth: an `OPTIONAL` or `MINUS` right arm, a sub-`SELECT` and an `EXISTS`
+body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
+(COUNT(*) AS ?c)` answers the bound node. Two rules follow.
+
+- **Assigning one is refused.** `BIND(… AS ?p)` or `(… AS ?p)` over a pre-bound
+  `?p`, at any depth, fails when the query is prepared. The assignment would
+  either be ignored or silently overwrite the caller's binding.
+- **Everything else answers by join semantics.** `VALUES ?p { … }` keeps the rows
+  that agree with the bound value, so `VALUES $this { ex:b }` with `$this` bound to
+  `ex:a` answers no row, and `MINUS` subtracts with `?p` bound on both sides. That
+  is the answer rdflib's `initBindings` gives.
+
+SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
+`VALUES` over a pre-bound name and an `AS` over one in a query executed with
+pre-bound variables, so the SHACL lanes (`sh:sparql`, node expressions and
+`sh:expression`) refuse all three when a shapes graph loads. See
+[SHACL validation](../validation/shacl.md).
+
+The rdflib compatibility shim answers a reassignment as rdflib 7.6 does, and only
+there: `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` rewrites the
+assignment before the native engine sees it. The native `Store.query` and
+`Store.prepare` keep refusing it.
+
 ## Numeric casts
 
 An XSD constructor function such as `xsd:double(?x)` follows the casting rules

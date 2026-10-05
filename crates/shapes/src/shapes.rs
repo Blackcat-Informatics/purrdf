@@ -1366,6 +1366,13 @@ pub(crate) struct Parser<'s> {
     /// reaches refuses the load, and the rest are unexecuted (see
     /// `Parser::refuse_reached_calls`).
     pub(crate) function_prebinding: std::cell::RefCell<std::collections::BTreeMap<String, String>>,
+    /// Every name each `sh:select` / `sh:sparqlExpr` node-expression query is executed
+    /// with pre-bound, by query text: `this` and the names the expression's context
+    /// binds or may bind, unioned over every place the text is parsed. Filled as node
+    /// expressions parse; read where a shape reaches the expression
+    /// ([`crate::extension_usage::reachable_select_expression_violation`]).
+    pub(crate) select_prebound:
+        std::cell::RefCell<std::collections::BTreeMap<String, std::collections::BTreeSet<String>>>,
     /// The pre-binding violations of queries nothing executes, filled at the end of a
     /// successful parse; `lint` reports them.
     unexecuted: std::cell::RefCell<Vec<crate::error::PrebindingViolation>>,
@@ -1548,6 +1555,7 @@ impl<'s> Parser<'s> {
             prebinding_refusal: std::cell::RefCell::new(None),
             unsupported_target: std::cell::RefCell::new(None),
             function_prebinding: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            select_prebound: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             unexecuted: std::cell::RefCell::new(Vec::new()),
             in_flight: FastSet::default(),
             base,
@@ -1867,7 +1875,11 @@ impl<'s> Parser<'s> {
         self.refuse_javascript_calls(&shapes)?;
         self.refuse_reached_calls(&shapes)?;
         if let Some((site, violation)) =
-            crate::extension_usage::reachable_select_expression_violation(&shapes)
+            crate::extension_usage::reachable_select_expression_violation(
+                &shapes,
+                &expressions,
+                &self.select_prebound.borrow(),
+            )
         {
             return Err(
                 self.refuse_prebinding(crate::error::PrebindingViolation::new(
