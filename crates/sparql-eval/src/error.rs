@@ -482,6 +482,9 @@ impl EvalError {
             Self::XPathRegex(purrdf_core::xsd_regex::xpath::Error::Resource(refusal)) => {
                 Some(refusal.resource.code())
             }
+            Self::XPathRegex(purrdf_core::xsd_regex::xpath::Error::Allocation {
+                resource, ..
+            }) => Some(resource.code()),
             Self::XPathRegex(_) => Some("native-sparql-xpath-operational"),
             Self::ExchangeIdExhausted => Some("native-sparql-exchange-id-exhausted"),
             Self::WorkspaceUnpriced(_) => Some("native-sparql-workspace-unpriced"),
