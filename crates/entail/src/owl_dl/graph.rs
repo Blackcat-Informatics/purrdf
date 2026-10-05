@@ -127,13 +127,80 @@ pub(crate) struct GeneratedRoot {
     pub(crate) index: u32,
 }
 
+impl State {
+    /// Append the edge `from → to` over `property`, indexing it under both endpoints' roots.
+    pub(crate) fn push_edge(&mut self, from: usize, to: usize, property: u32) {
+        let edge = self.edges.len();
+        self.edges.push((from, to, property));
+        let from = find(self, from);
+        let to = find(self, to);
+        for node in [from, to] {
+            if self.adjacency.len() <= node {
+                self.adjacency.resize_with(node + 1, Vec::new);
+            }
+        }
+        self.adjacency[from].push(edge);
+        if to != from {
+            self.adjacency[to].push(edge);
+        }
+    }
+
+    /// Fold `discard`'s indexed edges into `keep`'s, keeping the list ascending and unique.
+    fn merge_adjacency(&mut self, keep: usize, discard: usize) {
+        let Some(folded) = self.adjacency.get_mut(discard).map(std::mem::take) else {
+            return;
+        };
+        if folded.is_empty() {
+            return;
+        }
+        if self.adjacency.len() <= keep {
+            self.adjacency.resize_with(keep + 1, Vec::new);
+        }
+        let kept = std::mem::take(&mut self.adjacency[keep]);
+        let mut merged = Vec::with_capacity(kept.len() + folded.len());
+        let (mut left, mut right) = (kept.into_iter().peekable(), folded.into_iter().peekable());
+        loop {
+            let next = match (left.peek(), right.peek()) {
+                (Some(&l), Some(&r)) if l < r => left.next(),
+                (Some(&l), Some(&r)) if r < l => right.next(),
+                (Some(_), Some(_)) => {
+                    right.next();
+                    left.next()
+                }
+                (Some(_), None) => left.next(),
+                (None, Some(_)) => right.next(),
+                (None, None) => break,
+            };
+            merged.extend(next);
+        }
+        self.adjacency[keep] = merged;
+    }
+
+    /// The indices of every edge with an endpoint resolving to the root `x`, ascending.
+    pub(crate) fn class_edges(&self, x: usize) -> &[usize] {
+        self.adjacency.get(x).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// A completion graph under construction.
 #[derive(Clone)]
 pub(crate) struct State {
     /// All nodes ever created (merged-away ones remain, forwarded via `merged`).
     pub(crate) nodes: Vec<Node>,
-    /// Directed role edges `(from, to, property)`; endpoints resolved via [`find`].
+    /// Directed role edges `(from, to, property)`; endpoints resolved via [`find`]. Only
+    /// [`State::push_edge`] appends here, so [`State::adjacency`] indexes every edge.
     pub(crate) edges: Vec<(usize, usize, u32)>,
+    /// Union-find root → the indices into [`State::edges`] of every edge with an endpoint
+    /// resolving to it, in ascending order.
+    ///
+    /// A neighbourhood read ([`Graph::neighbors`]) needs the edges touching ONE node's class,
+    /// and reading them off the whole edge vector made every round cost the node count times
+    /// the edge count. An edge is indexed under its endpoints' roots when it is pushed, and a
+    /// merge folds the discarded root's list into the keeper's, so a root's list holds exactly
+    /// the edges the full scan would have kept for it. Walking it in ascending order visits
+    /// them in the order the scan did, which keeps every neighbourhood — and so every search,
+    /// verdict and proof — identical.
+    pub(crate) adjacency: Vec<Vec<usize>>,
     /// Named individual term id → its root node index.
     pub(crate) root_of: BTreeMap<u32, usize>,
     /// Generated (nominal-introduction) root identity → its root node index. Kept separate
@@ -768,6 +835,7 @@ impl<'a> Graph<'a> {
         let mut st = State {
             nodes: Vec::new(),
             edges: Vec::new(),
+            adjacency: Vec::new(),
             root_of: BTreeMap::new(),
             generated_root_of: BTreeMap::new(),
             clash: false,
@@ -784,7 +852,7 @@ impl<'a> Graph<'a> {
             for &(a, p, b) in &self.kb.abox_roles {
                 let ra = self.root(&mut st, a);
                 let rb = self.root(&mut st, b);
-                st.edges.push((ra, rb, p));
+                st.push_edge(ra, rb, p);
             }
             for &(a, b) in &self.kb.same_as {
                 let ra = self.root(&mut st, a);
@@ -810,7 +878,7 @@ impl<'a> Graph<'a> {
         for &(a, p, b) in extra_roles {
             let ra = self.root(&mut st, a);
             let rb = self.root(&mut st, b);
-            st.edges.push((ra, rb, p));
+            st.push_edge(ra, rb, p);
         }
         if !fresh_types.is_empty() {
             let mut label = self.seed_label();
@@ -1106,6 +1174,7 @@ impl<'a> Graph<'a> {
             }
         }
         st.nodes[discard].merged = Some(keep);
+        st.merge_adjacency(keep, discard);
     }
 
     /// Whether a filler concept can only be satisfied by an element of the DATA domain.
@@ -1184,9 +1253,9 @@ impl<'a> Graph<'a> {
         });
         // A forward role stores `x → y`; an inverse role stores `y → x`.
         if inverted {
-            st.edges.push((idx, x, prop));
+            st.push_edge(idx, x, prop);
         } else {
-            st.edges.push((x, idx, prop));
+            st.push_edge(x, idx, prop);
         }
         idx
     }
@@ -1283,7 +1352,10 @@ impl<'a> Graph<'a> {
             return;
         }
         let x = find(st, x);
-        for &(from, to, prop) in &st.edges {
+        // Only the edges indexed under `x`'s root can resolve an endpoint to `x`, and they
+        // are visited in the ascending order the full edge scan used to visit them in.
+        for &edge in st.class_edges(x) {
+            let (from, to, prop) = st.edges[edge];
             let f = find(st, from);
             let t = find(st, to);
             if ach.contains(&(prop, true)) && f == x && seen.insert(t) {
@@ -1371,7 +1443,7 @@ impl<'a> Graph<'a> {
         // A loop is its own inverse, so the direction the edge is stored in does not matter;
         // the named property is what the role hierarchy is closed over.
         let (Role::Named(property) | Role::Inv(property)) = role;
-        st.edges.push((x, x, property));
+        st.push_edge(x, x, property);
         true
     }
 
@@ -1597,14 +1669,19 @@ mod tests {
     /// A two-node state, source `0` reaching target `1` over `n` copies of the same edge —
     /// large enough that scanning every one of them is the cost these tests exist to bound.
     fn two_node_state_with_edges(n: usize, prop: u32) -> State {
-        State {
+        let mut st = State {
             nodes: vec![bare_node(true), bare_node(true)],
-            edges: std::iter::repeat_n((0usize, 1usize, prop), n).collect(),
+            edges: Vec::new(),
+            adjacency: Vec::new(),
             root_of: BTreeMap::new(),
             generated_root_of: BTreeMap::new(),
             clash: false,
             clique_exhausted: std::cell::Cell::new(false),
+        };
+        for _ in 0..n {
+            st.push_edge(0, 1, prop);
         }
+        st
     }
 
     // --- FB-1: `max_clique`/`rec_clique` poll the shared meter DURING the search -----------
