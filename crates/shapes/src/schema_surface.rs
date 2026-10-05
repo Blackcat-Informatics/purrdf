@@ -4392,17 +4392,14 @@ fn class_expression_report(
         }
     }
     for (&class_iri, disjunctions) in &projected_disjunctions {
-        let candidates: Vec<&str> = class_facts
-            .get(class_iri)
-            .map(|facts| {
-                facts
-                    .ancestors
-                    .iter()
-                    .copied()
-                    .filter(|ancestor| projected_disjunctions.contains_key(ancestor))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let candidates: Vec<&str> = class_facts.get(class_iri).map_or_else(Vec::new, |facts| {
+            facts
+                .ancestors
+                .iter()
+                .copied()
+                .filter(|ancestor| projected_disjunctions.contains_key(ancestor))
+                .collect()
+        });
         let mut disjunctions = disjunctions.clone();
         disjunctions.sort();
         disjunctions.dedup();
