@@ -906,6 +906,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/rdf/benches/stream_parse_alloc.rs` | lex.find-byte2-line-split, sparql.lexer-trivia |
 | `crates/rdf/benches/viz_layout.rs` | rdf.viz-layout |
 | `crates/rdf-core/benches/csv.rs` | core.csv-field |
+| `crates/rdf-core/benches/dataset_state_digest.rs` | blake3.hash-many-dispatch, blake3.single-block |
 | `crates/rdf-core/benches/distance.rs` | distance.exact.dot, distance.exact.sqeuclid, distance.reassociated.dot, distance.reassociated.sqeuclid |
 | `crates/rdf-core/benches/intern_absoluteness.rs` | core.intern, iri.delimiter-scan |
 | `crates/rdf-core/benches/intern_content_id.rs` | core.intern, hash.hex-decode, hash.hex-lower, hash.fixed-terminal |
