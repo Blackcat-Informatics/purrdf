@@ -2902,3 +2902,194 @@ fn the_status_enum_is_append_only() {
     // stated in prose ("Ok == 0").
     assert_eq!(PurrdfStatus::Ok as i32, 0);
 }
+
+/// The presentation record a C caller reads from a refused request, parsed.
+unsafe fn presentation_record(error: *mut PurrdfError) -> purrdf_lex::json::Value {
+    assert!(!error.is_null(), "a refusal sets the error");
+    let record = unsafe { purrdf::error::purrdf_error_presentation_json(error) };
+    assert!(
+        !record.is_null(),
+        "a parse refusal carries its diagnostic record"
+    );
+    let text = unsafe { std::ffi::CStr::from_ptr(record) }
+        .to_str()
+        .expect("UTF-8 record")
+        .to_owned();
+    purrdf_lex::json::read(&text).expect("JSON record")
+}
+
+/// Assert one typed parameter of a presentation object: its kind and its exact value.
+fn assert_typed(presentation: &purrdf_lex::json::Value, name: &str, kind: &str, value: &str) {
+    let parameter = &presentation["parameters"][name];
+    assert_eq!(
+        parameter["kind"].as_str(),
+        Some(kind),
+        "{name}: {presentation}"
+    );
+    assert_eq!(
+        parameter["value"].as_str(),
+        Some(value),
+        "{name}: {presentation}"
+    );
+}
+
+/// `purrdf_query` hands a C caller the parser's typed condition through
+/// `purrdf_error_presentation_json`: one stable `sparql-parse-*` identity per kind of
+/// failure, with the byte offset as a typed unsigned integer, and an IRI refusal's
+/// `purrdf-iri` condition as nested typed detail. The message is unchanged.
+#[test]
+fn query_parse_refusals_carry_typed_presentations() {
+    let cases: [(&str, &str, Option<&str>); 6] = [
+        (
+            "SELECT * WHERE { ?s ?p \"unterminated }",
+            "sparql-parse-lex",
+            Some("23"),
+        ),
+        ("ASK {", "sparql-parse-syntax", Some("5")),
+        ("ASK {} ORDER BY ?x", "sparql-parse-unsupported", None),
+        (
+            "SELECT * WHERE { <http://example.org/%zz> ?p ?o }",
+            "sparql-parse-iri",
+            None,
+        ),
+        (
+            "SELECT * WHERE { <relative> ?p ?o }",
+            "sparql-parse-iri",
+            None,
+        ),
+        (
+            "SELECT (<http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map>(\"key\") AS ?m) WHERE {}",
+            "sparql-parse-cdt-arity",
+            Some("57"),
+        ),
+    ];
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        for (query, identity, at) in cases {
+            let cq = CString::new(query).unwrap();
+            let mut kind: i32 = -1;
+            let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+            let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+            let mut boolean: u8 = 0;
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_query(
+                dataset,
+                cq.as_ptr(),
+                std::ptr::null(),
+                &raw mut kind,
+                &raw mut rows,
+                &raw mut graph,
+                &raw mut boolean,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::QueryError as i32, "{query}");
+            let record = presentation_record(error);
+            assert_eq!(record["code"].as_str(), Some("native-sparql-query-parse"));
+            let presentation = &record["presentation"];
+            assert_eq!(
+                presentation["messageId"].as_str(),
+                Some(identity),
+                "{query}"
+            );
+            if let Some(at) = at {
+                assert_typed(presentation, "at", "unsigned", at);
+            }
+            let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                message,
+                format!(
+                    "[native-sparql-query-parse] {}",
+                    record["message"].as_str().unwrap()
+                )
+            );
+            assert!(record.get("detail").is_none(), "{query}: {record}");
+            if query.contains("%zz") {
+                let detail = &presentation["detail"];
+                assert_eq!(
+                    detail["messageId"].as_str(),
+                    Some("iri-bad-percent-encoding")
+                );
+                assert_typed(detail, "offset", "unsigned", "19");
+            } else if query.contains("<relative>") {
+                let detail = &presentation["detail"];
+                assert_eq!(detail["messageId"].as_str(), Some("iri-relative-no-base"));
+                assert_typed(detail, "reference", "text", "relative");
+            } else {
+                assert!(presentation.get("detail").is_none(), "{query}");
+            }
+            purrdf_error_free(error);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// `purrdf_update_governed` carries the same typed presentations for a refused
+/// update, and the dataset is left exactly as it was.
+#[test]
+fn governed_update_parse_refusals_carry_typed_presentations() {
+    use purrdf::governor::{PurrdfQueryGovernors, purrdf_query_governors_init};
+    use purrdf::query::purrdf_update_governed;
+    let cases: [(&str, &str, Option<&str>); 3] = [
+        (
+            "INSERT DATA { <http://example.org/a> <http://example.org/b> \"x }",
+            "sparql-parse-lex",
+            Some("60"),
+        ),
+        ("DELETE WHERE {", "sparql-parse-syntax", Some("14")),
+        (
+            "INSERT DATA { <http://example.org/%zz> <http://example.org/p> 1 }",
+            "sparql-parse-iri",
+            None,
+        ),
+    ];
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let mut governors = std::mem::MaybeUninit::<PurrdfQueryGovernors>::uninit();
+        assert_eq!(
+            purrdf_query_governors_init(governors.as_mut_ptr()),
+            PurrdfStatus::Ok as i32
+        );
+        let governors = governors.assume_init();
+        for (update, identity, at) in cases {
+            let request = CString::new(update).unwrap();
+            let mut outcome = -1;
+            let mut evidence = std::mem::MaybeUninit::uninit();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_update_governed(
+                dataset,
+                request.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw const governors,
+                &raw mut outcome,
+                evidence.as_mut_ptr(),
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::QueryError as i32, "{update}");
+            let record = presentation_record(error);
+            assert_eq!(record["code"].as_str(), Some("native-sparql-update-parse"));
+            let presentation = &record["presentation"];
+            assert_eq!(
+                presentation["messageId"].as_str(),
+                Some(identity),
+                "{update}"
+            );
+            if let Some(at) = at {
+                assert_typed(presentation, "at", "unsigned", at);
+            } else {
+                let detail = &presentation["detail"];
+                assert_eq!(
+                    detail["messageId"].as_str(),
+                    Some("iri-bad-percent-encoding")
+                );
+                assert_typed(detail, "offset", "unsigned", "19");
+            }
+            purrdf_error_free(error);
+            assert_eq!(quad_count(dataset), 3);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
