@@ -2574,6 +2574,17 @@ impl Parser<'_, '_> {
         let (expr, lifted) = val.expr();
         match stage {
             ModStage::GroupBracketed => {
+                // `GROUP BY (?s)` (or `((?s))`): a condition that is only a variable
+                // groups by that variable, so it is a key the SELECT clause may project
+                // (§11.4), exactly as the unbracketed `GROUP BY ?s`.
+                if let Expression::Variable(v) = &expr
+                    && !self.peek_kw("AS")
+                {
+                    let v = v.clone();
+                    self.expect(&Token::RParen)?;
+                    self.top_modifiers().m.group_by.push(v);
+                    return self.group_by();
+                }
                 let var = if self.eat_kw("AS") {
                     self.expect_var()?
                 } else {

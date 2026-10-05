@@ -6470,6 +6470,30 @@ mod tests {
         }
     }
 
+    /// A `GROUP BY` condition that is only a variable, bracketed or not, groups by
+    /// that variable, so the variable is a key the `SELECT` clause may project (§11.4);
+    /// grouping by any other expression still makes no key of its variables (`agg08`).
+    #[test]
+    fn a_bracketed_variable_group_condition_is_a_key() {
+        for accepted in [
+            "SELECT ?s (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY (?s)",
+            "SELECT ?s (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY ((?s))",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY (?s)",
+            "SELECT (STR(?s) AS ?t) WHERE { ?s ?p ?o } GROUP BY (?s) ?p",
+            "SELECT ?k WHERE { ?s ?p ?o } GROUP BY (?s AS ?k)",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+        for refused in [
+            "SELECT ((?a + ?b) AS ?s) (COUNT(?a) AS ?c) WHERE { ?x ?a ?b } GROUP BY (?a + ?b)",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY (STR(?s))",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY (?s AS ?k)",
+            "SELECT ?o WHERE { ?s ?p ?o } GROUP BY (?s)",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+    }
+
     /// A collection is a `TriplesNode`, so like a blank-node property list it may
     /// stand alone with an empty `PropertyList` (`TriplesSameSubject ::= VarOrTerm
     /// PropertyListNotEmpty | TriplesNode PropertyList`), emitting only its own list

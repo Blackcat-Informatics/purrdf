@@ -3115,6 +3115,51 @@ fn an_aggregate_projection_reading_a_non_key_variable_is_refused() {
     }
 }
 
+/// **A bracketed variable is a group key** (SPARQL 1.1 §11.4): `GROUP BY (?s)` and
+/// `GROUP BY ((?s))` group by `?s` exactly as `GROUP BY ?s` does, so `?s` may be
+/// projected and every form answers the same rows. Grouping by any other expression
+/// still makes no key of its variables: the W3C `agg08` shape stays refused.
+#[test]
+fn a_bracketed_variable_group_condition_projects_like_the_bare_key() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+    let query = |text: &str| run(&["query", "--data", &ttl, "--results-format", "json", text]);
+    for (counted, shape) in [
+        (
+            true,
+            "SELECT ?s (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY {}",
+        ),
+        (false, "SELECT ?s WHERE { ?s ?p ?o } GROUP BY {}"),
+    ] {
+        let bare = query(&shape.replace("{}", "?s"));
+        assert!(bare.status.success(), "{shape}: {}", stderr(&bare));
+        let expected = stdout(&bare);
+        assert!(expected.contains("http://example.org/alice"), "{expected}");
+        if counted {
+            assert!(expected.contains("\"c\""), "{expected}");
+        }
+        for key in ["(?s)", "((?s))"] {
+            let text = shape.replace("{}", key);
+            let out = query(&text);
+            assert!(
+                out.status.success(),
+                "{text} must answer; stderr:\n{}",
+                stderr(&out)
+            );
+            assert_eq!(stdout(&out), expected, "{text} answers as GROUP BY ?s");
+        }
+    }
+    let agg08 = "SELECT ((?s + ?o) AS ?k) (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY (?s + ?o)";
+    let out = query(agg08);
+    assert!(!out.status.success(), "{agg08} must be refused");
+    assert!(
+        stderr(&out).contains("native-sparql-query-parse"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// A refused query or update reports the parser's condition in the same bytes
 /// whatever renders it: one case per parse-failure kind (lexical, syntax,
 /// unsupported construct, IRI, CDT arity), each pinned to the exact line on
