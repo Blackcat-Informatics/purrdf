@@ -429,13 +429,13 @@ fn a_having_condition_is_a_constraint() {
     }
 }
 
-/// The `(lexical, datatype)` an XSD cast of `source` to `xsd:{target}` binds.
-fn cast(target: &str, source: &str) -> Option<(String, String)> {
-    select(&format!("xsd:{target}({source})"))
-}
-
-fn typed(lexical: &str, datatype: &str) -> Option<(String, String)> {
-    Some((lexical.to_owned(), format!("{XSD}{datatype}")))
+/// The lexical form an XSD cast of `source` to `xsd:{target}` binds — asserting the
+/// bound literal is of the target datatype — or `None` for a cast error.
+fn cast(target: &str, source: &str) -> Option<String> {
+    select(&format!("xsd:{target}({source})")).map(|(lexical, datatype)| {
+        assert_eq!(datatype, format!("{XSD}{target}"), "xsd:{target}({source})");
+        lexical
+    })
 }
 
 #[test]
@@ -443,72 +443,66 @@ fn date_time_casts_keep_their_components_and_timezone() {
     // XPath F&O 3.1 §19.3: dateTime to date, time and the Gregorian types keeps the
     // components the target has, timezone included.
     let dt = "\"2002-10-10T17:30:05.5+05:00\"^^xsd:dateTime";
-    assert_eq!(cast("date", dt), typed("2002-10-10+05:00", "date"));
-    assert_eq!(cast("time", dt), typed("17:30:05.5+05:00", "time"));
-    assert_eq!(cast("gYear", dt), typed("2002+05:00", "gYear"));
-    assert_eq!(cast("gYearMonth", dt), typed("2002-10+05:00", "gYearMonth"));
-    assert_eq!(cast("gMonth", dt), typed("--10+05:00", "gMonth"));
-    assert_eq!(cast("gMonthDay", dt), typed("--10-10+05:00", "gMonthDay"));
-    assert_eq!(cast("gDay", dt), typed("---10+05:00", "gDay"));
+    assert_eq!(cast("date", dt), Some("2002-10-10+05:00".to_owned()));
+    assert_eq!(cast("time", dt), Some("17:30:05.5+05:00".to_owned()));
+    assert_eq!(cast("gYear", dt), Some("2002+05:00".to_owned()));
+    assert_eq!(cast("gYearMonth", dt), Some("2002-10+05:00".to_owned()));
+    assert_eq!(cast("gMonth", dt), Some("--10+05:00".to_owned()));
+    assert_eq!(cast("gMonthDay", dt), Some("--10-10+05:00".to_owned()));
+    assert_eq!(cast("gDay", dt), Some("---10+05:00".to_owned()));
     let utc = "\"-0044-03-15T12:00:00Z\"^^xsd:dateTime";
-    assert_eq!(cast("date", utc), typed("-0044-03-15Z", "date"));
-    assert_eq!(cast("gYear", utc), typed("-0044Z", "gYear"));
+    assert_eq!(cast("date", utc), Some("-0044-03-15Z".to_owned()));
+    assert_eq!(cast("gYear", utc), Some("-0044Z".to_owned()));
     let local = "\"2002-10-10T17:00:00\"^^xsd:dateTime";
-    assert_eq!(cast("date", local), typed("2002-10-10", "date"));
-    assert_eq!(cast("time", local), typed("17:00:00", "time"));
+    assert_eq!(cast("date", local), Some("2002-10-10".to_owned()));
+    assert_eq!(cast("time", local), Some("17:00:00".to_owned()));
     // date to dateTime is midnight of that date, with its timezone.
     let d = "\"2002-10-10-05:00\"^^xsd:date";
     assert_eq!(
         cast("dateTime", d),
-        typed("2002-10-10T00:00:00-05:00", "dateTime")
+        Some("2002-10-10T00:00:00-05:00".to_owned())
     );
-    assert_eq!(cast("gYearMonth", d), typed("2002-10-05:00", "gYearMonth"));
-    assert_eq!(cast("gMonthDay", d), typed("--10-10-05:00", "gMonthDay"));
+    assert_eq!(cast("gYearMonth", d), Some("2002-10-05:00".to_owned()));
+    assert_eq!(cast("gMonthDay", d), Some("--10-10-05:00".to_owned()));
     assert_eq!(
         cast("gDay", "\"2002-10-10\"^^xsd:date"),
-        typed("---10", "gDay")
+        Some("---10".to_owned())
     );
     // The neighbours the lexical path already served: same-type casts and simple
     // literals.
     assert_eq!(
         cast("date", "\"2002-10-10Z\"^^xsd:date"),
-        typed("2002-10-10Z", "date")
+        Some("2002-10-10Z".to_owned())
     );
     assert_eq!(
         cast("dateTime", "\"2002-10-10T00:00:00\""),
-        typed("2002-10-10T00:00:00", "dateTime")
+        Some("2002-10-10T00:00:00".to_owned())
     );
-    assert_eq!(cast("gYear", "\"2002\""), typed("2002", "gYear"));
+    assert_eq!(cast("gYear", "\"2002\""), Some("2002".to_owned()));
 }
 
 #[test]
 fn duration_and_binary_casts_convert_by_value() {
     let dur = "\"P1Y2M3DT4H\"^^xsd:duration";
-    assert_eq!(
-        cast("yearMonthDuration", dur),
-        typed("P1Y2M", "yearMonthDuration")
-    );
-    assert_eq!(
-        cast("dayTimeDuration", dur),
-        typed("P3DT4H", "dayTimeDuration")
-    );
+    assert_eq!(cast("yearMonthDuration", dur), Some("P1Y2M".to_owned()));
+    assert_eq!(cast("dayTimeDuration", dur), Some("P3DT4H".to_owned()));
     assert_eq!(
         cast("duration", "\"P3DT4H\"^^xsd:dayTimeDuration"),
-        typed("P3DT4H", "duration")
+        Some("P3DT4H".to_owned())
     );
     // The two binary spaces share spellings that mean different bytes: "abcd" is
     // three bytes as base64 and two as hex. The cast keeps the bytes.
     assert_eq!(
         cast("hexBinary", "\"abcd\"^^xsd:base64Binary"),
-        typed("69B71D", "hexBinary")
+        Some("69B71D".to_owned())
     );
     assert_eq!(
         cast("base64Binary", "\"69B71D\"^^xsd:hexBinary"),
-        typed("abcd", "base64Binary")
+        Some("abcd".to_owned())
     );
     assert_eq!(
         cast("hexBinary", "\"0fb7\"^^xsd:hexBinary"),
-        typed("0FB7", "hexBinary")
+        Some("0FB7".to_owned())
     );
 }
 
