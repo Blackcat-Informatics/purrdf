@@ -95,6 +95,8 @@ pub struct RankingProfile {
     mappings: Vec<(TermValue, usize)>,
     /// Explicit destination for otherwise unmapped predicates.
     unclassified: Option<usize>,
+    /// Normalize each field over its declared carriers rather than all documents.
+    field_populations: bool,
     /// Digest of the complete canonical profile description.
     fingerprint: [u8; FINGERPRINT_BYTES],
 }
@@ -146,6 +148,7 @@ impl RankingProfile {
             fields,
             mappings,
             unclassified,
+            field_populations: false,
             fingerprint: [0; FINGERPRINT_BYTES],
         };
         profile.fingerprint =
@@ -175,6 +178,21 @@ impl RankingProfile {
     /// Explicit unclassified field, if declared.
     pub const fn unclassified(&self) -> Option<usize> {
         self.unclassified
+    }
+    /// Select length normalization over documents carrying each field.
+    ///
+    /// This changes the ranking fingerprint. Corpus preparation must supply
+    /// the populations explicitly through [`PreparedCorpus::with_field_populations`].
+    #[must_use]
+    pub fn with_field_populations(mut self) -> Self {
+        self.field_populations = true;
+        self.fingerprint = *purrdf_hash::blake3::hash(&self.canonical_description()).as_bytes();
+        self
+    }
+
+    /// Whether each field uses its own carrier population for normalization.
+    pub const fn uses_field_populations(&self) -> bool {
+        self.field_populations
     }
     /// Identity of the complete ranking law and all caller choices.
     pub const fn fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
@@ -221,9 +239,11 @@ impl RankingProfile {
         let mut text = |value: &str| frame_le(&mut bytes, value.as_bytes());
         text(RANKING_PROFILE_ID);
         text(INDEX_CORPUS_PROFILE_ID);
-        text(
-            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*N/total;distinct-query-terms-sorted;field-sum-then-saturate",
-        );
+        text(if self.field_populations {
+            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*field_documents/total;distinct-query-terms-sorted;field-sum-then-saturate"
+        } else {
+            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*N/total;distinct-query-terms-sorted;field-sum-then-saturate"
+        });
         for number in [
             i128::from(RANKING_PROFILE_VERSION),
             i128::from(SCALE_DIGITS),
@@ -286,6 +306,8 @@ pub struct PreparedCorpus<'p> {
     documents: u64,
     /// Field token totals, in profile order.
     totals: Vec<u128>,
+    /// Explicit carrier counts in field order; empty under the dense law.
+    populations: Vec<u64>,
 }
 
 impl<'p> PreparedCorpus<'p> {
@@ -299,21 +321,65 @@ impl<'p> PreparedCorpus<'p> {
         documents: u64,
         totals: &[u128],
     ) -> Result<Self, TextError> {
+        if profile.uses_field_populations() {
+            return Err(TextError::data(
+                "this ranking profile requires explicit field populations",
+            ));
+        }
+        Self::validate(profile, documents, totals, &[])
+    }
+
+    /// Validate exact field totals and the number of documents carrying each field.
+    ///
+    /// The profile must select [`RankingProfile::with_field_populations`]. IDF
+    /// remains corpus-wide; only length normalization uses these populations.
+    /// A zero-token field may have a nonzero population. A nonzero total requires
+    /// a nonzero population, and no population may exceed the corpus size.
+    ///
+    /// # Errors
+    /// Refuses a dense profile, mismatching field counts, oversized populations,
+    /// or a total exceeding `field_documents * FIELD_LENGTH_MAX`.
+    pub fn with_field_populations(
+        profile: &'p RankingProfile,
+        documents: u64,
+        totals: &[u128],
+        populations: &[u64],
+    ) -> Result<Self, TextError> {
+        if !profile.uses_field_populations() || populations.len() != profile.fields.len() {
+            return Err(TextError::data(
+                "field populations require their ranking mode and one count per field",
+            ));
+        }
+        Self::validate(profile, documents, totals, populations)
+    }
+
+    /// Shared corpus admission before either constructor publishes statistics.
+    fn validate(
+        profile: &'p RankingProfile,
+        documents: u64,
+        totals: &[u128],
+        populations: &[u64],
+    ) -> Result<Self, TextError> {
         if documents > DOCUMENTS_MAX || totals.len() != profile.fields.len() {
             return Err(TextError::data(
                 "corpus population or field count exceeds the ranking profile",
             ));
         }
-        let maximum = u128::from(documents) * u128::from(FIELD_LENGTH_MAX);
-        if totals.iter().any(|&total| total > maximum) {
-            return Err(TextError::data(
-                "a corpus field total exceeds documents times the field length bound",
-            ));
+        for (at, &total) in totals.iter().enumerate() {
+            let population = populations.get(at).copied().unwrap_or(documents);
+            if population > documents
+                || total > u128::from(population) * u128::from(FIELD_LENGTH_MAX)
+            {
+                return Err(TextError::data(
+                    "a field population or token total exceeds its corpus bound",
+                ));
+            }
         }
         Ok(Self {
             profile,
             documents,
             totals: totals.to_vec(),
+            populations: populations.to_vec(),
         })
     }
 
@@ -401,19 +467,26 @@ impl PreparedQuery<'_, '_> {
             ));
         }
         let mut pseudo = Fixed::ZERO;
-        for ((input, field), &total) in fields
+        for (at, ((input, field), &total)) in fields
             .iter()
             .zip(&self.corpus.profile.fields)
             .zip(&self.corpus.totals)
+            .enumerate()
         {
-            validate_field(*input, total, self.corpus.documents, df)?;
+            let population = self.corpus.populations.get(at).copied();
+            let documents = population.unwrap_or(self.corpus.documents);
+            let remaining = if population.is_some() && input.length == 0 {
+                documents
+            } else {
+                documents.saturating_sub(1)
+            };
+            validate_field(*input, total, documents, remaining, df)?;
             if input.term_frequency == 0 {
                 continue;
             }
             // Positive tf implies positive length and total. Form this ratio
             // from exact counts so an average below one raw unit stays usable.
-            let numerator =
-                u128::from(input.length) * u128::from(self.corpus.documents) * 1_000_000_000_000;
+            let numerator = u128::from(input.length) * u128::from(documents) * 1_000_000_000_000;
             let relative = Fixed::from_raw(
                 i128::try_from(numerator / total).expect("bounded counts fit i128"),
             );
@@ -490,6 +563,7 @@ fn validate_field(
     input: FieldInput,
     total: u128,
     documents: u64,
+    remaining: u64,
     df: u64,
 ) -> Result<(), TextError> {
     if input.length > FIELD_LENGTH_MAX || input.term_frequency > TERM_FREQUENCY_MAX {
@@ -502,10 +576,7 @@ fn validate_field(
             "field frequency, length, and corpus total are inconsistent",
         ));
     }
-    if documents > 0
-        && total - u128::from(input.length)
-            > u128::from(documents - 1) * u128::from(FIELD_LENGTH_MAX)
-    {
+    if total - u128::from(input.length) > u128::from(remaining) * u128::from(FIELD_LENGTH_MAX) {
         return Err(TextError::data(
             "the remaining corpus cannot hold the declared field total",
         ));
