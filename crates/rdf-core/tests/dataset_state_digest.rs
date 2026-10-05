@@ -5,7 +5,10 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::cell::Cell;
+#[path = "support/dataset_state_fixtures.rs"]
+mod fixtures;
+
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -19,6 +22,9 @@ use purrdf_core::{
     graph_digest_view, try_flat_digest_view,
 };
 use purrdf_iri::vocab::rdf::REIFIES;
+
+#[global_allocator]
+static ALLOCATOR: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
 const P: &str = "http://example.org/p";
 const Q: &str = "http://example.org/q";
@@ -493,6 +499,8 @@ struct Probe {
     reservation_peak: Cell<u64>,
     duplicate_rows: bool,
     omit_named: bool,
+    workspace_limit: u64,
+    allocation_window: RefCell<Option<purrdf_alloc_probe::CurrentThreadWindow>>,
 }
 
 impl Probe {
@@ -507,6 +515,8 @@ impl Probe {
             reservation_peak: Cell::new(0),
             duplicate_rows: false,
             omit_named: false,
+            workspace_limit: u64::MAX,
+            allocation_window: RefCell::new(None),
         }
     }
 }
@@ -520,10 +530,20 @@ impl WorkspaceReservation for Admission<'_> {
             self.0.reservation_live.get(),
             "admission covers every allocation"
         );
+        if let Some(window) = self.0.allocation_window.borrow().as_ref() {
+            let observed = window.sample();
+            assert!(
+                u64::try_from(observed.peak_working_bytes).unwrap()
+                    <= self.0.reservation_peak.get(),
+                "allocations must fit the admission preceding this resize: {observed:?}",
+            );
+        }
         self.0
             .reservation_peak
             .set(self.0.reservation_peak.get().max(bytes));
-        if self.0.mode == FaultMode::Reservation && bytes > 0 {
+        if bytes > self.0.workspace_limit {
+            Err(SourceFault::new("workspace ceiling"))
+        } else if self.0.mode == FaultMode::Reservation && bytes > 0 {
             Err(SourceFault::new("workspace refused"))
         } else {
             Ok(())
@@ -939,7 +959,7 @@ fn interchangeable_empty_blank_declarations_do_not_require_factorial_search() {
     );
 }
 
-fn fixed_search_exhaustion_refuses_a_real_ambiguous_state() {
+fn refinable_connected_cycle_finishes_without_exhausting_search_work() {
     let state = State {
         graphs: Vec::new(),
         rows: (0..128_u8)
@@ -950,10 +970,7 @@ fn fixed_search_exhaustion_refuses_a_real_ambiguous_state() {
             })
             .collect(),
     };
-    assert_eq!(
-        DatasetStateDigest::from_view(&state.materialize()),
-        Err(DatasetStateError::SearchBudgetExceeded)
-    );
+    assert!(DatasetStateDigest::from_view(&state.materialize()).is_ok());
     assert!(
         DatasetStateDigest::from_view(&cycle_fixture(false, [0, 1, 2, 3, 4, 5]).materialize())
             .is_ok()
@@ -1160,6 +1177,97 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
     );
 }
 
+fn disconnected_symmetry_refuses_production_search_and_has_a_small_neighbor() {
+    assert_eq!(
+        DatasetStateDigest::from_view(&fixtures::triangle_components(8)),
+        Err(DatasetStateError::SearchBudgetExceeded),
+    );
+    assert!(DatasetStateDigest::from_view(&fixtures::triangle_components(2)).is_ok());
+}
+
+fn capped_workspace_admits_independent_anchors_and_covers_observed_allocations() {
+    let source = fixtures::anchored_blanks(256, false);
+    let expected = DatasetStateDigest::from_view(&source).unwrap();
+    let mut probe = Probe::new(source, FaultMode::Ready);
+    probe.workspace_limit = 2 * 1024 * 1024;
+    probe
+        .allocation_window
+        .replace(Some(purrdf_alloc_probe::CurrentThreadWindow::open()));
+    let actual = DatasetStateDigest::from_view(&probe);
+    let observed = probe.allocation_window.take().unwrap().close();
+    assert_eq!(actual.unwrap(), expected);
+    assert!(u64::try_from(observed.peak_working_bytes).unwrap() <= probe.reservation_peak.get());
+    assert!(probe.reservation_peak.get() <= probe.workspace_limit);
+    assert!(!probe.reservation_live.get());
+    let mut lower = Probe::new(Arc::clone(&probe.source), FaultMode::Ready);
+    lower.workspace_limit = probe.reservation_peak.get() - 1;
+    assert!(matches!(
+        DatasetStateDigest::from_view(&lower),
+        Err(DatasetStateError::Read(error)) if error == SourceFault::new("workspace ceiling"),
+    ));
+    assert!(!lower.reservation_live.get());
+    eprintln!(
+        "anchored workspace: admitted={} observed_peak={}",
+        probe.reservation_peak.get(),
+        observed.peak_working_bytes
+    );
+}
+
+fn high_incidence_nested_cdt_and_duplicate_rows_have_admitted_allocation_neighbors() {
+    let mut nested = Node::Blank(0);
+    for _ in 0..16 {
+        nested = Node::Triple(Box::new([Node::Blank(0), Node::Iri(P), nested]));
+    }
+    let mut chunks = vec!["[ ".to_owned()];
+    chunks.extend((0..31).map(|_| ", ".to_owned()));
+    chunks.push(" ]".to_owned());
+    let state = State {
+        graphs: (0..32).map(Node::Blank).collect(),
+        rows: vec![
+            Row {
+                role: Role::Ordinary,
+                terms: [
+                    Node::Blank(0),
+                    Node::Iri(Q),
+                    Node::Composite {
+                        chunks,
+                        blanks: (0..32).collect(),
+                        datatype: purrdf_cdt::CDT_LIST,
+                    },
+                ],
+                graph: Some(Node::Blank(0)),
+            },
+            Row {
+                role: Role::Ordinary,
+                terms: [Node::Blank(0), Node::Iri(P), nested],
+                graph: Some(Node::Blank(0)),
+            },
+        ],
+    };
+    let expected = state.digest();
+    for duplicate_rows in [false, true] {
+        let mut probe = Probe::new(state.materialize(), FaultMode::Ready);
+        probe.duplicate_rows = duplicate_rows;
+        probe.workspace_limit = 2 * 1024 * 1024;
+        probe
+            .allocation_window
+            .replace(Some(purrdf_alloc_probe::CurrentThreadWindow::open()));
+        let actual = DatasetStateDigest::from_view(&probe);
+        let observed = probe.allocation_window.take().unwrap().close();
+        assert_eq!(actual.unwrap(), expected);
+        assert!(
+            u64::try_from(observed.peak_working_bytes).unwrap() <= probe.reservation_peak.get()
+        );
+        assert!(probe.reservation_peak.get() <= probe.workspace_limit);
+        assert!(!probe.reservation_live.get());
+        eprintln!(
+            "nested CDT duplicate={duplicate_rows}: admitted={} observed_peak={}",
+            probe.reservation_peak.get(),
+            observed.peak_working_bytes
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
     legacy_canonical_form_omits_an_empty_named_declaration,
     legacy_flat_digest_erases_ordinary_annotation_roles,
@@ -1177,10 +1285,13 @@ purrdf_testkit::harness_main!(
     exact_literal_lexical_datatype_language_and_direction_bytes_participate,
     scoped_blanks_share_one_mapping_with_cdt_lists_maps_and_all_roles,
     interchangeable_empty_blank_declarations_do_not_require_factorial_search,
-    fixed_search_exhaustion_refuses_a_real_ambiguous_state,
+    refinable_connected_cycle_finishes_without_exhausting_search_work,
     complete_state_agrees_across_production_view_carriers,
     nonautomorphic_same_color_orbits_are_not_pruned,
     exact_lexical_bytes_and_maximum_accepted_nesting_have_neighbors,
     authored_reserved_namespace_iris_remain_ordinary_terms,
     capacity_and_invalid_datatype_refusals_have_ready_neighbors,
+    disconnected_symmetry_refuses_production_search_and_has_a_small_neighbor,
+    capped_workspace_admits_independent_anchors_and_covers_observed_allocations,
+    high_incidence_nested_cdt_and_duplicate_rows_have_admitted_allocation_neighbors,
 );

@@ -42,13 +42,24 @@ lookup for a CDT blank reference returns `IncoherentEmbeddedBlank`; a literal
 whose datatype does not resolve to an IRI returns `InvalidTerm`. Unrepresentable
 sizes return `Capacity`.
 
-Canonical search has the existing fixed `RDFC_CALL_LIMIT` work bound, charged
-for visited search/refinement states, incidence signatures, candidates and
-explicit automorphism checks. `SearchBudgetExceeded` publishes no approximation
-or partial identity. The old RDFC algorithm and its work accounting do not
-change. Retained capture/search workspace is admitted before allocation and
-released before returning the digest. Term traversal, rendering and search use
-heap work lists rather than call-stack recursion.
+Canonical search has the unchanged numeric `RDFC_CALL_LIMIT` bound, charged
+for visited search states, candidate expansion and explicit automorphism checks.
+Refinement has a separate finite input-derived bound: every nonterminal round
+strictly increases the number of nonempty cells, so `n + 1` rounds suffice for
+`n` blanks, including the stable check and the empty state. Ordered color buckets
+visit the blanks once per round. A structurally discrete state therefore needs
+one search node regardless of its blank count. `SearchBudgetExceeded` publishes
+no approximation or partial identity. The old RDFC algorithm and its work
+accounting do not change.
+
+Retained capture/search workspace is admitted before allocation and released
+before returning the digest. Rendering, incidence and partition scaffolding use
+an aggregate record bound plus per-blank metadata. Signature storage is bounded
+by the records actually incident to each blank, with framing and temporary
+buffer growth included. A record containing many distinct blanks can contribute
+to many simultaneously retained signatures; independent anchored records do not
+multiply the whole record set by the blank count. Term traversal, rendering and
+search use heap work lists rather than call-stack recursion.
 
 ## State and blank identity
 

@@ -4,6 +4,9 @@
 //! Report-only native construction costs for the complete-state identity.
 //! Fixtures are built before timing; no speedup or timing threshold is asserted.
 
+#[path = "../tests/support/dataset_state_fixtures.rs"]
+mod fixtures;
+
 use std::sync::Arc;
 
 use purrdf_core::{BlankScope, DatasetStateDigest, RdfDataset, RdfDatasetBuilder, RdfLiteral};
@@ -45,6 +48,12 @@ fn cases() -> Vec<(&'static str, Arc<RdfDataset>)> {
         ("asymmetric_32_blanks", asymmetric.freeze().unwrap()),
         ("interchangeable_32_graphs", symmetric.freeze().unwrap()),
         ("cdt_shared_graph", composite.freeze().unwrap()),
+        ("anchored_256_blanks", fixtures::anchored_blanks(256, false)),
+        (
+            "anchored_4096_blanks",
+            fixtures::anchored_blanks(4096, false),
+        ),
+        ("branching_two_triangles", fixtures::triangle_components(2)),
     ]
 }
 

@@ -45,8 +45,9 @@ impl DatasetStateDigest {
     /// # Errors
     /// Returns typed source/admission failures, incoherent embedded identities,
     /// unrepresentable workspace or fixed canonical-search exhaustion. No partial
-    /// state is certified. The fixed search bound is [`RDFC_CALL_LIMIT`]; this
-    /// construction does not change the existing RDFC algorithm or its identities.
+    /// state is certified. Search nodes, candidates and automorphism checks use
+    /// [`RDFC_CALL_LIMIT`]; each refinement has a checked input-derived round
+    /// bound. The existing RDFC algorithm and its identities do not change.
     pub fn from_view<D: FallibleDatasetView>(view: &D) -> StateResult<D, Self> {
         checkpointed_drain(view, |view| {
             let mut reservation = view.reserve_workspace(0).map_err(DatasetStateError::Read)?;
@@ -579,28 +580,53 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
         incidence
     }
 
+    fn color_buckets(colors: &[usize]) -> Vec<Vec<usize>> {
+        let mut buckets = vec![Vec::new(); colors.len()];
+        for (blank, &color) in colors.iter().enumerate() {
+            buckets[color].push(blank);
+        }
+        while buckets.last().is_some_and(Vec::is_empty) {
+            buckets.pop();
+        }
+        buckets
+    }
+
+    fn signature_bytes_bound(&self, incidence: &[Vec<usize>]) -> StateResult<D, u64> {
+        incidence.iter().try_fold(0_u64, |bytes, records| {
+            let key = records.iter().try_fold(8_u64, |key, &record| {
+                key.checked_add(
+                    self.record_bound(self.records[record])?
+                        .checked_add(8)
+                        .ok_or(DatasetStateError::Capacity)?,
+                )
+                .ok_or(DatasetStateError::Capacity)
+            })?;
+            bytes.checked_add(key).ok_or(DatasetStateError::Capacity)
+        })
+    }
+
     fn refine(
         &self,
         mut colors: Vec<usize>,
         incidence: &[Vec<usize>],
-        work: &mut u64,
-        limit: u64,
     ) -> StateResult<D, Vec<usize>> {
-        loop {
-            Self::tick(work, limit)?;
-            let cells = colors.iter().max().map_or(0, |n| n + 1);
+        // A nonterminal round strictly splits at least one nonempty cell. There
+        // are at most n cells, so n + 1 rounds include the final stable check,
+        // even for n = 0. This input-derived bound is independent of branching.
+        let rounds = colors
+            .len()
+            .checked_add(1)
+            .ok_or(DatasetStateError::Capacity)?;
+        for _ in 0..rounds {
+            let buckets = Self::color_buckets(&colors);
+            let cells = buckets.len();
             let mut next = vec![0; colors.len()];
             let mut count = 0;
             // Keep parent-cell order: a refinement only splits, never merges or
             // reorders old cells according to endian-dependent integer spellings.
-            for cell in 0..cells {
+            for (color, bucket) in buckets.into_iter().enumerate() {
                 let mut groups = BTreeMap::<Vec<u8>, Vec<usize>>::new();
-                for (blank, &color) in colors
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, color)| **color == cell)
-                {
-                    Self::tick(work, limit)?;
+                for blank in bucket {
                     let mut records: Vec<_> = incidence[blank]
                         .iter()
                         .map(|&i| {
@@ -631,8 +657,10 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
             if count == cells {
                 return Ok(next);
             }
+            debug_assert!(count > cells && count <= colors.len());
             colors = next;
         }
+        Err(DatasetStateError::SearchBudgetExceeded)
     }
 
     fn tick(work: &mut u64, limit: u64) -> StateResult<D, ()> {
@@ -659,16 +687,25 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
     fn canonical_bytes(&mut self, limit: u64) -> StateResult<D, Vec<u8>> {
         let count = self.blank_count;
         let bound = self.record_bytes_bound()?;
-        // Whole renderings, incidence keys/maps, and term-render work lists are
-        // covered before allocating search scratch. Capacity overflow is refusal.
-        let scratch = (count as u64)
-            .checked_add(16)
-            .and_then(|factor| bound.checked_mul(factor))
+        // Whole renderings and temporary record/term walks fit this aggregate
+        // byte bound. Incidence pairs are no more numerous than rendered blank
+        // occurrences; bucket/map metadata and ordinal vectors are linear in n.
+        // Admit that scaffolding before computing the actual incidence below.
+        let scratch = bound
+            .checked_mul(16)
             .and_then(|n| n.checked_add((count as u64).checked_mul(1024)?))
             .ok_or(DatasetStateError::Capacity)?;
         self.admit(scratch)?;
         usize::try_from(scratch).map_err(|_| DatasetStateError::Capacity)?;
         let incidence = self.incidence();
+        // Only incident records enter a blank's signature. Key growth and the
+        // current temporary rendering are covered separately from the stored
+        // record set; independent anchored records no longer get an n multiplier.
+        self.admit(
+            self.signature_bytes_bound(&incidence)?
+                .checked_mul(4)
+                .ok_or(DatasetStateError::Capacity)?,
+        )?;
         let mut identity: Vec<_> = (0..count).collect();
         let original = self.rendered_records(Labels::Ordinals(&identity));
         let mut pending: WorkList<Vec<usize>, 8> = WorkList::with(vec![0; count]);
@@ -677,19 +714,12 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
         let mut high_water = 1;
         while let Some(colors) = pending.pop() {
             Self::tick(&mut work, limit)?;
-            let colors = self.refine(colors, &incidence, &mut work, limit)?;
-            let mut members = Vec::new();
-            for cell in 0..count {
-                members = colors
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, &color)| (color == cell).then_some(i))
-                    .collect();
-                if members.len() > 1 {
-                    break;
-                }
-            }
-            if members.len() <= 1 {
+            let colors = self.refine(colors, &incidence)?;
+            let members = Self::color_buckets(&colors)
+                .into_iter()
+                .find(|cell| cell.len() > 1)
+                .unwrap_or_default();
+            if members.is_empty() {
                 let records = self.rendered_records(Labels::Ordinals(&colors));
                 let mut bytes = Vec::new();
                 bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());

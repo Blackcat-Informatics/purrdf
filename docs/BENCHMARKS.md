@@ -57,7 +57,8 @@ simply not narrated here:
 - `crates/rdf-core/benches/ir_layout.rs` — AoS vs. SoA vs. predicate-adjacency
   IR layouts (allocation counts, high-water mark, end-to-end latency).
 - `crates/rdf-core/benches/dataset_state_digest.rs` — complete-state identity
-  construction over empty, ground, asymmetric, interchangeable and CDT states.
+  construction over empty, ground, asymmetric, interchangeable and CDT states,
+  two independently anchored blank-node sizes and branching triangle components.
 - `crates/rdf-core/benches/mutable.rs` — copy-on-write mutation paths.
 - `crates/rdf-core/benches/intern_content_id.rs` — content-addressing
   recognition cost for ordinary vs. genuine content-id IRIs.
@@ -218,7 +219,7 @@ here.
 | Bench | What it measures |
 | --- | --- |
 | `crates/rdf-core/benches/ir_layout.rs` | AoS / SoA / predicate-adjacency IR layout trade-offs (latency, allocations, peak RSS). |
-| `crates/rdf-core/benches/dataset_state_digest.rs` | Complete-state identity construction over five fixed native shapes; fixture preparation is outside timing, and no existing identity path changes. |
+| `crates/rdf-core/benches/dataset_state_digest.rs` | Complete-state identity construction over eight fixed native shapes; fixture preparation is outside timing, and no existing identity path changes. |
 | `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration (`mut_snapshot_graphs`): removals spread over many graphs, a `DROP` of a one-quad graph beside a large annotated base, and repeated snapshots after a `DROP` of a large graph. |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |

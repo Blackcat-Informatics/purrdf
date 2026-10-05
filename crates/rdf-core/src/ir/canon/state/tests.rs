@@ -3,6 +3,9 @@
 
 //! Frozen preimages specified independently from the versioned byte grammar.
 
+#[path = "../../../../tests/support/dataset_state_fixtures.rs"]
+mod fixtures;
+
 use std::sync::Arc;
 
 use super::*;
@@ -99,4 +102,38 @@ fn frozen_canonical_payloads_match_independent_typed_preimages() {
         );
     }
     assert_eq!(names.len(), 12, "the complete frozen vector inventory");
+}
+
+#[test]
+fn discrete_refinement_uses_one_search_node_and_a_zero_node_budget_refuses() {
+    let dataset = fixtures::anchored_blanks(256, false);
+    let mut reservation = dataset.reserve_workspace(0).unwrap();
+    let mut captured = Captured::new(&*dataset, &mut reservation).unwrap();
+    captured.collect().unwrap();
+    assert_eq!(
+        captured.canonical_bytes(0),
+        Err(DatasetStateError::SearchBudgetExceeded),
+    );
+    let bytes = captured
+        .canonical_bytes(1)
+        .expect("one discrete terminal is one search node");
+    assert_eq!(bytes, captured.canonical_bytes(RDFC_CALL_LIMIT).unwrap());
+    let renamed = fixtures::anchored_blanks(256, true);
+    assert_eq!(
+        DatasetStateDigest::from_view(&dataset).unwrap(),
+        DatasetStateDigest::from_view(&renamed).unwrap(),
+    );
+}
+
+#[test]
+fn genuine_branching_refuses_its_search_budget_and_has_an_admitted_neighbor() {
+    let dataset = fixtures::triangle_components(2);
+    let mut reservation = dataset.reserve_workspace(0).unwrap();
+    let mut captured = Captured::new(&*dataset, &mut reservation).unwrap();
+    captured.collect().unwrap();
+    assert_eq!(
+        captured.canonical_bytes(1),
+        Err(DatasetStateError::SearchBudgetExceeded),
+    );
+    assert!(captured.canonical_bytes(RDFC_CALL_LIMIT).is_ok());
 }
