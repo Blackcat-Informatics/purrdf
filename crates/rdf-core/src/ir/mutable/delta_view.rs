@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
 use crate::hash::{FastMap, FastSet};
+use crate::ir::cursor::{Cursor, optional};
 use crate::ir::{QuadIds, QuadProbePlan, RdfDataset, TermId, TermRef, TermValue};
 
 /// A term in one mutation snapshot. Equal values shared by both layers always
@@ -441,48 +442,41 @@ impl DeltaDatasetView {
         o: Option<DeltaViewId>,
         g: GraphMatch<DeltaViewId>,
     ) -> impl Iterator<Item = QuadIds<DeltaViewId>> + '_ + use<'_> {
-        let base = self
-            .local_pattern(s, p, o, g, Layer::Base)
-            .into_iter()
-            .flat_map(move |q| {
-                self.base
-                    .as_ref()
-                    .quads_for_pattern_with_plan(&plan, q.s, q.p, q.o, q.g)
-            })
-            .filter(|q| self.base_quad_is_ordinary(*q))
-            .map(|q| q.map_ids(DeltaViewId::Base));
-        let delta = self
-            .local_pattern(s, p, o, g, Layer::Delta)
-            .into_iter()
-            .flat_map(move |q| {
-                self.delta
-                    .as_ref()
-                    .quads_for_pattern_with_plan(&plan, q.s, q.p, q.o, q.g)
-            })
-            .map(|q| self.map_delta(q));
-        let demoted = self
-            .has_suppressed_reifiers
-            .then_some(self.base.as_ref())
-            .into_iter()
-            .flat_map(move |ds| {
-                let subject = s.and_then(|id| self.local_id(id, Layer::Base));
-                subject
-                    .into_iter()
-                    .flat_map(move |subject| {
-                        ds.annotations_of_with_graph(subject)
-                            .map(move |(p, o, g)| QuadIds {
-                                s: subject,
-                                p,
-                                o,
-                                g,
-                            })
-                    })
-                    .chain(
-                        std::iter::once(ds)
-                            .filter(move |_| s.is_none())
-                            .flat_map(RdfDataset::annotation_quads),
-                    )
-            })
+        // Each layer contributes its one cursor or none (`optional`), and the
+        // demoted statement rows one arm, so the cursor holds no inactive branch
+        // and no `flat_map` front/back pair.
+        let base = optional(self.local_pattern(s, p, o, g, Layer::Base).map(|q| {
+            self.base
+                .as_ref()
+                .quads_for_pattern_with_plan(&plan, q.s, q.p, q.o, q.g)
+        }))
+        .filter(|q| self.base_quad_is_ordinary(*q))
+        .map(|q| q.map_ids(DeltaViewId::Base));
+        let delta = optional(self.local_pattern(s, p, o, g, Layer::Delta).map(|q| {
+            self.delta
+                .as_ref()
+                .quads_for_pattern_with_plan(&plan, q.s, q.p, q.o, q.g)
+        }))
+        .map(|q| self.map_delta(q));
+        type Unused = std::iter::Empty<QuadIds>;
+        let ds = self.base.as_ref();
+        let demoted =
+            match (self.has_suppressed_reifiers, s) {
+                (false, _) => Cursor::<_, _, Unused, Unused>::Empty,
+                (true, None) => Cursor::Second(ds.annotation_quads()),
+                (true, Some(id)) => match self.local_id(id, Layer::Base) {
+                    Some(subject) => Cursor::First(ds.annotations_of_with_graph(subject).map(
+                        move |(p, o, g)| QuadIds {
+                            s: subject,
+                            p,
+                            o,
+                            g,
+                        },
+                    )),
+                    None => Cursor::Empty,
+                },
+            };
+        let demoted = demoted
             .filter(|q| self.demoted_annotation_is_unique(*q))
             .map(|q| q.map_ids(DeltaViewId::Base))
             .filter(move |q| {
@@ -723,18 +717,20 @@ impl DatasetView for DeltaDatasetView {
     }
 
     fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
-        self.local_id(reifier, Layer::Base)
-            .into_iter()
-            .flat_map(|id| self.base.reifier_quads_of(id))
-            .filter(|q| !self.suppressed.contains(q))
-            .map(|q| q.map_ids(DeltaViewId::Base))
-            .chain(
+        optional(
+            self.local_id(reifier, Layer::Base)
+                .map(|id| self.base.reifier_quads_of(id)),
+        )
+        .filter(|q| !self.suppressed.contains(q))
+        .map(|q| q.map_ids(DeltaViewId::Base))
+        .chain(
+            optional(
                 self.local_id(reifier, Layer::Delta)
-                    .into_iter()
-                    .flat_map(|id| self.delta.reifier_quads_of(id))
-                    .filter(|q| !self.duplicate_reifiers.contains(q))
-                    .map(|q| self.map_delta(q)),
+                    .map(|id| self.delta.reifier_quads_of(id)),
             )
+            .filter(|q| !self.duplicate_reifiers.contains(q))
+            .map(|q| self.map_delta(q)),
+        )
     }
 
     /// Narrows each layer through its OWN [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph)
@@ -755,18 +751,20 @@ impl DatasetView for DeltaDatasetView {
         // arm. Chain order, and the order within each arm, are the unkeyed
         // override's, so this is the same multiset in the same order as
         // `reifier_quads().filter(|q| g.matches(q.g))`.
-        self.local_graph(g, Layer::Base)
-            .into_iter()
-            .flat_map(move |graph| self.base.reifier_quads_in_graph(graph))
-            .filter(|q| !self.suppressed.contains(q))
-            .map(|q| q.map_ids(DeltaViewId::Base))
-            .chain(
+        optional(
+            self.local_graph(g, Layer::Base)
+                .map(|graph| self.base.reifier_quads_in_graph(graph)),
+        )
+        .filter(|q| !self.suppressed.contains(q))
+        .map(|q| q.map_ids(DeltaViewId::Base))
+        .chain(
+            optional(
                 self.local_graph(g, Layer::Delta)
-                    .into_iter()
-                    .flat_map(move |graph| self.delta.reifier_quads_in_graph(graph))
-                    .filter(|q| !self.duplicate_reifiers.contains(q))
-                    .map(|q| self.map_delta(q)),
+                    .map(|graph| self.delta.reifier_quads_in_graph(graph)),
             )
+            .filter(|q| !self.duplicate_reifiers.contains(q))
+            .map(|q| self.map_delta(q)),
+        )
     }
 
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
@@ -802,70 +800,64 @@ impl DatasetView for DeltaDatasetView {
         // ordinary table, which carries no graph seam of its own, so it keeps the
         // definitional row filter; `local_graph` still drops the whole base arm when
         // the base cannot name `g`.
-        self.local_graph(g, Layer::Base)
-            .into_iter()
-            .flat_map(move |graph| {
-                self.base
-                    .annotation_quads_in_graph(graph)
-                    .filter(|q| self.base_annotation_is_retained(*q))
-                    .chain(
+        optional(self.local_graph(g, Layer::Base).map(|graph| {
+            self.base
+                .annotation_quads_in_graph(graph)
+                .filter(|q| self.base_annotation_is_retained(*q))
+                .chain(
+                    optional(
                         self.has_added_reifiers
                             .then_some(self.base.as_ref())
-                            .into_iter()
-                            .flat_map(RdfDataset::quads)
-                            .filter(move |q| graph.matches(q.g))
-                            .filter(|q| self.base_quad_is_annotation(*q)),
+                            .map(RdfDataset::quads),
                     )
-            })
-            .map(|q| q.map_ids(DeltaViewId::Base))
-            .chain(
+                    .filter(move |q| graph.matches(q.g))
+                    .filter(|q| self.base_quad_is_annotation(*q)),
+                )
+        }))
+        .map(|q| q.map_ids(DeltaViewId::Base))
+        .chain(
+            optional(
                 self.local_graph(g, Layer::Delta)
-                    .into_iter()
-                    .flat_map(move |graph| self.delta.annotation_quads_in_graph(graph))
-                    .filter(|q| !self.duplicate_annotations.contains(q))
-                    .map(|q| self.map_delta(q)),
+                    .map(|graph| self.delta.annotation_quads_in_graph(graph)),
             )
+            .filter(|q| !self.duplicate_annotations.contains(q))
+            .map(|q| self.map_delta(q)),
+        )
     }
 
     fn annotations_of_with_graph(
         &self,
         reifier: Self::Id,
     ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
-        let base = self
-            .local_id(reifier, Layer::Base)
-            .into_iter()
-            .flat_map(move |subject| {
-                self.base
-                    .annotations_of_with_graph(subject)
-                    .map(move |(p, o, g)| QuadIds {
-                        s: subject,
-                        p,
-                        o,
-                        g,
-                    })
-                    .filter(|q| self.base_annotation_is_retained(*q))
-                    .chain(
-                        self.base
-                            .quads_for_pattern(Some(subject), None, None, GraphMatch::Any)
-                            .filter(|q| self.base_quad_is_annotation(*q)),
-                    )
-            })
-            .map(|q| q.map_ids(DeltaViewId::Base));
-        let delta = self
-            .local_id(reifier, Layer::Delta)
-            .into_iter()
-            .flat_map(move |subject| {
-                self.delta
-                    .annotations_of_with_graph(subject)
-                    .map(move |(p, o, g)| QuadIds {
-                        s: subject,
-                        p,
-                        o,
-                        g,
-                    })
-            })
-            .filter(|q| !self.duplicate_annotations.contains(q))
-            .map(|q| self.map_delta(q));
+        let base = optional(self.local_id(reifier, Layer::Base).map(|subject| {
+            self.base
+                .annotations_of_with_graph(subject)
+                .map(move |(p, o, g)| QuadIds {
+                    s: subject,
+                    p,
+                    o,
+                    g,
+                })
+                .filter(|q| self.base_annotation_is_retained(*q))
+                .chain(
+                    self.base
+                        .quads_for_pattern(Some(subject), None, None, GraphMatch::Any)
+                        .filter(|q| self.base_quad_is_annotation(*q)),
+                )
+        }))
+        .map(|q| q.map_ids(DeltaViewId::Base));
+        let delta = optional(self.local_id(reifier, Layer::Delta).map(|subject| {
+            self.delta
+                .annotations_of_with_graph(subject)
+                .map(move |(p, o, g)| QuadIds {
+                    s: subject,
+                    p,
+                    o,
+                    g,
+                })
+        }))
+        .filter(|q| !self.duplicate_annotations.contains(q))
+        .map(|q| self.map_delta(q));
         base.chain(delta).map(|q| (q.p, q.o, q.g))
     }
 

@@ -59,6 +59,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `purrdf_core` crate root re-export the same types, so existing paths and
   matches keep compiling.
 
+### Changed
+
+- **core:** composite and delta-view probe cursors are much smaller. A
+  `CompositeDatasetView` probe now picks the source's carrier (native, delta or
+  graph selection) and statement table before it builds a cursor. The cursor
+  holds only that branch inline, and walks sources forward with one inner cursor
+  at a time. The cursor used to inline every inactive carrier and table branch,
+  about 44 KiB per probe. It is now 624 bytes on x86_64. Native and delta probes
+  still allocate nothing. A graph selection still boxes the retained view's
+  cursor once per selected-graph probe, but that box is now the compact cursor.
+  `DeltaDatasetView` probes and statement-table cursors also drop their unused
+  `flat_map` slots: the ordinary probe goes from 816 to 280 bytes. Results and
+  iteration order do not change. Measured in one validation pass of a
+  10,000-subject graph selection: requested bytes fall from 4.89 GB to 73.6 MB,
+  the live high-water mark from 9.45 MB to 1.45 MB, and user-space instructions
+  from 854 M to 262 M. The allocation-call count stays at 60,100. The new
+  `composite_probes` group in `crates/rdf-core/benches/shared_views.rs` times
+  subject, statement-table and scan probes on each carrier.
+
 ### Fixed
 
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form

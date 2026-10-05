@@ -3,6 +3,7 @@
 
 //! Immutable composition over shared native dictionaries and indexes.
 
+use super::cursor::{Cursor, forward_flat_map, optional};
 use super::view_accounting::WorkCounter;
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
 use crate::cdt_blank::{cdt_embedded_blanks, rewrite_cdt_blank_terms};
@@ -19,7 +20,7 @@ use std::sync::{Arc, LazyLock};
 
 type LocalId = DeltaViewId;
 type Pattern<I> = (Option<I>, Option<I>, Option<I>, GraphMatch<I>);
-type ProbeRows<'a, I> = Box<dyn Iterator<Item = QuadIds<I>> + 'a>;
+type ErasedRows<'a> = Box<dyn Iterator<Item = QuadIds<LocalId>> + 'a>;
 
 // Physical plans depend only on four bound-axis bits. Cache the small, fixed
 // set once, including graph-unbound variants needed by placement and the
@@ -487,56 +488,70 @@ impl CompositeSource {
         table: Table,
         subject: Option<LocalId>,
         g: GraphMatch<LocalId>,
-    ) -> ProbeRows<'_, LocalId> {
+    ) -> impl Iterator<Item = QuadIds<LocalId>> + '_ {
+        // Three carriers, so the fourth arm is never built.
+        type Unused = std::iter::Empty<QuadIds<LocalId>>;
         match &self.carrier {
             Carrier::Native(ds) => {
                 let Some(graph) = local_native_graph(g) else {
-                    return Box::new(std::iter::empty());
+                    return Cursor::<_, _, ErasedRows<'_>, Unused>::Empty;
                 };
                 let subject = match subject {
                     None => None,
                     Some(LocalId::Base(id)) => Some(id),
-                    Some(LocalId::Delta(_)) => return Box::new(std::iter::empty()),
+                    Some(LocalId::Delta(_)) => return Cursor::Empty,
                 };
-                Box::new(
+                Cursor::First(
                     metadata_probe(ds.as_ref(), table, subject, graph)
                         .map(|q| q.map_ids(LocalId::Base)),
                 )
             }
-            Carrier::Delta(ds) => metadata_probe(ds.as_ref(), table, subject, g),
+            Carrier::Delta(ds) => Cursor::Second(metadata_probe(ds.as_ref(), table, subject, g)),
             Carrier::Selected(selection) => {
                 let Some(graph) = selection.graph_match(g) else {
-                    return Box::new(std::iter::empty());
+                    return Cursor::Empty;
                 };
                 let narrowed = match subject {
                     None => None,
                     Some(id) => {
                         let Some(inner) = selection.inner(id) else {
-                            return Box::new(std::iter::empty());
+                            return Cursor::Empty;
                         };
                         Some(inner)
                     }
                 };
-                Box::new(
+                // A statement row is visible exactly when its OWN graph slot was
+                // selected, the same test the ordinary quads run: the statement
+                // layer is keyed per graph, so a reifier declared in two graphs
+                // contributes only the selected one's row.
+                //
+                // A selection's statement rows come FROM a composite, whose own
+                // statement cursors are built from this one: a transparent arm
+                // here would put the composite's opaque iterator inside itself,
+                // so this arm alone is type-erased, as `probe_graph` is.
+                let rows: ErasedRows<'_> = Box::new(
                     metadata_probe(selection.view.as_ref(), table, narrowed, graph)
                         .filter(move |q| q.g.is_some_and(|graph| selection.graphs.contains(&graph)))
                         .map(move |q| q.map_ids(|id| selection.local(id))),
-                )
+                );
+                Cursor::Third(rows)
             }
         }
     }
 
-    /// Dispatch before type erasure: a cursor carries only the active carrier
-    /// and table, rather than all inactive indexed/metadata iterator branches.
+    /// Dispatch on the carrier and table BEFORE building a cursor: the result
+    /// holds only the active branch's iterator, so it is as large as that one
+    /// branch rather than the sum of every inactive indexed and statement-table
+    /// branch, and the native and delta arms are built without allocating.
     /// Sources and values stay borrowed, including recursive selections.
     fn probe(
         &self,
         table: Table,
         plan: QuadProbePlan,
         (s, p, o, g): Pattern<LocalId>,
-    ) -> ProbeRows<'_, LocalId> {
+    ) -> impl Iterator<Item = QuadIds<LocalId>> + '_ {
         if !matches!(table, Table::Ordinary) {
-            return Box::new(
+            return Cursor::Fourth(
                 self.metadata_rows(table, s, g)
                     .filter(move |q| matches_pattern(*q, s, p, o, g)),
             );
@@ -544,19 +559,23 @@ impl CompositeSource {
         match &self.carrier {
             Carrier::Native(ds) => {
                 let Some((s, p, o, g)) = local_native_pattern(s, p, o, g) else {
-                    return Box::new(std::iter::empty());
+                    return Cursor::Empty;
                 };
-                Box::new(
+                Cursor::First(
                     ds.quads_for_pattern_with_plan(&plan, s, p, o, g)
                         .map(|q| q.map_ids(LocalId::Base)),
                 )
             }
-            Carrier::Delta(ds) => Box::new(ds.quads_for_pattern_with_plan(&plan, s, p, o, g)),
+            Carrier::Delta(ds) => Cursor::Second(ds.quads_for_pattern_with_plan(&plan, s, p, o, g)),
             Carrier::Selected(selection) => {
-                // Selection physically probes one named graph however the
-                // caller's logical graph axis was spelled.
+                // The projection reads the retained composite ONE selected graph
+                // at a time, so the physical pattern is graph-bound however the
+                // logical one was spelled. The caller's plan describes a
+                // different graph-boundness and a graph-bound prefix chosen for
+                // it would name the wrong rows, so this axis is re-planned here —
+                // the same reason placement re-plans its sources.
                 let selected_plan = physical_plan([s.is_some(), p.is_some(), o.is_some(), true]);
-                Box::new(
+                Cursor::Third(
                     selection
                         .probe_pattern((s, p, o, g))
                         .into_iter()
@@ -1350,10 +1369,11 @@ impl CompositeDatasetView {
         plan: QuadProbePlan,
         (s, p, o, g): Pattern<CompositeViewId>,
     ) -> impl Iterator<Item = QuadIds<CompositeViewId>> + '_ {
-        self.sources[..self.user_sources]
-            .iter()
-            .enumerate()
-            .flat_map(move |(index, source)| {
+        // Sources are walked forward only, so the cursor keeps ONE source's
+        // rows live at a time rather than `flat_map`'s front and back pair.
+        forward_flat_map(
+            self.sources[..self.user_sources].iter().enumerate(),
+            move |(index, source)| {
                 // Placement removes the logical graph constraint from the physical
                 // pattern. A graph-bound prefix would be invalid for that source;
                 // retain the caller's plan everywhere the bound axes stay intact.
@@ -1364,23 +1384,28 @@ impl CompositeDatasetView {
                 } else {
                     plan
                 };
-                self.pattern(index, s, p, o, g)
-                    .into_iter()
-                    .flat_map(move |pattern| source.probe(table, source_plan, pattern))
-                    .filter(move |q| {
-                        matches!(self.placement[index], SourceGraph::Preserve)
-                            || source
-                                .probe(
-                                    table,
-                                    physical_plan([true, true, true, false]),
-                                    (Some(q.s), Some(q.p), Some(q.o), GraphMatch::Any),
-                                )
-                                .next()
-                                .is_some_and(|first| first == *q)
-                    })
-                    .map(move |q| self.map_row(index, q))
-                    .filter(move |q| !(0..index).any(|earlier| self.contains(earlier, table, *q)))
-            })
+                // One source's cursor, or none: a source the pattern cannot name
+                // contributes an empty arm rather than a `flat_map`, which would
+                // reserve room for two copies of the source cursor.
+                optional(
+                    self.pattern(index, s, p, o, g)
+                        .map(|pattern| source.probe(table, source_plan, pattern)),
+                )
+                .filter(move |q| {
+                    matches!(self.placement[index], SourceGraph::Preserve)
+                        || source
+                            .probe(
+                                table,
+                                physical_plan([true, true, true, false]),
+                                (Some(q.s), Some(q.p), Some(q.o), GraphMatch::Any),
+                            )
+                            .next()
+                            .is_some_and(|first| first == *q)
+                })
+                .map(move |q| self.map_row(index, q))
+                .filter(move |q| !(0..index).any(|earlier| self.contains(earlier, table, *q)))
+            },
+        )
     }
     /// The handle source `index` holds for `value`, or `None`.
     ///
@@ -1976,19 +2001,20 @@ enum Table {
     Reifier,
     Annotation,
 }
-/// One active statement-table cursor over any borrowed dataset view.
-/// Carrier adapters retain their own graph/identity translations.
+/// One active statement-table cursor over any borrowed dataset view, built
+/// without allocating. Carrier adapters retain their own graph/identity
+/// translations.
 fn metadata_probe<D: DatasetView>(
     source: &D,
     table: Table,
     subject: Option<D::Id>,
     graph: GraphMatch<D::Id>,
-) -> ProbeRows<'_, D::Id> {
+) -> impl Iterator<Item = QuadIds<D::Id>> + '_ {
     match (table, subject) {
-        (Table::Ordinary, _) => Box::new(std::iter::empty()),
-        (Table::Reifier, Some(subject)) => Box::new(source.reifier_quads_of(subject)),
-        (Table::Reifier, None) => Box::new(source.reifier_quads_in_graph(graph)),
-        (Table::Annotation, Some(subject)) => Box::new(
+        (Table::Ordinary, _) => Cursor::Empty,
+        (Table::Reifier, Some(subject)) => Cursor::First(source.reifier_quads_of(subject)),
+        (Table::Reifier, None) => Cursor::Second(source.reifier_quads_in_graph(graph)),
+        (Table::Annotation, Some(subject)) => Cursor::Third(
             source
                 .annotations_of_with_graph(subject)
                 .map(move |(p, o, g)| QuadIds {
@@ -1998,7 +2024,7 @@ fn metadata_probe<D: DatasetView>(
                     g,
                 }),
         ),
-        (Table::Annotation, None) => Box::new(source.annotation_quads_in_graph(graph)),
+        (Table::Annotation, None) => Cursor::Fourth(source.annotation_quads_in_graph(graph)),
     }
 }
 

@@ -14,6 +14,11 @@ use std::sync::Arc;
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+/// The ceiling on one borrowed composite cursor. A cursor holds the active
+/// carrier's iterator alone, so it stays well inside this; a cursor that inlined
+/// every inactive carrier and statement-table branch would be tens of KiB.
+const CURSOR_CAP: usize = 256 * size_of::<usize>();
+
 fn composite(rows: usize, owners: usize) -> CompositeDatasetView {
     let sources = (0..owners)
         .map(|owner| {
@@ -46,7 +51,7 @@ fn probe_cursor_layout_is_bounded() {
     println!("borrowed composite cursor bytes ordinary/reifier/annotation: {layouts:?}");
     for bytes in layouts {
         assert!(
-            bytes <= 256 * size_of::<usize>(),
+            bytes <= CURSOR_CAP,
             "inactive branches inflated cursor to {bytes} bytes"
         );
     }
@@ -83,12 +88,10 @@ fn singleton_and_wide_probes_do_not_allocate_by_dataset_size() {
             let (large_rows, large_cost) = measure(&large, singleton.then_some(large_id));
             assert_eq!(small_rows, if singleton { 1 } else { 10 * owners });
             assert_eq!(large_rows, if singleton { 1 } else { 10_000 * owners });
-            assert_eq!(large_cost.requested_bytes, small_cost.requested_bytes);
-            assert_eq!(large_cost.allocations, small_cost.allocations);
-            assert!(
-                large_cost.requested_bytes
-                    <= u64::try_from(owners * 256 * size_of::<usize>()).unwrap()
-            );
+            // Native carriers dispatch to an inline arm: no probe, singleton or
+            // wide, touches the heap, whatever the dataset's size.
+            assert_eq!(small_cost, Measurement::default());
+            assert_eq!(large_cost, Measurement::default());
             println!("owners={owners} singleton={singleton}: {large_cost:?}");
         }
     }
@@ -110,8 +113,11 @@ fn nested_selection_retains_rows_and_compact_probe_cost() {
             .unwrap();
     let (rows, measured) = measure(&nested, None);
     assert_eq!(rows, 200);
+    // Each selection level boxes the retained composite's cursor once per
+    // selected-graph probe (the hop that keeps the recursive type finite): two
+    // levels, two compact cursors.
     assert!(
-        measured.requested_bytes <= 16_384,
+        measured.requested_bytes <= u64::try_from(2 * CURSOR_CAP).unwrap(),
         "nested cursor cost: {measured:?}"
     );
     println!("nested selected probe: {measured:?}");
@@ -205,7 +211,7 @@ fn delta_and_nested_selection_preserve_statement_layers_and_blank_classes() {
     assert_eq!((reifiers, annotations), (2, 2));
     assert_eq!(measured.retained_bytes, 0);
     assert!(
-        measured.requested_bytes <= 32_768,
+        measured.requested_bytes <= 16_384,
         "nested statement cursor cost: {measured:?}"
     );
     println!("delta/nested-selection statement probe: {measured:?}");
