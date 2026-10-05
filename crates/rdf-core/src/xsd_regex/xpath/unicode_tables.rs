@@ -1542,7 +1542,6 @@ pub(super) const CATEGORIES: &[(&str, &[(u32, u32)])] = &[
             (0x10_0000, 0x10_FFFD),
         ],
     ),
-    ("Cs", &[(0xD800, 0xDFFF)]),
     (
         "L",
         &[
