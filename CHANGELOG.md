@@ -95,7 +95,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   objects are byte-identical, except where an `owl:equivalentClass` names a
   datatype, which is now a datatype definition. Every schema cache key changes once, because
   the policy salt moves to `owl-rdfs-fragment-v2`: axioms with a blank-node
-  subject, which the surface used to skip, now reach the manifest.
+  subject, which the surface used to skip, now reach the manifest. A
+  restriction's source axiom is provenance only on the coverage rows of the
+  classes that carry it, so output and memory grow linearly with the classes.
+  A restricted property is emitted on the class carrying the restriction
+  whatever its declared domain. An existential restriction places the class in
+  the property's domain for the other properties of that domain. A universal
+  restriction on `owl:Thing` is a global range, and a restriction on
+  `inverse(p)` whose inverse is named is read as one on that property.
+  `owl:real`, `owl:rational`, `rdf:PlainLiteral`, `rdf:XMLLiteral`,
+  `rdf:dirLangString`, `rdf:HTML` and `rdf:JSON` are datatypes. Anonymous
+  classes under `owl:disjointWith`, `owl:AllDisjointClasses`,
+  `owl:disjointUnionOf` and in class assertions are reported. A class filler of
+  `owl:allValuesFrom` and a datatype complement are reported as approximations,
+  and `owl:allValuesFrom owl:Nothing` forbids the property.
 
 ### Fixed
 

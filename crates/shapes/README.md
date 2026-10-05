@@ -384,20 +384,31 @@ Anonymous class expressions are part of the theory:
   `owl:onClass` or `owl:onDataRange`) or a boolean form (`owl:unionOf`,
   `owl:intersectionOf`, `owl:complementOf`, `owl:oneOf`) that a named class is
   `rdfs:subClassOf` or `owl:equivalentClass` to is recorded with its source
-  axiom and inherited by every subclass. The property it names joins the
-  catalog, and the named classes in it are admitted as classes;
+  axiom and inherited by every subclass; asserted of `owl:Thing`, it holds of
+  every class, and a universal restriction on `owl:Thing` is the property's
+  range (or, over an inverse, its domain). The property it names joins the
+  catalog and is emitted on every class that carries the restriction, whatever
+  its declared domain; the axiom is provenance on those classes' coverage rows
+  alone, so provenance stays linear in the class/property cells. The named
+  classes in it are admitted as classes, and a restriction on the inverse of a
+  property whose inverse is named (`owl:inverseOf`, a symmetric property) is a
+  restriction on that named property;
 - data ranges built with `owl:onDatatype` and `owl:withRestrictions`,
   `owl:datatypeComplementOf`, or a literal `owl:oneOf` are read as fillers and
   ranges, and `[ owl:inverseOf p ]` is read wherever a property expression may
   stand, `rdfs:subPropertyOf`, `owl:equivalentProperty` and `owl:inverseOf`
   included;
+- the OWL 2 datatype map and the RDF 1.2 datatypes outside XSD (`owl:real`,
+  `owl:rational`, `rdf:PlainLiteral`, `rdf:XMLLiteral`, `rdf:dirLangString`,
+  `rdf:HTML`, `rdf:JSON`) are datatypes wherever a datatype is decided;
 - an `owl:equivalentClass` between an IRI and a data range, or another
   datatype, is a datatype definition (OWL 2 Structural Specification §9.4):
   the IRI is a datatype, no class, and a value of it is held to the defining
   range or typed with the datatype by name;
 - each named member of a union a class is equivalent to becomes its subclass,
   an existential restriction places a class within the restricted property's
-  domain, and a domain that is itself an anonymous expression matches the
+  domain (and through an inverse, its range) as a superclass, so the domain's
+  other properties reach it, and a domain that is itself an anonymous expression matches the
   classes asserted to be its subclasses.
 
 What a developer schema can state is projected onto the class's definition,
@@ -405,13 +416,13 @@ and from there into every language emitter:
 
 | OWL component | JSON Schema projection |
 |---|---|
-| `owl:allValuesFrom F` | every value meets `F`'s value schema, as `rdfs:range` does |
+| `owl:allValuesFrom F` | every value meets `F`'s value schema, as `rdfs:range` does (a class `F` is checked only as a node reference); `owl:Nothing` forbids the property |
 | `owl:someValuesFrom F`, `owl:hasValue v` | required; one value meets `F` or is `v` (`contains`) |
 | `owl:minCardinality n` (qualified: over `Q`) | required; `minItems n` (`contains Q`, `minContains n`) |
 | `owl:maxCardinality n` (qualified: over an exact `Q`) | `maxItems n` (`contains Q`, `maxContains n`); `0` forbids the property |
 | `owl:cardinality n` | both of the above |
 | datatype restriction | the base datatype and its numeric, temporal, length and pattern facets, through the SHACL value compiler (an XSD pattern anchored) |
-| `owl:datatypeComplementOf D` | a literal that is not `D` |
+| `owl:datatypeComplementOf D` | a literal not tagged `D` (judged on the tag, not the value space: an approximation) |
 | `owl:oneOf` of individuals or literals | an `enum` of their projections; on a class, an `@id` enumeration |
 | `owl:complementOf C` (named) | `@type` excludes `C` |
 | `owl:unionOf` of restrictions | `anyOf` over the members' property constraints |
@@ -422,16 +433,18 @@ marked `representation_approximation`. Direct SHACL property shapes stay
 authoritative over restrictions on the same property.
 
 What no schema keyword states is reported, never dropped: `owl:hasSelf`, a
-restriction on an inverse property or on several properties, a maximum over a
+restriction on an unnamed inverse property or on several properties, a maximum over a
 class qualifier (counting needs the class membership of referenced nodes), the
 complement of an anonymous expression, a union with a named member that the
 class does not already entail, the sufficient-condition direction of
 `owl:equivalentClass`, and a general class inclusion whose subclass expression
-is anonymous. `SchemaCompileRequest::class_expression_report` and
+is anonymous, and anonymous classes in `owl:disjointWith`,
+`owl:AllDisjointClasses`, `owl:disjointUnionOf` and class assertions.
+`SchemaCompileRequest::class_expression_report` and
 `compile_schema_with_class_expressions` return `SchemaClassExpressionReport`:
 every such axiom once, with each component's `SchemaExpressionOutcome`
 (`projected`, `approximated`, `unrepresented` or `excluded`) and reason on
-every class that carries it. A class definition also names its unrepresented
+every class that carries it, or on the axiom itself. A class definition also names its unrepresented
 components in its `$comment`.
 
 This is schema projection, not ABox entailment or unrestricted OWL reasoning.

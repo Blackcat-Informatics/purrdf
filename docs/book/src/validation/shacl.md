@@ -775,43 +775,58 @@ the unqualified and qualified cardinalities over `owl:onClass` or
 `owl:onDataRange`) or a boolean form (`owl:unionOf`, `owl:intersectionOf`,
 `owl:complementOf`, `owl:oneOf`) that a named class is `rdfs:subClassOf` or
 `owl:equivalentClass` to is recorded with its source axiom and inherited by
-every subclass. The property it names joins the catalog. Data ranges built with
-`owl:onDatatype` and `owl:withRestrictions`, `owl:datatypeComplementOf`, or a
-literal `owl:oneOf` are read as fillers and ranges, and `[ owl:inverseOf p ]` is
-read wherever a property expression may stand. An equivalence between an IRI
-and a data range, or another datatype, defines a datatype: a value is then held
-to the defining range, or typed with the datatype by name. Each named member
-of a union a class is equivalent to becomes its subclass, and an existential
-restriction places a class within the restricted property's domain.
+every subclass; asserted of `owl:Thing`, it holds of every class, and a
+universal restriction on `owl:Thing` is the property's range. The property it
+names joins the catalog and is emitted on the class that carries the
+restriction, whatever its declared domain, and the axiom is provenance on that
+class's coverage row alone. A restriction on the inverse of a property whose
+inverse is named is a restriction on that named property. Data ranges built
+with `owl:onDatatype` and `owl:withRestrictions`, `owl:datatypeComplementOf`,
+or a literal `owl:oneOf` are read as fillers and ranges, and `[ owl:inverseOf p
+]` is read wherever a property expression may stand. The OWL 2 datatype map
+and RDF 1.2 datatypes outside XSD (`owl:real`, `owl:rational`,
+`rdf:PlainLiteral`, `rdf:XMLLiteral`, `rdf:dirLangString`, `rdf:HTML`,
+`rdf:JSON`) are datatypes. An equivalence between an IRI and a data range, or
+another datatype, defines a datatype: a value is then held to the defining
+range, or typed with the datatype by name. Each named member of a union a class
+is equivalent to becomes its subclass, and an existential restriction places a
+class within the restricted property's domain, so that the domain's other
+properties reach it.
 
 What a developer schema can state is projected onto the class definition.
-`owl:allValuesFrom` holds every value to the filler, as a range does. An
-existential, `owl:hasValue` or a minimum makes the property required, with
-`contains` and `minContains` where the filler narrows the values. A maximum
-becomes `maxItems`, or `maxContains` over a qualifier whose value schema is
-exact. A datatype restriction's numeric, temporal, length and pattern facets
-are compiled by the SHACL value-constraint compiler, with the XSD pattern
-anchored. An `owl:oneOf` of named individuals restricts `@id`, the complement
-of a named class excludes it from `@type`, and a union of restrictions becomes
-`anyOf` over the members' property constraints. Requiring a value and counting
-distinct terms read open-world axioms closed-world, so the coverage rows they
-touch are representation approximations.
+`owl:allValuesFrom` holds every value to the filler; a class filler is checked
+only as a node reference, an approximation, and `owl:Nothing` forbids the
+property. An existential, `owl:hasValue` or a minimum makes the property
+required, with `contains` and `minContains` where the filler narrows the
+values. A maximum becomes `maxItems`, or `maxContains` over a qualifier whose
+value schema is exact. A datatype restriction's numeric, temporal, length and
+pattern facets are compiled by the SHACL value-constraint compiler, with the
+XSD pattern anchored; a datatype complement is judged on the literal's
+datatype tag rather than its value space, an approximation. An `owl:oneOf` of
+named individuals restricts `@id`, the complement of a named class excludes it
+from `@type`, and a union of restrictions becomes `anyOf` over the members'
+property constraints. Requiring a value and counting distinct terms read
+open-world axioms closed-world, so the coverage rows they touch are
+representation approximations.
 
 What no schema keyword states is reported, never dropped: `owl:hasSelf`, a
-restriction on an inverse or on several properties, a maximum over a class
-qualifier, the complement of an anonymous expression, a union with a named
-member the class does not already entail, the sufficient-condition direction of
-`owl:equivalentClass`, and a general class inclusion with an anonymous
-subclass. `SchemaCompileRequest::class_expression_report` and
+restriction on an unnamed inverse or on several properties, a maximum over a
+class qualifier, the complement of an anonymous expression, a union with a
+named member the class does not already entail, the sufficient-condition
+direction of `owl:equivalentClass`, a general class inclusion with an anonymous
+subclass, and anonymous classes in `owl:disjointWith`,
+`owl:AllDisjointClasses`, `owl:disjointUnionOf` and class assertions.
+`SchemaCompileRequest::class_expression_report` and
 `compile_schema_with_class_expressions` return the class-expression manifest:
 every such axiom once, with each component's outcome (projected, approximated,
-unrepresented or excluded) and reason on every class that carries it. The class
-definition names its unrepresented components in `$comment`. Only malformed
-input is refused: a restriction without `owl:onProperty`, a conflicting or
-non-integer cardinality, a qualified cardinality without its qualifier, an
-expression that contains itself, a data range where a class is required, or a
-filler that contradicts the property's kind. One request expands at most
-1,048,576 expression nodes.
+unrepresented or excluded) and reason, on every class that carries it or on the
+axiom itself. The class definition names its unrepresented components in
+`$comment`. Only malformed input is refused: a restriction without
+`owl:onProperty`, a conflicting or non-integer cardinality, a qualified
+cardinality without its qualifier, an expression that contains itself, a data
+range where a class is required, or a filler that contradicts the property's
+kind. One request expands at most 1,048,576 expression nodes, and coverage
+provenance stays linear in the class/property cells.
 
 Direct SHACL remains authoritative. Ontology-only fields are optional unless a
 class restriction requires them;

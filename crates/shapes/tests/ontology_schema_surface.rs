@@ -395,7 +395,7 @@ fn manifest_reports_every_form_with_its_outcome_and_provenance() {
         (
             "Person",
             format!("all({},{})", p("knows"), p("Person")),
-            vec![Projected],
+            vec![Approximated],
         ),
         (
             "Person",
@@ -445,7 +445,7 @@ fn manifest_reports_every_form_with_its_outcome_and_provenance() {
         (
             "Person",
             format!("all({},datatype_complement({}))", p("code"), xsd("integer")),
-            vec![Projected],
+            vec![Approximated],
         ),
         (
             "Person",
@@ -1021,4 +1021,283 @@ fn compilation_manifest_and_emitters_are_deterministic() {
     assert_eq!(first.compiled.schema_json, permuted.compiled.schema_json);
     assert_eq!(first.coverage.to_json(), permuted.coverage.to_json());
     assert_eq!(first_report.to_json(), permuted_report.to_json());
+}
+
+#[test]
+fn universal_restriction_to_owl_nothing_forbids_the_property() {
+    let ontology = "ex:A a owl:Class ; rdfs:subClassOf
+            [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom owl:Nothing ] .
+        ex:p a owl:ObjectProperty .";
+    let (compilation, report) = compile_both("", ontology, SchemaSurfaceMode::OntologyComplete);
+    let schema = &compilation.compiled.schema_json;
+    assert!(!accepts(schema, "A", "ex:a a ex:A ; ex:p ex:b .", "a"));
+    assert!(accepts(schema, "A", "ex:a a ex:A .", "a"));
+    assert_eq!(
+        outcomes(
+            &report,
+            "A",
+            &format!("all(<{EX}p>,<http://www.w3.org/2002/07/owl#Nothing>)")
+        ),
+        vec![SchemaExpressionOutcome::Projected]
+    );
+}
+
+#[test]
+fn a_restricted_property_is_judged_on_its_class_outside_its_domain() {
+    let ontology = "ex:Elsewhere a owl:Class .
+        ex:Z a owl:Class ; rdfs:subClassOf
+            [ a owl:Restriction ; owl:onProperty ex:q ; owl:allValuesFrom xsd:integer ] ,
+            [ a owl:Restriction ; owl:onProperty ex:q ; owl:maxCardinality 1 ] .
+        ex:q a owl:DatatypeProperty ; rdfs:domain ex:Elsewhere .";
+    let (compilation, _) = compile_both("", ontology, SchemaSurfaceMode::OntologyComplete);
+    let schema = &compilation.compiled.schema_json;
+    assert!(!accepts(
+        schema,
+        "Z",
+        "ex:z a ex:Z ; ex:q \"abc\" , \"def\" .",
+        "z"
+    ));
+    assert!(!accepts(schema, "Z", "ex:z a ex:Z ; ex:q \"abc\" .", "z"));
+    assert!(accepts(schema, "Z", "ex:z a ex:Z ; ex:q 5 .", "z"));
+}
+
+/// `classes` classes, each restricted by an existential on each of four
+/// shared, domainless object properties.
+fn shared_restriction_ontology(classes: usize) -> String {
+    use std::fmt::Write as _;
+    let mut ontology = String::from("ex:Target a owl:Class .\n");
+    for property in 0..4 {
+        let _ = writeln!(ontology, "ex:p{property} a owl:ObjectProperty .");
+    }
+    for class in 0..classes {
+        let _ = write!(
+            ontology,
+            "ex:C{class} a owl:Class ; rdfs:subClassOf ex:Target"
+        );
+        for property in 0..4 {
+            let _ = write!(
+                ontology,
+                " , [ a owl:Restriction ; owl:onProperty ex:p{property} ; owl:someValuesFrom ex:Target ]"
+            );
+        }
+        ontology.push_str(" .\n");
+    }
+    ontology
+}
+
+#[test]
+fn thousands_of_restricted_classes_on_shared_properties_scale_linearly() {
+    let small = compile_both(
+        "",
+        &shared_restriction_ontology(250),
+        SchemaSurfaceMode::OntologyComplete,
+    );
+    let large = compile_both(
+        "",
+        &shared_restriction_ontology(2_000),
+        SchemaSurfaceMode::OntologyComplete,
+    );
+    let ratio = |measure: fn(
+        &(
+            purrdf_shapes::SchemaCompilation,
+            SchemaClassExpressionReport,
+        ),
+    ) -> usize| { measure(&large) as f64 / measure(&small) as f64 };
+    // Eight times the classes: linear growth is about 8, quadratic 64.
+    for (name, growth) in [
+        ("schema", ratio(|run| run.0.compiled.schema_json.len())),
+        ("coverage", ratio(|run| run.0.coverage.to_json().len())),
+        ("manifest", ratio(|run| run.1.to_json().len())),
+    ] {
+        assert!(growth < 10.0, "{name} grew {growth:.1}x for 8x the classes");
+    }
+}
+
+/// A slice shaped like FOAF and PROV-O, in the example.org namespace:
+/// existentials, cardinalities, universals, a named inverse, a union domain,
+/// a qualified cardinality, functional properties and disjointness.
+const AGENT_PROVENANCE_SLICE: &str = r"
+    ex:Agent a owl:Class .
+    ex:Person a owl:Class ; rdfs:subClassOf ex:Agent ,
+        [ a owl:Restriction ; owl:onProperty ex:name ; owl:someValuesFrom xsd:string ] ,
+        [ a owl:Restriction ; owl:onProperty ex:mbox ; owl:maxCardinality 1 ] ;
+        owl:disjointWith ex:Organization , [ owl:complementOf ex:Agent ] .
+    ex:Organization a owl:Class ; rdfs:subClassOf ex:Agent .
+    ex:Group a owl:Class ; rdfs:subClassOf ex:Agent ,
+        [ a owl:Restriction ; owl:onProperty ex:member ; owl:allValuesFrom ex:Agent ] .
+    ex:Document a owl:Class ;
+        rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:maker ; owl:minCardinality 1 ] .
+    ex:made a owl:ObjectProperty ; owl:inverseOf ex:maker ; rdfs:domain ex:Agent .
+    ex:maker a owl:ObjectProperty ; rdfs:range ex:Agent .
+    ex:name a owl:DatatypeProperty ; rdfs:domain ex:Agent ; rdfs:range xsd:string .
+    ex:mbox a owl:ObjectProperty ; rdfs:domain ex:Agent .
+    ex:member a owl:ObjectProperty ; rdfs:domain ex:Group .
+
+    ex:Entity a owl:Class ; owl:disjointWith ex:Activity .
+    ex:Activity a owl:Class ;
+        rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:startedAtTime ;
+            owl:maxCardinality 1 ] .
+    ex:wasGeneratedBy a owl:ObjectProperty ; rdfs:domain ex:Entity ; rdfs:range ex:Activity .
+    ex:generated a owl:ObjectProperty ; owl:inverseOf ex:wasGeneratedBy .
+    ex:startedAtTime a owl:DatatypeProperty , owl:FunctionalProperty ;
+        rdfs:domain ex:Activity ; rdfs:range xsd:dateTime .
+    ex:atTime a owl:DatatypeProperty ; rdfs:range xsd:dateTime ;
+        rdfs:domain [ owl:unionOf ( ex:Entity ex:Activity ) ] .
+    ex:Bundle a owl:Class ; rdfs:subClassOf ex:Entity .
+    ex:Plan a owl:Class ; rdfs:subClassOf ex:Entity ,
+        [ a owl:Restriction ; owl:onProperty [ owl:inverseOf ex:generated ] ;
+          owl:someValuesFrom ex:Activity ] .
+    ex:Derivation a owl:Class ; rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:entity ;
+        owl:qualifiedCardinality 1 ; owl:onClass ex:Entity ] .
+    ex:entity a owl:ObjectProperty .
+    ex:Person rdfs:subClassOf [ a owl:Restriction ;
+        owl:onProperty <https://external.example/vocab/nick> ; owl:minCardinality 1 ] .
+    owl:Thing rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:homepage ;
+        owl:allValuesFrom xsd:anyURI ] .
+    ex:homepage a owl:DatatypeProperty .
+";
+
+/// Whether a manifest expression requires a value of its property.
+fn requires_value(expression: &str) -> bool {
+    expression.starts_with("some(")
+        || expression.starts_with("has_value(")
+        || ((expression.starts_with("min(") || expression.starts_with("exact("))
+            && !expression.starts_with("min(0,")
+            && !expression.starts_with("exact(0,"))
+}
+
+#[test]
+fn reported_outcomes_match_every_emitter_on_an_agent_provenance_slice() {
+    let (compilation, report) = compile_both(
+        "",
+        AGENT_PROVENANCE_SLICE,
+        SchemaSurfaceMode::OntologyComplete,
+    );
+    let compiled = &compilation.compiled;
+    let schema: Value = purrdf_lex::json::read(&compiled.schema_json).expect("schema JSON");
+    let linkml = emit_linkml(compiled, &linkml_config()).expect("LinkML emission");
+    let linkml_classes = &linkml.document.as_value()["classes"];
+    let typescript = emit_typescript(compiled, &typescript_config()).expect("TypeScript emission");
+    let declarations = std::str::from_utf8(&typescript.artifacts[TYPESCRIPT_DECLARATION_PATH])
+        .expect("UTF-8 TypeScript");
+    let graphql = emit_graphql(compiled, &graphql_config()).expect("GraphQL emission");
+    let pydantic = emit_pydantic(compiled, &pydantic_config()).expect("Pydantic emission");
+    let models = std::str::from_utf8(&pydantic.artifacts["example_ontology/models.py"])
+        .expect("UTF-8 Pydantic models");
+
+    let mut checked = 0_usize;
+    for axiom in &report.axioms {
+        for row in &axiom.classes {
+            let class = row.class_iri.strip_prefix(EX).expect("example.org class");
+            let definition = &schema["$defs"][class];
+            assert!(definition.as_object().is_some(), "{class} has a definition");
+            // GraphQL types the class, or delegates it to its scalar and says so.
+            assert!(
+                graphql
+                    .names
+                    .fields
+                    .contains_key(&format!("#/$defs/{class}"))
+                    || graphql.losses.entries().iter().any(|entry| {
+                        entry.code == "custom-scalar-validation-delegated"
+                            && format!("{:?}", entry.location).contains(&format!("#/$defs/{class}"))
+                    }),
+                "GraphQL neither types nor reports {class}"
+            );
+            for component in &row.components {
+                let Some(property) = &component.property_iri else {
+                    continue;
+                };
+                let key = property
+                    .strip_prefix(EX)
+                    .map_or_else(|| property.clone(), |local| format!("ex:{local}"));
+                let emitted = definition["properties"].get(&key).is_some();
+                let required = definition["required"]
+                    .as_array()
+                    .is_some_and(|keys| keys.iter().any(|item| item.as_str() == Some(&key)));
+                match component.outcome {
+                    SchemaExpressionOutcome::Projected | SchemaExpressionOutcome::Approximated => {
+                        assert!(emitted, "{class}.{key}: {}", component.expression);
+                        let property_schema = purrdf_lex::json::write_compact(
+                            &definition["properties"][key.as_str()],
+                        );
+                        if component.expression.starts_with("max(")
+                            && !component.expression.contains(",<")
+                        {
+                            assert!(
+                                property_schema.contains("\"maxItems\"")
+                                    || !property_schema.contains("\"array\""),
+                                "{class}.{key} bounds its count: {property_schema}"
+                            );
+                        }
+                        if requires_value(&component.expression) {
+                            assert!(required, "{class}.{key} is required in JSON Schema");
+                            assert_eq!(
+                                linkml_classes[class]["attributes"][key.as_str()]["required"],
+                                true,
+                                "{class}.{key} is required in LinkML"
+                            );
+                            let type_name = &typescript.type_names[class];
+                            let declaration = generated_definition_block(
+                                declarations,
+                                &format!("export type {type_name} = "),
+                                "\nexport type ",
+                            );
+                            assert!(
+                                declaration.contains(&format!("readonly \"{key}\":")),
+                                "{class}.{key} is required in TypeScript"
+                            );
+                            let model = pydantic.model_paths[class]
+                                .rsplit('.')
+                                .next()
+                                .expect("model name");
+                            let field = generated_definition_block(
+                                models,
+                                &format!("class {model}("),
+                                "\nclass ",
+                            )
+                            .lines()
+                            .find(|line| line.contains(&format!("alias=\"{key}\"")))
+                            .unwrap_or_else(|| panic!("{class}.{key} Pydantic field"))
+                            .to_owned();
+                            assert!(!field.contains("default="), "{class}.{key}: {field}");
+                        }
+                        checked += 1;
+                    }
+                    SchemaExpressionOutcome::Excluded => {
+                        if !component.reason.contains("SHACL") {
+                            assert!(!emitted, "{class}.{key} is excluded but emitted");
+                        }
+                        checked += 1;
+                    }
+                    SchemaExpressionOutcome::Unrepresented => {
+                        let other_requires = row.components.iter().any(|other| {
+                            other.property_iri.as_deref() == Some(property.as_str())
+                                && other.outcome != SchemaExpressionOutcome::Unrepresented
+                                && requires_value(&other.expression)
+                        });
+                        if !other_requires && !requires_value(&component.expression) {
+                            assert!(!required, "{class}.{key}: nothing projected requires it");
+                        }
+                        checked += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert!(checked >= 9, "the slice exercises the outcomes ({checked})");
+    // The global range from owl:Thing reaches every class's homepage field.
+    assert!(
+        purrdf_lex::json::write_compact(&schema["$defs"]["Document"]["properties"]["ex:homepage"])
+            .contains("xsd:anyURI")
+    );
+    // The slice's named inverse resolves: Plan's restriction is on
+    // wasGeneratedBy, which the class then requires.
+    assert!(
+        schema["$defs"]["Plan"]["required"]
+            .as_array()
+            .expect("Plan requires")
+            .iter()
+            .any(|key| key.as_str() == Some("ex:wasGeneratedBy"))
+    );
 }

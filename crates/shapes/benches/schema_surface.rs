@@ -30,6 +30,10 @@ struct Fixture {
 enum Density {
     Sparse,
     Dense,
+    /// Four shared, domainless object properties, each class a subclass of
+    /// one target and restricted by an existential on each of the four: the
+    /// shape whose provenance once grew with the square of the class count.
+    SharedRestricted,
     /// Domainless properties plus four anonymous superclass expressions per class:
     /// an existential, a universal, a maximum cardinality and a disjunction of
     /// two minimums, each over the class's own properties.
@@ -58,6 +62,22 @@ fn fixture(
     let mut ontology_turtle = String::from(PREFIXES);
     for class in 0..classes {
         let _ = writeln!(ontology_turtle, "ex:Class{class:04} a owl:Class .");
+    }
+    if matches!(density, Density::SharedRestricted) {
+        let _ = writeln!(ontology_turtle, "ex:Target a owl:Class .");
+        for class in 0..classes {
+            let _ = write!(
+                ontology_turtle,
+                "ex:Class{class:04} rdfs:subClassOf ex:Target"
+            );
+            for property in 0..properties {
+                let _ = write!(
+                    ontology_turtle,
+                    " , [ a owl:Restriction ; owl:onProperty ex:property{property:04} ; owl:someValuesFrom ex:Target ]"
+                );
+            }
+            let _ = writeln!(ontology_turtle, " .");
+        }
     }
     if matches!(density, Density::Restricted) {
         for class in 0..classes {
@@ -90,6 +110,12 @@ fn fixture(
                     "ex:property{property:04} a owl:DatatypeProperty ; rdfs:range xsd:string ."
                 );
             }
+            Density::SharedRestricted => {
+                let _ = writeln!(
+                    ontology_turtle,
+                    "ex:property{property:04} a owl:ObjectProperty ."
+                );
+            }
         }
     }
     let ontology = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&ontology_turtle, None)
@@ -114,6 +140,7 @@ fn bench_schema_surface(c: &mut Bench) {
     let sparse = fixture(256, 256, Density::Sparse, false);
     let dense = fixture(128, 256, Density::Dense, false);
     let restricted = fixture(128, 256, Density::Restricted, false);
+    let shared = fixture(1_000, 4, Density::SharedRestricted, false);
     let mut group = c.benchmark_group("shacl_schema_surface");
     group.sample_size(10);
 
@@ -161,6 +188,20 @@ fn bench_schema_surface(c: &mut Bench) {
                     SchemaSurfaceMode::OntologyComplete,
                 );
                 black_box(compile_schema(&request).expect("restricted ontology compilation"));
+            });
+        },
+    );
+    group.bench_function(
+        "ontology_shared_restrictions_1000_classes_4_properties",
+        |bencher| {
+            bencher.iter(|| {
+                let request = SchemaCompileRequest::new(
+                    &shared.shapes,
+                    &shared.namespaces,
+                    shared.ontology.as_ref(),
+                    SchemaSurfaceMode::OntologyComplete,
+                );
+                black_box(compile_schema(&request).expect("shared restriction compilation"));
             });
         },
     );

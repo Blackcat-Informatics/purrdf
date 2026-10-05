@@ -44,6 +44,11 @@ use crate::shapes::{ClosedMode, Constraint, Path, Shape, Target};
 use crate::term::{NamedNode, Term};
 
 use purrdf_iri::vocab::owl::{
+    ALL_DISJOINT_CLASSES as OWL_ALL_DISJOINT_CLASSES, DISJOINT_UNION_OF as OWL_DISJOINT_UNION_OF,
+    DISJOINT_WITH as OWL_DISJOINT_WITH, MEMBERS as OWL_MEMBERS, NOTHING as OWL_NOTHING,
+    SYMMETRIC_PROPERTY as OWL_SYMMETRIC_PROPERTY, THING as OWL_THING,
+};
+use purrdf_iri::vocab::owl::{
     ALL_VALUES_FROM as OWL_ALL_VALUES_FROM, ANNOTATION_PROPERTY as OWL_ANNOTATION_PROPERTY,
     CARDINALITY as OWL_CARDINALITY, CLASS as OWL_CLASS, COMPLEMENT_OF as OWL_COMPLEMENT_OF,
     DATA_RANGE as OWL_DATA_RANGE, DATATYPE_COMPLEMENT_OF as OWL_DATATYPE_COMPLEMENT_OF,
@@ -61,14 +66,18 @@ use purrdf_iri::vocab::owl::{
     QUALIFIED_CARDINALITY as OWL_QUALIFIED_CARDINALITY, SOME_VALUES_FROM as OWL_SOME_VALUES_FROM,
     UNION_OF as OWL_UNION_OF, WITH_RESTRICTIONS as OWL_WITH_RESTRICTIONS,
 };
-use purrdf_iri::vocab::rdf::{LANG_STRING as RDF_LANG_STRING, PROPERTY as RDF_PROPERTY};
+use purrdf_iri::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, HTML as RDF_HTML, JSON as RDF_JSON,
+    LANG_STRING as RDF_LANG_STRING, PLAIN_LITERAL as RDF_PLAIN_LITERAL, PROPERTY as RDF_PROPERTY,
+    XML_LITERAL as RDF_XML_LITERAL,
+};
 use purrdf_iri::vocab::rdfs::{
     DATATYPE as RDFS_DATATYPE, DOMAIN as RDFS_DOMAIN, LITERAL as RDFS_LITERAL,
     SUB_PROPERTY_OF as RDFS_SUB_PROPERTY_OF,
 };
 use purrdf_xsd::datatype::{
-    XSD_BOOLEAN, XSD_LENGTH, XSD_MAX_EXCLUSIVE, XSD_MAX_INCLUSIVE, XSD_MAX_LENGTH,
-    XSD_MIN_EXCLUSIVE, XSD_MIN_INCLUSIVE, XSD_MIN_LENGTH, XSD_PATTERN,
+    OWL_RATIONAL, OWL_REAL, XSD_BOOLEAN, XSD_LENGTH, XSD_MAX_EXCLUSIVE, XSD_MAX_INCLUSIVE,
+    XSD_MAX_LENGTH, XSD_MIN_EXCLUSIVE, XSD_MIN_INCLUSIVE, XSD_MIN_LENGTH, XSD_PATTERN,
 };
 
 // ── Expression model ────────────────────────────────────────────────────────
@@ -513,6 +522,59 @@ impl OntologyExpression {
         }
     }
 
+    /// Replace each restriction on `inverse(p)` whose inverse is named by a
+    /// restriction on that named property.
+    fn resolve_inverses(&mut self, inverses: &BTreeMap<String, String>) {
+        match self {
+            Self::Named(_) | Self::OneOf(_) | Self::DatatypeRestriction(..) => {}
+            Self::Union(members) | Self::Intersection(members) => {
+                for member in members.iter_mut() {
+                    member.resolve_inverses(inverses);
+                }
+                members.sort();
+                members.dedup();
+            }
+            Self::Complement(inner) | Self::DatatypeComplement(inner) => {
+                inner.resolve_inverses(inverses);
+            }
+            Self::Restriction(on, restriction) => {
+                if let RestrictedProperty::One(PropertyExpression::Inverse(iri)) = on
+                    && let Some(named) = inverses.get(iri.as_str())
+                {
+                    *on = RestrictedProperty::One(PropertyExpression::Named(named.clone()));
+                }
+                match restriction.as_mut() {
+                    Restriction::SomeValues(filler) | Restriction::AllValues(filler) => {
+                        filler.resolve_inverses(inverses);
+                    }
+                    Restriction::Min(_, Some(filler))
+                    | Restriction::Max(_, Some(filler))
+                    | Restriction::Exact(_, Some(filler)) => filler.resolve_inverses(inverses),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// The named properties restricted on the focus node itself: by a
+    /// restriction, or a member of a union or intersection of them — not
+    /// inside a complement, and not in a filler, which describes a value.
+    fn focus_restricted<'s>(&'s self, out: &mut BTreeSet<&'s str>) {
+        match self {
+            Self::Restriction(on, _) => {
+                if let Some(iri) = on.named() {
+                    out.insert(iri);
+                }
+            }
+            Self::Union(members) | Self::Intersection(members) => {
+                for member in members {
+                    member.focus_restricted(out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// The conjuncts of the expression: its members through nested
     /// intersections, the expression itself otherwise.
     fn conjuncts(&self) -> Vec<&Self> {
@@ -567,7 +629,10 @@ pub(crate) fn value_precision(
 ) -> ValuePrecision {
     match expression {
         OntologyExpression::Named(iri) => {
-            if is_datatype(iri, datatypes) {
+            if iri == OWL_REAL || iri == OWL_RATIONAL {
+                // Projected as the numeric literals, without their value spaces.
+                ValuePrecision::Approximate
+            } else if iri == OWL_THING || iri == OWL_NOTHING || is_datatype(iri, datatypes) {
                 ValuePrecision::Exact
             } else {
                 ValuePrecision::ClassLike
@@ -596,16 +661,12 @@ pub(crate) fn value_precision(
                 ValuePrecision::Approximate
             }
         }
-        OntologyExpression::DatatypeComplement(inner) => {
-            if value_precision(inner, datatypes) == ValuePrecision::Exact {
-                ValuePrecision::Exact
-            } else {
-                ValuePrecision::Approximate
-            }
-        }
-        OntologyExpression::Complement(_) | OntologyExpression::Restriction(..) => {
-            ValuePrecision::Approximate
-        }
+        // A datatype complement is judged on the literal's datatype tag, not on
+        // its value space: `"-3"^^xsd:integer` is a negative integer although
+        // it is not tagged `xsd:negativeInteger`.
+        OntologyExpression::DatatypeComplement(_)
+        | OntologyExpression::Complement(_)
+        | OntologyExpression::Restriction(..) => ValuePrecision::Approximate,
     }
 }
 
@@ -630,6 +691,11 @@ pub(crate) fn facet_supported(base: &str, facet: &str, value: &Term) -> bool {
     let Term::Literal(literal) = value else {
         return false;
     };
+    if is_builtin_non_xsd_datatype(base) {
+        // `owl:real`, `rdf:PlainLiteral` and the rest have no SHACL datatype
+        // projection to compile a facet against.
+        return false;
+    }
     let base_type = XsdDatatype::from_iri(base);
     let value_type = XsdDatatype::from_iri(literal.datatype_str());
     match facet {
@@ -947,6 +1013,18 @@ const SUFFICIENT_REASON: &str = "the sufficient-condition direction of owl:equiv
 const DATATYPE_DEFINITION_REASON: &str = "a datatype definition: a value of the defined datatype \
      is accepted when it is typed with the datatype by name, or when it meets the defining data \
      range";
+const THING_RANGE_REASON: &str =
+    "a universal restriction on owl:Thing is the property's rdfs:range for every class";
+const THING_DOMAIN_REASON: &str = "a universal restriction on owl:Thing over the inverse of a \
+     property is that property's rdfs:domain for every class";
+const DISJOINT_REASON: &str = "disjointness relates the memberships of two classes, which a \
+     developer schema judging one node against one class cannot state";
+const DISJOINT_UNION_REASON: &str = "a disjoint union relates the memberships of several \
+     classes, which a developer schema judging one node against one class cannot state";
+const CLASS_ASSERTION_REASON: &str = "a class assertion types an individual; developer schemas \
+     describe classes, not individuals";
+const NOT_A_CLASS_EXPRESSION_REASON: &str =
+    "the resource is typed by a blank node that declares no OWL class-expression construct";
 const UNCARRIED_REASON: &str =
     "no caller-owned class carries this axiom, so no developer schema represents it";
 
@@ -1384,6 +1462,31 @@ impl<'a> ExpressionReader<'a> {
         }
     }
 
+    /// Whether a blank node declares any OWL class-expression or data-range
+    /// construct, the predicates [`Self::expression`] dispatches on.
+    fn declares_construct(&self, term: &Term) -> bool {
+        native_quads(self.dataset, Some(term), None, None, GraphFilter::AnyGraph)
+            .iter()
+            .any(|(_, predicate, _)| {
+                [
+                    OWL_UNION_OF,
+                    OWL_INTERSECTION_OF,
+                    OWL_COMPLEMENT_OF,
+                    OWL_ONE_OF,
+                    OWL_ON_PROPERTY,
+                    OWL_ON_PROPERTIES,
+                    OWL_ON_CLASS,
+                    OWL_ON_DATA_RANGE,
+                    OWL_ON_DATATYPE,
+                    OWL_WITH_RESTRICTIONS,
+                    OWL_DATATYPE_COMPLEMENT_OF,
+                ]
+                .into_iter()
+                .chain(RESTRICTION_FACETS.iter().map(|(facet, _)| *facet))
+                .any(|construct| predicate.as_str() == construct)
+            })
+    }
+
     /// Read a property expression: an IRI, or a blank node that is
     /// `owl:inverseOf` exactly one named property.
     fn property_expression(&self, term: &Term) -> Result<PropertyExpression, SchemaCompileError> {
@@ -1688,18 +1791,16 @@ fn has_self_value(value: &Term, owner: &str) -> Result<(), SchemaCompileError> {
     }
 }
 
-/// Catalog every property a restriction in `expression` names, with the
-/// axiom that names it as provenance.
+/// Catalog every property a restriction in `expression` names. The axiom
+/// that names it is provenance only on the classes that carry the axiom.
 fn catalog_restrictions(
     expression: &OntologyExpression,
-    provenance: &SchemaCoverageProvenance,
     properties: &mut BTreeMap<String, PropertyFacts>,
 ) -> Result<(), SchemaCompileError> {
     expression.visit_restrictions(&mut |on, _restriction| {
         for iri in on.iris() {
             let facts = property_entry(properties, iri)?;
             facts.declarations.insert(OWL_ON_PROPERTY.to_owned());
-            facts.provenance.insert(provenance.clone());
         }
         Ok(())
     })
@@ -1738,6 +1839,8 @@ pub(crate) fn build(
     let mut property_relations = Vec::new();
     let mut named_equivalences: Vec<(String, String)> = Vec::new();
     let mut pending_axioms: Vec<PendingAxiom> = Vec::new();
+    let mut other_axioms: Vec<AxiomLevel> = Vec::new();
+    let mut symmetric: BTreeSet<String> = BTreeSet::new();
     let mut reader = ExpressionReader::new(&union);
 
     for (class, info) in &shape_classes {
@@ -1782,8 +1885,8 @@ pub(crate) fn build(
                     predicate: row.predicate.clone(),
                     object: object.canonical(),
                 };
-                catalog_restrictions(&subject, &provenance, &mut properties)?;
-                catalog_restrictions(&object, &provenance, &mut properties)?;
+                catalog_restrictions(&subject, &mut properties)?;
+                catalog_restrictions(&object, &mut properties)?;
                 pending_axioms.push(PendingAxiom {
                     subject_term: row.subject.clone(),
                     object_term: row.object.clone(),
@@ -1830,6 +1933,118 @@ pub(crate) fn build(
                 };
                 property_relations.push(PropertyRelation { left, right, kind });
             }
+            OWL_DISJOINT_WITH => {
+                if named_iri(&row.subject).is_some() && named_iri(&row.object).is_some() {
+                    continue;
+                }
+                let subject = reader.expression(&row.subject, 0)?;
+                let object = reader.expression(&row.object, 0)?;
+                refuse_data_range_as_class(&subject, &row.subject)?;
+                refuse_data_range_as_class(&object, &row.object)?;
+                let components = [&subject, &object]
+                    .into_iter()
+                    .filter(|side| !matches!(side, OntologyExpression::Named(_)))
+                    .map(|side| {
+                        axiom_component(
+                            side.canonical(),
+                            SchemaExpressionOutcome::Unrepresented,
+                            DISJOINT_REASON,
+                        )
+                    })
+                    .collect();
+                other_axioms.push((
+                    SchemaCoverageProvenance {
+                        subject: subject.provenance_subject(),
+                        predicate: row.predicate.clone(),
+                        object: object.canonical(),
+                    },
+                    components,
+                ));
+            }
+            OWL_DISJOINT_UNION_OF | OWL_MEMBERS => {
+                if row.predicate == OWL_MEMBERS
+                    && !objects_of(&union, &row.subject, rdf::TYPE)
+                        .iter()
+                        .any(|kind| named_iri(kind) == Some(OWL_ALL_DISJOINT_CLASSES))
+                {
+                    continue;
+                }
+                let owner = row.subject.to_string();
+                let mut members = Vec::new();
+                for item in reader.list_items(&row.object, &owner)? {
+                    let member = reader.expression(&item, 1)?;
+                    refuse_data_range_as_class(&member, &item)?;
+                    members.push(member);
+                }
+                if members
+                    .iter()
+                    .all(|member| matches!(member, OntologyExpression::Named(_)))
+                {
+                    continue;
+                }
+                let reason = if row.predicate == OWL_MEMBERS {
+                    DISJOINT_REASON
+                } else {
+                    DISJOINT_UNION_REASON
+                };
+                let mut rendered = String::from("members(");
+                for (index, member) in members.iter().enumerate() {
+                    if index > 0 {
+                        rendered.push(',');
+                    }
+                    member.write_canonical(&mut rendered);
+                }
+                rendered.push(')');
+                let components = members
+                    .iter()
+                    .filter(|member| !matches!(member, OntologyExpression::Named(_)))
+                    .map(|member| {
+                        axiom_component(
+                            member.canonical(),
+                            SchemaExpressionOutcome::Unrepresented,
+                            reason,
+                        )
+                    })
+                    .collect();
+                other_axioms.push((
+                    SchemaCoverageProvenance {
+                        subject: named_iri(&row.subject)
+                            .map_or_else(|| ANONYMOUS_INDIVIDUAL.to_owned(), str::to_owned),
+                        predicate: row.predicate.clone(),
+                        object: rendered,
+                    },
+                    components,
+                ));
+            }
+            rdf::TYPE if matches!(row.object, Term::BlankNode(_)) => {
+                // A class assertion whose class is anonymous types an
+                // individual; a developer schema describes classes.
+                let subject = named_iri(&row.subject)
+                    .map_or_else(|| ANONYMOUS_INDIVIDUAL.to_owned(), str::to_owned);
+                let component = if reader.declares_construct(&row.object) {
+                    let class = reader.expression(&row.object, 0)?;
+                    refuse_data_range_as_class(&class, &row.object)?;
+                    axiom_component(
+                        class.canonical(),
+                        SchemaExpressionOutcome::Excluded,
+                        CLASS_ASSERTION_REASON,
+                    )
+                } else {
+                    axiom_component(
+                        ANONYMOUS_INDIVIDUAL.to_owned(),
+                        SchemaExpressionOutcome::Unrepresented,
+                        NOT_A_CLASS_EXPRESSION_REASON,
+                    )
+                };
+                other_axioms.push((
+                    SchemaCoverageProvenance {
+                        subject,
+                        predicate: row.predicate.clone(),
+                        object: component.expression.clone(),
+                    },
+                    vec![component],
+                ));
+            }
             predicate => {
                 let Some(subject_iri) = named_iri(&row.subject) else {
                     continue;
@@ -1866,6 +2081,9 @@ pub(crate) fn build(
                             RDFS_DATATYPE | OWL_DATA_RANGE => {
                                 datatypes.insert(subject_iri.to_owned());
                             }
+                            OWL_SYMMETRIC_PROPERTY => {
+                                symmetric.insert(subject_iri.to_owned());
+                            }
                             _ => {}
                         }
                     }
@@ -1876,7 +2094,7 @@ pub(crate) fn build(
                             predicate: predicate.to_owned(),
                             object: expression.canonical(),
                         };
-                        catalog_restrictions(&expression, &provenance, &mut properties)?;
+                        catalog_restrictions(&expression, &mut properties)?;
                         let sourced = SourcedExpression {
                             expression,
                             provenance: provenance.clone(),
@@ -1901,7 +2119,7 @@ pub(crate) fn build(
     // A definition can make another equivalence a definition, so this runs to
     // a fixpoint, bounded by the number of equivalences.
     let mut datatype_definitions: BTreeMap<String, OntologyExpression> = BTreeMap::new();
-    let mut datatype_axioms: Vec<(SchemaCoverageProvenance, String)> = Vec::new();
+    let mut datatype_axioms: Vec<AxiomLevel> = Vec::new();
     loop {
         let known = datatypes.len();
         named_equivalences.retain(|(left, right)| {
@@ -1931,7 +2149,14 @@ pub(crate) fn build(
                 let (name, range) = (name.to_owned(), range.clone());
                 let axiom = pending_axioms.swap_remove(index);
                 datatypes.insert(name.clone());
-                datatype_axioms.push((axiom.provenance, range.canonical()));
+                datatype_axioms.push((
+                    axiom.provenance,
+                    vec![axiom_component(
+                        range.canonical(),
+                        SchemaExpressionOutcome::Approximated,
+                        DATATYPE_DEFINITION_REASON,
+                    )],
+                ));
                 datatype_definitions.entry(name).or_insert(range);
             } else {
                 index += 1;
@@ -1947,6 +2172,16 @@ pub(crate) fn build(
         equivalent_class_relations.push((left, right));
     }
     pending_axioms.sort_by(|left, right| left.provenance.cmp(&right.provenance));
+    // A named property's inverse may itself be named (`made owl:inverseOf
+    // maker`, or a symmetric property): a restriction on `inverse(made)` is a
+    // restriction on `maker`.
+    let inverse_names = named_inverses(&property_relations, &symmetric);
+    if !inverse_names.is_empty() {
+        for axiom in &mut pending_axioms {
+            axiom.subject.resolve_inverses(&inverse_names);
+            axiom.object.resolve_inverses(&inverse_names);
+        }
+    }
     let mut class_axioms: Vec<ClassAxiom> = Vec::with_capacity(pending_axioms.len());
     for axiom in pending_axioms {
         refuse_data_range_as_class(&axiom.subject, &axiom.subject_term)?;
@@ -1958,10 +2193,20 @@ pub(crate) fn build(
             axiom.provenance,
         ));
     }
+    datatype_axioms.extend(other_axioms);
     datatype_axioms.sort();
+
+    globalize_thing_universals(&mut class_axioms, &mut properties)?;
 
     enforce_limit("properties", properties.len(), MAX_SCHEMA_PROPERTIES)?;
     propagate_property_facts(&mut properties, &property_relations)?;
+    existential_domain_edges(
+        &class_axioms,
+        &properties,
+        &datatypes,
+        &mut subclass_relations,
+        &mut explicit_classes,
+    );
     validate_property_ranges(&properties, &datatypes)?;
     validate_restriction_fillers(&properties, &class_axioms, &datatypes)?;
 
@@ -2028,7 +2273,164 @@ pub(crate) fn build(
 struct DatatypeFacts {
     declared: BTreeSet<String>,
     definitions: BTreeMap<String, OntologyExpression>,
-    axioms: Vec<(SchemaCoverageProvenance, String)>,
+    /// Axioms reported on the axiom itself rather than on a class: datatype
+    /// definitions, disjointness, and class assertions.
+    axioms: Vec<AxiomLevel>,
+}
+
+/// One axiom the manifest reports with axiom-level components only.
+type AxiomLevel = (SchemaCoverageProvenance, Vec<SchemaExpressionComponent>);
+
+fn axiom_component(
+    expression: String,
+    outcome: SchemaExpressionOutcome,
+    reason: &str,
+) -> SchemaExpressionComponent {
+    SchemaExpressionComponent {
+        expression,
+        property_iri: None,
+        outcome,
+        reason: reason.to_owned(),
+    }
+}
+
+/// Each named property whose inverse is also named: `inverse(p) = q` for every
+/// `p owl:inverseOf q` (either way round, through `owl:equivalentProperty`
+/// too) and `inverse(p) = p` for a symmetric `p`. The smallest IRI wins where
+/// several are named.
+fn named_inverses(
+    relations: &[PropertyRelation],
+    symmetric: &BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    let mut candidates: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for property in symmetric {
+        candidates.entry(property).or_default().insert(property);
+    }
+    for relation in relations {
+        if matches!(relation.kind, PropertyRelationKind::Equivalent)
+            && relation.left.is_inverse() != relation.right.is_inverse()
+        {
+            let (left, right) = (relation.left.iri(), relation.right.iri());
+            candidates.entry(left).or_default().insert(right);
+            candidates.entry(right).or_default().insert(left);
+        }
+    }
+    candidates
+        .into_iter()
+        .filter_map(|(property, inverses)| {
+            inverses
+                .first()
+                .map(|inverse| (property.to_owned(), (*inverse).to_owned()))
+        })
+        .collect()
+}
+
+/// A universal restriction asserted of `owl:Thing` holds of every individual:
+/// `owl:Thing ⊑ ∀p.F` is `p`'s range `F`, and `owl:Thing ⊑ ∀inverse(p).F` its
+/// domain. Each is moved onto the property, propagated with its other
+/// ranges and domains, and reported on the axiom.
+fn globalize_thing_universals(
+    class_axioms: &mut [ClassAxiom],
+    properties: &mut BTreeMap<String, PropertyFacts>,
+) -> Result<(), SchemaCompileError> {
+    for axiom in class_axioms {
+        let ClassAxiom {
+            provenance,
+            carriers,
+            uncarried,
+        } = axiom;
+        for (carrier, conjuncts) in carriers.iter_mut() {
+            if carrier != OWL_THING {
+                continue;
+            }
+            let mut kept = Vec::with_capacity(conjuncts.len());
+            for conjunct in std::mem::take(conjuncts) {
+                let OntologyExpression::Restriction(RestrictedProperty::One(property), restriction) =
+                    &conjunct
+                else {
+                    kept.push(conjunct);
+                    continue;
+                };
+                let Restriction::AllValues(filler) = restriction.as_ref() else {
+                    kept.push(conjunct);
+                    continue;
+                };
+                let facts = property_entry(properties, property.iri())?;
+                let sourced = SourcedExpression {
+                    expression: filler.clone(),
+                    provenance: provenance.clone(),
+                };
+                facts.provenance.insert(provenance.clone());
+                let reason = if property.is_inverse() {
+                    facts.domains.insert(sourced);
+                    THING_DOMAIN_REASON
+                } else {
+                    facts.ranges.insert(sourced);
+                    THING_RANGE_REASON
+                };
+                uncarried.push(SchemaExpressionComponent {
+                    expression: conjunct.canonical(),
+                    property_iri: Some(property.iri().to_owned()),
+                    outcome: SchemaExpressionOutcome::Projected,
+                    reason: reason.to_owned(),
+                });
+            }
+            *conjuncts = kept;
+        }
+        uncarried.sort();
+        uncarried.dedup();
+    }
+    Ok(())
+}
+
+/// A class that a restriction requires a value of is within the restricted
+/// property's domain (OWL 2 Direct Semantics: `C ⊑ ∃p.X` and `dom(p) = D`
+/// entail `C ⊑ D`), and, through an inverse, within its range. Each named
+/// class of such a domain becomes a superclass in the hierarchy, so the other
+/// properties of that domain reach the class too.
+fn existential_domain_edges(
+    class_axioms: &[ClassAxiom],
+    properties: &BTreeMap<String, PropertyFacts>,
+    datatypes: &BTreeSet<String>,
+    subclass_relations: &mut Vec<(String, String)>,
+    explicit_classes: &mut BTreeSet<String>,
+) {
+    for axiom in class_axioms {
+        for (carrier, conjuncts) in &axiom.carriers {
+            if carrier == OWL_THING {
+                continue;
+            }
+            for conjunct in conjuncts {
+                let OntologyExpression::Restriction(RestrictedProperty::One(property), restriction) =
+                    conjunct
+                else {
+                    continue;
+                };
+                if !restriction.is_existential() {
+                    continue;
+                }
+                let Some(facts) = properties.get(property.iri()) else {
+                    continue;
+                };
+                let scopes = if property.is_inverse() {
+                    &facts.ranges
+                } else {
+                    &facts.domains
+                };
+                for scope in scopes {
+                    for part in scope.expression.conjuncts() {
+                        if let OntologyExpression::Named(class) = part
+                            && class != carrier
+                            && !is_datatype(class, datatypes)
+                        {
+                            explicit_classes.insert(class.clone());
+                            subclass_relations.push((carrier.clone(), class.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn dataset_rows(dataset: &RdfDataset) -> Vec<TripleRow> {
@@ -2402,8 +2804,29 @@ fn render_axiom(provenance: &SchemaCoverageProvenance) -> String {
     )
 }
 
-fn is_builtin_datatype(iri: &str) -> bool {
-    iri.starts_with(crate::model::xsd::BASE) || iri == RDFS_LITERAL || iri == RDF_LANG_STRING
+/// Whether `iri` is a datatype without any declaration: an XSD datatype,
+/// `rdfs:Literal`, a member of the OWL 2 datatype map outside XSD
+/// (`owl:real`, `owl:rational`, `rdf:PlainLiteral`, `rdf:XMLLiteral`), or an
+/// RDF 1.2 datatype (`rdf:langString`, `rdf:dirLangString`, `rdf:HTML`,
+/// `rdf:JSON`).
+pub(crate) fn is_builtin_datatype(iri: &str) -> bool {
+    iri.starts_with(crate::model::xsd::BASE) || is_builtin_non_xsd_datatype(iri)
+}
+
+/// The builtin datatypes whose IRIs are not in the XSD namespace.
+pub(crate) fn is_builtin_non_xsd_datatype(iri: &str) -> bool {
+    matches!(
+        iri,
+        RDFS_LITERAL
+            | RDF_LANG_STRING
+            | RDF_DIR_LANG_STRING
+            | RDF_PLAIN_LITERAL
+            | RDF_XML_LITERAL
+            | RDF_HTML
+            | RDF_JSON
+            | OWL_REAL
+            | OWL_RATIONAL
+    )
 }
 
 fn class_supertypes(
@@ -2556,11 +2979,14 @@ struct ClassExpressionFacts<'a> {
     anonymous: AnonymousSupers,
     /// Restrictions on one named property, asserted as top-level conjuncts.
     restrictions: BTreeMap<&'a str, BTreeSet<&'a Restriction>>,
-    /// Properties some top-level conjunct requires a value of. By OWL
-    /// semantics such a class is within the property's `rdfs:domain`.
-    existential: BTreeSet<&'a str>,
+    /// Properties a restriction asserted of the class itself restricts: a top-
+    /// level conjunct, or a disjunct or conjunct of one.
+    admitted: BTreeSet<&'a str>,
     /// Every named property any conjunct restricts, at any depth.
     mentioned: BTreeSet<&'a str>,
+    /// For each named property, the axioms (by index) whose conjuncts this
+    /// class carries and that restrict it, at any depth.
+    axioms_on: BTreeMap<&'a str, BTreeSet<usize>>,
 }
 
 impl<'a> ClassExpressionFacts<'a> {
@@ -2569,21 +2995,19 @@ impl<'a> ClassExpressionFacts<'a> {
             entries,
             ..Self::default()
         };
-        for &(_, conjunct) in &facts.entries {
+        for &(axiom, conjunct) in &facts.entries {
+            conjunct.focus_restricted(&mut facts.admitted);
             match conjunct {
                 OntologyExpression::Named(_) => continue,
                 OntologyExpression::Restriction(on, restriction) => {
-                    if let Some(iri) = on.named() {
-                        if restriction.is_existential() {
-                            facts.existential.insert(iri);
-                        }
-                        if !matches!(**restriction, Restriction::HasSelf) {
-                            facts
-                                .restrictions
-                                .entry(iri)
-                                .or_default()
-                                .insert(restriction);
-                        }
+                    if let Some(iri) = on.named()
+                        && !matches!(**restriction, Restriction::HasSelf)
+                    {
+                        facts
+                            .restrictions
+                            .entry(iri)
+                            .or_default()
+                            .insert(restriction);
                     }
                 }
                 OntologyExpression::Union(members) => {
@@ -2596,9 +3020,11 @@ impl<'a> ClassExpressionFacts<'a> {
             }
             facts.anonymous.canonical.insert(conjunct.canonical());
             let mentioned = &mut facts.mentioned;
+            let axioms_on = &mut facts.axioms_on;
             let _: Result<(), ()> = conjunct.visit_restrictions(&mut |on, _| {
                 if let Some(iri) = on.named() {
                     mentioned.insert(iri);
+                    axioms_on.entry(iri).or_default().insert(axiom);
                 }
                 Ok(())
             });
@@ -2673,6 +3099,8 @@ fn assemble_surface(
     let class_facts = class_expression_facts(class_axioms, &eligible_classes, supertypes)?;
     let no_anonymous = AnonymousSupers::default();
     let mut statuses: BTreeMap<(String, String), SchemaCoverageStatus> = BTreeMap::new();
+    let mut provenance_records = 0_usize;
+    let mut range_records = 0_usize;
 
     for (property_iri, facts) in properties {
         let kind = facts.kind(&property_iri)?;
@@ -2712,8 +3140,36 @@ fn assemble_surface(
             let class_expressions = class_facts.get(class_iri.as_str());
             let has_shape = shape_info
                 .is_some_and(|info| info.direct_properties.contains(property_iri.as_str()));
-            let existential = class_expressions
-                .is_some_and(|expressions| expressions.existential.contains(property_iri.as_str()));
+            // A class that a restriction on the property is asserted of carries
+            // the property, whatever its declared domain: an instance with a
+            // value is in the domain by RDFS, and one the restriction requires
+            // a value of is in it by OWL.
+            let restricted = class_expressions
+                .is_some_and(|expressions| expressions.admitted.contains(property_iri.as_str()));
+            // The restriction axioms this class carries or inherits on the
+            // property, and no others: provenance stays linear in the cells.
+            let provenance = class_expressions
+                .and_then(|expressions| expressions.axioms_on.get(property_iri.as_str()))
+                .map_or_else(
+                    || base_provenance.clone(),
+                    |axioms| {
+                        let mut provenance = base_provenance.clone();
+                        provenance.extend(
+                            axioms
+                                .iter()
+                                .map(|&axiom| class_axioms[axiom].provenance.clone()),
+                        );
+                        provenance.sort();
+                        provenance.dedup();
+                        provenance
+                    },
+                );
+            provenance_records = provenance_records.saturating_add(provenance.len());
+            enforce_limit(
+                "coverage provenance records",
+                provenance_records,
+                MAX_SCHEMA_RELATIONS * 8,
+            )?;
             let (status, precision) = if has_shape {
                 (
                     SchemaCoverageStatus::HasShape,
@@ -2729,7 +3185,7 @@ fn assemble_surface(
                     SchemaCoverageStatus::ExcludedNamespace,
                     SchemaCoveragePrecision::Exact,
                 )
-            } else if !existential
+            } else if !restricted
                 && !facts.domains.iter().all(|domain| {
                     supertypes.get(class_iri).is_some_and(|types| {
                         domain.expression.matches_class(
@@ -2771,6 +3227,12 @@ fn assemble_surface(
                 } else {
                     SchemaCoveragePrecision::RepresentationApproximation
                 };
+                range_records = range_records.saturating_add(facts.ranges.len());
+                enforce_limit(
+                    "projected range expressions",
+                    range_records,
+                    MAX_SCHEMA_RELATIONS,
+                )?;
                 let class = classes
                     .get_mut(class_iri)
                     .expect("eligible complete-mode class has a surface entry");
@@ -2786,7 +3248,7 @@ fn assemble_surface(
                             .collect(),
                         datatype_iris: datatype_iris.clone(),
                         functional: !facts.functional.is_empty(),
-                        provenance: base_provenance.clone(),
+                        provenance: provenance.clone(),
                         restrictions,
                     },
                 );
@@ -2805,7 +3267,7 @@ fn assemble_surface(
                     .is_some_and(|class| class.synthesized_open),
                 status,
                 precision,
-                provenance: base_provenance.clone(),
+                provenance,
             });
         }
 
@@ -2854,7 +3316,7 @@ fn assemble_surface(
         &mut classes,
         &datatypes,
     )?;
-    let class_expressions = with_datatype_definitions(class_expressions, &datatype_axioms);
+    let class_expressions = with_axiom_level_components(class_expressions, &datatype_axioms);
 
     let surface = SchemaSurface {
         classes,
@@ -2896,8 +3358,13 @@ fn class_expression_facts<'a>(
             continue;
         };
         let mut entries: BTreeSet<(usize, &OntologyExpression)> = BTreeSet::new();
-        for supertype in types {
-            if let Some(list) = carried.get(supertype.as_str()) {
+        // Every class is a subclass of `owl:Thing`.
+        for supertype in types
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once(OWL_THING))
+        {
+            if let Some(list) = carried.get(supertype) {
                 entries.extend(list.iter().copied());
             }
         }
@@ -2955,7 +3422,12 @@ const UNION_MEMBER_REASON: &str =
 const DATA_RANGE_REASON: &str = "a data range in class position has no class projection";
 const SOME_REASON: &str = "required, with one value in the filler: the projection reads OWL's \
      open-world existential closed-world";
-const ALL_REASON: &str = "every value is held to the filler's value schema, as an rdfs:range is";
+const ALL_REASON: &str =
+    "every value is held to the filler's value schema, which states it exactly";
+const ALL_NOTHING_REASON: &str =
+    "owl:Nothing admits no value, so the property is absent on every instance";
+const ALL_CLASS_REASON: &str = "every value is held to be a node reference, as a class rdfs:range \
+     is; the class membership of the referenced node is not visible at the value";
 const ALL_APPROXIMATE_REASON: &str = "every value is held to the filler's value schema, which \
      admits more than the filler: a referenced node's class membership is not visible at the value";
 const HAS_VALUE_REASON: &str = "required, with the value among the property's values: the \
@@ -2988,8 +3460,12 @@ pub(crate) fn restriction_outcomes(
     use SchemaExpressionOutcome::{Approximated, Projected, Unrepresented};
     match restriction {
         Restriction::SomeValues(_) => vec![(Approximated, SOME_REASON)],
+        Restriction::AllValues(OntologyExpression::Named(iri)) if iri == OWL_NOTHING => {
+            vec![(Projected, ALL_NOTHING_REASON)]
+        }
         Restriction::AllValues(filler) => match value_precision(filler, datatypes) {
-            ValuePrecision::Exact | ValuePrecision::ClassLike => vec![(Projected, ALL_REASON)],
+            ValuePrecision::Exact => vec![(Projected, ALL_REASON)],
+            ValuePrecision::ClassLike => vec![(Approximated, ALL_CLASS_REASON)],
             ValuePrecision::Approximate => vec![(Approximated, ALL_APPROXIMATE_REASON)],
         },
         Restriction::HasValue(value) => {
@@ -3178,30 +3654,21 @@ impl ConjunctContext<'_> {
 
 /// Add each anonymous datatype definition to the manifest as an axiom whose
 /// one component is the defining data range.
-fn with_datatype_definitions(
+fn with_axiom_level_components(
     mut report: SchemaClassExpressionReport,
-    datatype_axioms: &[(SchemaCoverageProvenance, String)],
+    axioms: &[AxiomLevel],
 ) -> SchemaClassExpressionReport {
-    if datatype_axioms.is_empty() {
+    if axioms.is_empty() {
         return report;
     }
-    let (outcome, reason) = if report.mode == SchemaSurfaceMode::ShapedOnly {
-        (SchemaExpressionOutcome::Excluded, SHAPED_ONLY_REASON)
-    } else {
-        (
-            SchemaExpressionOutcome::Approximated,
-            DATATYPE_DEFINITION_REASON,
-        )
-    };
-    for (provenance, range) in datatype_axioms {
+    for (provenance, components) in axioms {
+        let components = components
+            .iter()
+            .map(|component| in_mode(report.mode, component.clone()))
+            .collect();
         report.axioms.push(SchemaClassExpressionAxiom {
             provenance: provenance.clone(),
-            components: vec![SchemaExpressionComponent {
-                expression: range.clone(),
-                property_iri: None,
-                outcome,
-                reason: reason.to_owned(),
-            }],
+            components,
             classes: Vec::new(),
         });
     }
@@ -3209,6 +3676,24 @@ fn with_datatype_definitions(
         .axioms
         .sort_by(|left, right| left.provenance.cmp(&right.provenance));
     report
+}
+
+/// A component as `mode` carries it: shaped-only mode projects no ontology
+/// axiom, so what would be projected or approximated is excluded there.
+fn in_mode(
+    mode: SchemaSurfaceMode,
+    mut component: SchemaExpressionComponent,
+) -> SchemaExpressionComponent {
+    if mode == SchemaSurfaceMode::ShapedOnly
+        && matches!(
+            component.outcome,
+            SchemaExpressionOutcome::Projected | SchemaExpressionOutcome::Approximated
+        )
+    {
+        component.outcome = SchemaExpressionOutcome::Excluded;
+        SHAPED_ONLY_REASON.clone_into(&mut component.reason);
+    }
+    component
 }
 
 /// Classify every inherited conjunct of every eligible class, route the
@@ -3273,7 +3758,12 @@ fn class_expression_report(
                     components: Vec::new(),
                     classes: Vec::new(),
                 });
-        entry.components.extend(axiom.uncarried.iter().cloned());
+        entry.components.extend(
+            axiom
+                .uncarried
+                .iter()
+                .map(|component| in_mode(mode, component.clone())),
+        );
         for (class_iri, components) in rows {
             entry.classes.push(SchemaClassExpressionCoverage {
                 class_iri: class_iri.to_owned(),
@@ -4346,6 +4836,304 @@ mod tests {
             classes
                 .classes
                 .contains_key("https://example.org/schema/Parent")
+        );
+    }
+
+    /// The outcomes the class-expression manifest reports for `expression` on
+    /// `class`, or on the axiom itself when `class` is `None`.
+    fn manifest_outcomes(
+        surface: &SchemaSurface,
+        class: Option<&str>,
+        expression: &str,
+    ) -> Vec<(SchemaExpressionOutcome, String)> {
+        surface
+            .class_expressions
+            .axioms
+            .iter()
+            .flat_map(|axiom| {
+                let rows: Vec<&SchemaExpressionComponent> = match class {
+                    Some(class) => axiom
+                        .classes
+                        .iter()
+                        .filter(|row| {
+                            row.class_iri == format!("https://example.org/schema/{class}")
+                        })
+                        .flat_map(|row| &row.components)
+                        .collect(),
+                    None => axiom.components.iter().collect(),
+                };
+                rows
+            })
+            .filter(|component| component.expression == expression)
+            .map(|component| (component.outcome, component.reason.clone()))
+            .collect()
+    }
+
+    const EXS: &str = "https://example.org/schema/";
+
+    #[test]
+    fn restriction_provenance_is_scoped_to_the_classes_that_carry_it() {
+        use std::fmt::Write as _;
+        let mut ontology = String::from(
+            "ex:p0 a owl:ObjectProperty . ex:p1 a owl:ObjectProperty .
+             ex:Target a owl:Class .\n",
+        );
+        for class in 0..50 {
+            let _ = writeln!(
+                ontology,
+                "ex:C{class} a owl:Class ; rdfs:subClassOf
+                    [ a owl:Restriction ; owl:onProperty ex:p0 ; owl:someValuesFrom ex:Target ] ,
+                    [ a owl:Restriction ; owl:onProperty ex:p1 ; owl:someValuesFrom ex:Target ] ."
+            );
+        }
+        ontology.push_str("ex:Sub a owl:Class ; rdfs:subClassOf ex:C7 .\n");
+        let surface = complete(&ontology).expect("restricted classes");
+        let p0 = property(&surface, &format!("{EXS}p0"));
+        for row in &p0.classes {
+            let restriction_axioms: Vec<&SchemaCoverageProvenance> = row
+                .provenance
+                .iter()
+                .filter(|provenance| provenance.predicate == rdfs::SUB_CLASS_OF)
+                .collect();
+            let expected: Vec<String> = match row.class_iri.strip_prefix(EXS) {
+                Some("Sub") => vec![format!("{EXS}C7")],
+                Some(local) if local.starts_with('C') => vec![row.class_iri.clone()],
+                _ => Vec::new(),
+            };
+            assert_eq!(
+                restriction_axioms
+                    .iter()
+                    .map(|provenance| provenance.subject.clone())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{}: a row carries only the restriction axioms its class inherits",
+                row.class_iri
+            );
+        }
+    }
+
+    #[test]
+    fn rdf_and_owl_datatype_map_members_are_datatypes() {
+        complete(
+            "ex:Text owl:equivalentClass rdf:PlainLiteral .
+             ex:text a owl:DatatypeProperty ; rdfs:range ex:Text .
+             ex:Dir owl:equivalentClass rdf:dirLangString .
+             ex:dir a owl:DatatypeProperty ; rdfs:range ex:Dir .
+             ex:A rdfs:subClassOf
+                 [ a owl:Restriction ; owl:onProperty ex:dir ; owl:allValuesFrom rdf:dirLangString ] ,
+                 [ a owl:Restriction ; owl:onProperty ex:real ; owl:allValuesFrom
+                   [ a rdfs:Datatype ; owl:onDatatype owl:real ;
+                     owl:withRestrictions ( [ xsd:minInclusive 0 ] ) ] ] ,
+                 [ a owl:Restriction ; owl:onProperty ex:html ; owl:someValuesFrom rdf:HTML ] .
+             ex:real a owl:DatatypeProperty .
+             ex:html a owl:DatatypeProperty ; rdfs:range rdf:HTML .
+             ex:json a owl:DatatypeProperty ; rdfs:range rdf:JSON .
+             ex:xml a owl:DatatypeProperty ; rdfs:range rdf:XMLLiteral .
+             ex:rational a owl:DatatypeProperty ; rdfs:range owl:rational .",
+        )
+        .expect("the OWL 2 datatype map and the RDF 1.2 datatypes are datatypes");
+        for (invalid, needle) in [
+            (
+                "ex:Text owl:equivalentClass rdf:PlainLiteral .
+                 ex:text a owl:ObjectProperty ; rdfs:range ex:Text .",
+                "owl:ObjectProperty has datatype range",
+            ),
+            (
+                "ex:q a owl:ObjectProperty .
+                 ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:q ;
+                     owl:allValuesFrom rdf:dirLangString ] .",
+                "owl:ObjectProperty is restricted to the data range",
+            ),
+            (
+                "ex:q a owl:ObjectProperty .
+                 ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:q ;
+                     owl:allValuesFrom [ a rdfs:Datatype ; owl:onDatatype owl:real ;
+                     owl:withRestrictions ( [ xsd:minInclusive 0 ] ) ] ] .",
+                "owl:ObjectProperty is restricted to the data range",
+            ),
+        ] {
+            let error = complete(invalid).expect_err("a datatype on an object property is refused");
+            assert!(
+                matches!(&error, SchemaCompileError::InvalidOntology { reason, .. } if reason.contains(needle)),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn disjointness_and_class_assertions_with_anonymous_classes_are_reported() {
+        let surface = complete(
+            "ex:A a owl:Class ; owl:disjointWith
+                 [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B ] .
+             [ a owl:AllDisjointClasses ; owl:members ( ex:A ex:B
+                 [ owl:complementOf ex:C ] ) ] .
+             ex:D owl:disjointUnionOf ( ex:E [ a owl:Restriction ; owl:onProperty ex:p ;
+                 owl:hasValue ex:v ] ) .
+             ex:x a [ a owl:Restriction ; owl:onProperty ex:p ; owl:hasValue ex:v ] .
+             ex:A owl:disjointWith ex:B .",
+        )
+        .expect("disjointness and class assertions are read");
+        let predicates: BTreeSet<&str> = surface
+            .class_expressions
+            .axioms
+            .iter()
+            .map(|axiom| axiom.provenance.predicate.as_str())
+            .collect();
+        for predicate in [
+            "http://www.w3.org/2002/07/owl#disjointWith",
+            "http://www.w3.org/2002/07/owl#members",
+            "http://www.w3.org/2002/07/owl#disjointUnionOf",
+            rdf::TYPE,
+        ] {
+            assert!(predicates.contains(predicate), "{predicate} is reported");
+        }
+        for axiom in &surface.class_expressions.axioms {
+            assert!(!axiom.components.is_empty(), "{:?}", axiom.provenance);
+            for component in &axiom.components {
+                assert!(matches!(
+                    component.outcome,
+                    SchemaExpressionOutcome::Unrepresented | SchemaExpressionOutcome::Excluded
+                ));
+            }
+        }
+        // The neighbour: disjointness between named classes is no anonymous
+        // class expression, and stays out of the manifest.
+        assert!(
+            !surface
+                .class_expressions
+                .axioms
+                .iter()
+                .any(|axiom| axiom.provenance.object == format!("<{EXS}B>"))
+        );
+        // A malformed anonymous member is still refused.
+        let error =
+            complete("ex:A owl:disjointWith [ a owl:Restriction ; owl:someValuesFrom ex:B ] .")
+                .expect_err("a restriction without owl:onProperty is malformed anywhere");
+        assert!(matches!(error, SchemaCompileError::InvalidOntology { .. }));
+    }
+
+    #[test]
+    fn class_fillers_and_datatype_complements_are_approximations() {
+        let surface = complete(
+            "ex:A a owl:Class ; rdfs:subClassOf
+                 [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom ex:B ] ,
+                 [ a owl:Restriction ; owl:onProperty ex:n ; owl:allValuesFrom
+                   [ owl:intersectionOf ( xsd:integer
+                       [ a rdfs:Datatype ; owl:datatypeComplementOf xsd:negativeInteger ] ) ] ] ,
+                 [ a owl:Restriction ; owl:onProperty ex:s ; owl:allValuesFrom xsd:string ] .
+             ex:p a owl:ObjectProperty . ex:B a owl:Class .
+             ex:n a owl:DatatypeProperty . ex:s a owl:DatatypeProperty .",
+        )
+        .expect("universals");
+        let outcome = |expression: String| manifest_outcomes(&surface, Some("A"), &expression)[0].0;
+        assert_eq!(
+            outcome(format!("all(<{EXS}p>,<{EXS}B>)")),
+            SchemaExpressionOutcome::Approximated,
+            "class membership of a referenced node is not checked"
+        );
+        assert_eq!(
+            outcome(format!(
+                "all(<{EXS}n>,intersection(<http://www.w3.org/2001/XMLSchema#integer>,datatype_complement(<http://www.w3.org/2001/XMLSchema#negativeInteger>)))"
+            )),
+            SchemaExpressionOutcome::Approximated,
+            "a datatype complement is judged on the @type tag, not the value space"
+        );
+        assert_eq!(
+            outcome(format!(
+                "all(<{EXS}s>,<http://www.w3.org/2001/XMLSchema#string>)"
+            )),
+            SchemaExpressionOutcome::Projected,
+            "a datatype filler is exact"
+        );
+    }
+
+    #[test]
+    fn existential_restrictions_place_a_class_in_the_property_domain() {
+        let surface = complete(
+            "ex:D a owl:Class . ex:B a owl:Class .
+             ex:p a owl:ObjectProperty ; rdfs:domain ex:D .
+             ex:q a owl:ObjectProperty ; rdfs:domain ex:D .
+             ex:A a owl:Class ; rdfs:subClassOf
+                 [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B ] .
+             ex:U a owl:Class ; rdfs:subClassOf
+                 [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom ex:B ] .",
+        )
+        .expect("existential domain");
+        assert_eq!(
+            class_status(&surface, &format!("{EXS}q"), &format!("{EXS}A")),
+            SchemaCoverageStatus::IncludedUnshaped,
+            "A ⊑ ∃p.B and domain(p) = D entail A ⊑ D"
+        );
+        assert_eq!(
+            class_status(&surface, &format!("{EXS}q"), &format!("{EXS}U")),
+            SchemaCoverageStatus::ExcludedDomain,
+            "a universal restriction entails no domain membership"
+        );
+    }
+
+    #[test]
+    fn universal_restrictions_on_owl_thing_are_global_ranges() {
+        let surface = complete(
+            "ex:A a owl:Class . ex:C a owl:Class .
+             ex:p a owl:ObjectProperty .
+             owl:Thing rdfs:subClassOf
+                 [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom ex:A ] .",
+        )
+        .expect("global range");
+        let p = &surface.classes[&format!("{EXS}C")].properties[&format!("{EXS}p")];
+        assert_eq!(p.ranges, vec![OntologyExpression::Named(format!("{EXS}A"))]);
+        let reported = manifest_outcomes(&surface, None, &format!("all(<{EXS}p>,<{EXS}A>)"));
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert!(reported[0].1.contains("range"), "{reported:?}");
+    }
+
+    #[test]
+    fn restrictions_on_named_inverses_resolve_to_the_named_property() {
+        let surface = complete(
+            "ex:made a owl:ObjectProperty ; owl:inverseOf ex:maker .
+             ex:maker a owl:ObjectProperty .
+             ex:Thingy a owl:Class . ex:Person a owl:Class .
+             ex:Z a owl:Class ; rdfs:subClassOf
+                 [ a owl:Restriction ; owl:onProperty [ owl:inverseOf ex:made ] ;
+                   owl:someValuesFrom ex:Person ] ,
+                 [ a owl:Restriction ; owl:onProperty [ owl:inverseOf ex:unpaired ] ;
+                   owl:someValuesFrom ex:Person ] .
+             ex:unpaired a owl:ObjectProperty .",
+        )
+        .expect("inverse restrictions");
+        let resolved = manifest_outcomes(
+            &surface,
+            Some("Z"),
+            &format!("some(<{EXS}maker>,<{EXS}Person>)"),
+        );
+        assert_eq!(resolved.len(), 1, "inverse(made) is maker");
+        assert_eq!(resolved[0].0, SchemaExpressionOutcome::Approximated);
+        let unresolved = manifest_outcomes(
+            &surface,
+            Some("Z"),
+            &format!("some(inverse(<{EXS}unpaired>),<{EXS}Person>)"),
+        );
+        assert_eq!(unresolved[0].0, SchemaExpressionOutcome::Unrepresented);
+    }
+
+    #[test]
+    fn any_restriction_emits_its_property_on_the_carrying_class() {
+        let surface = complete(
+            "ex:Elsewhere a owl:Class . ex:Z a owl:Class ; rdfs:subClassOf
+                 [ a owl:Restriction ; owl:onProperty ex:q ; owl:allValuesFrom xsd:integer ] ,
+                 [ a owl:Restriction ; owl:onProperty ex:q ; owl:maxCardinality 1 ] .
+             ex:Y a owl:Class .
+             ex:q a owl:DatatypeProperty ; rdfs:domain ex:Elsewhere .",
+        )
+        .expect("restricted property");
+        assert_eq!(
+            class_status(&surface, &format!("{EXS}q"), &format!("{EXS}Z")),
+            SchemaCoverageStatus::IncludedUnshaped
+        );
+        assert_eq!(
+            class_status(&surface, &format!("{EXS}q"), &format!("{EXS}Y")),
+            SchemaCoverageStatus::ExcludedDomain,
+            "a class that carries no restriction stays out of the domain"
         );
     }
 }

@@ -172,17 +172,17 @@ mod temporal_order;
 
 use numeric_order::{BoundNumber, Decimal, Facet, Threshold, order_pattern};
 
-use purrdf_iri::vocab::owl::NS as OWL_NS;
+use purrdf_iri::vocab::owl::{NOTHING as OWL_NOTHING, NS as OWL_NS};
 use purrdf_iri::vocab::rdf::{
     DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING, NIL as RDF_NIL,
-    NS as RDF_NS,
+    NS as RDF_NS, PLAIN_LITERAL as RDF_PLAIN_LITERAL,
 };
 use purrdf_iri::vocab::rdfs::NS as RDFS_NS;
 use purrdf_iri::vocab::sh::NS as SH_NS;
 use purrdf_xsd::datatype::{
-    XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER, XSD_LENGTH, XSD_MAX_EXCLUSIVE, XSD_MAX_INCLUSIVE,
-    XSD_MAX_LENGTH, XSD_MIN_EXCLUSIVE, XSD_MIN_INCLUSIVE, XSD_MIN_LENGTH, XSD_NS, XSD_PATTERN,
-    XSD_STRING,
+    OWL_RATIONAL, OWL_REAL, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER, XSD_LENGTH,
+    XSD_MAX_EXCLUSIVE, XSD_MAX_INCLUSIVE, XSD_MAX_LENGTH, XSD_MIN_EXCLUSIVE, XSD_MIN_INCLUSIVE,
+    XSD_MIN_LENGTH, XSD_NS, XSD_PATTERN, XSD_STRING,
 };
 
 /// The `xsd:integer`-derived datatypes (local names) with the bounds of their
@@ -2078,6 +2078,10 @@ fn restricted_value_schema(
     }
     for restriction in restrictions {
         let (schema, at_least, at_most) = match restriction {
+            // `owl:Nothing` has no member, so no value is permitted.
+            Restriction::AllValues(OntologyExpression::Named(iri)) if iri == OWL_NOTHING => {
+                (json!({}), None, Some(0))
+            }
             Restriction::AllValues(_) | Restriction::HasSelf => continue,
             Restriction::SomeValues(filler) => (
                 range_expression_schema(filler, property, class_iri, ctx),
@@ -2384,6 +2388,13 @@ fn datatype_restriction_schema(
     class_iri: &str,
     ctx: &mut Ctx<'_>,
 ) -> Value {
+    if !facets
+        .iter()
+        .any(|(facet, value)| facet_supported(base, facet, &value.term))
+    {
+        // No facet projects, so the range is its base datatype's.
+        return named_range_schema(base, property, class_iri, ctx);
+    }
     let mut constraints = vec![
         Constraint::Datatype(vec![NamedNode::from(base)]),
         Constraint::MaxCount(1),
@@ -2448,9 +2459,21 @@ fn named_range_schema(
     if iri == RDF_LANG_STRING || iri == RDF_DIR_LANG_STRING {
         return datatype_value_schema(iri, ctx.ns);
     }
+    if iri == RDF_PLAIN_LITERAL {
+        // OWL 2 §4.3: the strings, with or without a language tag.
+        return json!({
+            "anyOf": [
+                datatype_value_schema(XSD_STRING, ctx.ns),
+                datatype_value_schema(RDF_LANG_STRING, ctx.ns)
+            ]
+        });
+    }
+    if iri == OWL_REAL || iri == OWL_RATIONAL {
+        return numeric_literal_schema(iri == OWL_REAL, ctx.ns);
+    }
     if property.kind == OntologyPropertyKind::Datatype
         || property.datatype_iris.contains(iri)
-        || iri.starts_with(XSD_NS)
+        || crate::schema_surface::is_builtin_datatype(iri)
         || ctx.surface_datatypes.contains(iri)
     {
         return datatype_value_schema(iri, ctx.ns);
@@ -2472,6 +2495,33 @@ fn named_range_schema(
     } else {
         json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
     }
+}
+
+/// The literals in the value space of `owl:real` (`real`) or `owl:rational`:
+/// a bare integer, or a literal tagged with an integer-family datatype,
+/// `xsd:decimal`, `owl:rational` or (for `owl:real`) `owl:real`. Lexical forms
+/// are not judged, so this is an approximation the class-expression manifest
+/// reports.
+fn numeric_literal_schema(real: bool, ns: &Namespaces) -> Value {
+    let mut types: Vec<Value> = INTEGER_DATATYPES
+        .iter()
+        .map(|(local, _, _)| Value::String(ns.compact_iri(&format!("{XSD_NS}{local}"))))
+        .collect();
+    types.push(Value::String(ns.compact_iri(XSD_DECIMAL)));
+    types.push(Value::String(ns.compact_iri(OWL_RATIONAL)));
+    if real {
+        types.push(Value::String(ns.compact_iri(OWL_REAL)));
+    }
+    json!({
+        "anyOf": [
+            { "type": "integer" },
+            {
+                "type": "object",
+                "properties": { "@value": { "type": "string" }, "@type": { "enum": types } },
+                "required": ["@value", "@type"]
+            }
+        ]
+    })
 }
 
 fn general_literal_schema() -> Value {
