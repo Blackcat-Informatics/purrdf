@@ -475,7 +475,9 @@ impl PreparedQuery<'_, '_> {
         {
             let population = self.corpus.populations.get(at).copied();
             let documents = population.unwrap_or(self.corpus.documents);
-            let remaining = if population.is_some() && input.length == 0 {
+            let remaining = if population.is_some_and(|count| count < self.corpus.documents)
+                && input.length == 0
+            {
                 documents
             } else {
                 documents.saturating_sub(1)

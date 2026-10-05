@@ -238,4 +238,181 @@ fn populations_and_totals_are_checked_before_scoring() {
             .expect("missing field"),
         Fixed::ZERO
     );
+    let all_carriers = PreparedCorpus::with_field_populations(
+        &profile,
+        2,
+        &[2 * u128::from(FIELD_LENGTH_MAX), 0, 0],
+        &[2, 0, 0],
+    )
+    .expect("every document carries the first field");
+    // A zero-length row cannot fit when both carriers must have maximum length.
+    assert!(
+        all_carriers
+            .prepare_query(&[("cat", 1)])
+            .expect("query")
+            .contribution(0, &[FieldInput::default(); 3])
+            .is_err()
+    );
+}
+
+#[test]
+fn sparse_shortest_normalization_and_bounds_match_the_reference() {
+    let profile = RankingProfile::new(
+        vec![RankingField::new("text", FIELD_WEIGHT_MAX, Fixed::ONE).expect("field")],
+        Vec::new(),
+        Some(0),
+    )
+    .expect("profile")
+    .with_field_populations();
+    let population = DOCUMENTS_MAX - 1;
+    let total =
+        u128::from(population) * u128::from(FIELD_LENGTH_MAX) - u128::from(FIELD_LENGTH_MAX - 1);
+    let corpus =
+        PreparedCorpus::with_field_populations(&profile, DOCUMENTS_MAX, &[total], &[population])
+            .expect("bounded");
+    let query = corpus.prepare_query(&[("cat", 1)]).expect("query");
+    let input = [FieldInput {
+        term_frequency: 1,
+        length: 1,
+    }];
+    assert_eq!(
+        query.contribution(0, &input).expect("score").into_raw(),
+        reference_score(DOCUMENTS_MAX, 1, &[population], &[total], &profile, &input)
+    );
+    assert!(
+        query
+            .contribution(
+                0,
+                &[FieldInput {
+                    term_frequency: 1,
+                    length: 0
+                }]
+            )
+            .is_err()
+    );
+    assert!(
+        query
+            .contribution(
+                0,
+                &[FieldInput {
+                    term_frequency: 0,
+                    length: FIELD_LENGTH_MAX + 1
+                }]
+            )
+            .is_err()
+    );
+    assert!(corpus.prepare_query(&[("cat", DOCUMENTS_MAX + 1)]).is_err());
+    let empty =
+        PreparedCorpus::with_field_populations(&profile, 0, &[0], &[0]).expect("empty corpus");
+    assert!(empty.prepare_query(&[]).expect("query").score(&[]).is_err());
+}
+
+#[test]
+fn index_carriers_follow_partition_and_remapping_facts() {
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_text::{
+        GraphSelector, PartitionKey, TextIndex, TextIndexConfig, explain, rank_partition,
+    };
+
+    let mut builder = RdfDatasetBuilder::new();
+    let title = builder.intern_iri("https://example.org/title");
+    let body = builder.intern_iri("https://example.org/body");
+    let graph = builder.intern_iri("https://example.org/graph");
+    for (subject, predicate, text, named) in [
+        ("a", title, "cat", false),
+        ("b", body, "cat cat dog dog", false),
+        ("c", body, "dog dog", false),
+        ("d", title, "cat", true),
+        ("d", body, "dog", true),
+    ] {
+        let subject = builder.intern_iri(&format!("https://example.org/{subject}"));
+        let literal = builder.intern_literal(RdfLiteral::simple(text));
+        builder.push_quad(subject, predicate, literal, named.then_some(graph));
+    }
+    let dataset = builder.freeze().expect("dataset");
+    let config = TextIndexConfig::new(
+        vec![
+            TermValue::iri("https://example.org/title"),
+            TermValue::iri("https://example.org/body"),
+        ],
+        GraphSelector::Any,
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .expect("config");
+    let dense_profile = RankingProfile::new(
+        vec![
+            RankingField::new("title", Fixed::ONE, B).expect("field"),
+            RankingField::new("body", Fixed::ONE, B).expect("field"),
+        ],
+        vec![
+            (TermValue::iri("https://example.org/title"), 0),
+            (TermValue::iri("https://example.org/body"), 1),
+        ],
+        None,
+    )
+    .expect("profile");
+    let dense = TextIndex::from_dataset_with_ranking(&*dataset, &config, dense_profile.clone())
+        .expect("index");
+    let profile = dense_profile.with_field_populations();
+    let sparse = dense
+        .clone()
+        .with_ranking_profile(profile.clone())
+        .expect("rerank");
+    let direct =
+        TextIndex::from_dataset_with_ranking(&*dataset, &config, profile.clone()).expect("direct");
+    assert_eq!(direct.fingerprint(), sparse.fingerprint());
+    assert_eq!(dense.source_fingerprint(), sparse.source_fingerprint());
+    assert_eq!(dense.analyzer_fingerprint(), sparse.analyzer_fingerprint());
+    assert_ne!(dense.fingerprint(), sparse.fingerprint());
+    let partition = PartitionKey::new(None, None);
+    assert_eq!(
+        sparse.field_populations(&partition),
+        Some([1, 2].as_slice())
+    );
+    assert_eq!(sparse.field_totals(&partition), Some([1, 6].as_slice()));
+    let named = PartitionKey::new(Some(TermValue::iri("https://example.org/graph")), None);
+    assert_eq!(sparse.field_populations(&named), Some([1, 1].as_slice()));
+    let needle = ["cat".to_owned()];
+    let rows = rank_partition(&sparse, &partition, &needle, None).expect("rank");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rank_partition(&sparse, &partition, &needle, Some(1)).expect("ceiling"),
+        rows[..1]
+    );
+    let mut changed_score = false;
+    for row in &rows {
+        let lengths = sparse.field_lengths(row.document).expect("lengths");
+        let inputs = if lengths[0] != 0 {
+            [
+                FieldInput {
+                    term_frequency: 1,
+                    length: 1,
+                },
+                FieldInput::default(),
+            ]
+        } else {
+            [
+                FieldInput::default(),
+                FieldInput {
+                    term_frequency: 2,
+                    length: 4,
+                },
+            ]
+        };
+        assert_eq!(
+            row.score.into_raw(),
+            reference_score(3, 2, &[1, 2], &[1, 6], &profile, &inputs)
+        );
+        assert_eq!(
+            explain(&sparse, row.document, &needle).expect("explanation")[0].contribution,
+            row.score
+        );
+        changed_score |=
+            explain(&dense, row.document, &needle).expect("dense")[0].contribution != row.score;
+    }
+    assert!(changed_score, "sparse means must alter sparse scores");
+    let merged = RankingProfile::single_field().with_field_populations();
+    let merged = sparse.with_ranking_profile(merged).expect("remap");
+    assert_eq!(merged.field_populations(&partition), Some([3].as_slice()));
+    assert_eq!(merged.field_totals(&partition), Some([7].as_slice()));
 }
