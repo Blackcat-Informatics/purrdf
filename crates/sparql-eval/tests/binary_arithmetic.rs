@@ -18,9 +18,8 @@
 mod support;
 
 use std::fmt::Write as _;
-use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
+use purrdf_core::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{AggregateRegistry, ExtensionEnv, NativeSparqlEngine, QueryOptions};
 use purrdf_xsd::ieee::reference as soft;
 use purrdf_xsd::numeric::{canonical_double, canonical_float};
