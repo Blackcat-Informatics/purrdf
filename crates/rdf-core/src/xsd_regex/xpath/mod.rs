@@ -10,6 +10,14 @@
 
 use std::fmt;
 
+mod compile;
+mod r#match;
+mod replace;
+mod unicode_tables;
+
+pub use compile::{CompiledPattern, compile};
+pub use r#match::Captures;
+
 /// The Recommendation that defines a pattern's grammar and matching law.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -178,6 +186,7 @@ purrdf_hash::default_from_new!(Limits);
 pub struct Budget {
     limits: Limits,
     used: [u64; Resource::COUNT],
+    peak_compile_slots: u64,
 }
 
 impl Budget {
@@ -187,6 +196,7 @@ impl Budget {
         Self {
             limits,
             used: [0; Resource::COUNT],
+            peak_compile_slots: 0,
         }
     }
 
@@ -209,11 +219,25 @@ impl Budget {
     /// A typed [`Refusal`] when the exact accumulated requirement exceeds the
     /// bound. Even `u64::MAX + 1` remains a refusal with its exact requirement.
     pub fn charge(&mut self, resource: Resource, amount: u64) -> Result<(), Refusal> {
-        let required = u128::from(self.used(resource)) + u128::from(amount);
+        self.charge_wide(resource, u128::from(amount))
+    }
+
+    /// Internal allocation arithmetic is retained before a host-sized cast.
+    pub(super) fn charge_wide(&mut self, resource: Resource, amount: u128) -> Result<(), Refusal> {
+        let required = u128::from(self.used(resource)) + amount;
         self.limits.admit(resource, required)?;
         // Admission proves this sum fits the u64 limit as well as its counter.
-        self.used[resource.index()] += amount;
+        self.used[resource.index()] = u64::try_from(required)
+            .expect("admission proves the exact requirement fits its u64 bound");
+        if resource == Resource::CompileSlots {
+            self.peak_compile_slots = self.peak_compile_slots.max(self.used(resource));
+        }
         Ok(())
+    }
+
+    /// Release only compiler storage whose owner has actually been dropped.
+    pub(super) fn release_compile_slots(&mut self, amount: u64) {
+        self.used[Resource::CompileSlots.index()] -= amount;
     }
 }
 
@@ -247,6 +271,15 @@ impl std::error::Error for Refusal {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
+    /// A flag is not defined by the selected dated law (FORX0001).
+    Flags {
+        /// UTF-8 byte offset within the flags string.
+        offset: usize,
+        /// The rejected flag character.
+        flag: char,
+        /// The law against which the flags were admitted.
+        profile: Profile,
+    },
     /// Invalid grammar under the explicitly selected dated profile.
     Syntax {
         /// UTF-8 byte offset of the offending construct.
@@ -263,13 +296,35 @@ pub enum Error {
         /// The requested storage units.
         units: u64,
     },
+    /// The replacement pattern matches the empty string (FORX0003).
+    EmptyMatch,
+    /// The replacement text violates the shared XPath grammar (FORX0004).
+    Replacement(super::ReplacementError),
 }
 
-purrdf_lex::variant_from!(Error { Resource(Refusal) });
+purrdf_lex::variant_from!(Error { Resource(Refusal), Replacement(super::ReplacementError) });
+
+impl Error {
+    /// Whether this is an operational failure rather than a pattern,
+    /// flag or replacement-language error.
+    #[must_use]
+    pub const fn is_operational(&self) -> bool {
+        matches!(self, Self::Resource(_) | Self::Allocation { .. })
+    }
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Flags {
+                offset,
+                flag,
+                profile,
+            } => write!(
+                f,
+                "invalid XPath flag {flag:?} at byte {offset} for {} (err:FORX0001)",
+                profile.name()
+            ),
             Self::Syntax { offset, message } => {
                 write!(f, "invalid XPath pattern at byte {offset}: {message}")
             }
@@ -279,6 +334,10 @@ impl fmt::Display for Error {
                 "{}: host refused allocation of {units} units",
                 resource.code()
             ),
+            Self::EmptyMatch => {
+                f.write_str("replacement pattern matches the empty string (err:FORX0003)")
+            }
+            Self::Replacement(error) => error.fmt(f),
         }
     }
 }
@@ -287,7 +346,11 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Resource(refusal) => Some(refusal),
-            Self::Syntax { .. } | Self::Allocation { .. } => None,
+            Self::Replacement(error) => Some(error),
+            Self::Flags { .. }
+            | Self::Syntax { .. }
+            | Self::Allocation { .. }
+            | Self::EmptyMatch => None,
         }
     }
 }

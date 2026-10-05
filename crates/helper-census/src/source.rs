@@ -543,7 +543,11 @@ impl Workspace {
     fn walk_mod(&mut self, context: &Context<'_>, place: &Place<'_>, item: &syn::ItemMod) {
         self.define(context, place, &item.ident, &item.attrs, place.module);
         let module = format!("{}::{}", place.module, item.ident);
-        let child_directory = format!("{}/{}", place.directory, item.ident);
+        let name = item.ident.to_string();
+        // A raw identifier's r# is Rust syntax, not part of its module filename.
+        // Keep that spelling in symbols while resolving ordinary path names.
+        let directory_name = name.strip_prefix("r#").unwrap_or(&name);
+        let child_directory = format!("{}/{directory_name}", place.directory);
         if let Some((_, items)) = &item.content {
             let inner = Place {
                 file: place.file,
@@ -1246,6 +1250,37 @@ mod tests {
         );
         assert!(walked.resolve("demo_a::ops::tests::hidden").is_none());
         assert!(walked.resolve("demo_a::Thing::gone").is_none());
+    }
+
+    #[test]
+    fn raw_module_identifiers_use_unprefixed_file_names() {
+        let walked = workspace(&[
+            ("crates/a/Cargo.toml", "[package]\nname = \"demo-a\"\n"),
+            (
+                "crates/a/src/lib.rs",
+                "mod r#match; mod r#loop; mod r#type { mod r#enum; } #[path = \"explicit.rs\"] mod r#async;",
+            ),
+            ("crates/a/src/match.rs", "pub fn flat() {}"),
+            ("crates/a/src/loop/mod.rs", "mod child;"),
+            ("crates/a/src/loop/child.rs", "pub fn directory() {}"),
+            ("crates/a/src/type/enum.rs", "pub fn inline() {}"),
+            ("crates/a/src/explicit.rs", "pub fn explicit() {}"),
+        ]);
+        for (symbol, file) in [
+            ("demo_a::r#match::flat", "crates/a/src/match.rs"),
+            (
+                "demo_a::r#loop::child::directory",
+                "crates/a/src/loop/child.rs",
+            ),
+            (
+                "demo_a::r#type::r#enum::inline",
+                "crates/a/src/type/enum.rs",
+            ),
+            ("demo_a::r#async::explicit", "crates/a/src/explicit.rs"),
+        ] {
+            assert!(walked.resolve(symbol).is_some(), "{symbol}");
+            assert_eq!(walked.definitions[symbol].file, file);
+        }
     }
 
     #[test]
