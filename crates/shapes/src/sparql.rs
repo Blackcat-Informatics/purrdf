@@ -477,7 +477,7 @@ pub(crate) fn eval_cached_scalar_query_view<
     parameters: &[&str],
     bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
 ) -> Result<Option<Term>, String> {
-    run_cached_select_generic_view(dataset, select, parameters, bind, project_scalar)
+    run_cached_select_with_shacl_prebinding_view(dataset, select, parameters, bind, project_scalar)
         .map_err(|e| format!("scalar expression {e}"))
 }
 
@@ -1798,29 +1798,6 @@ fn project_graph<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
 ///
 /// As [`run_cached_prepared_view`], plus a non-SELECT result.
 pub(crate) fn run_cached_select_with_shacl_prebinding_view<
-    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
-    R,
->(
-    dataset: &D,
-    select: &str,
-    parameters: &[&str],
-    bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
-    project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
-) -> Result<R, String> {
-    run_cached_prepared_view(dataset, select, parameters, None, bind, |outcome| {
-        project_solutions(outcome, project)
-    })
-}
-
-/// Run a generic-substitution SELECT on this worker's cached handle.
-///
-/// The SHACL-AF node-expression path's prepared door: no SHACL pre-binding rewrite,
-/// exactly as [`run_select_generic_view`].
-///
-/// # Errors
-///
-/// As [`run_cached_prepared_view`], plus a non-SELECT result.
-pub(crate) fn run_cached_select_generic_view<
     D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
     R,
 >(
