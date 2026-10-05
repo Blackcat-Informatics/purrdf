@@ -82,10 +82,10 @@ one less than the number of reached blank nodes.
 
 | Term | Encoding |
 | --- | --- |
-| IRI | `0x00 || frame(iri)` |
-| Blank | `0x01 || u64_le(ordinal)` |
-| Literal | `0x02 || frame(lexical) || frame(datatype) || language || direction` |
-| Triple term | `0x03 || term(subject) || term(predicate) || term(object)` |
+| IRI | `0x00 \|\| frame(iri)` |
+| Blank | `0x01 \|\| u64_le(ordinal)` |
+| Literal | `0x02 \|\| frame(lexical) \|\| frame(datatype) \|\| language \|\| direction` |
+| Triple term | `0x03 \|\| term(subject) \|\| term(predicate) \|\| term(object)` |
 
 A language or direction field is `0x00` for absence, or `0x01 || frame(value)`
 for presence. Direction values are the existing exact `ltr` or `rtl` spellings.
@@ -96,10 +96,10 @@ additional frame.
 | State record | Encoding |
 | --- | --- |
 | Default graph declaration | `0x00` |
-| Named graph declaration | `0x01 || term(name)` |
-| Ordinary row | `0x02 || term(s) || term(p) || term(o) || graph` |
-| Native reifier row | `0x03 || term(s) || term(p) || term(o) || graph` |
-| Native annotation row | `0x04 || term(s) || term(p) || term(o) || graph` |
+| Named graph declaration | `0x01 \|\| term(name)` |
+| Ordinary row | `0x02 \|\| term(s) \|\| term(p) \|\| term(o) \|\| graph` |
+| Native reifier row | `0x03 \|\| term(s) \|\| term(p) \|\| term(o) \|\| graph` |
+| Native annotation row | `0x04 \|\| term(s) \|\| term(p) \|\| term(o) \|\| graph` |
 
 The ordinary/reifier/annotation term triples are the raw rows exposed by the
 view. Reifier rows therefore retain the view's native `rdf:reifies` predicate
