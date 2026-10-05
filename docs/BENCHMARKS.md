@@ -48,14 +48,18 @@ other compares two different questions.
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 93 `[[bench]]`
-targets in total; this section and the inventory table below document 23 of
+They live under `crates/*/benches/`. The workspace registers 105 `[[bench]]`
+targets in total; this section and the inventory table below document 29 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
 
 - `crates/rdf-core/benches/ir_layout.rs` — AoS vs. SoA vs. predicate-adjacency
   IR layouts (allocation counts, high-water mark, end-to-end latency).
+- `crates/rdf-core/benches/dataset_state_digest.rs` — complete-state identity
+  construction over empty, ground, asymmetric, interchangeable and CDT states,
+  two independently anchored blank-node sizes, branching triangle components,
+  and identical-leaf cells with 256 and 4,096 blanks.
 - `crates/rdf-core/benches/mutable.rs` — copy-on-write mutation paths.
 - `crates/rdf-core/benches/intern_content_id.rs` — content-addressing
   recognition cost for ordinary vs. genuine content-id IRIs.
@@ -81,6 +85,9 @@ simply not narrated here:
   (`IRIREF`, string literals, comments).
 - `crates/sparql-eval/benches/query_eval.rs` — end-to-end SPARQL SELECT
   evaluation over synthetic datasets.
+- `crates/sparql-eval/benches/governed_eval.rs` — governor costs and fixed-length
+  paths versus explicit triple expansion, with preparation outside timing and
+  projected answers checked before sampling.
 - `crates/sparql-eval/benches/cost_based_bgp_planner.rs` — regression watch on
   the cost-based BGP join planner; the deterministic win over the retired
   structural heuristic is gated by the `bgp` unit tests (which count real
@@ -92,6 +99,11 @@ simply not narrated here:
   pinned by operation counts in `nested_exists_gate`, not by these timings).
 - `crates/sparql-eval/benches/lateral_service.rs` — variable-endpoint
   `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
+- `crates/sparql-eval/benches/graph_constant_membership.rs` — constant named-graph
+  lookup and per-row membership probes over frozen, delta, composite and pack
+  views.
+- `crates/shapes/benches/graph_membership.rs` — per-row named-graph membership
+  probes through the SHACL data view over native and mutation snapshots.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
   LinkML import/lowering throughput and one-operation allocation traffic,
   including the change path's conforming-versus-violating contrast over one
@@ -199,7 +211,7 @@ target obligations and native owners are in [WASM test ownership](WASM_TESTING.m
 
 ### Native benchmark inventory
 
-This table documents 23 of the 93 `[[bench]]` targets registered across the
+This table documents 29 of the 105 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -208,6 +220,7 @@ here.
 | Bench | What it measures |
 | --- | --- |
 | `crates/rdf-core/benches/ir_layout.rs` | AoS / SoA / predicate-adjacency IR layout trade-offs (latency, allocations, peak RSS). |
+| `crates/rdf-core/benches/dataset_state_digest.rs` | Complete-state identity construction over ten fixed native shapes; fixture preparation is outside timing, and no existing identity path changes. |
 | `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration (`mut_snapshot_graphs`): removals spread over many graphs, a `DROP` of a one-quad graph beside a large annotated base, and repeated snapshots after a `DROP` of a large graph; a mutable-layer declared graph drained row by row at 1k and 10k rows (`mut_declared_graph_removal`); and snapshot publication of a delta of 1k, 20k and 200k added rows, retention check and freeze included (`snapshot_with_delta`). |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
