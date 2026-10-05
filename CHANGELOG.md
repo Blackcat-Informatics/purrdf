@@ -359,7 +359,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   context and the parameters of a component or target type. A SHACL node
   expression's query may read `$this` and the names its context binds: `value`
   inside `sh:expression`, a custom function's arguments inside its body, and
-  `node-expr --scope` names. A node expression never binds `$currentShape` or
+  `node-expr --scope` names. A custom function's argument is evaluated in the
+  empty scope (SHACL 1.2 Node Expressions §6.3), so a query inside one may read
+  `$this` alone: reading the call site's `$value` or an enclosing body's `$arg0`
+  there is refused at load instead of aborting validation, and the argument may
+  assign `?value`. A node expression never binds `$currentShape` or
   `$shapesGraph`, so reading either — like any other variable — is refused when
   the shapes graph is loaded or packed, even in an expression no focus node
   reaches. Assigning a pre-bound name, by `BIND(… AS ?x)` or `(… AS ?x)` at any
@@ -373,8 +377,27 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a
   sub-`SELECT`, answers the bound node, an implicit group over no rows answers
   `COUNT` 0 with the bound node, and `HAVING` and `ORDER BY` read it.
-  `ShaclPrebinding` is kept for compatibility; both of its values now select
-  the same rewrite.
+  `ShaclPrebinding` and `QueryOptions::with_prebinding` are kept for
+  compatibility and deprecated; both of its values select the same rewrite.
+  The engine lanes (prepared parameters, request substitutions) refuse only
+  the reassignment and answer `VALUES` and `MINUS` over a pre-bound name by
+  join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
+  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse both
+  per SHACL 1.2 SPARQL Extensions, Appendix A, now for every name a node
+  expression pre-binds: `VALUES ?value { … }` inside `sh:expression` is
+  refused at load as `VALUES $this { … }` already was. A query that reads
+  every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
+  nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
+  `EXISTS` or property-function call) skips the rewrite's expression walk,
+  which takes the SHACL allocation pins to 40 / 78 / 48 / 101 per focus node
+  ungoverned and 58 / 98 / 66 / 126 governed.
+- **rdflib compatibility:** `purrdf.compat.rdflib.Graph.query` answers a
+  query that assigns an `initBindings` variable as rdflib 7.6 does, by
+  rewriting the assignment inside the shim; the native `Store.query` and
+  `Store.prepare` keep refusing it.
+- **SPARQL grouping:** a `GROUP BY` condition that is only a variable,
+  bracketed or not, is a key: `SELECT ?s (COUNT(*) AS ?c) … GROUP BY (?s)` and
+  `GROUP BY ((?s))` answer as `GROUP BY ?s` does instead of being refused.
 
 ## [3.0.1] - 2026-10-02
 

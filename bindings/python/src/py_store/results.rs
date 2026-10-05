@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! SPARQL **Results** serialization / parsing for the `purrdf` Python extension
-//! (rdflib drop-in support).
+//! SPARQL **Results** serialization / parsing for the `purrdf` Python extension: the
+//! four W3C SPARQL Results codecs.
 //!
 //! The native SPARQL surface materializes a SELECT/ASK/CONSTRUCT result into the
 //! [`PyQuerySolutions`](super::query::PyQuerySolutions) family, but there was no
 //! way to emit a SELECT/ASK result in the four W3C SPARQL **Results** formats
 //! (JSON / XML / CSV / TSV) or to read one back. This module bridges the compat
-//! `Result` object model to [`purrdf_sparql_results`](crate::sparql) so
-//! `rdflib`-style `Result.serialize(format=...)` / `Result.parse(...)` work.
+//! `Result` object model to [`purrdf_sparql_results`](crate::sparql); the shim's
+//! `Result.serialize(format=...)` / `Result.parse(...)` call these codecs.
 //!
 //! Every emitter is byte-deterministic by construction (the crate's hand-rolled
 //! writers), so goldens are stable. Reads support JSON and XML (the two formats

@@ -138,8 +138,8 @@ impl PyStore {
         Ok(())
     }
 
-    /// Remove a single quad. No-op if the quad is absent (matches the RDFLib
-    /// `Graph.remove` contract, which silently ignores misses).
+    /// Remove a single quad. No-op if the quad is absent: removing a member a set
+    /// does not hold leaves the set unchanged.
     fn remove(mut slf: PyRefMut<'_, Self>, quad: &PyQuad) -> PyResult<()> {
         slf.as_super()
             .inner
