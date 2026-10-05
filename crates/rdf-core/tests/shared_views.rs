@@ -803,8 +803,11 @@ fn blanks_referenced_only_inside_composite_literals_stay_independent() {
     ));
 }
 
+/// The pre-freeze check charges exactly what the frozen delta retains, so an
+/// oversized delta is refused before any freeze: no work is done or counted, and a
+/// later admitted snapshot counts its one freeze and the text it copied.
 #[test]
-fn post_freeze_retention_refusal_counts_completed_work_without_publishing() {
+fn an_oversized_delta_is_refused_before_the_freeze_and_counts_no_work() {
     let base = RdfDatasetBuilder::new().freeze().unwrap();
     let mut mutable = MutableDataset::new(base.clone());
     mutable
@@ -824,13 +827,13 @@ fn post_freeze_retention_refusal_counts_completed_work_without_publishing() {
         ..ViewLimits::default()
     };
     assert!(mutable.snapshot_view_with_limits(limited).is_err());
-    assert_eq!(mutable.work_stats().freezes, 1);
-    assert_eq!(mutable.work_stats().materializations, 0);
-    assert!(mutable.work_stats().copied_text_bytes >= 8192);
+    assert_eq!(mutable.work_stats(), ViewWork::default());
     assert_eq!(base.quad_count(), 0);
     let successful = mutable.snapshot_view().unwrap();
     assert_eq!(successful.quads().count(), 1);
-    assert_eq!(mutable.work_stats().freezes, 2);
+    assert_eq!(mutable.work_stats().freezes, 1);
+    assert_eq!(mutable.work_stats().materializations, 0);
+    assert!(mutable.work_stats().copied_text_bytes >= 8192);
 }
 
 /// `count` graphs declared on a mutable layer over `base`, none owning a row.
