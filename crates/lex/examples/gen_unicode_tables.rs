@@ -16,6 +16,7 @@
 //! | `idna` | `crates/iri/src/idna_tables.rs` | the RFC 5892 derived property, Joining_Type, Bidi_Class, the Appendix A scripts, the combining marks, NFKC_Casefold |
 //! | `ecma-properties` | `crates/jsonschema/src/ecma/property_tables.rs` | the property names and values an ECMA-262 `\p{…}` escape may spell |
 //! | `ecma-ranges` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | the code point ranges of each of those properties, and simple case folding |
+//! | `xpath` | `crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs` | XPath categories, blocks and the direct full-case-variant relation |
 //!
 //! Every UCD file read names its release in its header, and the generator
 //! refuses to run unless each names [`UNICODE_VERSION`]. The `normalization`
@@ -151,6 +152,7 @@ fn assert_one_version() {
         "PropertyValueAliases.txt",
         "ScriptExtensions.txt",
         "Scripts.txt",
+        "SpecialCasing.txt",
         "WordBreakProperty.txt",
         "GraphemeBreakProperty.txt",
         "GraphemeBreakTest.txt",
@@ -182,6 +184,9 @@ struct Entry {
     /// The decomposition mapping (one level, as written), and whether it is a
     /// compatibility (`<tag>`) mapping.
     decomposition: Option<(bool, Vec<u32>)>,
+    /// The simple mappings; unconditional special casing supplies full ones.
+    upper: Option<u32>,
+    lower: Option<u32>,
 }
 
 /// Every assigned code point's entry, with the `First`/`Last` ranges
@@ -211,6 +216,8 @@ fn unicode_data() -> BTreeMap<u32, Entry> {
             general_category: f[2].to_owned(),
             ccc: f[3].parse().expect("numeric combining class"),
             decomposition,
+            upper: (!f[12].is_empty()).then(|| hex(f[12])),
+            lower: (!f[13].is_empty()).then(|| hex(f[13])),
         };
         if f[1].ends_with(", First>") {
             range_start = Some((point, entry));
@@ -2222,20 +2229,7 @@ fn ecma_ranges() -> String {
         &doc.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     emit_version_assertion(&mut out);
-    out.push_str("pub(super) const RANGES: &[(&str, &[(u32, u32)])] = &[\n");
-    for (name, spans) in &properties {
-        let _ = writeln!(out, "    (\"{name}\", &[");
-        for &(low, high) in spans {
-            let _ = writeln!(
-                out,
-                "        ({}, {}),",
-                grouped_hex(low),
-                grouped_hex(high)
-            );
-        }
-        out.push_str("    ]),\n");
-    }
-    out.push_str("];\n");
+    emit_named_spans(&mut out, "RANGES", &properties);
 
     let mut folding: BTreeMap<u32, u32> = BTreeMap::new();
     for f in data_lines(&read("CaseFolding.txt")) {
@@ -2273,6 +2267,144 @@ fn ecma_ranges() -> String {
     out
 }
 
+/// A named, sorted range table; both regexp dialects use the same emission.
+fn emit_named_spans(out: &mut String, constant: &str, table: &BTreeMap<String, Spans>) {
+    let _ = writeln!(
+        out,
+        "pub(super) const {constant}: &[(&str, &[(u32, u32)])] = &["
+    );
+    for (name, spans) in table {
+        let _ = writeln!(out, "    (\"{name}\", &[");
+        for &(low, high) in spans {
+            let _ = writeln!(
+                out,
+                "        ({}, {}),",
+                grouped_hex(low),
+                grouped_hex(high)
+            );
+        }
+        out.push_str("    ]),\n");
+    }
+    out.push_str("];\n");
+}
+
+// ---------------------------------------------------------------------------
+// `xpath`: categories, blocks and full case variants, without a transitive fold.
+
+type FullCaseMappings = [BTreeMap<u32, Vec<u32>>; 2];
+
+fn set_case_mapping(table: &mut BTreeMap<u32, Vec<u32>>, point: u32, image: Vec<u32>) {
+    if image == [point] {
+        table.remove(&point);
+    } else {
+        table.insert(point, image);
+    }
+}
+
+/// Lower and upper full mappings of a character in isolation. Conditional
+/// locale/context rules do not apply to F&O's single-character comparison.
+fn xpath_case_mappings() -> FullCaseMappings {
+    let mut mappings: FullCaseMappings = [BTreeMap::new(), BTreeMap::new()];
+    for (point, entry) in unicode_data() {
+        if let Some(lower) = entry.lower {
+            set_case_mapping(&mut mappings[0], point, vec![lower]);
+        }
+        if let Some(upper) = entry.upper {
+            set_case_mapping(&mut mappings[1], point, vec![upper]);
+        }
+    }
+    for f in data_lines(&read("SpecialCasing.txt")) {
+        assert!(
+            f.len() >= 5,
+            "SpecialCasing.txt row has fewer than five fields"
+        );
+        if f[4].is_empty() {
+            let point = hex(f[0]);
+            set_case_mapping(&mut mappings[0], point, hex_list(f[1]));
+            set_case_mapping(&mut mappings[1], point, hex_list(f[3]));
+        }
+    }
+    mappings
+}
+
+/// Direct same-full-lower OR same-full-upper neighbors. Unioning the two
+/// partitions per character does not close that relation transitively.
+fn xpath_case_variants(mappings: &FullCaseMappings) -> BTreeMap<u32, BTreeSet<u32>> {
+    let mut variants: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    for mapping in mappings {
+        let mut groups: BTreeMap<Vec<u32>, Vec<u32>> = BTreeMap::new();
+        for (&point, image) in mapping {
+            groups.entry(image.clone()).or_default().push(point);
+        }
+        // A singleton image also contains its identity-mapped character.
+        // No unassigned code-point sweep or runtime Unicode inference is used.
+        for (image, members) in &mut groups {
+            if let [only] = image[..]
+                && !mapping.contains_key(&only)
+            {
+                members.push(only);
+            }
+        }
+        for members in groups.values() {
+            for &point in members {
+                variants.entry(point).or_default().extend(members);
+            }
+        }
+    }
+    variants.retain(|_, neighbors| neighbors.len() > 1);
+    variants
+}
+
+fn xpath() -> String {
+    let mut categories = category_spans();
+    for kind in ["L", "M", "N", "P", "Z", "S", "C"] {
+        let spans = merge(
+            categories
+                .iter()
+                .filter(|(name, _)| name.len() == 2 && name.starts_with(kind))
+                .flat_map(|(_, spans)| spans.iter().copied()),
+        );
+        categories.insert(kind.to_owned(), spans);
+    }
+    let blocks: BTreeMap<String, Spans> = records("Blocks.txt")
+        .into_iter()
+        .map(|(low, high, f)| {
+            (
+                purrdf_testkit::ucd::xsd_block_escape_name(&f[0]),
+                vec![(low, high)],
+            )
+        })
+        .collect();
+    let variants = xpath_case_variants(&xpath_case_mappings());
+    let source = source_line("`UnicodeData.txt`, `SpecialCasing.txt` and `Blocks.txt`");
+    let mut doc = vec![
+        "XPath general categories, block escapes and direct full-case variants.".to_owned(),
+        "Case variants compare full lower OR upper mappings, without transitive closure."
+            .to_owned(),
+        String::new(),
+    ];
+    doc.extend(wrap(&source, 76));
+    let mut out = String::new();
+    emit_header(
+        &mut out,
+        "xpath",
+        &doc.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    emit_version_assertion(&mut out);
+    emit_named_spans(&mut out, "CATEGORIES", &categories);
+    emit_named_spans(&mut out, "BLOCKS", &blocks);
+    out.push_str("pub(super) const CASE_VARIANTS: &[(u32, &[u32])] = &[\n");
+    for (point, neighbors) in variants {
+        let _ = write!(out, "    ({}, &[", grouped_hex(point));
+        for neighbor in neighbors {
+            let _ = write!(out, "{},", grouped_hex(neighbor));
+        }
+        out.push_str("]),\n");
+    }
+    out.push_str("];\n");
+    out
+}
+
 fn main() {
     let set = std::env::args().nth(1).unwrap_or_default();
     assert_one_version();
@@ -2282,10 +2414,91 @@ fn main() {
         "idna" => idna(),
         "ecma-properties" => ecma_properties(),
         "ecma-ranges" => ecma_ranges(),
+        "xpath" => xpath(),
         other => panic!(
             "unknown table set {other:?}: expected normalization, text, idna, ecma-properties or \
-             ecma-ranges"
+             ecma-ranges or xpath"
         ),
     };
     print!("{out}");
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod xpath_tests {
+    use super::{category_spans, xpath_case_mappings, xpath_case_variants};
+
+    #[test]
+    fn full_mapping_vectors_include_unconditional_expansions_and_ignore_locale_rules() {
+        let [lower, upper] = xpath_case_mappings();
+        assert_eq!(upper[&0xDF], [0x53, 0x53]);
+        assert_eq!(upper[&0xFB05], [0x53, 0x54]);
+        assert_eq!(upper[&0xFB06], [0x53, 0x54]);
+        assert_eq!(lower[&0x130], [0x69, 0x307]);
+        assert_eq!(lower[&0x49], [0x69]);
+        assert_eq!(upper[&0x131], [0x49]);
+        assert_eq!(upper[&0x1F80], [0x1F08, 0x399]);
+    }
+
+    #[test]
+    fn frozen_case_relation_is_direct_and_never_transitively_closed() {
+        let variants = xpath_case_variants(&xpath_case_mappings());
+        for (left, right, expected) in [
+            (0x69, 0x131, true),    // i and dotless i share uppercase I.
+            (0x69, 0x130, false),   // Dotted I has a full two-character lower image.
+            (0xFB05, 0xFB06, true), // Both ligatures have the full upper image ST.
+            (0xDF, 0x1E9E, true),   // Sharp s and capital sharp s share lowercase.
+            (0x3B8, 0x3D1, true),   // Theta and theta symbol share uppercase.
+            (0x3B8, 0x3F4, true),   // Theta and capital theta symbol share lowercase.
+            (0x3D1, 0x3F4, false),  // Those two neighbors are not variants of each other.
+            (0x41, 0x61, true),
+            (0x41, 0x62, false),
+        ] {
+            assert_eq!(
+                variants
+                    .get(&left)
+                    .is_some_and(|neighbors| neighbors.contains(&right)),
+                expected,
+                "U+{left:04X}, U+{right:04X}"
+            );
+            assert_eq!(
+                variants
+                    .get(&right)
+                    .is_some_and(|neighbors| neighbors.contains(&left)),
+                expected,
+                "reversed U+{right:04X}, U+{left:04X}"
+            );
+        }
+    }
+
+    #[test]
+    fn category_vectors_cover_assigned_unassigned_private_and_surrogate_points() {
+        let categories = category_spans();
+        for (point, category) in [
+            (0x41, "Lu"),
+            (0x61, "Ll"),
+            (0x30, "Nd"),
+            (0x660, "Nd"),
+            (0x300, "Mn"),
+            (0x378, "Cn"),
+            (0xE000, "Co"),
+            (0xD800, "Cs"),
+            (0x10_FFFF, "Cn"),
+        ] {
+            assert!(
+                categories[category]
+                    .iter()
+                    .any(|&(low, high)| low <= point && point <= high)
+            );
+            assert_eq!(
+                categories
+                    .values()
+                    .filter(|spans| spans
+                        .iter()
+                        .any(|&(low, high)| low <= point && point <= high))
+                    .count(),
+                1,
+                "U+{point:04X} belongs to exactly its general category"
+            );
+        }
+    }
 }

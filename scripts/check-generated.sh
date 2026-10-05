@@ -55,7 +55,7 @@ cargo run -p purrdf-core --example gen_unicode_blocks --locked \
 #   idna            - purrdf-iri: the RFC 5892 derived property and the IDNA tables
 #   ecma-properties - purrdf-jsonschema: the names an ECMA-262 `\p{…}` may spell
 #   ecma-ranges     - purrdf-jsonschema: those properties' ranges, simple folding
-for set in normalization text idna ecma-properties ecma-ranges; do
+for set in normalization text idna ecma-properties ecma-ranges xpath; do
   cargo run -p purrdf-lex --example gen_unicode_tables --locked -- "$set" \
     | rustfmt --edition 2024 --emit stdout \
     > "$tmp/unicode-$set.rs"
@@ -121,6 +121,7 @@ sync_file "$tmp/unicode-text.rs" crates/text/src/unicode_tables.rs
 sync_file "$tmp/unicode-idna.rs" crates/iri/src/idna_tables.rs
 sync_file "$tmp/unicode-ecma-properties.rs" crates/jsonschema/src/ecma/property_tables.rs
 sync_file "$tmp/unicode-ecma-ranges.rs" crates/jsonschema/src/ecma/unicode_ranges.rs
+sync_file "$tmp/unicode-xpath.rs" crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs
 sync_file "$tmp/html-entities.rs" crates/lex/src/html/entities.rs
 
 # Recompute every dictionary row, cost, collision report, canonical artifact and
