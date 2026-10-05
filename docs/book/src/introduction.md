@@ -117,10 +117,9 @@ dataset already in memory, through the evaluator's caller-keyed extension seams
 
 All three are pure functions of their input on every target — fixed point,
 exact rationals, or a pinned binary64 order, with canonical tie-breaks — and
-the claim is executed rather than argued: the text and kNN determinism tests
-run the same body natively and on `wasm32-unknown-unknown`, and
-`make geo-determinism` compares the two targets byte for byte. They are
-Rust-host seams: a host registers an index or space under its own IRIs, and
+native Rust tests pin their numeric and serialized expectations. `make wasm`
+builds all three crates for `wasm32-unknown-unknown`; focused WASM tests exercise
+actual dispatch, SIMD kernels and host interfaces. They are Rust-host seams: a host registers an index or space under its own IRIs, and
 that host may itself be compiled to wasm32. The shipped npm package and Python
 wheel do not yet expose these three relations.
 

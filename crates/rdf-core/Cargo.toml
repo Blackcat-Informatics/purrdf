@@ -253,10 +253,8 @@ harness = false
 # The CSV field scanner's kernel differential -- the portable oracle, the live
 # dispatch and every explicit vector kernel this build compiles -- run through
 # the doc-hidden `purrdf_core::csv::backend` module on `purrdf_testkit`'s
-# `harness = false` runner, so the same named cases run natively under
-# `cargo test` and on wasm32-unknown-unknown in Node under
-# scripts/wasm-test-runner.sh (`make wasm-test`), baseline and +simd128 --
-# the one test in this crate that EXECUTES the wasm32 `simd128` kernel.
+# `harness = false` runner. Native Rust runs the full target; `make wasm-test`
+# selects the explicit simd128 kernel comparisons and dispatch assertion.
 [[test]]
 name = "csv_scan_wasm"
 harness = false

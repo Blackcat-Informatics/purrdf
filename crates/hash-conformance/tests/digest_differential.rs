@@ -13,9 +13,8 @@
 //! Every record is also hashed in two streamed pieces, split at a point drawn
 //! from its seed, which must agree with the one-shot digest.
 //!
-//! The target is `harness = false` on `purrdf_testkit`'s runner, so the same
-//! cases run natively under `cargo test` and on `wasm32-unknown-unknown` in
-//! Node (`make wasm-test`), where only the portable paths exist.
+//! Native Rust runs this complete frozen corpus on the shared harness.
+//! WASM execution is reserved for actual target dispatch and SIMD kernels.
 
 use purrdf_hash::backend::{Crc32Backend, Sha1Backend};
 use purrdf_hash::dispatch::{assert_required_available, host_advertises};
