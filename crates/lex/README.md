@@ -48,6 +48,7 @@ the workspace share.
 | `walk` | `WorkList`, the heap work list every whole-tree walk keeps; `Nested` and `Dismantle`, an owned child box whose drop takes the nesting apart without recursing; `write_debug` over `Tok`, a recursive type's `Debug` with the derive's exact bytes | — |
 | `assoc` | `get`, `get_mut` and `insert` over an ordered `[(K, V)]` association list, read by first match and written by replacing the first match or appending | — |
 | `constructors!`, `variant_from!`, `message_error!` | Constructors whose whole body is one conversion (text parameters are `impl Into<String>`); `From` impls that wrap a source into one enum variant, or a rendering of several sources (`Variant(A, B) as convert`); an error type whose whole content is one message | — |
+| `diagnostic` | `DiagnosticPresentation`: a diagnostic's stable message identity and named typed arguments (`DiagnosticParameter`, `DiagnosticValue`), validated against an English template with `{name}`/`{name:?}` placeholders and rendered once; `to_json` keeps exact integers as typed decimal strings; refusals are `DiagnosticPresentationError`. `purrdf_core::diagnostic` re-exports the same types | — |
 
 ## Why a scanner may not approximate
 
