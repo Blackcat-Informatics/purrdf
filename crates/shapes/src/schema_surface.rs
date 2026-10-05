@@ -2848,13 +2848,13 @@ fn assemble_surface(
     let class_expressions = class_expression_report(
         request.mode(),
         class_axioms,
-        &datatype_axioms,
         &class_facts,
         &statuses,
         supertypes,
         &mut classes,
         &datatypes,
     )?;
+    let class_expressions = with_datatype_definitions(class_expressions, &datatype_axioms);
 
     let surface = SchemaSurface {
         classes,
@@ -3176,12 +3176,46 @@ impl ConjunctContext<'_> {
     }
 }
 
+/// Add each anonymous datatype definition to the manifest as an axiom whose
+/// one component is the defining data range.
+fn with_datatype_definitions(
+    mut report: SchemaClassExpressionReport,
+    datatype_axioms: &[(SchemaCoverageProvenance, String)],
+) -> SchemaClassExpressionReport {
+    if datatype_axioms.is_empty() {
+        return report;
+    }
+    let (outcome, reason) = if report.mode == SchemaSurfaceMode::ShapedOnly {
+        (SchemaExpressionOutcome::Excluded, SHAPED_ONLY_REASON)
+    } else {
+        (
+            SchemaExpressionOutcome::Approximated,
+            DATATYPE_DEFINITION_REASON,
+        )
+    };
+    for (provenance, range) in datatype_axioms {
+        report.axioms.push(SchemaClassExpressionAxiom {
+            provenance: provenance.clone(),
+            components: vec![SchemaExpressionComponent {
+                expression: range.clone(),
+                property_iri: None,
+                outcome,
+                reason: reason.to_owned(),
+            }],
+            classes: Vec::new(),
+        });
+    }
+    report
+        .axioms
+        .sort_by(|left, right| left.provenance.cmp(&right.provenance));
+    report
+}
+
 /// Classify every inherited conjunct of every eligible class, route the
 /// class-level projections onto the surface, and assemble the manifest.
 fn class_expression_report(
     mode: SchemaSurfaceMode,
     class_axioms: &[ClassAxiom],
-    datatype_axioms: &[(SchemaCoverageProvenance, String)],
     class_facts: &BTreeMap<&str, ClassExpressionFacts<'_>>,
     statuses: &BTreeMap<(String, String), SchemaCoverageStatus>,
     supertypes: &BTreeMap<String, BTreeSet<String>>,
@@ -3246,30 +3280,6 @@ fn class_expression_report(
                 components: components.into_iter().collect(),
             });
         }
-    }
-    for (provenance, range) in datatype_axioms {
-        let (outcome, reason) = if mode == SchemaSurfaceMode::ShapedOnly {
-            (SchemaExpressionOutcome::Excluded, SHAPED_ONLY_REASON)
-        } else {
-            (
-                SchemaExpressionOutcome::Approximated,
-                DATATYPE_DEFINITION_REASON,
-            )
-        };
-        axioms
-            .entry(provenance.clone())
-            .or_insert_with(|| SchemaClassExpressionAxiom {
-                provenance: provenance.clone(),
-                components: Vec::new(),
-                classes: Vec::new(),
-            })
-            .components
-            .push(SchemaExpressionComponent {
-                expression: range.clone(),
-                property_iri: None,
-                outcome,
-                reason: reason.to_owned(),
-            });
     }
     let mut axioms: Vec<SchemaClassExpressionAxiom> = axioms.into_values().collect();
     for axiom in &mut axioms {

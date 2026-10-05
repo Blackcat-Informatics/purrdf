@@ -92,7 +92,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   input: a restriction without `owl:onProperty`, conflicting or non-integer
   cardinalities, an ill-formed or cyclic RDF list, or an expression that
   contains itself. Schemas and coverage reports for ontologies with only IRI
-  objects are byte-identical. Every schema cache key changes once, because
+  objects are byte-identical, except where an `owl:equivalentClass` names a
+  datatype, which is now a datatype definition. Every schema cache key changes once, because
   the policy salt moves to `owl-rdfs-fragment-v2`: axioms with a blank-node
   subject, which the surface used to skip, now reach the manifest.
 
