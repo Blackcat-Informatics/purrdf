@@ -197,6 +197,76 @@ fn reached_native_query_resources_use_machine_codes_and_recover_with_current_lim
 }
 
 #[test]
+fn dated_some_value_discards_ordinary_query_failures_but_retains_resource_refusals() {
+    let shapes = r"
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        ex:S a sh:NodeShape; sh:targetNode ex:n;
+            sh:property [ sh:path ex:p; sh:someValue [
+                sh:or ( [ sh:class ex:Duck ] [ sh:sparql [
+                    sh:select 'SELECT $this WHERE { FILTER(<http://example.org/missingFunction>($this)) }'
+                ] ] )
+            ] ] .
+    ";
+    let first = "<http://example.org/n> <http://example.org/p> <http://example.org/aBad> .";
+    let data = format!(
+        "{first}\n<http://example.org/n> <http://example.org/p> <http://example.org/zGood> .\n\
+         <http://example.org/zGood> <{}> <http://example.org/Duck> .",
+        purrdf_iri::vocab::rdf::TYPE
+    );
+    let resource_shapes = shapes.replace(
+        "<http://example.org/missingFunction>($this)",
+        "REGEX(STR($this), \"bad\", \"i\")",
+    );
+    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+        let options = ValidationOptions::default().with_profile(profile);
+        let discarded = validate_complete_documents(shapes, None, &data, &options, &[]);
+        assert_eq!(
+            complete_validation_status(&discarded),
+            CompleteValidationStatus::Conforms,
+            "{profile:?}: the later Duck conforms despite the earlier ordinary failure"
+        );
+        assert!(discarded.unwrap().results().next().is_none());
+        assert_eq!(
+            complete_validation_status(&validate_complete_documents(
+                shapes,
+                None,
+                first,
+                &options,
+                &[]
+            )),
+            CompleteValidationStatus::ExecutionFailure,
+            "{profile:?}: without a conforming value the ordinary failure remains"
+        );
+        let low = options.clone().with_xpath_regex(
+            profile.xpath_profile().unwrap(),
+            Limits::new().with(Resource::MatchSteps, 0),
+        );
+        let refused = validate_complete_documents(&resource_shapes, None, &data, &low, &[]);
+        assert_eq!(
+            complete_validation_status(&refused),
+            CompleteValidationStatus::ResourceRefused,
+            "{profile:?}: a later conforming value cannot erase execution refusal"
+        );
+        assert!(matches!(&refused,
+            Err(purrdf_shapes::report::CompleteValidationError::XPath(error))
+                if matches!(error.as_ref(), purrdf_shapes::xpath::XPathValidationError::Query(diagnostic)
+                    if diagnostic.code == Resource::MatchSteps.code())));
+        assert_eq!(
+            complete_validation_status(&validate_complete_documents(
+                &resource_shapes,
+                None,
+                &data,
+                &options,
+                &[]
+            )),
+            CompleteValidationStatus::Conforms,
+            "{profile:?}: current higher limits recover the same authored request"
+        );
+    }
+}
+
+#[test]
 fn shared_product_doors_apply_the_current_bundle_before_source_admission() {
     let shapes = Arc::new(purrdf_shapes::engine::parse_shapes(SHAPES, None).unwrap());
     let prepared = PreparedShapes::new(shapes);

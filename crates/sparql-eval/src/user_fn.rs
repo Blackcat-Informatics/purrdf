@@ -2287,7 +2287,7 @@ mod tests {
                 EX_NATIVE_ERR,
                 Arity::Exact(0),
                 Volatility::Stable,
-                Arc::new(|_| Err(EvalError::function("earlier ordinary failure"))),
+                Arc::new(|_| Err(EvalError::function("earlier host failure"))),
             );
             let bound = BoundFunctionRegistry::bound_for_test(registry);
             let dataset = empty_dataset();
@@ -2390,10 +2390,16 @@ mod tests {
                         },
                         |_| (),
                     );
-                result.expect_err("earlier worker fails ordinarily")
+                result.expect_err("earlier host worker fails")
             });
-            assert_eq!(error, EvalError::function("earlier ordinary failure"));
-            crate::engine::eval_diagnostic_code(&error, "native-sparql-query-eval");
+            assert_eq!(
+                error,
+                EvalError::function_operational("earlier host failure")
+            );
+            assert_eq!(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-query-eval"),
+                EvalError::FUNCTION_OPERATIONAL_CODE
+            );
             assert_eq!(exact.calls.lock().expect("calls").len(), 1);
             assert!(
                 exact.observed.lock().expect("observed").is_empty(),
