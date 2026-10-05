@@ -182,6 +182,16 @@ impl State {
     }
 }
 
+/// The `(property, forward?)` edge patterns that realize a role, sorted ascending. Shared
+/// rather than cloned: a neighbourhood read is the most-called scan in either calculus, and a
+/// cached closure is read far more often than it is built.
+pub(crate) type Achievers = std::rc::Rc<[(u32, bool)]>;
+
+/// Whether `pattern` realizes the role `achievers` was closed for.
+fn realizes(achievers: &[(u32, bool)], pattern: (u32, bool)) -> bool {
+    achievers.binary_search(&pattern).is_ok()
+}
+
 /// A completion graph under construction.
 #[derive(Clone)]
 pub(crate) struct State {
@@ -758,7 +768,7 @@ pub(crate) struct Graph<'a> {
     /// see [`crate::owl_dl::clause::ClauseSet::untriggered`]): those clauses are retried at
     /// every node of every round, and before this cache each retry rebuilt the same closure
     /// from scratch.
-    achiever_cache: RefCell<BTreeMap<Role, BTreeSet<(u32, bool)>>>,
+    achiever_cache: RefCell<BTreeMap<Role, Achievers>>,
     /// Absorbed range clauses (`⊤ ⊑ ∀r.DR`, from `rdfs:range` over a data property),
     /// pre-indexed by the edge role — the narrowed data-range ids a `≥n r.DR` counting
     /// question at [`Self::data_clashes`] must fold in.
@@ -1068,9 +1078,9 @@ impl<'a> Graph<'a> {
             // inverse `R` (x the source, forward achiever) and `parent → n` for a named `R`
             // (x the target, inverse achiever).
             let realized = if inverted {
-                ach.contains(&(prop, true))
+                realizes(&ach, (prop, true))
             } else {
-                ach.contains(&(prop, false))
+                realizes(&ach, (prop, false))
             };
             if realized && seen.insert(y) {
                 out.push(y);
@@ -1295,14 +1305,14 @@ impl<'a> Graph<'a> {
         let mut out: Vec<usize> = Vec::new();
         let mut seen: BTreeSet<usize> = BTreeSet::new();
         self.step(st, x, &ach, &mut seen, &mut out);
-        for &(prop, dir) in &ach {
+        for &(prop, dir) in ach.iter() {
             if !self.kb.transitive.contains(&prop) {
                 continue;
             }
             if self.work.exhausted() {
                 return out;
             }
-            let single: BTreeSet<(u32, bool)> = std::iter::once((prop, dir)).collect();
+            let single = [(prop, dir)];
             // Breadth-first over this one transitive role, seeded from `x`'s own step.
             let mut frontier: Vec<usize> = Vec::new();
             self.step(st, x, &single, &mut BTreeSet::new(), &mut frontier);
@@ -1335,7 +1345,7 @@ impl<'a> Graph<'a> {
         &self,
         st: &State,
         x: usize,
-        ach: &BTreeSet<(u32, bool)>,
+        ach: &[(u32, bool)],
         seen: &mut BTreeSet<usize>,
         out: &mut Vec<usize>,
     ) {
@@ -1358,10 +1368,10 @@ impl<'a> Graph<'a> {
             let (from, to, prop) = st.edges[edge];
             let f = find(st, from);
             let t = find(st, to);
-            if ach.contains(&(prop, true)) && f == x && seen.insert(t) {
+            if realizes(ach, (prop, true)) && f == x && seen.insert(t) {
                 out.push(t);
             }
-            if ach.contains(&(prop, false)) && t == x && seen.insert(f) {
+            if realizes(ach, (prop, false)) && t == x && seen.insert(f) {
                 out.push(f);
             }
         }
@@ -1376,10 +1386,10 @@ impl<'a> Graph<'a> {
     /// unit — a lookup and a clone of a small set — and only a MISS pays for the stack walk
     /// below, so the meter still moves on every call but the search now pays the closure's
     /// real cost once rather than once per call.
-    fn achievers(&self, role: Role) -> BTreeSet<(u32, bool)> {
+    fn achievers(&self, role: Role) -> Achievers {
         if let Some(cached) = self.achiever_cache.borrow().get(&role) {
             self.work.charge(1);
-            return cached.clone();
+            return std::rc::Rc::clone(cached);
         }
         let start = match role {
             Role::Named(p) => (p, true),
@@ -1402,7 +1412,7 @@ impl<'a> Graph<'a> {
                 // must never be memoized — a cached partial closure would silently answer every
                 // later call for this role, in this run or (were the cap raised) a later one,
                 // with fewer achievers than the role hierarchy actually has.
-                return set;
+                return set.into_iter().collect();
             }
             self.work.charge(1);
             if !set.insert((q, dir)) {
@@ -1419,8 +1429,12 @@ impl<'a> Graph<'a> {
                 }
             }
         }
-        self.achiever_cache.borrow_mut().insert(role, set.clone());
-        set
+        // Ascending, as `BTreeSet` iterates: [`realizes`] binary-searches it.
+        let closed: Achievers = set.into_iter().collect();
+        self.achiever_cache
+            .borrow_mut()
+            .insert(role, std::rc::Rc::clone(&closed));
+        closed
     }
 
     /// Whether `x` has a `role`-edge to itself, read through the role hierarchy and the
