@@ -3559,9 +3559,9 @@ fn configuration(
 pub struct PremiseIriError {
     /// The refused premise IRI, verbatim.
     iri: String,
-    /// The workspace IRI parser's condition: its parse refusal, or
-    /// [`purrdf_core::IriError::NotAbsoluteByGrammar`] for a well-formed relative reference
-    /// (the empty string included), since no base is ever applied to a premise IRI.
+    /// The workspace IRI parser's condition: its parse refusal ([`purrdf_core::IriError::Empty`]
+    /// for the empty string), or [`purrdf_core::IriError::NotAbsoluteByGrammar`] for a
+    /// well-formed relative reference, since no base is ever applied to a premise IRI.
     cause: purrdf_core::IriError,
 }
 
@@ -3628,8 +3628,9 @@ impl std::error::Error for PremiseIriError {
 /// Check that every premise IRI is an absolute IRI, in order, refusing the first that is not.
 ///
 /// The workspace IRI parser ([`purrdf_iri::is_absolute`]) judges each one. A string it refuses
-/// carries its parse condition; a well-formed relative reference, the empty string included,
-/// carries [`purrdf_core::IriError::NotAbsoluteByGrammar`] with no base in scope, because a
+/// carries its parse condition (the empty string carries [`purrdf_core::IriError::Empty`]); a
+/// well-formed relative reference carries [`purrdf_core::IriError::NotAbsoluteByGrammar`]
+/// with no base in scope, because a
 /// premise IRI is compared with absolute `owl:imports` objects and no base is ever applied to
 /// it. [`premise_import_map`] runs this first, so every entailment service on this boundary —
 /// and every host that calls one — refuses the same premise IRI with the same message; a host

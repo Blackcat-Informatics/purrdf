@@ -62,8 +62,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   every premise IRI is an absolute IRI, using the workspace IRI parser. A
   refusal is a `PremiseIriError`. It names the IRI and has a typed
   `presentation()` (`premise-iri-not-absolute`) whose `detail` is the IRI
-  parser's own `iri-*` condition. A relative reference, including the empty
-  string, has the detail `iri-not-absolute-by-grammar.absent`.
+  parser's own `iri-*` condition. A relative reference has the detail
+  `iri-not-absolute-by-grammar.absent`; the empty string has `iri-empty`.
 - **SPARQL query census and prepared parameters:**
   `purrdf_sparql_algebra::Query::for_each_variable` visits every variable a
   query mentions, including `CONSTRUCT` template slots and `DESCRIBE` targets.

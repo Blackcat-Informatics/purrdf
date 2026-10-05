@@ -80,7 +80,7 @@ fn the_presentation_nests_the_iri_parser_condition() {
         ("http://example.org/%zz", Some("iri-bad-percent-encoding")),
         ("lib", Some("iri-not-absolute-by-grammar.absent")),
         ("../lib", Some("iri-not-absolute-by-grammar.absent")),
-        ("", None),
+        ("", Some("iri-empty")),
     ] {
         let error = check_premise_iris(&[ONTOLOGY, premise]).expect_err(premise);
         assert_eq!(error.iri(), premise);
