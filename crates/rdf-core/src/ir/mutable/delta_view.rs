@@ -72,6 +72,12 @@ pub struct DeltaDatasetView {
 }
 
 impl DeltaDatasetView {
+    /// The construction charge of one term of the frozen delta: its slot in the
+    /// delta id table plus the hash entries that map it to a base id, at four times
+    /// their payload for table slack.
+    pub(super) const AUXILIARY_BYTES_PER_DELTA_TERM: usize = size_of::<DeltaViewId>()
+        + 4 * (size_of::<(TermId, TermId)>() + size_of::<(TermId, Option<TermId>)>());
+
     pub(super) fn new(
         base: Arc<RdfDataset>,
         delta: Arc<RdfDataset>,
@@ -85,10 +91,7 @@ impl DeltaDatasetView {
         stats.auxiliary_bytes = delta
             .as_ref()
             .term_count()
-            .saturating_mul(
-                size_of::<DeltaViewId>()
-                    + 4 * (size_of::<(TermId, TermId)>() + size_of::<(TermId, Option<TermId>)>()),
-            )
+            .saturating_mul(Self::AUXILIARY_BYTES_PER_DELTA_TERM)
             .saturating_add(
                 suppressed
                     .len()

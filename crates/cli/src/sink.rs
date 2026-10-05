@@ -15,8 +15,9 @@
 //! `--loss-ledger`. The ledger combines the **contract** losses for the
 //! `(source-codec → target-codec)` pair ([`pair_loss_ledger`], when both codec
 //! names are known) with the **realized** counts of what the serializer actually
-//! dropped ([`RealizedDrops`] — statement-layer rows, base-direction literals, and
-//! named-graph rows), each recorded as a runtime entry only when non-zero.
+//! dropped ([`RealizedDrops`] — statement-layer rows, base-direction literals,
+//! named-graph rows, and declared empty named graphs), each recorded as a runtime
+//! entry only when non-zero.
 //!
 //! The two halves are not interchangeable, and the realized half is the one that
 //! always reports: the contract half needs BOTH codec names, so a lane that
@@ -27,12 +28,13 @@
 use std::borrow::Cow;
 use std::io::Write;
 
+use purrdf_core::loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED;
 use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, PackBuilder, dataset_from_view, pair_loss_ledger,
+    DatasetView, LossEntry, LossLedger, PackBuilder, TermValue, dataset_from_view, pair_loss_ledger,
 };
 use purrdf_rdf::{
     JsonLdSerializeOptions, NativeRdfFormat, SerializeGraph, SerializeOptions, SourceFormat,
-    StatementLayer, serialize_dataset_to_writer_with,
+    StatementLayer, empty_named_graphs_dropped, serialize_dataset_to_writer_with,
 };
 
 use crate::error::CliError;
@@ -317,6 +319,11 @@ pub(crate) fn write_rdf<D: DatasetView>(
     validate_jsonld_options(target, jsonld_options)?;
     match target {
         SourceFormat::Native(format) => {
+            // Read before the first byte is written, so a refused read leaves no
+            // partial document behind. Empty for every target that spells an empty
+            // graph, and for a dataset that declares none.
+            let empty_named_graphs =
+                empty_named_graphs_dropped(view, format, SerializeGraph::Dataset)?;
             // Streamed: the document is written as it is produced rather than built
             // whole and handed over. The loss ledger is unaffected — the drop counts
             // come back in the report instead of the outcome, and mean the same.
@@ -349,6 +356,7 @@ pub(crate) fn write_rdf<D: DatasetView>(
                     statement_rows: report.statement_rows_dropped,
                     directional_literals: report.directional_literals_dropped,
                     named_graph_rows: report.named_graph_rows_dropped,
+                    empty_named_graphs,
                 },
             ))
         }
@@ -356,7 +364,9 @@ pub(crate) fn write_rdf<D: DatasetView>(
             let dataset = dataset_from_view(view)?;
             let bytes = PackBuilder::build_bytes(&dataset)?;
             write_out(out, &bytes)?;
-            // A pack is a lossless RDF-1.2 container: no ledger entries.
+            // A pack is a lossless RDF-1.2 container — base quads, the statement layer
+            // and declared empty named graphs (zero-row partitions) alike: no ledger
+            // entries.
             Ok(LossLedger::new())
         }
         // GTS is a READ-ONLY target for this pipeline: `format::refuse_gts_target`
@@ -390,7 +400,8 @@ pub(crate) fn validate_jsonld_options(
 ///
 /// The three counts partition the dropped rows — star layer, base direction, graph
 /// scoping — so no row is reported twice and none is reported under a cause that did
-/// not produce it.
+/// not produce it. The declared empty named graphs own no row, so they are listed
+/// beside the counts rather than inside them.
 struct RealizedDrops {
     /// RDF-1.2 statement-layer rows dropped because the target has no star layer.
     statement_rows: usize,
@@ -398,6 +409,8 @@ struct RealizedDrops {
     directional_literals: usize,
     /// Rows dropped because the target is a single-graph syntax.
     named_graph_rows: usize,
+    /// Declared named graphs with no row that the target has no spelling for.
+    empty_named_graphs: Vec<TermValue>,
 }
 
 /// Combine the contract losses for `(src_codec → dst_codec)` with the realized
@@ -412,6 +425,7 @@ fn build_ledger(
         statement_rows: statement_rows_dropped,
         directional_literals: directional_literals_dropped,
         named_graph_rows: named_graph_rows_dropped,
+        ref empty_named_graphs,
     } = realized;
     let mut ledger = match (src_codec, dst_codec) {
         (Some(from), Some(to)) => pair_loss_ledger(from, to),
@@ -453,6 +467,25 @@ fn build_ledger(
                  the statement-layer rows scoped to them) were DROPPED because the target \
                  format is a single-graph syntax with no named-graph construct — they are not \
                  folded into the default graph"
+            )),
+            location: None,
+        });
+    }
+    for graph in empty_named_graphs {
+        let name = match graph {
+            TermValue::Blank { label, .. } => format!("_:{label}"),
+            TermValue::Iri(iri) => format!("<{iri}>"),
+            // A graph name is an IRI or a blank node; anything else could not have
+            // been declared, but is still reported rather than dropped silently.
+            other => format!("{other:?}"),
+        };
+        ledger.record(LossEntry {
+            code: Cow::Borrowed(LOSS_EMPTY_NAMED_GRAPH_DROPPED),
+            from: Cow::Owned(src_codec.unwrap_or("unknown").to_string()),
+            to: Cow::Owned(dst_codec.unwrap_or("unknown").to_string()),
+            note: Cow::Owned(format!(
+                "the declared named graph {name} holds no row, and the target format has no \
+                 spelling for an empty named graph, so it was DROPPED"
             )),
             location: None,
         });

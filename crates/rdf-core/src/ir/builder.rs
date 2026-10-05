@@ -22,7 +22,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use hashbrown::HashTable;
-use purrdf_iri::{IriError, langtag};
+use purrdf_iri::IriError;
 
 use crate::blank_label::LabelAlphabet;
 use crate::{
@@ -689,7 +689,7 @@ impl RdfDatasetBuilder {
     /// the `xsd:string` default are applied here, so both entry points expand the
     /// datatype the same way rather than each spelling the rule.
     ///
-    /// The language tag is folded for the key ([`langtag::identity_fold`]) ONLY when
+    /// The language tag is folded for the key ([`purrdf_iri::langtag::identity_fold`]) ONLY when
     /// it is not already its own fold. BCP 47 tags are case-insensitive and ingress
     /// normalizes them, so the common case is a tag that is already folded and a
     /// fold whose output is a copy of its input. The LOOKUP path
@@ -728,13 +728,11 @@ impl RdfDatasetBuilder {
             self.intern_blank(&label, scope);
         }
 
-        let lowered = language
-            .filter(|tag| !langtag::is_identity_folded(tag))
-            .map(langtag::identity_fold);
+        let language = language.map(super::term::interned_language);
         self.interner.intern(TermLookup::Literal {
             lexical,
             datatype: datatype_id,
-            language: lowered.as_deref().or(language),
+            language: language.as_deref(),
             direction,
         })
     }
@@ -1300,6 +1298,26 @@ impl RdfDatasetBuilder {
     /// bound) and as the frozen dataset's term count.
     pub(crate) fn term_count(&self) -> usize {
         self.interner.term_count()
+    }
+
+    /// The terms, RDF rows and payload bytes freezing this builder now would
+    /// retain, given the number of distinct named graphs it names: exactly what the
+    /// frozen dataset's [`term_count`](RdfDataset::term_count),
+    /// [`rdf_row_count`](RdfDataset::rdf_row_count) and
+    /// [`rdf_payload_bytes`](RdfDataset::rdf_payload_bytes) will report. Every
+    /// table already holds one entry per distinct term or row, and freezing only
+    /// sorts and boxes them; the named-graph table is the one that freezing
+    /// deduplicates, so its distinct count is the caller's. Each quantity only
+    /// grows as interning proceeds.
+    pub(crate) fn pending_extent(&self, named_graphs: usize) -> (usize, usize, usize) {
+        let rows = self.quads.len() + self.reifiers.len() + self.annotations.len();
+        let payload = self.interner.arena.len()
+            + size_of_val(self.interner.terms.as_slice())
+            + size_of_val(self.quads.as_slice())
+            + size_of_val(self.reifiers.as_slice())
+            + size_of_val(self.annotations.as_slice())
+            + named_graphs * size_of::<TermId>();
+        (self.interner.term_count(), rows, payload)
     }
 
     /// The first IRI interned into this builder that violated the IR-boundary

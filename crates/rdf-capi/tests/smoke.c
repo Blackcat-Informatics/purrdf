@@ -577,7 +577,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.8.0` is pinned in tests/abi.rs. */
+     * literal `0.9.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -753,7 +753,49 @@ int main(int argc, char **argv) {
               contains_bytes(kbytes, klen, "http://g2"),
           "both graph names survive into n-quads");
     purrdf_buffer_free(kept);
+
+    /* The neighbouring dataset: graph rows, but no graph declared empty, so no
+     * target drops a declaration. */
+    size_t empty_dropped = 99;
+    rc = purrdf_serialize_empty_named_graphs_dropped(graph_dataset, "application/n-quads",
+                                                     &empty_dropped, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && empty_dropped == 0,
+          "a dataset with no declared empty graph drops none");
     purrdf_dataset_free(graph_dataset);
+
+    /* A TriG dataset declaring two graphs with no row, one IRI-named and one
+     * blank-named. N-Quads, HexTuples and Turtle cannot write an empty graph, and
+     * none of purrdf_serialize's three row counts can see a graph that owns no row;
+     * the added query reports them. TriG writes them, so it reports none. */
+    const char *declared_doc = "<http://s> <http://p> <http://o> .\n"
+                               "<http://g1> { <http://s> <http://p> <http://o2> . }\n"
+                               "<http://empty> { }\n"
+                               "_:bg { }\n";
+    PurrdfDataset *declared_dataset = NULL;
+    rc = purrdf_parse((const uint8_t *)declared_doc, strlen(declared_doc),
+                      "application/trig", NULL, NULL, &declared_dataset, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && declared_dataset != NULL,
+          "parse a trig document declaring empty graphs");
+    const char *lossy_targets[] = {"application/n-quads", "application/x-hextuples",
+                                   "text/turtle"};
+    for (size_t i = 0; i < sizeof lossy_targets / sizeof lossy_targets[0]; ++i) {
+        empty_dropped = 99;
+        rc = purrdf_serialize_empty_named_graphs_dropped(declared_dataset, lossy_targets[i],
+                                                         &empty_dropped, &error);
+        CHECK(rc == PURRDF_STATUS_OK && error == NULL && empty_dropped == 2,
+              "a target without an empty-graph spelling drops both declarations");
+    }
+    empty_dropped = 99;
+    rc = purrdf_serialize_empty_named_graphs_dropped(declared_dataset, "application/trig",
+                                                     &empty_dropped, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && empty_dropped == 0,
+          "trig writes declared empty graphs");
+    rc = purrdf_serialize_empty_named_graphs_dropped(declared_dataset, "application/trig",
+                                                     NULL, &error);
+    CHECK(rc == PURRDF_STATUS_NULL_POINTER, "a null out_count is refused");
+    purrdf_error_free(error);
+    error = NULL;
+    purrdf_dataset_free(declared_dataset);
 
     /* GTS round-trip (plain graph) */
     PurrdfBuffer *gts = NULL;
