@@ -210,11 +210,18 @@ pub struct MutableDataset {
     /// iterated for order.
     suppressed: FastSet<QuadKey>,
     suppressed_rows: usize,
+    /// Named graphs declared on top of the base, in declaration order, deduplicated:
+    /// each survives [`freeze`](Self::freeze) and every snapshot as a declared graph
+    /// whether or not it owns a quad.
+    declared_graphs: Vec<TermValue>,
     /// The live RDF row count — quads, reifier bindings and annotations, base and
-    /// added — of every base graph a mutation has touched. Seeded from the base on
-    /// first touch ([`RdfDataset::named_graph_row_count`]) and kept exact in O(1) by
-    /// every insert, removal, suppression and un-suppression after it.
-    graph_rows: FastMap<TermId, usize>,
+    /// added — of every named graph a mutation has touched, base-named or
+    /// delta-named. A base graph is seeded from the base on first touch
+    /// ([`RdfDataset::named_graph_row_count`]); a delta graph holds no base row, and
+    /// its first touch is the insert of its first row, so it is seeded with zero.
+    /// Kept exact in O(1) by every insert, removal, suppression and un-suppression
+    /// after it, so deciding whether a removal emptied a graph never scans.
+    graph_rows: FastMap<MutTermId, usize>,
     /// Base graphs a mutation emptied — removed their last row, or withdrew their
     /// declaration while they held none — and that hold no row now. Publication
     /// shares it with each snapshot, which withholds these graphs from named-graph
@@ -238,10 +245,66 @@ impl MutableDataset {
             next_added_ord: 0,
             suppressed: FastSet::default(),
             suppressed_rows: 0,
+            declared_graphs: Vec::new(),
             graph_rows: FastMap::default(),
             withdrawn_graphs: Arc::default(),
             work: super::view_accounting::WorkCounter::default(),
         }
+    }
+
+    /// Declare that the named graph `graph` exists, even if it never owns a quad —
+    /// the mutable twin of
+    /// [`RdfDatasetBuilder::declare_named_graph`]. The declaration survives
+    /// [`freeze`](Self::freeze) and [`snapshot_view`](Self::snapshot_view), where the
+    /// graph is listed among [`crate::DatasetView::named_graphs`]. Returns `false` when the
+    /// graph was already declared here or by the base.
+    ///
+    /// # Errors
+    ///
+    /// `rdf-ir-graph-name-invalid` when `graph` is neither an IRI nor a blank node,
+    /// and the shared IRI diagnostic code when it is a relative IRI.
+    pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, crate::RdfDiagnostic> {
+        if !matches!(graph, TermValue::Iri(_) | TermValue::Blank { .. }) {
+            return Err(crate::RdfDiagnostic::error(
+                "rdf-ir-graph-name-invalid",
+                "a declared named graph must be an IRI or blank node",
+            ));
+        }
+        check_value_absolute(&graph).map_err(|error| {
+            crate::RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
+        })?;
+        // A base graph keeps its one declaration: declaring it again after a mutation
+        // withdrew it restores the base's, so it is never listed twice.
+        if let Some(id) = self.base_graph(&graph) {
+            if !self.withdrawn_graphs.contains(&id) {
+                return Ok(false);
+            }
+            Arc::make_mut(&mut self.withdrawn_graphs).remove(&id);
+            return Ok(true);
+        }
+        if self.declared_graphs.contains(&graph) {
+            return Ok(false);
+        }
+        self.declared_graphs.push(graph);
+        Ok(true)
+    }
+
+    /// Every named graph this dataset carries as a declaration — the base's named
+    /// graphs a mutation has not withdrawn, then each graph declared since — whether
+    /// or not it owns a quad now.
+    pub fn declared_named_graphs(&self) -> impl Iterator<Item = TermValue> + '_ {
+        self.base
+            .named_graphs()
+            .filter(|id| !self.withdrawn_graphs.contains(id))
+            .map(|id| self.base_value(id))
+            .chain(self.declared_graphs.iter().cloned())
+    }
+
+    /// The base's id for `graph` when the base names it as a graph.
+    fn base_graph(&self, graph: &TermValue) -> Option<TermId> {
+        self.base
+            .term_id_by_value(graph)
+            .filter(|&id| self.base.named_graphs().any(|g| g == id))
     }
 
     /// The shared frozen base this dataset branched from.
@@ -251,9 +314,12 @@ impl MutableDataset {
     }
 
     /// Visit every retained blank identity without freezing or copying the dataset.
-    /// Includes suppressed base terms and blanks nested in delta triple terms or
-    /// composite literals, so fresh publication can avoid all identities this
-    /// destination owns. The first `Break` ends the visit.
+    /// Includes suppressed base terms, blanks nested in delta triple terms or
+    /// composite literals, and blank names of graphs declared through
+    /// [`Self::declare_named_graph`] — which own no row and so live in no term table,
+    /// yet survive every freeze and snapshot — so fresh publication can avoid all
+    /// identities this destination owns. An identity may be visited more than once.
+    /// The first `Break` ends the visit.
     pub fn visit_blank_identities<B>(
         &self,
         mut visit: impl FnMut(&str, crate::BlankScope) -> ControlFlow<B>,
@@ -266,6 +332,9 @@ impl MutableDataset {
         }
         for value in &self.delta.values {
             value.visit_blank_identities(&mut visit)?;
+        }
+        for graph in &self.declared_graphs {
+            graph.visit_blank_identities(&mut visit)?;
         }
         ControlFlow::Continue(())
     }
@@ -469,11 +538,14 @@ impl MutableDataset {
     fn insert_key(&mut self, key: QuadKey) -> bool {
         let rows = self.insert_rows(key);
         if rows > 0
-            && let Some(MutTermId::Base(graph)) = key.g
+            && let Some(graph) = key.g
         {
             let live = self.graph_rows_of(graph);
             *live += rows;
-            if *live == rows && self.withdrawn_graphs.contains(&graph) {
+            if *live == rows
+                && let MutTermId::Base(graph) = graph
+                && self.withdrawn_graphs.contains(&graph)
+            {
                 Arc::make_mut(&mut self.withdrawn_graphs).remove(&graph);
             }
         }
@@ -509,15 +581,42 @@ impl MutableDataset {
     fn remove_key(&mut self, key: QuadKey) -> bool {
         let rows = self.remove_rows(key);
         if rows > 0
-            && let Some(MutTermId::Base(graph)) = key.g
+            && let Some(graph) = key.g
         {
             let live = self.graph_rows_of(graph);
             *live -= rows;
             if *live == 0 {
-                Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
+                if let MutTermId::Base(graph) = graph {
+                    Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
+                }
+                self.withdraw_emptied_declaration(graph);
             }
         }
         rows > 0
+    }
+
+    /// A graph declared through [`Self::declare_named_graph`] follows the base's rule:
+    /// the mutation that removes its last row withdraws the declaration. Called only
+    /// when the graph's live row count reaches zero, and probes only when some
+    /// declaration exists, so neither a dataset without one nor a removal that leaves
+    /// rows behind pays anything.
+    fn withdraw_emptied_declaration(&mut self, graph: MutTermId) {
+        if self.declared_graphs.is_empty() {
+            return;
+        }
+        let index = match graph {
+            MutTermId::Base(_) => {
+                let value = self.mut_value(graph);
+                self.declared_graphs.iter().position(|g| *g == value)
+            }
+            MutTermId::Delta(id) => {
+                let value = self.delta.value(id);
+                self.declared_graphs.iter().position(|g| g == value)
+            }
+        };
+        if let Some(index) = index {
+            self.declared_graphs.remove(index);
+        }
     }
 
     /// The remove side of the four rules; the number of RDF rows it took away.
@@ -539,14 +638,16 @@ impl MutableDataset {
         0
     }
 
-    /// The live row count of the base graph `graph`, seeded from the base on first
-    /// touch. Every mutation in a base graph passes through here, so a graph not yet
-    /// in the map has never been mutated and its base count is its live count.
-    fn graph_rows_of(&mut self, graph: TermId) -> &mut usize {
+    /// The live row count of the named graph `graph`, seeded on first touch. Every
+    /// mutation in a graph passes through here, so a graph not yet in the map has
+    /// never been mutated: a base graph's live count is then its base count, and a
+    /// delta graph — which no base row can name — holds none.
+    fn graph_rows_of(&mut self, graph: MutTermId) -> &mut usize {
         let base = &self.base;
-        self.graph_rows
-            .entry(graph)
-            .or_insert_with(|| base.named_graph_row_count(graph))
+        self.graph_rows.entry(graph).or_insert_with(|| match graph {
+            MutTermId::Base(id) => base.named_graph_row_count(id),
+            MutTermId::Delta(_) => 0,
+        })
     }
 
     /// Whether a [`QuadKey`] is in the effective set: `(base ∪ added) − suppressed`.
@@ -610,6 +711,9 @@ impl MutableDataset {
         if let Some(id) = self.base.term_id_by_value(graph) {
             self.withdraw_base_graph(id);
         }
+        // A declaration made through `declare_named_graph` is withdrawn the same way:
+        // a graph that still holds rows stays enumerated through them.
+        self.declared_graphs.retain(|g| g != graph);
     }
 
     /// [`Self::withdraw_graph_declaration`] for every named graph of the base —
@@ -619,10 +723,13 @@ impl MutableDataset {
         for graph in base.named_graphs() {
             self.withdraw_base_graph(graph);
         }
+        self.declared_graphs.clear();
     }
 
     fn withdraw_base_graph(&mut self, graph: TermId) {
-        if *self.graph_rows_of(graph) == 0 && !self.withdrawn_graphs.contains(&graph) {
+        if *self.graph_rows_of(MutTermId::Base(graph)) == 0
+            && !self.withdrawn_graphs.contains(&graph)
+        {
             Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
         }
     }
@@ -751,20 +858,27 @@ impl MutableDataset {
         &self,
         limits: super::view_accounting::ViewLimits,
     ) -> Result<DeltaDatasetView, crate::RdfDiagnostic> {
-        let mut stats = super::view_accounting::ViewStats::default();
-        stats.retain(&self.base);
-        stats.retained_sources += 1;
-        stats.retained_terms = stats.retained_terms.saturating_add(self.delta.values.len());
-        stats.retained_rows = stats.retained_rows.saturating_add(self.added.len());
-        stats.auxiliary_bytes = self
-            .suppressed
-            .len()
-            .saturating_mul(4 * size_of::<super::QuadIds>());
-        limits.check(&stats)?;
         let mut builder = self.base.rebuild_builder();
-        self.append_delta(&mut builder);
+        let mut admission = DeltaAdmission::new(&self.base, self.suppressed.len(), limits);
+        self.append_delta(&mut builder, &mut admission)?;
+        let extent = admission.check(&builder)?;
         let delta = builder.freeze()?;
-        // A later view-retention refusal does not undo a completed native freeze.
+        debug_assert_eq!(
+            (
+                delta.term_count(),
+                delta.rdf_row_count(),
+                delta.rdf_payload_bytes()
+            ),
+            extent,
+            "the admitted extent is exactly what the frozen delta retains"
+        );
+        // `DeltaDatasetView::new` below checks the same limits once more, over stats
+        // it computes from the frozen base and delta: sources, the base's share, and
+        // the delta's terms, rows and payload are the values admitted above (the
+        // assertion pins the delta's), and its auxiliary charge is the same formula
+        // over the same counts. Every quantity is equal, so a snapshot admitted above
+        // is admitted there and its refusal is unreachable; the `?` keeps the view's
+        // own constructor total rather than trusting this caller.
         self.work.add(super::view_accounting::ViewWork {
             copied_terms: delta.term_count(),
             copied_rows: delta.rdf_row_count(),
@@ -803,7 +917,14 @@ impl MutableDataset {
     /// One RDF 1.2 delta classifier shared by compaction and snapshot publication.
     /// Only added subjects probe the base reifier index; a small delta never builds
     /// a base-sized set of owned reifier values.
-    fn append_delta(&self, builder: &mut RdfDatasetBuilder) {
+    ///
+    /// `admission` sees every row and declaration as it is interned, and refuses the
+    /// delta as soon as it exceeds a retention limit, before the freeze.
+    fn append_delta(
+        &self,
+        builder: &mut RdfDatasetBuilder,
+        admission: &mut DeltaAdmission<'_>,
+    ) -> Result<(), crate::RdfDiagnostic> {
         let added_values: Vec<QuadValues> = self
             .added_in_order()
             .into_iter()
@@ -835,6 +956,7 @@ impl MutableDataset {
             let triple = builder.intern_triple(s, p, o);
             let g = q.g.as_ref().map(|g| builder.intern_value(g));
             builder.push_reifier_in_graph(reifier, triple, g);
+            admission.row(builder, g)?;
         }
         for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
             if is_decl {
@@ -864,7 +986,115 @@ impl MutableDataset {
             } else {
                 builder.push_quad(s, p, o, g);
             }
+            admission.row(builder, g)?;
         }
+        // Declarations last, so a delta that declares nothing interns exactly as it
+        // always did.
+        for graph in &self.declared_graphs {
+            let id = builder.intern_value(graph);
+            builder.declare_named_graph(id);
+            admission.row(builder, Some(id))?;
+        }
+        Ok(())
+    }
+}
+
+/// The retention check of one snapshot, made while [`MutableDataset::append_delta`]
+/// interns the delta rather than over a second walk of it.
+///
+/// The builder's tables hold one entry per distinct term and row as it goes
+/// ([`RdfDatasetBuilder::pending_extent`]), and every quantity the limits bound
+/// only grows as interning proceeds. A check that fails part way therefore fails
+/// at the end too, and the check after the last row is the exact verdict on the
+/// frozen delta: a delta over a limit is refused before the freeze, with no work
+/// counted, and one within every limit is admitted.
+struct DeltaAdmission<'a> {
+    base: &'a RdfDataset,
+    suppressed: usize,
+    limits: super::view_accounting::ViewLimits,
+    /// The distinct named graphs the delta names, by row or by declaration — the
+    /// one table the freeze deduplicates.
+    graphs: FastSet<TermId>,
+    /// The graph of the previous row, so a run of rows in one graph probes the set
+    /// once.
+    last_graph: Option<TermId>,
+    rows_since_check: usize,
+}
+
+impl<'a> DeltaAdmission<'a> {
+    /// Rows interned between two checks part way through the delta. Only how soon an
+    /// oversized delta stops depends on it; the verdict is the final check's.
+    const CHECK_EVERY: usize = 1024;
+
+    fn new(
+        base: &'a RdfDataset,
+        suppressed: usize,
+        limits: super::view_accounting::ViewLimits,
+    ) -> Self {
+        Self {
+            base,
+            suppressed,
+            limits,
+            graphs: FastSet::default(),
+            last_graph: None,
+            rows_since_check: 0,
+        }
+    }
+
+    /// The snapshot's retention as of what `builder` holds now, and the delta's own
+    /// `(terms, rows, payload)`.
+    fn stats(
+        &self,
+        builder: &RdfDatasetBuilder,
+    ) -> (super::view_accounting::ViewStats, (usize, usize, usize)) {
+        let extent = builder.pending_extent(self.graphs.len());
+        let (terms, rows, payload) = extent;
+        let mut stats = super::view_accounting::ViewStats::default();
+        stats.retain(self.base);
+        stats.retained_sources += 1;
+        stats.retained_terms = stats.retained_terms.saturating_add(terms);
+        stats.retained_rows = stats.retained_rows.saturating_add(rows);
+        stats.retained_payload_bytes = stats.retained_payload_bytes.saturating_add(payload);
+        // The construction charge `DeltaDatasetView::new` makes for the same delta.
+        stats.auxiliary_bytes = terms
+            .saturating_mul(DeltaDatasetView::AUXILIARY_BYTES_PER_DELTA_TERM)
+            .saturating_add(
+                self.suppressed
+                    .saturating_add(rows)
+                    .saturating_mul(4 * size_of::<super::QuadIds>()),
+            );
+        (stats, extent)
+    }
+
+    /// Check the limits against what `builder` holds now.
+    fn check(
+        &self,
+        builder: &RdfDatasetBuilder,
+    ) -> Result<(usize, usize, usize), crate::RdfDiagnostic> {
+        let (stats, extent) = self.stats(builder);
+        self.limits.check(&stats)?;
+        Ok(extent)
+    }
+
+    /// Account one interned row (or declaration) naming `graph`, checking the limits
+    /// every [`Self::CHECK_EVERY`] rows.
+    fn row(
+        &mut self,
+        builder: &RdfDatasetBuilder,
+        graph: Option<TermId>,
+    ) -> Result<(), crate::RdfDiagnostic> {
+        if let Some(graph) = graph
+            && self.last_graph != Some(graph)
+        {
+            self.graphs.insert(graph);
+            self.last_graph = Some(graph);
+        }
+        self.rows_since_check += 1;
+        if self.rows_since_check == Self::CHECK_EVERY {
+            self.rows_since_check = 0;
+            self.check(builder)?;
+        }
+        Ok(())
     }
 }
 
@@ -1143,6 +1373,162 @@ mod tests {
     /// path has its own cases at the end of this module.
     fn ins(m: &mut MutableDataset, quad: QuadValues) -> bool {
         m.insert(quad).expect("fixture IRIs are absolute")
+    }
+
+    /// A graph declared on the mutable layer survives a freeze and a snapshot as a
+    /// declared graph, IRI- and blank-named alike; a redeclaration and a non-graph
+    /// term are answered, and a dataset that declares nothing freezes as before.
+    #[test]
+    fn declared_named_graphs_survive_freeze_and_snapshot() {
+        let empty_base = RdfDatasetBuilder::new().freeze().expect("empty base");
+        let mut m = MutableDataset::new(Arc::clone(&empty_base));
+        ins(&mut m, q("s", "p", "o"));
+        let plain = m.freeze().expect("freezes");
+        assert_eq!(plain.named_graphs().count(), 0);
+
+        let blank = TermValue::Blank {
+            label: "bg".to_owned(),
+            scope: crate::BlankScope::DEFAULT,
+        };
+        assert_eq!(m.declare_named_graph(iri_val("g")), Ok(true));
+        assert_eq!(m.declare_named_graph(blank.clone()), Ok(true));
+        assert_eq!(m.declare_named_graph(iri_val("g")), Ok(false));
+        let literal = TermValue::Literal {
+            lexical_form: "x".to_owned(),
+            datatype: purrdf_xsd::datatype::XSD_STRING.to_owned(),
+            language: None,
+            direction: None,
+        };
+        assert_eq!(
+            m.declare_named_graph(literal).map_err(|e| e.code),
+            Err("rdf-ir-graph-name-invalid".into())
+        );
+        assert_eq!(m.declared_named_graphs().count(), 2);
+
+        let frozen = m.freeze().expect("freezes");
+        let names: std::collections::BTreeSet<TermValue> = frozen
+            .named_graphs()
+            .map(|g| frozen.term_value(g))
+            .collect();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from([iri_val("g"), blank])
+        );
+        let view = m.snapshot_view().expect("snapshots");
+        assert_eq!(crate::DatasetView::named_graphs(&view).count(), 2);
+
+        // A branch off the frozen result keeps the declarations as base declarations.
+        let branch = MutableDataset::new(frozen);
+        assert_eq!(branch.declared_named_graphs().count(), 2);
+    }
+
+    /// Declarations made through `declare_named_graph` take part in the withdrawal
+    /// rules: a declaration DROP/CLEAR names is withdrawn, an untouched one survives,
+    /// `DROP NAMED`/`ALL` withdraws every one, and removing a declared graph's last
+    /// row withdraws it as it would a base declaration. Rows keep a graph enumerated.
+    #[test]
+    fn declared_named_graphs_follow_the_withdrawal_rules() {
+        let names = |m: &MutableDataset| -> std::collections::BTreeSet<TermValue> {
+            let frozen = m.freeze().expect("freezes");
+            frozen
+                .named_graphs()
+                .map(|g| frozen.term_value(g))
+                .collect()
+        };
+        let empty_base = || RdfDatasetBuilder::new().freeze().expect("empty base");
+
+        // DROP GRAPH of one declaration; the other survives.
+        let mut m = MutableDataset::new(empty_base());
+        m.declare_named_graph(iri_val("g")).expect("declares");
+        m.declare_named_graph(iri_val("h")).expect("declares");
+        m.withdraw_graph_declaration(&iri_val("h"));
+        assert_eq!(names(&m), std::collections::BTreeSet::from([iri_val("g")]));
+        assert_eq!(m.declared_named_graphs().count(), 1);
+
+        // DROP ALL withdraws every declaration.
+        m.withdraw_named_graph_declarations();
+        assert!(names(&m).is_empty());
+
+        // A declared graph with a row stays while the row does; removing the last
+        // row withdraws it.
+        let mut m = MutableDataset::new(empty_base());
+        m.declare_named_graph(iri_val("g")).expect("declares");
+        let row = QuadValues::quad(iri_val("s"), iri_val("p"), iri_val("o"), iri_val("g"));
+        ins(&mut m, row.clone());
+        m.withdraw_graph_declaration(&iri_val("g"));
+        assert_eq!(names(&m), std::collections::BTreeSet::from([iri_val("g")]));
+        let mut m = MutableDataset::new(empty_base());
+        m.declare_named_graph(iri_val("g")).expect("declares");
+        ins(&mut m, row.clone());
+        assert!(m.remove(&row));
+        assert!(names(&m).is_empty());
+
+        // A withdrawn base declaration is not reported, and may be declared again.
+        let mut b = RdfDatasetBuilder::new();
+        let e = b.intern_iri("http://example.org/e");
+        b.declare_named_graph(e);
+        let mut m = MutableDataset::new(b.freeze().expect("freezes"));
+        m.withdraw_graph_declaration(&iri_val("e"));
+        assert_eq!(m.declared_named_graphs().count(), 0);
+        assert!(names(&m).is_empty());
+        assert_eq!(m.declare_named_graph(iri_val("e")), Ok(true));
+        assert_eq!(names(&m), std::collections::BTreeSet::from([iri_val("e")]));
+    }
+
+    /// Declaring a withdrawn base graph again restores the base's declaration
+    /// rather than adding a second one: the graph is listed once whether or not a
+    /// row then lands in it, and the removal of that row withdraws it again.
+    #[test]
+    fn redeclaring_a_withdrawn_base_graph_lists_it_once() {
+        let listed = |m: &MutableDataset| m.declared_named_graphs().collect::<Vec<_>>();
+        let enumerated = |m: &MutableDataset| {
+            let view = m.snapshot_view().expect("publishes");
+            crate::DatasetView::named_graphs(&view).count()
+        };
+        let row = QuadValues::quad(iri_val("s"), iri_val("p"), iri_val("o"), iri_val("bg"));
+        // A base graph declared empty, and one that held a row the mutation removed.
+        let mut empty = RdfDatasetBuilder::new();
+        let bg = empty.intern_iri("http://example.org/bg");
+        empty.declare_named_graph(bg);
+        let mut populated = RdfDatasetBuilder::new();
+        let (s, p, o) = (
+            populated.intern_iri("http://example.org/s0"),
+            populated.intern_iri("http://example.org/p"),
+            populated.intern_iri("http://example.org/o0"),
+        );
+        let bg = populated.intern_iri("http://example.org/bg");
+        populated.push_quad(s, p, o, Some(bg));
+        for (base, emptied) in [(empty.freeze(), false), (populated.freeze(), true)] {
+            let mut m = MutableDataset::new(base.expect("base freezes"));
+            if emptied {
+                assert!(m.remove(&QuadValues::quad(
+                    iri_val("s0"),
+                    iri_val("p"),
+                    iri_val("o0"),
+                    iri_val("bg"),
+                )));
+            } else {
+                m.withdraw_graph_declaration(&iri_val("bg"));
+            }
+            assert_eq!(listed(&m), []);
+            assert_eq!(m.declare_named_graph(iri_val("bg")), Ok(true));
+            assert_eq!(listed(&m), [iri_val("bg")]);
+            assert_eq!(enumerated(&m), 1);
+            assert_eq!(m.declare_named_graph(iri_val("bg")), Ok(false));
+            ins(&mut m, row.clone());
+            assert_eq!(listed(&m), [iri_val("bg")], "listed once with a row");
+            assert_eq!(enumerated(&m), 1);
+            assert!(m.remove(&row));
+            assert_eq!(listed(&m), [], "removing its last row withdraws it");
+            assert_eq!(enumerated(&m), 0);
+        }
+        // A base graph that was never withdrawn is already declared.
+        let mut b = RdfDatasetBuilder::new();
+        let e = b.intern_iri("http://example.org/bg");
+        b.declare_named_graph(e);
+        let mut m = MutableDataset::new(b.freeze().expect("freezes"));
+        assert_eq!(m.declare_named_graph(iri_val("bg")), Ok(false));
+        assert_eq!(listed(&m), [iri_val("bg")]);
     }
 
     /// A base with three quads: (a,p,b), (a,p,c), (b,p,c) — and one reifier+annotation.

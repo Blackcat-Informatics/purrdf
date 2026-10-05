@@ -1357,8 +1357,27 @@ pub mod skos {
     /// The namespace IRI: every term of this vocabulary starts with it.
     pub const NS: &str = "http://www.w3.org/2004/02/skos/core#";
 
+    /// `skos:prefLabel`.
+    pub const PREF_LABEL: &str = "http://www.w3.org/2004/02/skos/core#prefLabel";
+    /// `skos:altLabel`.
+    pub const ALT_LABEL: &str = "http://www.w3.org/2004/02/skos/core#altLabel";
+    /// `skos:hiddenLabel`.
+    pub const HIDDEN_LABEL: &str = "http://www.w3.org/2004/02/skos/core#hiddenLabel";
+
+    /// `skos:note`.
+    pub const NOTE: &str = "http://www.w3.org/2004/02/skos/core#note";
     /// `skos:definition`.
     pub const DEFINITION: &str = "http://www.w3.org/2004/02/skos/core#definition";
+    /// `skos:scopeNote`.
+    pub const SCOPE_NOTE: &str = "http://www.w3.org/2004/02/skos/core#scopeNote";
+    /// `skos:example`.
+    pub const EXAMPLE: &str = "http://www.w3.org/2004/02/skos/core#example";
+    /// `skos:historyNote`.
+    pub const HISTORY_NOTE: &str = "http://www.w3.org/2004/02/skos/core#historyNote";
+    /// `skos:editorialNote`.
+    pub const EDITORIAL_NOTE: &str = "http://www.w3.org/2004/02/skos/core#editorialNote";
+    /// `skos:changeNote`.
+    pub const CHANGE_NOTE: &str = "http://www.w3.org/2004/02/skos/core#changeNote";
 }
 
 /// PROV-O: The PROV Ontology (`http://www.w3.org/ns/prov#`).
@@ -1492,7 +1511,28 @@ pub mod cred {
 
 #[cfg(test)]
 mod tests {
-    use super::{language_datatype_iri, rdf};
+    use super::{language_datatype_iri, rdf, skos};
+
+    #[test]
+    fn skos_label_and_documentation_constants_match_the_reference_local_names() {
+        // A consumer can use every term in a const context, without allocating
+        // or restating its full IRI outside the vocabulary home.
+        const TERMS: [(&str, &str); 10] = [
+            (skos::PREF_LABEL, "prefLabel"),
+            (skos::ALT_LABEL, "altLabel"),
+            (skos::HIDDEN_LABEL, "hiddenLabel"),
+            (skos::NOTE, "note"),
+            (skos::DEFINITION, "definition"),
+            (skos::SCOPE_NOTE, "scopeNote"),
+            (skos::EXAMPLE, "example"),
+            (skos::HISTORY_NOTE, "historyNote"),
+            (skos::EDITORIAL_NOTE, "editorialNote"),
+            (skos::CHANGE_NOTE, "changeNote"),
+        ];
+        for (term, local) in TERMS {
+            assert_eq!(term.strip_prefix(skos::NS), Some(local));
+        }
+    }
 
     /// Every term constant of a module starts with that module's `NS`, and no
     /// two constants of one module spell the same IRI.

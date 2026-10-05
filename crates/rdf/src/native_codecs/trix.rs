@@ -17,7 +17,7 @@
 //! loss.
 
 use super::syntax::{
-    ClassicTerm, CodecName, check_language_tag, element_text, freeze_classic_rows,
+    ClassicTerm, CodecName, check_language_tag, element_text, freeze_classic_rows_declaring,
 };
 use purrdf_core::sink::{TextOut, TextSink};
 use purrdf_core::xml_escape::Context;
@@ -96,6 +96,10 @@ pub(super) fn parse_trix_to_dataset(
 
     // Accumulate (subject, predicate, object, graph) rows, then intern + fold once.
     let mut rows: Vec<(ClassicTerm, String, ClassicTerm, Option<ClassicTerm>)> = Vec::new();
+    // Every graph name a `<graph>` block carries, so a block with no `<triple>` is a
+    // declared EMPTY named graph rather than nothing. An unnamed empty block is the
+    // default graph, which every dataset already has.
+    let mut declared_graphs: Vec<ClassicTerm> = Vec::new();
     for graph in root.element_children() {
         if !is_trix(graph, "graph") {
             return Err(TRIX.parse_err(format!(
@@ -116,7 +120,9 @@ pub(super) fn parse_trix_to_dataset(
                         "a <graph> name (<uri>/<id>) must precede its <triple> elements",
                     ));
                 }
-                graph_name = Some(node_term(child, base)?);
+                let name = node_term(child, base)?;
+                declared_graphs.push(name.clone());
+                graph_name = Some(name);
             } else {
                 return Err(TRIX.parse_err(format!(
                     "unexpected element <{}> under <graph>",
@@ -126,7 +132,7 @@ pub(super) fn parse_trix_to_dataset(
         }
     }
 
-    freeze_classic_rows(rows, LabelAlphabet::XmlText)
+    freeze_classic_rows_declaring(rows, declared_graphs, LabelAlphabet::XmlText)
 }
 
 /// Parse a `<triple>` element's three term children.
@@ -347,7 +353,8 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
 /// Serialize a [`SerGraph`] to TriX XML text.
 ///
 /// Quads are grouped into `<graph>` elements by their graph slot (default graph first,
-/// then named graphs in first-appearance order) so the emission is deterministic.
+/// then named graphs in first-appearance order) so the emission is deterministic. A
+/// declared named graph with no rows is written as an empty `<graph>` block.
 /// Annotation rows are emitted as plain triples in the default graph. A quoted-triple
 /// (RDF-1.2) term is a HARD error — TriX has no triple-term surface.
 fn write_trix<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<(), RdfDiagnostic> {
@@ -379,6 +386,15 @@ fn write_trix<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<(), 
                 vacant.insert(vec![triple]);
             }
             Entry::Occupied(mut occupied) => occupied.get_mut().push(triple),
+        }
+    }
+
+    // A declared named graph with no rows still gets its (empty) `<graph>` block, so the
+    // declaration survives the round trip exactly as TriG's `<g> { }` does.
+    for &name in &graph.named_graphs {
+        if let Entry::Vacant(vacant) = groups.entry(Some(name)) {
+            order.push(Some(name));
+            vacant.insert(Vec::new());
         }
     }
 

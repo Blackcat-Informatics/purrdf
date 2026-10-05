@@ -27,7 +27,7 @@ use purrdf_core::{
     DatasetMut, DatasetView, FastHasher, FastSet, GraphMatchValue, MutableDataset, QuadValues,
     RdfDataset, RdfDatasetBuilder, TermValue,
 };
-use purrdf_testkit::bench::{Bench, bench_group, bench_main};
+use purrdf_testkit::bench::{BatchSize, Bench, BenchmarkId, bench_group, bench_main};
 
 /// Number of base quads the COW base / simple store start from.
 const BASE_QUADS: u32 = 2000;
@@ -366,6 +366,117 @@ fn after_large_drop() -> MutableDataset {
     cow
 }
 
+/// Row counts of the graph a mutation declares and then drains row by row.
+const DECLARED_GRAPH_ROWS: [u32; 2] = [1_000, 10_000];
+
+/// A graph declared on the mutable layer over the `BASE_QUADS` base, holding `rows`
+/// added quads `(d{n}, p, e{n}, declared)`, and those quads in insertion order.
+fn declared_graph_with_rows(
+    base: &Arc<RdfDataset>,
+    rows: u32,
+) -> (MutableDataset, Vec<QuadValues>) {
+    let mut cow = MutableDataset::new(Arc::clone(base));
+    let graph = iri("declared");
+    assert!(
+        cow.declare_named_graph(graph.clone())
+            .expect("the bench graph name is an absolute IRI"),
+        "the bench graph is declared once"
+    );
+    let quads: Vec<QuadValues> = (0..rows)
+        .map(|n| {
+            QuadValues::quad(
+                iri(&format!("d{n}")),
+                iri("p"),
+                iri(&format!("e{n}")),
+                graph.clone(),
+            )
+        })
+        .collect();
+    for q in &quads {
+        let _ = cow.insert(q.clone()).expect("bench fixtures are absolute");
+    }
+    (cow, quads)
+}
+
+/// Draining a graph declared on the mutable layer one row at a time: every removal
+/// decides whether it emptied the declared graph, and the last one withdraws the
+/// declaration. The graph's live row count makes each decision O(1), so the drain is
+/// linear in the row count; this lane measures that it stays so. The declaration,
+/// the base branch and the inserts are setup, outside the timed region.
+/// Report-only.
+fn bench_declared_graph_removal(c: &mut Bench) {
+    let base = build_base();
+    let mut group = c.benchmark_group("mut_declared_graph_removal");
+    group.sample_size(10);
+    for rows in DECLARED_GRAPH_ROWS {
+        group.bench_with_input(BenchmarkId::from_parameter(rows), &rows, |b, &rows| {
+            b.iter_batched(
+                || declared_graph_with_rows(&base, rows),
+                |(mut cow, quads)| {
+                    for q in &quads {
+                        assert!(cow.remove(q), "every drained row was present");
+                    }
+                    assert_eq!(
+                        cow.declared_named_graphs().count(),
+                        0,
+                        "draining the declared graph withdraws its declaration"
+                    );
+                    cow
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+/// Added-row counts of the snapshot-publication lane.
+const SNAPSHOT_DELTA_ROWS: [u32; 3] = [1_000, 20_000, 200_000];
+
+/// The `BASE_QUADS` base with `rows` added quads over it: brand-new subjects and
+/// literal objects, every fourth row in one of eight named graphs, and every
+/// eighth row reusing a base subject.
+fn delta_of(base: &Arc<RdfDataset>, rows: u32) -> MutableDataset {
+    let mut cow = MutableDataset::new(Arc::clone(base));
+    for n in 0..rows {
+        let s = if n % 8 == 0 {
+            iri(&format!("s{}", n % BASE_QUADS))
+        } else {
+            iri(&format!("d{n}"))
+        };
+        let o = TermValue::typed_literal(n.to_string(), "http://www.w3.org/2001/XMLSchema#integer");
+        let quad = if n % 4 == 0 {
+            QuadValues::quad(s, iri("p"), o, iri(&format!("g{}", n % 8)))
+        } else {
+            QuadValues::triple(s, iri("p"), o)
+        };
+        let _ = cow.insert(quad).expect("bench fixtures are absolute");
+    }
+    cow
+}
+
+/// Snapshot publication of a delta of 1k, 20k and 200k added rows: the retention
+/// check, the freeze of the delta and the view's construction. Report-only.
+fn bench_snapshot_with_delta(c: &mut Bench) {
+    let base = build_base();
+    let mut group = c.benchmark_group("snapshot_with_delta");
+    group.sample_size(10);
+    for rows in SNAPSHOT_DELTA_ROWS {
+        let cow = delta_of(&base, rows);
+        group.bench_with_input(BenchmarkId::from_parameter(rows), &cow, |b, cow| {
+            b.iter(|| {
+                std::hint::black_box(
+                    cow.snapshot_view()
+                        .expect("the bench delta publishes")
+                        .stats()
+                        .retained_terms,
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Print the relative head-to-head context once: how many quads each store holds, so
 /// the timed numbers are read against the same effective set. No winner asserted.
 fn bench_context(_c: &mut Bench) {
@@ -401,6 +512,8 @@ bench_group!(
     bench_mutate,
     bench_query,
     bench_freeze,
-    bench_snapshot_graphs
+    bench_snapshot_graphs,
+    bench_declared_graph_removal,
+    bench_snapshot_with_delta
 );
 bench_main!(benches);
