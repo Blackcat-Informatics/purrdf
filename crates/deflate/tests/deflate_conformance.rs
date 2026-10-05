@@ -6,9 +6,9 @@
 //!
 //! Every refusal here is executed twice: once on the stream believed invalid,
 //! and once on the nearest stream that is valid, which must decode. The
-//! target is `harness = false` on `purrdf_testkit`'s runner, so the same named
-//! cases run natively under `cargo test` and on wasm32-unknown-unknown in
-//! Node (`make wasm-test`, baseline and `+simd128`).
+//! complete target runs natively on the shared harness. `make wasm-test`
+//! selects WASM backend dispatch and explicit simd128 kernel comparisons;
+//! generic stream and refusal conformance remains native.
 
 use purrdf_testkit::rng::{splitmix64_bytes, xoshiro256_bytes};
 use std::io::{Read, Write};

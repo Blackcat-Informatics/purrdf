@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The fixed-key table hasher: its frozen self-vectors, replayed on every
-//! target, and its statistical quality, measured natively.
+//! available native path, and its statistical quality, measured natively.
 //!
 //! # Vectors
 //!
@@ -11,8 +11,8 @@
 //! portable and AES functions answered when they were written. The oracle is
 //! purrdf-hash itself, so a replay proves stability (across targets,
 //! compilers and later edits), not correctness. The portable file replays
-//! everywhere: natively, on i686, and on wasm32 in Node (`make wasm-test`),
-//! where the folded multiply is built from 32-bit halves. The AES file replays
+//! on native builds, including i686. Release-crate WASM compilation is checked
+//! separately; generic vector semantics stay native. The AES file replays
 //! on builds whose target enables AES. The records drive `Hasher` methods
 //! directly, never the standard library's `Hash` impls, whose byte streams
 //! are not purrdf-hash's to freeze.
