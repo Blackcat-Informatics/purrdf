@@ -850,11 +850,14 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
     let mut named_graphs: BTreeMap<String, CarrierNamedGraph> = BTreeMap::new();
 
     // Iterate the union of graph names carrying asserted quads OR orphan reifiers (a graph
-    // may carry only orphan reifiers, so `by_graph` alone would miss it).
+    // may carry only orphan reifiers, so `by_graph` alone would miss it) OR merely
+    // declared: a declared EMPTY named graph is written as `{"@id": g, "@graph": []}`,
+    // exactly as TriG writes `<g> { }`, rather than vanishing from the document.
     let graph_keys: BTreeSet<Option<usize>> = by_graph
         .keys()
         .copied()
         .chain(orphan_by_graph.keys().copied())
+        .chain(graph.named_graphs.iter().copied().map(Some))
         .collect();
     for g in graph_keys {
         let mut nodes: Vec<CarrierNode> = Vec::new();

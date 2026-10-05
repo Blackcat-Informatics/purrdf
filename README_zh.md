@@ -703,7 +703,7 @@ SBOM——见 [`docs/RELEASE.md`](./docs/RELEASE.md)。
 一致性检查会在各版本来源（`Cargo.toml`、`pyproject.toml`、`package.json`、
 `CITATION.cff`）不一致时让构建失败。唯一的例外是 C ABI。`libpurrdf` 的
 [`purrdf.h`](./crates/rdf-capi/include/purrdf.h) 携带自己的
-`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（当前为 **0.7**），在每次导出签名变更时提升，由
+`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（当前为 **0.9**），在每次导出签名变更时提升，由
 `crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时经由 `purrdf_abi_version`
 读回。它与工作区分开编号，并保持 `0.x`：它并未冻结，工作区的 1.0.0 对它不作任何承诺。
 

@@ -201,8 +201,18 @@
  * RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
  * and never sees an enumerator's value move. The discriminants are therefore pinned
  * separately, by `the_status_enum_is_append_only` in `tests/abi.rs`.
+ *
+ * # `0.8.0` → `0.9.0`: one added symbol
+ *
+ * `0.8.0` shipped as the ABI of the `3.0.x` libraries. This bump adds
+ * `purrdf_serialize_empty_named_graphs_dropped` — the count of declared empty named
+ * graphs a whole-dataset `purrdf_serialize` to a given target drops — and changes no
+ * existing prototype, struct layout or status number, so a host built against `0.8.0`
+ * keeps calling everything it called before unchanged. It bumps for the reason the
+ * `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
+ * answer `purrdf_abi_version` the way `0.8.0` does.
  */
-#define PURRDF_ABI_MINOR 8
+#define PURRDF_ABI_MINOR 9
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -2805,6 +2815,37 @@ int32_t purrdf_serialize(const PurrdfDataset *dataset,
                          size_t *out_directional_literals_dropped,
                          size_t *out_named_graph_rows_dropped,
                          PurrdfError **out_error);
+
+/**
+ * Write to `*out_count` how many declared named graphs a whole-dataset
+ * serialization of `dataset` to `media_type` drops: graphs the dataset declares with
+ * no row (a TriG `<g> { }`) that the target has no spelling for. N-Quads and
+ * HexTuples name a graph only on a row and the single-graph syntaxes (Turtle,
+ * N-Triples, RDF/XML) have no graph at all, so `purrdf_serialize` to one of them
+ * omits each such graph — and none of its three row counts can see a graph that owns
+ * no row. `0` for TriG, TriX, JSON-LD and YAML-LD, which write an empty graph, and
+ * for a dataset that declares none.
+ *
+ * The fourth realized count of `purrdf_serialize`, answered for the same dataset and
+ * target without serializing again: it is the same number the wasm
+ * `SerializeLoss.emptyNamedGraphsDropped` and Python's
+ * `SerializeLoss.empty_named_graphs_dropped` report, and the count of
+ * `empty-named-graph-dropped` entries `purrdf convert --loss-ledger` records. An
+ * added entry point rather than a fourth out-param, so `purrdf_serialize`'s
+ * prototype is unchanged.
+ *
+ * Status: `PURRDF_STATUS_NULL_POINTER` for a null `dataset`, `media_type` or
+ * `out_count`; `PURRDF_STATUS_UNSUPPORTED_FORMAT` for a media type the registry does
+ * not know, exactly as `purrdf_serialize` refuses it.
+ *
+ * # Safety
+ * `dataset` must be a live handle; `media_type` must be NUL-terminated; `out_count`
+ * must be writable; `out_error` must be null or writable.
+ */
+int32_t purrdf_serialize_empty_named_graphs_dropped(const PurrdfDataset *dataset,
+                                                    const char *media_type,
+                                                    size_t *out_count,
+                                                    PurrdfError **out_error);
 
 /**
  * Serialize a dataset INCREMENTALLY, handing each window to `on_chunk`.
