@@ -123,6 +123,79 @@ Anything outside this surface — and every malformed query — is a typed
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
+## Numeric limits
+
+PurRDF computes `xsd:integer` in a signed 128-bit integer and `xsd:decimal` as a
+signed 128-bit mantissa with at most 18 digits after the decimal point. XSD 1.1
+lets a processor limit these two value spaces, provided it supports at least 16
+decimal digits and documents its limits. These are PurRDF's limits:
+
+| Datatype | Arithmetic range |
+|---|---|
+| `xsd:integer` and the integer types derived from it | −2^127 to 2^127 − 1, 38 digits |
+| `xsd:decimal` | magnitudes below 2^127, at most 18 digits after the point |
+
+Arithmetic inside these limits is exact, except for three roundings that XPath
+and XQuery Functions and Operators 3.1 allows:
+
+- A decimal result with more digits than the representation keeps is truncated
+  toward zero, at the finest scale of 18 or fewer fractional digits that holds
+  it. This applies to `+`, `-`, `*`, `/` and `AVG`.
+  `"1000000000000000000000000000000"^^xsd:decimal + "0.000000000000000001"^^xsd:decimal`
+  is `1000000000000000000000000000000`, and `7 / 3` is `2.333333333333333333`.
+- A conversion to `xsd:float` or `xsd:double` rounds once, to the nearest value,
+  ties to even.
+- A conversion from `xsd:float` or `xsd:double` to `xsd:decimal` gives the
+  nearest decimal.
+
+Every other limit is an error, so the expression is unbound. An integer or
+decimal result whose integer part is too large is `err:FOAR0002`. An integer
+literal past 2^127 used in arithmetic is `err:FOCA0003`, a decimal literal that
+is too large is `err:FOCA0001`, and one with more than 18 significant
+fractional digits is `err:FOCA0006`. A trailing zero is not significant:
+`"0.10000000000000000000"^^xsd:decimal` is the value `0.1`. The Rust API names
+the code of each error through `purrdf_xsd::XsdError::code`. The negation and
+the absolute value of a derived integer type are `xsd:integer`, so
+`-("5"^^xsd:unsignedByte)` is `-5` typed `xsd:integer`.
+
+### Literals past the limits
+
+A literal past the limits keeps its lexical form, and it is still a number. The
+operations that need no arithmetic are exact for an `xsd:integer` or
+`xsd:decimal` literal of any length: the comparison operators, `=`, `!=`, `IN`,
+`ORDER BY`, `MIN`, `MAX`, `isNumeric`, the effective boolean value, and casts to
+`xsd:double`, `xsd:float`, `xsd:boolean` and `xsd:string`. A cast to an integer
+or decimal type succeeds when the value fits the type.
+
+```sparql
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?big WHERE {
+  VALUES ?big { "100000000000000000000000000000000000000000"^^xsd:integer }
+  FILTER(?big > "170141183460469231731687303715884105727"^^xsd:integer)
+}
+```
+
+This query binds `?big`. Arithmetic over such a literal is an error, unless the
+other operand is an `xsd:float` or `xsd:double`. Then the literal is first
+converted to that type, rounded once to the nearest value. SHACL range
+constraints, CSVW datatype facets and the OWL 2 RL datatype rules compare
+numbers the same exact way, and ShEx accepts and compares a node's value past
+the limits exactly.
+
+### `SUM` and `AVG`
+
+`SUM` and `AVG` add their values exactly, however large the running total
+grows. An integer `SUM` is exact at any size, so its result can be a literal
+past the limits. A decimal `SUM` is limited once, at the end: it is truncated
+where it has more digits than the representation keeps, and it is an error when
+its integer part is too large. `AVG` is `SUM` divided by `COUNT`, under the
+division rule above. When only the running total passed the limits, `AVG` divides
+the exact total, so it still answers whenever the mean fits. The average of the
+integers `170141183460469231731687303715884105727` and
+`170141183460469231731687303715884105726` is
+`"170141183460469231731687303715884105726"^^xsd:decimal`. `AVG` never returns a
+literal outside the decimal limits.
+
 ## Numeric casts
 
 An XSD constructor function such as `xsd:double(?x)` follows the casting rules

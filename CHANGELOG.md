@@ -10,6 +10,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **Numeric limits as the conformance contract:** `purrdf-xsd` documents its
+  bounds: `xsd:integer` in `i128`, `xsd:decimal` as an `i128` mantissa with at
+  most 18 fractional digits. Every limit it hits is a typed error.
+  `XsdError::code()` returns the XPath and XQuery Functions and Operators 3.1
+  code as an `ErrorCode`: `err:FOAR0002` for an arithmetic result that is too
+  large, `err:FOCA0003` and `err:FOCA0001` for an integer or decimal lexical
+  form that is too large, `err:FOCA0006` for one with too many fractional
+  digits, and `err:FOCA0002` for `NaN` or an infinity cast to decimal.
+  `Decimal::try_from_f64` is `Decimal::from_f64_closest` with these errors.
+- **Exact comparison at any size:** `DecimalDigits` holds an `xsd:integer` or
+  `xsd:decimal` value of any length and scale. It compares exactly, needs no
+  arithmetic, and converts to `f64` and `f32` with one correct rounding.
+  `LiteralValue` is a bounded `XsdValue` or such a value, and
+  `literal_cmp`, `literal_equal` and `literal_total_cmp` extend `value_cmp`,
+  `value_equal` and `value_total_cmp` to it. `decimal_mean` divides an exact
+  running total of any size by a row count under `numeric_div`'s precision
+  rule.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -61,6 +78,42 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **SPARQL numbers past the bounds:** an `xsd:integer` or `xsd:decimal`
+  literal past the bounded representation is a number. The comparison
+  operators, `=`, `!=`, `IN`, `ORDER BY`, `MIN`, `MAX`, `isNumeric`, the
+  effective boolean value, and casts to `xsd:double`, `xsd:float`,
+  `xsd:boolean` and `xsd:string` treat it exactly. Before, it was an opaque
+  term: `ORDER BY` sorted it by its digits as text, and `=` and `<` raised an
+  error. Arithmetic with an `xsd:float` or `xsd:double` operand converts it to
+  that type, rounded once. A cast to an integer or decimal type succeeds when
+  the value fits.
+- **SPARQL `AVG`:** a decimal `AVG` whose running total passes the bounds
+  answers when the mean fits, instead of being unbound. An integer `AVG`
+  returns one representable `xsd:decimal`, truncated at the finest scale that
+  fits, as `/` does. It no longer returns a literal that no operator could read
+  back. `AVG` equals `SUM / COUNT` wherever `SUM` is bounded. A decimal `SUM`
+  adds exactly and fails only when its total is too large.
+- **XSD decimal arithmetic:** `+`, `-` and `*` keep every digit the
+  representation holds and truncate the rest toward zero, the precision rule
+  `/` already follows. They raise `err:FOAR0002` only when the integer part of
+  the result is too large. Before, `1e30 + 1e-18` and `0.5 * 4e37` were
+  refused as overflows. A decimal lexical form whose fractional digits past
+  the eighteenth are all zeros now parses.
+- **Unary minus and `abs` on derived integer types:** they return
+  `xsd:integer`, as do `ceiling`, `floor` and `round`. Before,
+  `-("5"^^xsd:unsignedByte)` produced `"-5"^^xsd:unsignedByte`, a literal
+  outside its own datatype.
+- **SHACL range constraints:** `sh:minInclusive`, `sh:maxInclusive`,
+  `sh:minExclusive`, `sh:maxExclusive`, `sh:lessThan` and
+  `sh:lessThanOrEquals` compare numbers exactly with the SPARQL operators.
+  Before, both sides went through a double, so `9007199254740992` satisfied
+  `sh:minInclusive 9007199254740993`, and spellings the datatype rejects, such
+  as `"1.5"^^xsd:integer` or `"inf"^^xsd:double`, were compared as numbers.
+- **D-entailment, ShEx and CSVW:** an integer or decimal literal past the
+  bounds is no longer ill-typed. The OWL 2 RL datatype rules decide its
+  equality with other literals exactly. ShEx accepts it, compares it and counts
+  its digits exactly. CSVW accepts such a cell and checks its datatype facets
+  exactly.
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
   with a non-ASCII character where the timezone suffix would be, such as
   `"2001-01-01€12345"`, is rejected as an invalid lexical form instead of
