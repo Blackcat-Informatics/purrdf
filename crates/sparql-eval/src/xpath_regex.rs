@@ -66,9 +66,9 @@ impl Program {
     }
 }
 
-/// A constant's verdict belongs to the exact context configuration that linked it.
-/// Refusals are retained here only until that expression is evaluated; they are
-/// never inserted into a syntax or program cache.
+/// A constant retains a successful native program for its exact law and source.
+/// Each execution admits that program under its current limits. Native failures
+/// are recomputed on evaluation and never become a cached request verdict.
 #[derive(Clone)]
 pub(crate) struct LinkedPattern {
     selection: Option<Selection>,
@@ -101,13 +101,17 @@ pub(crate) fn resolve<D: DatasetView + Sync>(
             .admit_pattern(pattern)
             .map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
     }
-    if let Some(linked) = linked
-        && linked.selection == ctx.xpath_regex
-    {
-        if let Ok(Some(Program::Native(compiled, limits))) = &linked.verdict {
-            compiled.admit(*limits).map_err(EvalError::XPathRegex)?;
+    if let Some(linked) = linked {
+        match (&linked.verdict, ctx.xpath_regex) {
+            (Ok(Some(Program::Native(compiled, _))), Some(Selection { profile, limits }))
+                if compiled.matches_source(profile, pattern, flags) =>
+            {
+                compiled.admit(limits).map_err(EvalError::XPathRegex)?;
+                return Ok(Some(Program::Native(Arc::clone(compiled), limits)));
+            }
+            (_, None) if linked.selection.is_none() => return linked.verdict.clone(),
+            _ => {}
         }
-        return linked.verdict.clone();
     }
     cached(ctx, pattern, flags)
 }
@@ -161,6 +165,78 @@ mod tests {
     use super::*;
     use purrdf_core::term_fixture::empty_dataset;
     use xpath::{Limits, Profile, Resource};
+
+    #[test]
+    fn a_linked_program_admits_current_limits_in_a_fresh_execution_context() {
+        let data = empty_dataset();
+        let mut original = EvalCtx::new(&*data).with_xpath_regex(Profile::Xpath31, Limits::new());
+        let linked = LinkedPattern::link(&mut original, "^(a|b)$", "");
+        let mut current = EvalCtx::new(&*data).with_xpath_regex(
+            Profile::Xpath31,
+            Limits::new().with(Resource::CompileSteps, 0),
+        );
+        assert_eq!(current.xpath_regex_cache.stats().entries, 0);
+        assert_eq!(
+            resolve(&mut current, "^(a|b)$", "", Some(&linked))
+                .unwrap()
+                .unwrap()
+                .is_match("a")
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(current.xpath_regex_cache.stats().entries, 0);
+        for resource in [
+            Resource::PatternBytes,
+            Resource::ProgramNodes,
+            Resource::CompileSlots,
+        ] {
+            current = EvalCtx::new(&*data)
+                .with_xpath_regex(Profile::Xpath31, Limits::new().with(resource, 0));
+            assert_eq!(
+                resolve(&mut current, "^(a|b)$", "", Some(&linked))
+                    .err()
+                    .unwrap()
+                    .code(),
+                Some(resource.code())
+            );
+        }
+        current = EvalCtx::new(&*data).with_xpath_regex(
+            Profile::Xpath31,
+            Limits::new().with(Resource::MatchSteps, 0),
+        );
+        assert_eq!(
+            resolve(&mut current, "^(a|b)$", "", Some(&linked))
+                .unwrap()
+                .unwrap()
+                .is_match("a")
+                .unwrap_err()
+                .code(),
+            Some(Resource::MatchSteps.code())
+        );
+    }
+
+    #[test]
+    fn a_linked_refusal_does_not_hide_a_later_admitted_program() {
+        let data = empty_dataset();
+        let low = Limits::new().with(Resource::CompileSteps, 0);
+        let mut ctx = EvalCtx::new(&*data).with_xpath_regex(Profile::Xpath31, low);
+        let linked = LinkedPattern::link(&mut ctx, "a", "");
+        assert_eq!(
+            linked.verdict.as_ref().err().unwrap().code(),
+            Some(Resource::CompileSteps.code())
+        );
+        ctx = ctx.with_xpath_regex(Profile::Xpath31, Limits::new());
+        resolve(&mut ctx, "a", "", None).unwrap().unwrap();
+        ctx = ctx.with_xpath_regex(Profile::Xpath31, low);
+        assert_eq!(
+            resolve(&mut ctx, "a", "", Some(&linked))
+                .unwrap()
+                .unwrap()
+                .is_match("a")
+                .unwrap(),
+            Some(true)
+        );
+    }
 
     #[test]
     fn reused_native_program_rechecks_storage_and_gets_fresh_execution_fuel() {
