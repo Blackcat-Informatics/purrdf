@@ -17,7 +17,8 @@ use std::sync::Arc;
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::term_fixture::iri;
 use purrdf_core::{
-    DatasetMut, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, TermValue,
+    DatasetMut, GraphExistenceMode, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder,
+    TermValue,
 };
 
 // A current-thread window: sibling tests run on other threads of this process.
@@ -146,4 +147,40 @@ fn emptiness_is_decided_per_graph_and_by_the_graphs_own_rows() {
     assert!(mutable.declared_named_graphs().any(|g| g == base_graph));
     drain(&mut mutable, &base_graph, &base_rows);
     assert_eq!(mutable.freeze().expect("drained").named_graphs().count(), 1);
+}
+
+#[test]
+fn remembered_slot_drain_has_no_per_row_allocation() {
+    const ROWS: usize = 2048;
+    let base = base();
+    for graph in [iri("remembered"), TermValue::blank("remembered")] {
+        let mut mutable = MutableDataset::new_with_graph_existence(
+            Arc::clone(&base),
+            GraphExistenceMode::RememberEmpty,
+        );
+        assert!(
+            mutable
+                .create_named_graph(graph.clone())
+                .expect("fresh graph")
+        );
+        let quads = rows_in(&graph, ROWS);
+        for quad in &quads {
+            assert!(mutable.insert(quad.clone()).expect("absolute rows"));
+        }
+        let window = CurrentThreadWindow::open();
+        for quad in &quads {
+            assert!(mutable.remove(quad));
+        }
+        let requested = window.close().requested_bytes;
+        assert_eq!(requested, 0, "retained slot removal allocates no replay");
+        assert!(mutable.has_named_graph(&graph));
+        let frozen = mutable.freeze().expect("drained graph retains its slot");
+        assert!(
+            frozen
+                .named_graphs()
+                .any(|id| frozen.term_value(id) == graph)
+        );
+        mutable.withdraw_graph_declaration(&graph);
+        assert!(!mutable.has_named_graph(&graph));
+    }
 }

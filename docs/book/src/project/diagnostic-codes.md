@@ -109,6 +109,7 @@ whose terms do not form a well-formed dataset.
 | `rdf-ir-literal-subject` | A literal occupies subject position. | RDF admits no literal subject; restructure the statement. |
 | `rdf-ir-triple-subject` | A triple term occupies subject position. | RDF 1.2 admits triple terms in object position only; use a reifier. |
 | `rdf-ir-graph-name-invalid` | A graph name is a literal or a triple term. | A graph name must be an IRI or a blank node. |
+| `rdf-ir-graph-already-exists` | Creating a graph finds an existing slot in remembered-empty mode. | Choose a fresh graph name or suppress this semantic error with SILENT. |
 | `rdf-ir-reifier-not-triple` | A reifier binding points at something other than a triple term. | Bind the reifier to a triple term. |
 | `rdf-ir-triple-cycle` | A triple term contains itself, directly or through nesting. | Remove the cycle. |
 | `rdf-ir-triple-nesting-limit` | Triple-term nesting exceeds the builder's depth limit. | Flatten the nesting. |

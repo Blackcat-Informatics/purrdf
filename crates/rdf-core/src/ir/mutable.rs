@@ -16,6 +16,8 @@
 //! or while it is a graph the base declared empty that no mutation has emptied
 //! since (removing its last row or [withdrawing its
 //! declaration](MutableDataset::withdraw_graph_declaration)).
+//! [`GraphExistenceMode::RememberEmpty`] instead retains a named graph's slot when
+//! its last row is removed; explicit declaration withdrawal still removes it.
 //!
 //! [`MutableDataset::freeze`] is the **compaction** pass that re-interns the
 //! effective set (terms, reifiers, annotations, graph names, locations) into a fresh
@@ -60,6 +62,21 @@ use super::term_walk::{Nested, try_fold_nested};
 
 mod delta_view;
 pub use delta_view::{DeltaDatasetView, DeltaViewId};
+
+/// The lifetime of named-graph declarations in a mutable branch.
+///
+/// Frozen datasets carry graph presence, never this caller-selected policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GraphExistenceMode {
+    /// Preserve the current row-based graph lifetime: removing a graph's last row
+    /// withdraws its declaration. An explicitly declared empty graph survives
+    /// until a mutation or explicit withdrawal empties it.
+    #[default]
+    Implicit,
+    /// Remember named-graph slots independently of rows, until explicit withdrawal.
+    RememberEmpty,
+}
 
 /// The `rdf:reifies` predicate IRI — mirrors [`super::dataset`]'s private copy (kept
 /// local rather than exported: both classify the SAME fold, independently, from a
@@ -185,6 +202,7 @@ impl DeltaBuilder {
 pub struct MutableDataset {
     /// The shared, immutable COW base. Cloning the `Arc` is the cheap branch.
     base: Arc<RdfDataset>,
+    graph_existence: GraphExistenceMode,
     /// The delta's own term interner (mints `Delta` ids for brand-new terms).
     delta: DeltaBuilder,
     /// Quads added on top of the base, in [`MutTermId`] space, deduplicated by value.
@@ -239,6 +257,7 @@ impl MutableDataset {
     pub fn new(base: Arc<RdfDataset>) -> Self {
         Self {
             base,
+            graph_existence: GraphExistenceMode::Implicit,
             delta: DeltaBuilder::default(),
             added: FastSet::default(),
             added_ord: FastMap::default(),
@@ -250,6 +269,63 @@ impl MutableDataset {
             withdrawn_graphs: Arc::default(),
             work: super::view_accounting::WorkCounter::default(),
         }
+    }
+
+    /// Branch from `base` with an explicitly selected graph-existence policy.
+    /// No base row is copied; the policy applies only to this mutable branch.
+    #[must_use]
+    pub fn new_with_graph_existence(base: Arc<RdfDataset>, mode: GraphExistenceMode) -> Self {
+        Self {
+            graph_existence: mode,
+            ..Self::new(base)
+        }
+    }
+
+    /// The graph-existence policy selected when this branch was created.
+    #[must_use]
+    pub const fn graph_existence(&self) -> GraphExistenceMode {
+        self.graph_existence
+    }
+
+    /// Create an empty named graph under this branch's selected policy.
+    /// In implicit mode this succeeds without registering a declaration. In
+    /// remembered mode a new slot is registered, and an existing slot is refused.
+    ///
+    /// # Errors
+    /// Invalid graph names receive the same ingress diagnostic as
+    /// [`Self::declare_named_graph`]; `rdf-ir-graph-already-exists` names a
+    /// remembered slot that already exists, including a populated graph.
+    pub fn create_named_graph(&mut self, graph: TermValue) -> Result<bool, crate::RdfDiagnostic> {
+        Self::check_graph_name(&graph)?;
+        if self.graph_existence == GraphExistenceMode::Implicit {
+            return Ok(false);
+        }
+        if self.has_named_graph(&graph) {
+            return Err(crate::RdfDiagnostic::error(
+                "rdf-ir-graph-already-exists",
+                "the named graph already exists",
+            ));
+        }
+        Ok(self.declare_graph(graph))
+    }
+
+    /// Whether a named graph has a present slot or any effective RDF row.
+    /// Probes the existing declaration registry and live row counts without
+    /// freezing, scanning rows or minting a term.
+    #[must_use]
+    pub fn has_named_graph(&self, graph: &TermValue) -> bool {
+        if self.declared_graphs.contains(graph)
+            || self
+                .base_graph(graph)
+                .is_some_and(|id| !self.withdrawn_graphs.contains(&id))
+        {
+            return true;
+        }
+        self.base
+            .term_id_by_value(graph)
+            .map(MutTermId::Base)
+            .or_else(|| self.delta.find(graph).map(MutTermId::Delta))
+            .is_some_and(|id| self.graph_rows.get(&id).is_some_and(|&rows| rows > 0))
     }
 
     /// Declare that the named graph `graph` exists, even if it never owns a quad —
@@ -264,29 +340,39 @@ impl MutableDataset {
     /// `rdf-ir-graph-name-invalid` when `graph` is neither an IRI nor a blank node,
     /// and the shared IRI diagnostic code when it is a relative IRI.
     pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, crate::RdfDiagnostic> {
+        Self::check_graph_name(&graph)?;
+        Ok(self.declare_graph(graph))
+    }
+
+    fn check_graph_name(graph: &TermValue) -> Result<(), crate::RdfDiagnostic> {
         if !matches!(graph, TermValue::Iri(_) | TermValue::Blank { .. }) {
             return Err(crate::RdfDiagnostic::error(
                 "rdf-ir-graph-name-invalid",
                 "a declared named graph must be an IRI or blank node",
             ));
         }
-        check_value_absolute(&graph).map_err(|error| {
+        check_value_absolute(graph).map_err(|error| {
             crate::RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
-        })?;
+        })
+    }
+
+    /// Register presence in the one declaration home. Record ingress and explicit
+    /// declaration ingress retain their existing validation boundaries.
+    fn declare_graph(&mut self, graph: TermValue) -> bool {
         // A base graph keeps its one declaration: declaring it again after a mutation
         // withdrew it restores the base's, so it is never listed twice.
         if let Some(id) = self.base_graph(&graph) {
             if !self.withdrawn_graphs.contains(&id) {
-                return Ok(false);
+                return false;
             }
             Arc::make_mut(&mut self.withdrawn_graphs).remove(&id);
-            return Ok(true);
+            return true;
         }
         if self.declared_graphs.contains(&graph) {
-            return Ok(false);
+            return false;
         }
         self.declared_graphs.push(graph);
-        Ok(true)
+        true
     }
 
     /// Every named graph this dataset carries as a declaration — the base's named
@@ -304,7 +390,7 @@ impl MutableDataset {
     fn base_graph(&self, graph: &TermValue) -> Option<TermId> {
         self.base
             .term_id_by_value(graph)
-            .filter(|&id| self.base.named_graphs().any(|g| g == id))
+            .filter(|&id| self.base.has_named_graph(id))
     }
 
     /// The shared frozen base this dataset branched from.
@@ -540,13 +626,22 @@ impl MutableDataset {
         if rows > 0
             && let Some(graph) = key.g
         {
-            let live = self.graph_rows_of(graph);
-            *live += rows;
-            if *live == rows
-                && let MutTermId::Base(graph) = graph
-                && self.withdrawn_graphs.contains(&graph)
-            {
-                Arc::make_mut(&mut self.withdrawn_graphs).remove(&graph);
+            let first_rows = {
+                let live = self.graph_rows_of(graph);
+                *live += rows;
+                *live == rows
+            };
+            if first_rows {
+                if let MutTermId::Base(id) = graph
+                    && self.withdrawn_graphs.contains(&id)
+                {
+                    Arc::make_mut(&mut self.withdrawn_graphs).remove(&id);
+                }
+                if self.graph_existence == GraphExistenceMode::RememberEmpty
+                    && !matches!(graph, MutTermId::Base(id) if self.base.has_named_graph(id))
+                {
+                    self.declare_graph(self.mut_value(graph));
+                }
             }
         }
         rows > 0
@@ -585,7 +680,7 @@ impl MutableDataset {
         {
             let live = self.graph_rows_of(graph);
             *live -= rows;
-            if *live == 0 {
+            if *live == 0 && self.graph_existence == GraphExistenceMode::Implicit {
                 if let MutTermId::Base(graph) = graph {
                     Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
                 }
@@ -700,13 +795,15 @@ impl MutableDataset {
     /// Withdraw the base's declaration of the named graph `graph`, so that it is
     /// enumerated by a snapshot or a freeze only while it holds a row.
     ///
-    /// A graph exists while it holds a row. The one exception is a graph the base
+    /// In implicit mode a graph exists while it holds a row. The exception is a graph the base
     /// declared empty (a TriG `GRAPH <g> {}`), which is enumerated until a mutation
     /// empties it: removing a graph's last row does that implicitly, and this call
     /// does it for a graph that has no row to remove — `DROP GRAPH` / `CLEAR GRAPH`
     /// of a declared empty graph. A graph that still holds rows is unaffected (it
     /// stays enumerated while it holds them), rows added afterwards bring the graph
     /// back, and a graph the base never named is a no-op.
+    /// In remembered mode last-row removal retains the slot; this explicit call
+    /// withdraws it once no rows remain, for example after a DROP removes its rows.
     pub fn withdraw_graph_declaration(&mut self, graph: &TermValue) {
         if let Some(id) = self.base.term_id_by_value(graph) {
             self.withdraw_base_graph(id);

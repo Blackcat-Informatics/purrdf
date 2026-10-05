@@ -44,11 +44,10 @@ impl ViewTermId for DeltaViewId {
 /// grows with delta terms, never with the base. Reifier bindings and annotations
 /// retain their separate RDF 1.2 tables and original graph scopes.
 ///
-/// A named graph of the base that the mutation emptied — removed its last row,
-/// or withdrew its declaration while it held none — and that holds no row of
-/// this snapshot is not enumerated by [`DatasetView::named_graphs`]: the
-/// snapshot's graphs are the graphs that hold a row, plus the base's declared
-/// empty graphs no operation emptied.
+/// A named graph whose declaration the mutable branch withdrew and that holds no
+/// row is not enumerated by [`DatasetView::named_graphs`]. A remembered slot stays
+/// present when its last row leaves; implicit-mode removal withdraws it. This view
+/// carries the resulting presence, independently of the branch's selected policy.
 ///
 /// The base remains available through [`Self::base`] for source locations and
 /// non-RDF sidecars that `DatasetView` does not expose. Materializing this view
@@ -630,7 +629,9 @@ impl DatasetView for DeltaDatasetView {
     }
 
     fn capabilities(&self) -> RdfStoreCapabilities {
-        self.base.capabilities().union(self.delta.capabilities())
+        let mut capabilities = self.base.capabilities().union(self.delta.capabilities());
+        capabilities.named_graphs = self.named_graphs().next().is_some();
+        capabilities
     }
 
     fn len_hint(&self) -> Option<u64> {

@@ -84,7 +84,7 @@ pub use embedding::*;
 pub use event_sink::RdfDatasetVisitor;
 pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};
-pub use mutable::{DeltaDatasetView, DeltaViewId, MutableDataset, QuadValues};
+pub use mutable::{DeltaDatasetView, DeltaViewId, GraphExistenceMode, MutableDataset, QuadValues};
 pub use pack::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
     pack_digest, restore_pack, verify_pack,
