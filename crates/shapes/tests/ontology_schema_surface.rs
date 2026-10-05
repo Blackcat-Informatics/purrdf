@@ -488,11 +488,9 @@ fn manifest_reports_every_form_with_its_outcome_and_provenance() {
             format!("some({},{})", p("child"), p("Person")),
             vec![Approximated],
         ),
-        (
-            "Parent",
-            format!("has_self({})", p("self")),
-            vec![Unrepresented],
-        ),
+        // A subclass inheriting a component with its owner's outcome has no
+        // row of its own: Person's row is Parent's, through the hierarchy.
+        ("Parent", format!("has_self({})", p("self")), vec![]),
         ("Robot", format!("max(0,{})", p("name")), vec![Approximated]),
         (
             "Robot",
@@ -1157,6 +1155,31 @@ const AGENT_PROVENANCE_SLICE: &str = r"
     ex:homepage a owl:DatatypeProperty .
 ";
 
+/// A schema's compact text followed by that of every definition it reaches
+/// through `$ref`, so an inherited restriction a class references is read
+/// where it lives.
+fn with_references(schema: &Value, document: &Value) -> String {
+    let marker = "\"$ref\":\"#/$defs/";
+    let mut text = String::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut pending = vec![schema.clone()];
+    while let Some(next) = pending.pop() {
+        let compact = purrdf_lex::json::write_compact(&next);
+        for reference in compact.split(marker).skip(1) {
+            let key = reference
+                .split('"')
+                .next()
+                .expect("reference key")
+                .to_owned();
+            if seen.insert(key.clone()) {
+                pending.push(document["$defs"][key.as_str()].clone());
+            }
+        }
+        text.push_str(&compact);
+    }
+    text
+}
+
 /// Whether a manifest expression requires a value of its property.
 fn requires_value(expression: &str) -> bool {
     expression.starts_with("some(")
@@ -1217,9 +1240,8 @@ fn reported_outcomes_match_every_emitter_on_an_agent_provenance_slice() {
                 match component.outcome {
                     SchemaExpressionOutcome::Projected | SchemaExpressionOutcome::Approximated => {
                         assert!(emitted, "{class}.{key}: {}", component.expression);
-                        let property_schema = purrdf_lex::json::write_compact(
-                            &definition["properties"][key.as_str()],
-                        );
+                        let property_schema =
+                            with_references(&definition["properties"][key.as_str()], &schema);
                         if component.expression.starts_with("max(")
                             && !component.expression.contains(",<")
                         {
@@ -1300,4 +1322,79 @@ fn reported_outcomes_match_every_emitter_on_an_agent_provenance_slice() {
             .iter()
             .any(|key| key.as_str() == Some("ex:wasGeneratedBy"))
     );
+}
+
+/// A class tree shaped like the Gene Ontology: `classes` classes in a binary
+/// heap (depth about log2 of the count), each restricted by two existentials
+/// on shared properties.
+fn ontology_tree(classes: usize) -> String {
+    use std::fmt::Write as _;
+    let mut ontology =
+        String::from("ex:partOf a owl:ObjectProperty .\nex:regulates a owl:ObjectProperty .\n");
+    for class in 0..classes {
+        let _ = write!(ontology, "ex:G{class} a owl:Class");
+        if class > 0 {
+            let parent = (class - 1) / 2;
+            let _ = write!(ontology, " ; rdfs:subClassOf ex:G{parent}");
+        }
+        let target = class / 3;
+        let _ = writeln!(
+            ontology,
+            " ; rdfs:subClassOf \
+             [ a owl:Restriction ; owl:onProperty ex:partOf ; owl:someValuesFrom ex:G{target} ] , \
+             [ a owl:Restriction ; owl:onProperty ex:regulates ; owl:someValuesFrom ex:G{target} ] ."
+        );
+    }
+    ontology
+}
+
+#[test]
+fn a_gene_ontology_sized_tree_references_inherited_restrictions() {
+    let measure = |classes: usize| {
+        let (compilation, report) = compile_both(
+            "",
+            &ontology_tree(classes),
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let bytes = compilation.compiled.schema_json.len()
+            + compilation.coverage.to_json().len()
+            + report.to_json().len();
+        bytes as f64 / classes as f64
+    };
+    // Depth 9 against depth 15: copying inherited restrictions inline grows
+    // the bytes per class with the depth; referencing them does not.
+    let shallow = measure(1_023);
+    let deep = measure(50_000);
+    assert!(
+        deep < shallow * 1.25,
+        "bytes per class grew from {shallow:.0} to {deep:.0} with the depth"
+    );
+}
+
+#[test]
+fn graphql_names_literal_enumerations_beside_their_array_form() {
+    for ontology in [
+        "ex:A a owl:Class . ex:e a owl:DatatypeProperty ;
+            rdfs:range [ a rdfs:Datatype ; owl:oneOf ( \"x\" \"y\" ) ] .",
+        "ex:A a owl:Class ; rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:e ;
+            owl:allValuesFrom [ a rdfs:Datatype ; owl:oneOf ( \"x\" \"y\" ) ] ] .
+         ex:e a owl:DatatypeProperty .",
+    ] {
+        let (compilation, _) = compile_both("", ontology, SchemaSurfaceMode::OntologyComplete);
+        let graphql = emit_graphql(&compilation.compiled, &graphql_config())
+            .expect("a literal enumeration is a GraphQL enum");
+        let sdl = std::str::from_utf8(&graphql.artifacts[GRAPHQL_SCHEMA_PATH]).expect("UTF-8");
+        assert!(sdl.contains("enum "), "{sdl}");
+    }
+    // The same enumeration through SHACL sh:in.
+    let (compilation, _) = compile_both(
+        "ex:AShape a sh:NodeShape ; sh:targetClass ex:A ;
+            sh:property [ sh:path ex:e ; sh:in ( \"x\" \"y\" ) ] .",
+        "",
+        SchemaSurfaceMode::ShapedOnly,
+    );
+    let graphql = emit_graphql(&compilation.compiled, &graphql_config())
+        .expect("an sh:in enumeration is a GraphQL enum");
+    let sdl = std::str::from_utf8(&graphql.artifacts[GRAPHQL_SCHEMA_PATH]).expect("UTF-8");
+    assert!(sdl.contains("enum "), "{sdl}");
 }

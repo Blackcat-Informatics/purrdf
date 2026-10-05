@@ -870,6 +870,18 @@ impl<'a> Planner<'a> {
                         })?;
                     member.wrapped = false;
                 } else {
+                    // An enum or a nested union alternative already holds the
+                    // alternative's base name for its own type, so the wrapper
+                    // object that carries it is named apart.
+                    if matches!(
+                        self.representations.get(&branch_path),
+                        Some(Representation::Enum | Representation::Union)
+                    ) {
+                        member.output_type = checked_graphql_name(
+                            &format!("{}Value", member.output_type),
+                            "generated union member type",
+                        )?;
+                    }
                     self.reserve_type_name(&member.output_type, &branch_path)?;
                     member.wrapped = true;
                 }

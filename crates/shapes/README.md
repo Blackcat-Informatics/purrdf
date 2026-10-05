@@ -432,32 +432,78 @@ unique-name readings of open-world axioms, so each coverage row they touch is
 marked `representation_approximation`. Direct SHACL property shapes stay
 authoritative over restrictions on the same property.
 
+An inherited restriction is referenced, not copied. The class that owns a
+restriction (the one that carries it, or the topmost caller-owned class that
+inherits it from a class outside the caller's vocabulary) holds it in a
+fragment definition, `<Class>.Restriction.<property>` in `$defs`. That
+fragment references the nearest owning ancestor's fragment for the same
+property. A subclass's property schema references its nearest owner's
+fragment through `allOf`, and disjunctions of restrictions are referenced the
+same way through `<Class>.Disjunctions`. Schema, coverage provenance and
+manifest therefore grow with the number of restrictions, not with
+restrictions times the depth of the hierarchy.
+
+A class constructor on an IRI (`ex:Day owl:oneOf ( … )`, `ex:BC owl:unionOf
+( … )`, `ex:NotB owl:complementOf ex:B`, an IRI typed `owl:Restriction`) is the
+equivalence OWL gives it: `ex:Day ≡ {…}`, and a subclass of an IRI-named
+restriction carries that restriction.
+
 What no schema keyword states is reported, never dropped: `owl:hasSelf`, a
-restriction on an unnamed inverse property or on several properties, a maximum over a
-class qualifier (counting needs the class membership of referenced nodes), the
-complement of an anonymous expression, a union with a named member that the
-class does not already entail, the sufficient-condition direction of
-`owl:equivalentClass`, and a general class inclusion whose subclass expression
-is anonymous, and anonymous classes in `owl:disjointWith`,
-`owl:AllDisjointClasses`, `owl:disjointUnionOf` and class assertions.
-`SchemaCompileRequest::class_expression_report` and
+restriction on an unnamed inverse property or on several properties, a maximum
+over a class qualifier (counting needs the class membership of referenced
+nodes), the complement of an anonymous expression, a union with a named member
+that the class does not already entail, the sufficient-condition direction of
+`owl:equivalentClass`, a general class inclusion whose subclass expression is
+anonymous, anonymous classes in `owl:disjointWith`, `owl:AllDisjointClasses`,
+`owl:disjointUnionOf` and class assertions, and `owl:hasKey` on an anonymous
+class. `SchemaCompileRequest::class_expression_report` and
 `compile_schema_with_class_expressions` return `SchemaClassExpressionReport`:
 every such axiom once, with each component's `SchemaExpressionOutcome`
-(`projected`, `approximated`, `unrepresented` or `excluded`) and reason on
-every class that carries it, or on the axiom itself. A class definition also names its unrepresented
-components in its `$comment`.
+(`projected`, `approximated`, `unrepresented` or `excluded`) and reason, on the
+axiom itself or on each class that owns it. A class below an owner has a row of
+its own only where its outcome differs from the owner's. A class definition
+names its unrepresented components in its `$comment`.
 
 This is schema projection, not ABox entailment or unrestricted OWL reasoning.
-Property chains and axioms outside the fragment do not drive fields. Malformed
-RDF lists, namespace/key collisions, incompatible property kinds or ranges, and
-fixed limit breaches fail with typed errors, as does a structurally malformed
-class expression: a restriction without `owl:onProperty`, conflicting or
-non-integer cardinalities, a qualified cardinality without its qualifier, an
-expression that contains itself, a data range where a class expression is
-required, or a filler that contradicts the restricted property's kind. The
-fixed ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or
-coverage cells, OWL expression depth 64, and 1,048,576 expanded expression
-nodes per request.
+Property chains and axioms outside the fragment do not drive fields. Nothing
+the surface accepted before anonymous expressions were read is refused now. An
+axiom it used to skip (one with an anonymous subject, disjointness, a class
+assertion, a constructor on an IRI, `owl:hasKey`) is reported as
+`unrepresented` when its anonymous part is malformed. An `owl:ObjectProperty`
+ranging over a datatype is refused only where the datatype is XSD,
+`rdfs:Literal`, `rdf:langString` or declared, as before.
+
+Typed errors remain for namespace/key collisions, incompatible property kinds
+or ranges, fixed limit breaches, and a malformed anonymous expression in an
+axiom the surface always read: the object of `rdfs:subClassOf`,
+`owl:equivalentClass`, `rdfs:subPropertyOf`, `owl:equivalentProperty` or
+`owl:inverseOf` with a named subject, or an `rdfs:domain`/`rdfs:range`. Such an
+expression is malformed when it has:
+- a restriction without exactly one `owl:onProperty` or `owl:onProperties`;
+- conflicting values for one facet;
+- a cardinality that is not a non-negative integer literal within 64 bits;
+- a qualified cardinality without its qualifier, a qualifier without a
+  qualified cardinality, or more than one qualifier;
+- `owl:hasSelf` other than `true`;
+- `owl:onProperties` with anything but `owl:someValuesFrom` or
+  `owl:allValuesFrom`;
+- a blank node that declares no construct, or mixes constructs;
+- an empty `owl:oneOf`, one that mixes individuals and literals, or one with a
+  triple-term member;
+- a union or intersection with fewer than two distinct members;
+- an anonymous property expression that is not `owl:inverseOf` one named
+  property;
+- `owl:onDatatype` that is not an IRI, an empty `owl:withRestrictions`, a
+  facet restriction that is not a blank node with exactly one literal facet, or
+  an `xsd:pattern` outside the XSD regular-expression language;
+- an ill-formed or cyclic RDF list, or an expression that contains itself;
+- a data range where a class expression is required;
+- a filler, `owl:hasValue` or `owl:hasSelf` that contradicts the restricted
+  property's kind.
+
+The fixed ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or
+coverage cells, OWL expression depth 64, 1,048,576 expanded expression nodes
+per request, and 16,777,216 inherited class-expression references.
 
 Every catalogued property appears exactly once in `SchemaCoverageReport`, with
 sorted class decisions, inclusion/exclusion reasons, precision, and source

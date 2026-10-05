@@ -45,8 +45,8 @@ use crate::term::{NamedNode, Term};
 
 use purrdf_iri::vocab::owl::{
     ALL_DISJOINT_CLASSES as OWL_ALL_DISJOINT_CLASSES, DISJOINT_UNION_OF as OWL_DISJOINT_UNION_OF,
-    DISJOINT_WITH as OWL_DISJOINT_WITH, MEMBERS as OWL_MEMBERS, NOTHING as OWL_NOTHING,
-    SYMMETRIC_PROPERTY as OWL_SYMMETRIC_PROPERTY, THING as OWL_THING,
+    DISJOINT_WITH as OWL_DISJOINT_WITH, HAS_KEY as OWL_HAS_KEY, MEMBERS as OWL_MEMBERS,
+    NOTHING as OWL_NOTHING, SYMMETRIC_PROPERTY as OWL_SYMMETRIC_PROPERTY, THING as OWL_THING,
 };
 use purrdf_iri::vocab::owl::{
     ALL_VALUES_FROM as OWL_ALL_VALUES_FROM, ANNOTATION_PROPERTY as OWL_ANNOTATION_PROPERTY,
@@ -493,7 +493,11 @@ impl OntologyExpression {
         }
     }
 
-    fn matches_class(&self, supertypes: &BTreeSet<String>, anonymous: &AnonymousSupers) -> bool {
+    fn matches_class(
+        &self,
+        supertypes: &BTreeSet<String>,
+        anonymous: &AnonymousSupers<'_>,
+    ) -> bool {
         match self {
             Self::Named(iri) => supertypes.contains(iri),
             Self::Union(members) => {
@@ -629,8 +633,12 @@ pub(crate) fn value_precision(
 ) -> ValuePrecision {
     match expression {
         OntologyExpression::Named(iri) => {
-            if iri == OWL_REAL || iri == OWL_RATIONAL {
-                // Projected as the numeric literals, without their value spaces.
+            if matches!(
+                iri.as_str(),
+                OWL_REAL | OWL_RATIONAL | RDF_JSON | RDF_XML_LITERAL | RDF_HTML
+            ) {
+                // Projected as literals of the datatype or its members without
+                // judging the lexical form.
                 ValuePrecision::Approximate
             } else if iri == OWL_THING || iri == OWL_NOTHING || is_datatype(iri, datatypes) {
                 ValuePrecision::Exact
@@ -787,14 +795,14 @@ pub(crate) fn non_negative_integer(lexical: &str) -> Option<u64> {
 /// The anonymous class expressions a class is known to be a subclass of, read
 /// structurally when a domain is not a named class.
 #[derive(Debug, Default)]
-struct AnonymousSupers {
-    canonical: BTreeSet<String>,
-    unions: Vec<BTreeSet<String>>,
+struct AnonymousSupers<'a> {
+    canonical: BTreeSet<&'a str>,
+    unions: Vec<&'a BTreeSet<String>>,
 }
 
-impl AnonymousSupers {
+impl AnonymousSupers<'_> {
     fn entails(&self, expression: &OntologyExpression) -> bool {
-        !self.canonical.is_empty() && self.canonical.contains(&expression.canonical())
+        !self.canonical.is_empty() && self.canonical.contains(expression.canonical().as_str())
     }
 
     /// Whether the class is a subclass of a union whose members are among
@@ -871,6 +879,12 @@ pub(crate) struct SurfaceProperty {
     /// anonymous superclass expressions, canonically ordered. `owl:hasSelf` is
     /// never here: no schema keyword at the value location states it.
     pub(crate) restrictions: Vec<Restriction>,
+    /// The classes whose restriction fragments on this property the class
+    /// references: itself where it owns restrictions on it, otherwise its
+    /// nearest ancestors that do. Each fragment references its own nearest
+    /// owning ancestors, so a class's schema grows with the restrictions it
+    /// owns, not with its depth.
+    pub(crate) restriction_owners: Vec<String>,
 }
 
 /// One existing named class represented by a schema `$def`.
@@ -883,8 +897,23 @@ pub(crate) struct SurfaceClass {
     /// named class, or a disjunction of property restrictions.
     pub(crate) focus: Vec<OntologyExpression>,
     /// Each anonymous superclass expression component the class's schema
-    /// cannot represent, rendered `expression: reason`, sorted.
+    /// cannot represent, rendered `expression: reason`, sorted: those the
+    /// class owns, and those whose outcome differs from its owner's.
     pub(crate) unrepresented: Vec<String>,
+    /// The classes whose disjunction fragments the class references: itself
+    /// where it owns projected disjunctions, otherwise its nearest ancestors
+    /// that do.
+    pub(crate) disjunction_owners: Vec<String>,
+}
+
+/// The restrictions or disjunctions one class owns on one property (or, for
+/// disjunctions, on the focus node), and the nearest strict ancestors whose
+/// fragments for the same slot it references.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Fragment {
+    pub(crate) restrictions: Vec<Restriction>,
+    pub(crate) disjunctions: Vec<OntologyExpression>,
+    pub(crate) parents: Vec<String>,
 }
 
 /// Single source of truth for ontology-aware schema definitions and coverage.
@@ -898,6 +927,12 @@ pub(crate) struct SchemaSurface {
     pub(crate) datatypes: BTreeSet<String>,
     /// Each defined datatype's defining data range.
     pub(crate) datatype_definitions: BTreeMap<String, OntologyExpression>,
+    /// Restriction fragments by `(owner class, Some(property))` and
+    /// disjunction fragments by `(owner class, None)`.
+    pub(crate) fragments: BTreeMap<(String, Option<String>), Fragment>,
+    /// One emitted surface property per property IRI, for the value schemas
+    /// of fragments whose owner does not itself emit the property.
+    pub(crate) property_templates: BTreeMap<String, SurfaceProperty>,
 }
 
 impl SchemaSurface {
@@ -910,8 +945,6 @@ impl SchemaSurface {
             .collect();
         debug_assert_eq!(report_properties.len(), self.report.properties.len());
         let mut emitted = 0_usize;
-        let mut range_expressions = 0_usize;
-        let mut provenance_records = 0_usize;
         for class in self.classes.values() {
             for (property_iri, property) in &class.properties {
                 debug_assert_eq!(property_iri, &property.iri);
@@ -932,13 +965,13 @@ impl SchemaSurface {
                         .any(|restriction| matches!(restriction, Restriction::HasSelf))
                 );
                 emitted += 1;
-                range_expressions += property.ranges.len();
-                provenance_records += property.provenance.len();
             }
         }
+        // Bounded by the coverage-cell ceiling checked before assembly. The
+        // range expressions and provenance records per cell are bounded by the
+        // ontology's own axioms, not by a separate ceiling: main accepts any
+        // number of them within the cell ceiling, and so does this.
         debug_assert!(emitted <= MAX_SCHEMA_RELATIONS);
-        debug_assert!(range_expressions <= MAX_SCHEMA_RELATIONS);
-        debug_assert!(provenance_records <= MAX_SCHEMA_RELATIONS * 8);
         // Never silently dropped: every anonymous class axiom carries at least
         // one component, on a class or on the axiom itself.
         for axiom in &self.class_expressions.axioms {
@@ -1025,6 +1058,11 @@ const CLASS_ASSERTION_REASON: &str = "a class assertion types an individual; dev
      describe classes, not individuals";
 const NOT_A_CLASS_EXPRESSION_REASON: &str =
     "the resource is typed by a blank node that declares no OWL class-expression construct";
+const MALFORMED_REASON: &str = "the anonymous expression is not a well-formed OWL class \
+     expression; the axiom was skipped before anonymous expressions were read, so it is \
+     reported rather than refused, and nothing is projected";
+const HAS_KEY_REASON: &str = "a key identifies individuals of a class by their values, which no \
+     developer schema judging one node states";
 const UNCARRIED_REASON: &str =
     "no caller-owned class carries this axiom, so no developer schema represents it";
 
@@ -1037,6 +1075,9 @@ struct ClassAxiom {
     carriers: Vec<(String, Vec<OntologyExpression>)>,
     /// Components of the axiom that no named class carries.
     uncarried: Vec<SchemaExpressionComponent>,
+    /// Whether the axiom was skipped before anonymous expressions were read,
+    /// so that an ill-typed one is reported rather than refused.
+    lenient: bool,
 }
 
 impl ClassAxiom {
@@ -1050,6 +1091,7 @@ impl ClassAxiom {
             provenance,
             carriers: Vec::new(),
             uncarried: Vec::new(),
+            lenient: false,
         };
         if equivalent {
             axiom.include(subject, object, SUFFICIENT_REASON);
@@ -1702,6 +1744,9 @@ struct PendingAxiom {
     subject: OntologyExpression,
     object: OntologyExpression,
     equivalent: bool,
+    /// Whether the axiom was skipped before anonymous expressions were read,
+    /// so that a malformed one is reported rather than refused.
+    lenient: bool,
     provenance: SchemaCoverageProvenance,
 }
 
@@ -1840,6 +1885,7 @@ pub(crate) fn build(
     let mut named_equivalences: Vec<(String, String)> = Vec::new();
     let mut pending_axioms: Vec<PendingAxiom> = Vec::new();
     let mut other_axioms: Vec<AxiomLevel> = Vec::new();
+    let mut named_constructors: BTreeMap<String, String> = BTreeMap::new();
     let mut symmetric: BTreeSet<String> = BTreeSet::new();
     let mut reader = ExpressionReader::new(&union);
 
@@ -1874,12 +1920,28 @@ pub(crate) fn build(
                     }
                     continue;
                 }
-                let subject = reader.expression(&row.subject, 0)?;
-                let object = reader.expression(&row.object, 0)?;
-                if !equivalent {
-                    refuse_data_range_as_class(&subject, &row.subject)?;
-                    refuse_data_range_as_class(&object, &row.object)?;
-                }
+                // An axiom with an anonymous subject was skipped before
+                // anonymous expressions were read, so a malformed one is
+                // reported rather than refused; one with a named subject and an
+                // anonymous object was refused, and still is when malformed.
+                let lenient = !matches!(row.subject, Term::NamedNode(_));
+                let read = (|| {
+                    let subject = reader.expression(&row.subject, 0)?;
+                    let object = reader.expression(&row.object, 0)?;
+                    if !equivalent {
+                        refuse_data_range_as_class(&subject, &row.subject)?;
+                        refuse_data_range_as_class(&object, &row.object)?;
+                    }
+                    Ok::<_, SchemaCompileError>((subject, object))
+                })();
+                let (subject, object) = match read {
+                    Ok(sides) => sides,
+                    Err(_) if lenient => {
+                        other_axioms.push(malformed_axiom(row));
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let provenance = SchemaCoverageProvenance {
                     subject: subject.provenance_subject(),
                     predicate: row.predicate.clone(),
@@ -1893,6 +1955,7 @@ pub(crate) fn build(
                     subject,
                     object,
                     equivalent,
+                    lenient,
                     provenance,
                 });
             }
@@ -1902,8 +1965,18 @@ pub(crate) fn build(
                 if row.predicate == OWL_INVERSE_OF && matches!(row.subject, Term::BlankNode(_)) {
                     continue;
                 }
-                let left = reader.property_expression(&row.subject)?;
-                let mut right = reader.property_expression(&row.object)?;
+                let sides = reader
+                    .property_expression(&row.subject)
+                    .and_then(|left| Ok((left, reader.property_expression(&row.object)?)));
+                let (left, mut right) = match sides {
+                    Ok(sides) => sides,
+                    // Skipped before anonymous expressions were read: reported.
+                    Err(_) if !matches!(row.subject, Term::NamedNode(_)) => {
+                        other_axioms.push(malformed_axiom(row));
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let provenance = SchemaCoverageProvenance {
                     subject: left.provenance_subject(),
                     predicate: row.predicate.clone(),
@@ -1933,34 +2006,13 @@ pub(crate) fn build(
                 };
                 property_relations.push(PropertyRelation { left, right, kind });
             }
-            OWL_DISJOINT_WITH => {
-                if named_iri(&row.subject).is_some() && named_iri(&row.object).is_some() {
-                    continue;
-                }
-                let subject = reader.expression(&row.subject, 0)?;
-                let object = reader.expression(&row.object, 0)?;
-                refuse_data_range_as_class(&subject, &row.subject)?;
-                refuse_data_range_as_class(&object, &row.object)?;
-                let components = [&subject, &object]
-                    .into_iter()
-                    .filter(|side| !matches!(side, OntologyExpression::Named(_)))
-                    .map(|side| {
-                        axiom_component(
-                            side.canonical(),
-                            SchemaExpressionOutcome::Unrepresented,
-                            DISJOINT_REASON,
-                        )
-                    })
-                    .collect();
-                other_axioms.push((
-                    SchemaCoverageProvenance {
-                        subject: subject.provenance_subject(),
-                        predicate: row.predicate.clone(),
-                        object: object.canonical(),
-                    },
-                    components,
-                ));
-            }
+            // Each of these was skipped before anonymous expressions were read,
+            // so a malformed one is reported rather than refused.
+            OWL_DISJOINT_WITH => match disjoint_axiom(&mut reader, row) {
+                Ok(Some(axiom)) => other_axioms.push(axiom),
+                Ok(None) => {}
+                Err(_) => other_axioms.push(malformed_axiom(row)),
+            },
             OWL_DISJOINT_UNION_OF | OWL_MEMBERS => {
                 if row.predicate == OWL_MEMBERS
                     && !objects_of(&union, &row.subject, rdf::TYPE)
@@ -1969,86 +2021,36 @@ pub(crate) fn build(
                 {
                     continue;
                 }
-                let owner = row.subject.to_string();
-                let mut members = Vec::new();
-                for item in reader.list_items(&row.object, &owner)? {
-                    let member = reader.expression(&item, 1)?;
-                    refuse_data_range_as_class(&member, &item)?;
-                    members.push(member);
+                match members_axiom(&mut reader, row) {
+                    Ok(Some(axiom)) => other_axioms.push(axiom),
+                    Ok(None) => {}
+                    Err(_) => other_axioms.push(malformed_axiom(row)),
                 }
-                if members
-                    .iter()
-                    .all(|member| matches!(member, OntologyExpression::Named(_)))
-                {
-                    continue;
+            }
+            OWL_HAS_KEY if !matches!(row.subject, Term::NamedNode(_)) => {
+                match has_key_axiom(&mut reader, row) {
+                    Ok(axiom) => other_axioms.push(axiom),
+                    Err(_) => other_axioms.push(malformed_axiom(row)),
                 }
-                let reason = if row.predicate == OWL_MEMBERS {
-                    DISJOINT_REASON
-                } else {
-                    DISJOINT_UNION_REASON
-                };
-                let mut rendered = String::from("members(");
-                for (index, member) in members.iter().enumerate() {
-                    if index > 0 {
-                        rendered.push(',');
-                    }
-                    member.write_canonical(&mut rendered);
-                }
-                rendered.push(')');
-                let components = members
-                    .iter()
-                    .filter(|member| !matches!(member, OntologyExpression::Named(_)))
-                    .map(|member| {
-                        axiom_component(
-                            member.canonical(),
-                            SchemaExpressionOutcome::Unrepresented,
-                            reason,
-                        )
-                    })
-                    .collect();
-                other_axioms.push((
-                    SchemaCoverageProvenance {
-                        subject: named_iri(&row.subject)
-                            .map_or_else(|| ANONYMOUS_INDIVIDUAL.to_owned(), str::to_owned),
-                        predicate: row.predicate.clone(),
-                        object: rendered,
-                    },
-                    components,
-                ));
             }
             rdf::TYPE if matches!(row.object, Term::BlankNode(_)) => {
-                // A class assertion whose class is anonymous types an
-                // individual; a developer schema describes classes.
-                let subject = named_iri(&row.subject)
-                    .map_or_else(|| ANONYMOUS_INDIVIDUAL.to_owned(), str::to_owned);
-                let component = if reader.declares_construct(&row.object) {
-                    let class = reader.expression(&row.object, 0)?;
-                    refuse_data_range_as_class(&class, &row.object)?;
-                    axiom_component(
-                        class.canonical(),
-                        SchemaExpressionOutcome::Excluded,
-                        CLASS_ASSERTION_REASON,
-                    )
-                } else {
-                    axiom_component(
-                        ANONYMOUS_INDIVIDUAL.to_owned(),
-                        SchemaExpressionOutcome::Unrepresented,
-                        NOT_A_CLASS_EXPRESSION_REASON,
-                    )
-                };
-                other_axioms.push((
-                    SchemaCoverageProvenance {
-                        subject,
-                        predicate: row.predicate.clone(),
-                        object: component.expression.clone(),
-                    },
-                    vec![component],
-                ));
+                match class_assertion_axiom(&mut reader, row) {
+                    Ok(axiom) => other_axioms.push(axiom),
+                    Err(_) => other_axioms.push(malformed_axiom(row)),
+                }
             }
             predicate => {
                 let Some(subject_iri) = named_iri(&row.subject) else {
                     continue;
                 };
+                if is_construct_predicate(predicate) {
+                    // A class constructor on an IRI: the IRI names the class the
+                    // construct describes (OWL 2 Mapping to RDF Graphs reads it
+                    // as an equivalence), read once every row is seen.
+                    named_constructors
+                        .entry(subject_iri.to_owned())
+                        .or_insert_with(|| predicate.to_owned());
+                }
                 match predicate {
                     rdf::TYPE => {
                         let Some(type_iri) = named_iri(&row.object) else {
@@ -2118,6 +2120,46 @@ pub(crate) fn build(
     // equivalence between a datatype and a data range defines the datatype.
     // A definition can make another equivalence a definition, so this runs to
     // a fixpoint, bounded by the number of equivalences.
+    for (class, predicate) in &named_constructors {
+        let term = Term::NamedNode(NamedNode::new_unchecked(class.as_str()));
+        match reader.anonymous(&term, class, 0) {
+            Ok(object) => {
+                catalog_restrictions(&object, &mut properties)?;
+                pending_axioms.push(PendingAxiom {
+                    subject_term: term.clone(),
+                    object_term: term,
+                    provenance: SchemaCoverageProvenance {
+                        subject: class.clone(),
+                        predicate: predicate.clone(),
+                        object: object.canonical(),
+                    },
+                    subject: OntologyExpression::Named(class.clone()),
+                    object,
+                    equivalent: true,
+                    lenient: true,
+                });
+            }
+            // Skipped before anonymous expressions were read: reported.
+            Err(_) => other_axioms.push((
+                SchemaCoverageProvenance {
+                    subject: class.clone(),
+                    predicate: predicate.clone(),
+                    object: ANONYMOUS_INDIVIDUAL.to_owned(),
+                },
+                vec![axiom_component(
+                    ANONYMOUS_INDIVIDUAL.to_owned(),
+                    SchemaExpressionOutcome::Unrepresented,
+                    MALFORMED_REASON,
+                )],
+            )),
+        }
+    }
+
+    // The datatypes main knew: declared ones. An object property ranging over
+    // a datatype only these name is refused, as main refuses it; one ranging
+    // over a defined or newly recognised datatype is accepted, as main
+    // accepts it.
+    let declared_datatypes = datatypes.clone();
     let mut datatype_definitions: BTreeMap<String, OntologyExpression> = BTreeMap::new();
     let mut datatype_axioms: Vec<AxiomLevel> = Vec::new();
     loop {
@@ -2184,14 +2226,31 @@ pub(crate) fn build(
     }
     let mut class_axioms: Vec<ClassAxiom> = Vec::with_capacity(pending_axioms.len());
     for axiom in pending_axioms {
-        refuse_data_range_as_class(&axiom.subject, &axiom.subject_term)?;
-        refuse_data_range_as_class(&axiom.object, &axiom.object_term)?;
-        class_axioms.push(ClassAxiom::classify(
+        let checked = refuse_data_range_as_class(&axiom.subject, &axiom.subject_term)
+            .and_then(|()| refuse_data_range_as_class(&axiom.object, &axiom.object_term));
+        match checked {
+            Ok(()) => {}
+            Err(_) if axiom.lenient => {
+                datatype_axioms.push((
+                    axiom.provenance,
+                    vec![axiom_component(
+                        ANONYMOUS_INDIVIDUAL.to_owned(),
+                        SchemaExpressionOutcome::Unrepresented,
+                        MALFORMED_REASON,
+                    )],
+                ));
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+        let mut classified = ClassAxiom::classify(
             &axiom.subject,
             &axiom.object,
             axiom.equivalent,
             axiom.provenance,
-        ));
+        );
+        classified.lenient = axiom.lenient;
+        class_axioms.push(classified);
     }
     datatype_axioms.extend(other_axioms);
     datatype_axioms.sort();
@@ -2207,8 +2266,8 @@ pub(crate) fn build(
         &mut subclass_relations,
         &mut explicit_classes,
     );
-    validate_property_ranges(&properties, &datatypes)?;
-    validate_restriction_fillers(&properties, &class_axioms, &datatypes)?;
+    validate_property_ranges(&properties, &datatypes, &declared_datatypes)?;
+    validate_restriction_fillers(&properties, &mut class_axioms, &datatypes)?;
 
     let class_names = |expression: &OntologyExpression, out: &mut BTreeSet<String>| {
         let mut mentioned = BTreeSet::new();
@@ -2260,6 +2319,7 @@ pub(crate) fn build(
         explicit_classes,
         DatatypeFacts {
             declared: datatypes,
+            prior: declared_datatypes,
             definitions: datatype_definitions,
             axioms: datatype_axioms,
         },
@@ -2271,7 +2331,11 @@ pub(crate) fn build(
 /// The request's datatypes: every declared or defined one, each definition's
 /// data range, and the anonymous definition axioms for the manifest.
 struct DatatypeFacts {
+    /// Every declared or defined datatype.
     declared: BTreeSet<String>,
+    /// The declared datatypes alone, which an object property's range may
+    /// name as a literal (see `is_prior_datatype`).
+    prior: BTreeSet<String>,
     definitions: BTreeMap<String, OntologyExpression>,
     /// Axioms reported on the axiom itself rather than on a class: datatype
     /// definitions, disjointness, and class assertions.
@@ -2338,6 +2402,7 @@ fn globalize_thing_universals(
             provenance,
             carriers,
             uncarried,
+            ..
         } = axiom;
         for (carrier, conjuncts) in carriers.iter_mut() {
             if carrier != OWL_THING {
@@ -2431,6 +2496,219 @@ fn existential_domain_edges(
             }
         }
     }
+}
+
+/// The predicates that make an IRI subject a class constructor.
+fn is_construct_predicate(predicate: &str) -> bool {
+    [
+        OWL_UNION_OF,
+        OWL_INTERSECTION_OF,
+        OWL_COMPLEMENT_OF,
+        OWL_ONE_OF,
+        OWL_ON_PROPERTY,
+        OWL_ON_PROPERTIES,
+        OWL_ON_CLASS,
+        OWL_ON_DATA_RANGE,
+        OWL_ON_DATATYPE,
+        OWL_WITH_RESTRICTIONS,
+        OWL_DATATYPE_COMPLEMENT_OF,
+    ]
+    .contains(&predicate)
+        || RESTRICTION_FACETS
+            .iter()
+            .any(|(facet, _)| *facet == predicate)
+}
+
+/// The rendering of an axiom side in a malformed axiom's provenance: a named
+/// subject bare, a named object in angle brackets, anything anonymous as
+/// `[]` (a blank-node label is local to one parse, and would make the report
+/// change with triple order).
+fn malformed_axiom(row: &TripleRow) -> AxiomLevel {
+    let subject =
+        named_iri(&row.subject).map_or_else(|| ANONYMOUS_INDIVIDUAL.to_owned(), str::to_owned);
+    let object = match &row.object {
+        Term::NamedNode(node) => format!("<{}>", node.as_str()),
+        Term::Literal(_) => row.object_key.clone(),
+        _ => ANONYMOUS_INDIVIDUAL.to_owned(),
+    };
+    (
+        SchemaCoverageProvenance {
+            subject,
+            predicate: row.predicate.clone(),
+            object,
+        },
+        vec![axiom_component(
+            ANONYMOUS_INDIVIDUAL.to_owned(),
+            SchemaExpressionOutcome::Unrepresented,
+            MALFORMED_REASON,
+        )],
+    )
+}
+
+/// `owl:disjointWith` with an anonymous side.
+fn disjoint_axiom(
+    reader: &mut ExpressionReader<'_>,
+    row: &TripleRow,
+) -> Result<Option<AxiomLevel>, SchemaCompileError> {
+    if named_iri(&row.subject).is_some() && named_iri(&row.object).is_some() {
+        return Ok(None);
+    }
+    let subject = reader.expression(&row.subject, 0)?;
+    let object = reader.expression(&row.object, 0)?;
+    refuse_data_range_as_class(&subject, &row.subject)?;
+    refuse_data_range_as_class(&object, &row.object)?;
+    let components = [&subject, &object]
+        .into_iter()
+        .filter(|side| !matches!(side, OntologyExpression::Named(_)))
+        .map(|side| {
+            axiom_component(
+                side.canonical(),
+                SchemaExpressionOutcome::Unrepresented,
+                DISJOINT_REASON,
+            )
+        })
+        .collect();
+    Ok(Some((
+        SchemaCoverageProvenance {
+            subject: subject.provenance_subject(),
+            predicate: row.predicate.clone(),
+            object: object.canonical(),
+        },
+        components,
+    )))
+}
+
+fn render_members(members: &[OntologyExpression]) -> String {
+    let mut rendered = String::from("members(");
+    for (index, member) in members.iter().enumerate() {
+        if index > 0 {
+            rendered.push(',');
+        }
+        member.write_canonical(&mut rendered);
+    }
+    rendered.push(')');
+    rendered
+}
+
+/// `owl:disjointUnionOf`, or the `owl:members` of an `owl:AllDisjointClasses`,
+/// with an anonymous member.
+fn members_axiom(
+    reader: &mut ExpressionReader<'_>,
+    row: &TripleRow,
+) -> Result<Option<AxiomLevel>, SchemaCompileError> {
+    let owner = row.subject.to_string();
+    let mut members = Vec::new();
+    for item in reader.list_items(&row.object, &owner)? {
+        let member = reader.expression(&item, 1)?;
+        refuse_data_range_as_class(&member, &item)?;
+        members.push(member);
+    }
+    if members
+        .iter()
+        .all(|member| matches!(member, OntologyExpression::Named(_)))
+    {
+        return Ok(None);
+    }
+    let reason = if row.predicate == OWL_MEMBERS {
+        DISJOINT_REASON
+    } else {
+        DISJOINT_UNION_REASON
+    };
+    let components = members
+        .iter()
+        .filter(|member| !matches!(member, OntologyExpression::Named(_)))
+        .map(|member| {
+            axiom_component(
+                member.canonical(),
+                SchemaExpressionOutcome::Unrepresented,
+                reason,
+            )
+        })
+        .collect();
+    Ok(Some((
+        SchemaCoverageProvenance {
+            subject: named_iri(&row.subject)
+                .map_or_else(|| ANONYMOUS_INDIVIDUAL.to_owned(), str::to_owned),
+            predicate: row.predicate.clone(),
+            object: render_members(&members),
+        },
+        components,
+    )))
+}
+
+/// `owl:hasKey` on an anonymous class expression.
+fn has_key_axiom(
+    reader: &mut ExpressionReader<'_>,
+    row: &TripleRow,
+) -> Result<AxiomLevel, SchemaCompileError> {
+    let class = reader.expression(&row.subject, 0)?;
+    refuse_data_range_as_class(&class, &row.subject)?;
+    let owner = class.canonical();
+    let mut keys = Vec::new();
+    for item in reader.list_items(&row.object, &owner)? {
+        keys.push(PropertyExpression::Named(
+            named_iri(&item)
+                .ok_or_else(|| SchemaCompileError::InvalidOntology {
+                    subject: owner.clone(),
+                    reason: "owl:hasKey members must be property IRIs".to_owned(),
+                })?
+                .to_owned(),
+        ));
+    }
+    let mut rendered = String::from("keys(");
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            rendered.push(',');
+        }
+        key.write_canonical(&mut rendered);
+    }
+    rendered.push(')');
+    Ok((
+        SchemaCoverageProvenance {
+            subject: owner.clone(),
+            predicate: row.predicate.clone(),
+            object: rendered,
+        },
+        vec![axiom_component(
+            owner,
+            SchemaExpressionOutcome::Unrepresented,
+            HAS_KEY_REASON,
+        )],
+    ))
+}
+
+/// A class assertion `x a [ … ]` whose class is anonymous.
+fn class_assertion_axiom(
+    reader: &mut ExpressionReader<'_>,
+    row: &TripleRow,
+) -> Result<AxiomLevel, SchemaCompileError> {
+    // A class assertion whose class is anonymous types an individual; a
+    // developer schema describes classes.
+    let subject =
+        named_iri(&row.subject).map_or_else(|| ANONYMOUS_INDIVIDUAL.to_owned(), str::to_owned);
+    let component = if reader.declares_construct(&row.object) {
+        let class = reader.expression(&row.object, 0)?;
+        refuse_data_range_as_class(&class, &row.object)?;
+        axiom_component(
+            class.canonical(),
+            SchemaExpressionOutcome::Excluded,
+            CLASS_ASSERTION_REASON,
+        )
+    } else {
+        axiom_component(
+            ANONYMOUS_INDIVIDUAL.to_owned(),
+            SchemaExpressionOutcome::Unrepresented,
+            NOT_A_CLASS_EXPRESSION_REASON,
+        )
+    };
+    Ok((
+        SchemaCoverageProvenance {
+            subject,
+            predicate: row.predicate.clone(),
+            object: component.expression.clone(),
+        },
+        vec![component],
+    ))
 }
 
 fn dataset_rows(dataset: &RdfDataset) -> Vec<TripleRow> {
@@ -2673,6 +2951,7 @@ fn add_bidirectional_edge(graph: &mut [BTreeSet<usize>], left: usize, right: usi
 fn validate_property_ranges(
     properties: &BTreeMap<String, PropertyFacts>,
     datatypes: &BTreeSet<String>,
+    declared_datatypes: &BTreeSet<String>,
 ) -> Result<(), SchemaCompileError> {
     for (property, facts) in properties {
         let kind = facts.kind(property)?;
@@ -2695,7 +2974,7 @@ fn validate_property_ranges(
                 OntologyPropertyKind::Object
                     if range.expression.has_data_only_construct()
                         || !range.expression.all_named_members_match(&|iri| {
-                            !is_builtin_datatype(iri) && !datatypes.contains(iri)
+                            !is_prior_datatype(iri, declared_datatypes)
                         }) =>
                 {
                     return Err(SchemaCompileError::InvalidOntology {
@@ -2719,11 +2998,35 @@ fn validate_property_ranges(
 /// datatype property (OWL 2 Structural Specification §8.2 and §8.4).
 fn validate_restriction_fillers(
     properties: &BTreeMap<String, PropertyFacts>,
-    axioms: &[ClassAxiom],
+    axioms: &mut [ClassAxiom],
+    datatypes: &BTreeSet<String>,
+) -> Result<(), SchemaCompileError> {
+    for axiom in axioms {
+        match check_restriction_fillers(properties, axiom, datatypes) {
+            Ok(()) => {}
+            // An axiom skipped before anonymous expressions were read is
+            // reported as malformed rather than refused.
+            Err(_) if axiom.lenient => {
+                axiom.carriers.clear();
+                axiom.uncarried = vec![axiom_component(
+                    ANONYMOUS_INDIVIDUAL.to_owned(),
+                    SchemaExpressionOutcome::Unrepresented,
+                    MALFORMED_REASON,
+                )];
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn check_restriction_fillers(
+    properties: &BTreeMap<String, PropertyFacts>,
+    axiom: &ClassAxiom,
     datatypes: &BTreeSet<String>,
 ) -> Result<(), SchemaCompileError> {
     let is_data = |iri: &str| is_datatype(iri, datatypes);
-    for axiom in axioms {
+    {
         for (_, conjuncts) in &axiom.carriers {
             for conjunct in conjuncts {
                 conjunct.visit_restrictions(&mut |on, restriction| {
@@ -2811,6 +3114,17 @@ fn render_axiom(provenance: &SchemaCoverageProvenance) -> String {
 /// `rdf:JSON`).
 pub(crate) fn is_builtin_datatype(iri: &str) -> bool {
     iri.starts_with(crate::model::xsd::BASE) || is_builtin_non_xsd_datatype(iri)
+}
+
+/// Whether `iri` names a datatype the surface knew before the OWL 2 datatype
+/// map was read: an XSD datatype, `rdfs:Literal`, `rdf:langString`, or a
+/// declared `rdfs:Datatype`/`owl:DataRange`. An object property's range is
+/// refused only over these, so nothing accepted before is refused now.
+pub(crate) fn is_prior_datatype(iri: &str, declared: &BTreeSet<String>) -> bool {
+    iri.starts_with(crate::model::xsd::BASE)
+        || iri == RDFS_LITERAL
+        || iri == RDF_LANG_STRING
+        || declared.contains(iri)
 }
 
 /// The builtin datatypes whose IRIs are not in the XSD namespace.
@@ -2970,13 +3284,54 @@ fn insert_propagated_fact<T: Ord>(
     Ok(())
 }
 
+/// The canonical rendering of one carried conjunct, and of a union's members,
+/// computed once however many classes inherit the conjunct.
+#[derive(Debug)]
+struct ConjunctInfo {
+    canonical: String,
+    union_members: Option<BTreeSet<String>>,
+}
+
+/// The address of a carried conjunct, the key of its [`ConjunctInfo`].
+fn conjunct_key(conjunct: &OntologyExpression) -> usize {
+    std::ptr::from_ref(conjunct) as usize
+}
+
+fn conjunct_infos(class_axioms: &[ClassAxiom]) -> BTreeMap<usize, ConjunctInfo> {
+    let mut infos = BTreeMap::new();
+    for axiom in class_axioms {
+        for (_, conjuncts) in &axiom.carriers {
+            for conjunct in conjuncts {
+                infos
+                    .entry(conjunct_key(conjunct))
+                    .or_insert_with(|| ConjunctInfo {
+                        canonical: conjunct.canonical(),
+                        union_members: match conjunct {
+                            OntologyExpression::Union(members) => {
+                                Some(members.iter().map(OntologyExpression::canonical).collect())
+                            }
+                            _ => None,
+                        },
+                    });
+            }
+        }
+    }
+    infos
+}
+
 /// What one eligible class inherits from the anonymous class axioms on it and
-/// its superclasses.
+/// its superclasses, and which of those it owns: the ones no eligible strict
+/// ancestor also inherits.
 #[derive(Debug, Default)]
 struct ClassExpressionFacts<'a> {
-    /// `(axiom index, conjunct)`, canonically ordered and de-duplicated.
+    /// `(axiom index, conjunct)` inherited, canonically ordered.
     entries: Vec<(usize, &'a OntologyExpression)>,
-    anonymous: AnonymousSupers,
+    /// The inherited entries no eligible strict ancestor inherits.
+    owned: BTreeSet<(usize, &'a OntologyExpression)>,
+    /// The eligible classes strictly above this one (not in its equivalence
+    /// cycle).
+    ancestors: BTreeSet<&'a str>,
+    anonymous: AnonymousSupers<'a>,
     /// Restrictions on one named property, asserted as top-level conjuncts.
     restrictions: BTreeMap<&'a str, BTreeSet<&'a Restriction>>,
     /// Properties a restriction asserted of the class itself restricts: a top-
@@ -2984,18 +3339,27 @@ struct ClassExpressionFacts<'a> {
     admitted: BTreeSet<&'a str>,
     /// Every named property any conjunct restricts, at any depth.
     mentioned: BTreeSet<&'a str>,
-    /// For each named property, the axioms (by index) whose conjuncts this
-    /// class carries and that restrict it, at any depth.
-    axioms_on: BTreeMap<&'a str, BTreeSet<usize>>,
+    /// Owned top-level restrictions on each named property, with their axiom.
+    owned_restrictions: BTreeMap<&'a str, Vec<(usize, &'a Restriction)>>,
+    /// The nearest owners of restrictions on each property (filled once every
+    /// class's ownership is known).
+    restriction_owners: BTreeMap<&'a str, Vec<&'a str>>,
 }
 
 impl<'a> ClassExpressionFacts<'a> {
-    fn new(entries: Vec<(usize, &'a OntologyExpression)>) -> Self {
+    fn new(
+        entries: Vec<(usize, &'a OntologyExpression)>,
+        owned: BTreeSet<(usize, &'a OntologyExpression)>,
+        ancestors: BTreeSet<&'a str>,
+        infos: &'a BTreeMap<usize, ConjunctInfo>,
+    ) -> Self {
         let mut facts = Self {
             entries,
+            owned,
+            ancestors,
             ..Self::default()
         };
-        for &(axiom, conjunct) in &facts.entries {
+        for &(_, conjunct) in &facts.entries {
             conjunct.focus_restricted(&mut facts.admitted);
             match conjunct {
                 OntologyExpression::Named(_) => continue,
@@ -3010,27 +3374,56 @@ impl<'a> ClassExpressionFacts<'a> {
                             .insert(restriction);
                     }
                 }
-                OntologyExpression::Union(members) => {
-                    facts
-                        .anonymous
-                        .unions
-                        .push(members.iter().map(OntologyExpression::canonical).collect());
-                }
                 _ => {}
             }
-            facts.anonymous.canonical.insert(conjunct.canonical());
+            if let Some(info) = infos.get(&conjunct_key(conjunct)) {
+                facts.anonymous.canonical.insert(info.canonical.as_str());
+                if let Some(members) = &info.union_members {
+                    facts.anonymous.unions.push(members);
+                }
+            }
             let mentioned = &mut facts.mentioned;
-            let axioms_on = &mut facts.axioms_on;
             let _: Result<(), ()> = conjunct.visit_restrictions(&mut |on, _| {
                 if let Some(iri) = on.named() {
                     mentioned.insert(iri);
-                    axioms_on.entry(iri).or_default().insert(axiom);
                 }
                 Ok(())
             });
         }
+        for &(axiom, conjunct) in &facts.owned {
+            if let OntologyExpression::Restriction(on, restriction) = conjunct
+                && let Some(iri) = on.named()
+                && !matches!(**restriction, Restriction::HasSelf)
+            {
+                facts
+                    .owned_restrictions
+                    .entry(iri)
+                    .or_default()
+                    .push((axiom, restriction));
+            }
+        }
         facts
     }
+}
+
+/// The minimal elements of `candidates` under the class hierarchy: those with
+/// no other candidate strictly below them.
+fn nearest<'a>(
+    candidates: &[&'a str],
+    class_facts: &BTreeMap<&str, ClassExpressionFacts<'a>>,
+) -> Vec<&'a str> {
+    candidates
+        .iter()
+        .copied()
+        .filter(|&candidate| {
+            !candidates.iter().any(|&other| {
+                other != candidate
+                    && class_facts
+                        .get(other)
+                        .is_some_and(|facts| facts.ancestors.contains(candidate))
+            })
+        })
+        .collect()
 }
 
 #[allow(
@@ -3048,6 +3441,7 @@ fn assemble_surface(
 ) -> Result<SchemaSurface, SchemaCompileError> {
     let DatatypeFacts {
         declared: datatypes,
+        prior: prior_datatypes,
         definitions: datatype_definitions,
         axioms: datatype_axioms,
     } = datatype_facts;
@@ -3096,11 +3490,11 @@ fn assemble_surface(
         MAX_SCHEMA_RELATIONS,
     )?;
 
-    let class_facts = class_expression_facts(class_axioms, &eligible_classes, supertypes)?;
+    let infos = conjunct_infos(class_axioms);
+    let class_facts = class_expression_facts(class_axioms, &eligible_classes, supertypes, &infos)?;
+    let mut property_templates: BTreeMap<String, SurfaceProperty> = BTreeMap::new();
     let no_anonymous = AnonymousSupers::default();
     let mut statuses: BTreeMap<(String, String), SchemaCoverageStatus> = BTreeMap::new();
-    let mut provenance_records = 0_usize;
-    let mut range_records = 0_usize;
 
     for (property_iri, facts) in properties {
         let kind = facts.kind(&property_iri)?;
@@ -3108,7 +3502,11 @@ fn assemble_surface(
         for range in &facts.ranges {
             range.expression.named_members(&mut datatype_iris);
         }
-        datatype_iris.retain(|iri| datatypes.contains(iri));
+        if kind == OntologyPropertyKind::Object {
+            datatype_iris.retain(|iri| prior_datatypes.contains(iri));
+        } else {
+            datatype_iris.retain(|iri| datatypes.contains(iri));
+        }
         let mut class_rows = Vec::new();
         let mut outcomes = BTreeSet::new();
         let base_provenance: Vec<SchemaCoverageProvenance> = facts
@@ -3124,8 +3522,12 @@ fn assemble_surface(
         // A range a value schema cannot state exactly (a restriction, a
         // complement, an enumeration of individuals) is projected as an open
         // node reference, like a named class range, but weaker than stated.
+        // A range is reported as an approximation when its value schema
+        // admits more than the range. An object property projects a named
+        // datatype range as a node, as it always has, so only its anonymous
+        // ranges are judged that way.
         let approximate_range = facts.ranges.iter().any(|range| {
-            !range.expression.is_named_skeleton()
+            (kind != OntologyPropertyKind::Object || !range.expression.is_named_skeleton())
                 && value_precision(&range.expression, &datatypes) == ValuePrecision::Approximate
         });
         // Membership in a domain beyond the named hierarchy is read
@@ -3148,28 +3550,36 @@ fn assemble_surface(
                 .is_some_and(|expressions| expressions.admitted.contains(property_iri.as_str()));
             // The restriction axioms this class carries or inherits on the
             // property, and no others: provenance stays linear in the cells.
-            let provenance = class_expressions
-                .and_then(|expressions| expressions.axioms_on.get(property_iri.as_str()))
-                .map_or_else(
-                    || base_provenance.clone(),
-                    |axioms| {
-                        let mut provenance = base_provenance.clone();
+            // The restriction axioms of the nearest classes that own
+            // restrictions on the property (this class, where it owns some):
+            // each class's row names what it owns or the nearest owner it
+            // references, so provenance grows with the restrictions, not with
+            // the depth.
+            let owners: Vec<&str> = class_expressions
+                .and_then(|expressions| expressions.restriction_owners.get(property_iri.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let provenance = if owners.is_empty() {
+                base_provenance.clone()
+            } else {
+                let mut provenance = base_provenance.clone();
+                for owner in &owners {
+                    if let Some(owned) = class_facts
+                        .get(owner)
+                        .and_then(|facts| facts.owned_restrictions.get(property_iri.as_str()))
+                    {
                         provenance.extend(
-                            axioms
+                            owned
                                 .iter()
-                                .map(|&axiom| class_axioms[axiom].provenance.clone()),
+                                .map(|&(axiom, _)| class_axioms[axiom].provenance.clone()),
                         );
-                        provenance.sort();
-                        provenance.dedup();
-                        provenance
-                    },
-                );
-            provenance_records = provenance_records.saturating_add(provenance.len());
-            enforce_limit(
-                "coverage provenance records",
-                provenance_records,
-                MAX_SCHEMA_RELATIONS * 8,
-            )?;
+                    }
+                }
+                provenance.sort();
+                provenance.dedup();
+                provenance
+            };
+
             let (status, precision) = if has_shape {
                 (
                     SchemaCoverageStatus::HasShape,
@@ -3212,8 +3622,9 @@ fn assemble_surface(
             } else {
                 let restrictions: Vec<Restriction> = class_expressions
                     .and_then(|expressions| expressions.restrictions.get(property_iri.as_str()))
-                    .map(|set| set.iter().map(|&restriction| restriction.clone()).collect())
-                    .unwrap_or_default();
+                    .map_or_else(Vec::new, |set| {
+                        set.iter().map(|&restriction| restriction.clone()).collect()
+                    });
                 let restricted_approximately = restrictions.iter().any(|restriction| {
                     restriction_outcomes(restriction, &datatypes)
                         .iter()
@@ -3227,12 +3638,6 @@ fn assemble_surface(
                 } else {
                     SchemaCoveragePrecision::RepresentationApproximation
                 };
-                range_records = range_records.saturating_add(facts.ranges.len());
-                enforce_limit(
-                    "projected range expressions",
-                    range_records,
-                    MAX_SCHEMA_RELATIONS,
-                )?;
                 let class = classes
                     .get_mut(class_iri)
                     .expect("eligible complete-mode class has a surface entry");
@@ -3250,8 +3655,15 @@ fn assemble_surface(
                         functional: !facts.functional.is_empty(),
                         provenance: provenance.clone(),
                         restrictions,
+                        restriction_owners: owners.iter().map(|&owner| owner.to_owned()).collect(),
                     },
                 );
+                if !property_templates.contains_key(&property_iri) {
+                    let mut template = class.properties[&property_iri].clone();
+                    template.restrictions.clear();
+                    template.restriction_owners.clear();
+                    property_templates.insert(property_iri.clone(), template);
+                }
                 (SchemaCoverageStatus::IncludedUnshaped, precision)
             };
             if class_expressions
@@ -3307,14 +3719,17 @@ fn assemble_surface(
         });
     }
 
-    let class_expressions = class_expression_report(
-        request.mode(),
-        class_axioms,
-        &class_facts,
-        &statuses,
-        supertypes,
+    let (class_expressions, fragments) = class_expression_report(
+        &ReportInputs {
+            mode: request.mode(),
+            class_axioms,
+            class_facts: &class_facts,
+            statuses: &statuses,
+            supertypes,
+            datatypes: &datatypes,
+            infos: &infos,
+        },
         &mut classes,
-        &datatypes,
     )?;
     let class_expressions = with_axiom_level_components(class_expressions, &datatype_axioms);
 
@@ -3327,6 +3742,8 @@ fn assemble_surface(
         class_expressions,
         datatypes,
         datatype_definitions,
+        fragments,
+        property_templates,
     };
     surface.assert_conservation();
     Ok(surface)
@@ -3337,7 +3754,8 @@ fn assemble_surface(
 fn class_expression_facts<'a>(
     class_axioms: &'a [ClassAxiom],
     eligible_classes: &'a [String],
-    supertypes: &BTreeMap<String, BTreeSet<String>>,
+    supertypes: &'a BTreeMap<String, BTreeSet<String>>,
+    infos: &'a BTreeMap<usize, ConjunctInfo>,
 ) -> Result<BTreeMap<&'a str, ClassExpressionFacts<'a>>, SchemaCompileError> {
     let mut carried: BTreeMap<&str, Vec<(usize, &OntologyExpression)>> = BTreeMap::new();
     for (index, axiom) in class_axioms.iter().enumerate() {
@@ -3352,35 +3770,93 @@ fn class_expression_facts<'a>(
     if carried.is_empty() {
         return Ok(facts);
     }
+    let eligible: BTreeSet<&str> = eligible_classes.iter().map(String::as_str).collect();
+    let no_supertypes = BTreeSet::new();
+    let supers_of = |class: &str| supertypes.get(class).unwrap_or(&no_supertypes);
     let mut assertions = 0_usize;
     for class_iri in eligible_classes {
         let Some(types) = supertypes.get(class_iri) else {
             continue;
         };
+        // The eligible classes strictly above: a supertype in the class's own
+        // equivalence cycle is not above it.
+        let ancestors: BTreeSet<&str> = types
+            .iter()
+            .map(String::as_str)
+            .filter(|&supertype| {
+                supertype != class_iri
+                    && eligible.contains(supertype)
+                    && !supers_of(supertype).contains(class_iri)
+            })
+            .collect();
         let mut entries: BTreeSet<(usize, &OntologyExpression)> = BTreeSet::new();
+        let mut owned: BTreeSet<(usize, &OntologyExpression)> = BTreeSet::new();
         // Every class is a subclass of `owl:Thing`.
         for supertype in types
             .iter()
             .map(String::as_str)
             .chain(std::iter::once(OWL_THING))
         {
-            if let Some(list) = carried.get(supertype) {
-                entries.extend(list.iter().copied());
+            let Some(list) = carried.get(supertype) else {
+                continue;
+            };
+            entries.extend(list.iter().copied());
+            // Owned when no eligible strict ancestor inherits it too: the
+            // carrier is this class or in its cycle, or an ineligible carrier
+            // (or `owl:Thing`) no eligible strict ancestor reaches.
+            let owns = if supertype == OWL_THING {
+                ancestors.is_empty()
+            } else if eligible.contains(supertype) {
+                !ancestors.contains(supertype)
+            } else {
+                !ancestors
+                    .iter()
+                    .any(|&ancestor| supers_of(ancestor).contains(supertype))
+            };
+            if owns {
+                owned.extend(list.iter().copied());
             }
         }
         if entries.is_empty() {
             continue;
         }
+        // Each class holds references to the conjuncts it inherits, not
+        // copies; the bound keeps that bookkeeping proportionate to the
+        // ontology (a 50,000-class tree 15 deep with two restrictions per
+        // class holds 1.5 million).
         assertions = assertions.saturating_add(entries.len());
         enforce_limit(
             "inherited class-expression assertions",
             assertions,
-            MAX_SCHEMA_RELATIONS,
+            MAX_SCHEMA_RELATIONS * 16,
         )?;
         facts.insert(
             class_iri.as_str(),
-            ClassExpressionFacts::new(entries.into_iter().collect()),
+            ClassExpressionFacts::new(entries.into_iter().collect(), owned, ancestors, infos),
         );
+    }
+    // The nearest owners of each restricted property, now that every class's
+    // ownership is known.
+    let mut owners: BTreeMap<&str, BTreeMap<&str, Vec<&str>>> = BTreeMap::new();
+    for (&class_iri, class) in &facts {
+        let mut per_property: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for &property in class.restrictions.keys() {
+            let candidates: Vec<&str> = std::iter::once(class_iri)
+                .chain(class.ancestors.iter().copied())
+                .filter(|owner| {
+                    facts
+                        .get(owner)
+                        .is_some_and(|facts| facts.owned_restrictions.contains_key(property))
+                })
+                .collect();
+            per_property.insert(property, nearest(&candidates, &facts));
+        }
+        owners.insert(class_iri, per_property);
+    }
+    for (class_iri, per_property) in owners {
+        if let Some(class) = facts.get_mut(class_iri) {
+            class.restriction_owners = per_property;
+        }
     }
     Ok(facts)
 }
@@ -3561,15 +4037,18 @@ impl ConjunctContext<'_> {
     /// The components one inherited conjunct reports, each flagged when the
     /// conjunct is projected on the focus node (as a class-level schema
     /// constraint rather than through a property).
-    fn classify(&self, conjunct: &OntologyExpression) -> Vec<(SchemaExpressionComponent, bool)> {
+    fn classify(
+        &self,
+        conjunct: &OntologyExpression,
+        expression: &str,
+    ) -> Vec<(SchemaExpressionComponent, bool)> {
         use SchemaExpressionOutcome::{Approximated, Excluded, Projected, Unrepresented};
-        let expression = conjunct.canonical();
         let restricted = match conjunct {
             OntologyExpression::Restriction(on, _) => on.named().map(str::to_owned),
             _ => None,
         };
         let component = |outcome, reason: &str| SchemaExpressionComponent {
-            expression: expression.clone(),
+            expression: expression.to_owned(),
             property_iri: restricted.clone(),
             outcome,
             reason: reason.to_owned(),
@@ -3642,7 +4121,7 @@ impl ConjunctContext<'_> {
             }
             OntologyExpression::Intersection(members) => members
                 .iter()
-                .flat_map(|member| self.classify(member))
+                .flat_map(|member| self.classify(member, &member.canonical()))
                 .collect(),
             OntologyExpression::DatatypeRestriction(..)
             | OntologyExpression::DatatypeComplement(_) => {
@@ -3661,20 +4140,30 @@ fn with_axiom_level_components(
     if axioms.is_empty() {
         return report;
     }
-    for (provenance, components) in axioms {
-        let components = components
-            .iter()
-            .map(|component| in_mode(report.mode, component.clone()))
-            .collect();
-        report.axioms.push(SchemaClassExpressionAxiom {
-            provenance: provenance.clone(),
-            components,
-            classes: Vec::new(),
-        });
-    }
-    report
+    // One axiom row per provenance: an axiom-level component joins the row
+    // its provenance already has.
+    let mut rows: BTreeMap<SchemaCoverageProvenance, SchemaClassExpressionAxiom> = report
         .axioms
-        .sort_by(|left, right| left.provenance.cmp(&right.provenance));
+        .drain(..)
+        .map(|axiom| (axiom.provenance.clone(), axiom))
+        .collect();
+    for (provenance, components) in axioms {
+        let row = rows
+            .entry(provenance.clone())
+            .or_insert_with(|| SchemaClassExpressionAxiom {
+                provenance: provenance.clone(),
+                components: Vec::new(),
+                classes: Vec::new(),
+            });
+        row.components.extend(
+            components
+                .iter()
+                .map(|component| in_mode(report.mode, component.clone())),
+        );
+        row.components.sort();
+        row.components.dedup();
+    }
+    report.axioms = rows.into_values().collect();
     report
 }
 
@@ -3696,20 +4185,47 @@ fn in_mode(
     component
 }
 
-/// Classify every inherited conjunct of every eligible class, route the
-/// class-level projections onto the surface, and assemble the manifest.
-fn class_expression_report(
+/// What the class-expression manifest is built from.
+struct ReportInputs<'r, 'a> {
     mode: SchemaSurfaceMode,
-    class_axioms: &[ClassAxiom],
-    class_facts: &BTreeMap<&str, ClassExpressionFacts<'_>>,
-    statuses: &BTreeMap<(String, String), SchemaCoverageStatus>,
-    supertypes: &BTreeMap<String, BTreeSet<String>>,
+    class_axioms: &'r [ClassAxiom],
+    class_facts: &'r BTreeMap<&'a str, ClassExpressionFacts<'a>>,
+    statuses: &'r BTreeMap<(String, String), SchemaCoverageStatus>,
+    supertypes: &'r BTreeMap<String, BTreeSet<String>>,
+    datatypes: &'r BTreeSet<String>,
+    infos: &'r BTreeMap<usize, ConjunctInfo>,
+}
+
+type Fragments = BTreeMap<(String, Option<String>), Fragment>;
+
+/// Classify what each class owns, and each inherited restriction whose
+/// outcome on the class differs from its owner's; route the class-level
+/// projections onto the surface; build the fragments the classes reference;
+/// and assemble the manifest. A class that inherits a component with its
+/// owner's outcome has no row of its own for it: its row is its owner's,
+/// reached through the class hierarchy, so the manifest grows with the
+/// restrictions rather than with the depth.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass over every class's owned and inherited conjuncts"
+)]
+fn class_expression_report(
+    inputs: &ReportInputs<'_, '_>,
     classes: &mut BTreeMap<String, SurfaceClass>,
-    datatypes: &BTreeSet<String>,
-) -> Result<SchemaClassExpressionReport, SchemaCompileError> {
+) -> Result<(SchemaClassExpressionReport, Fragments), SchemaCompileError> {
+    let ReportInputs {
+        mode,
+        class_axioms,
+        class_facts,
+        statuses,
+        supertypes,
+        datatypes,
+        infos,
+    } = *inputs;
     let no_supertypes = BTreeSet::new();
     let mut per_axiom: Vec<BTreeMap<&str, BTreeSet<SchemaExpressionComponent>>> =
         vec![BTreeMap::new(); class_axioms.len()];
+    let mut projected_disjunctions: BTreeMap<&str, Vec<OntologyExpression>> = BTreeMap::new();
     let mut cells = 0_usize;
     for (&class_iri, facts) in class_facts {
         let context = ConjunctContext {
@@ -3722,9 +4238,76 @@ fn class_expression_report(
         let mut focus: BTreeSet<OntologyExpression> = BTreeSet::new();
         let mut unrepresented: BTreeSet<String> = BTreeSet::new();
         for &(axiom, conjunct) in &facts.entries {
-            for (component, on_focus) in context.classify(conjunct) {
+            let owned = facts.owned.contains(&(axiom, conjunct));
+            let record = owned
+                || match conjunct {
+                    // A disjunction the class's own hierarchy entails, though
+                    // its owner's does not, differs from the owner's outcome.
+                    OntologyExpression::Union(_) => facts
+                        .ancestors
+                        .iter()
+                        .find(|&&ancestor| {
+                            class_facts
+                                .get(ancestor)
+                                .is_some_and(|facts| facts.owned.contains(&(axiom, conjunct)))
+                        })
+                        .is_none_or(|&owner| {
+                            let owner_context = ConjunctContext {
+                                mode,
+                                class_iri: owner,
+                                supertypes: supertypes.get(owner).unwrap_or(&no_supertypes),
+                                statuses,
+                                datatypes,
+                            };
+                            let outcomes = |components: Vec<(SchemaExpressionComponent, bool)>| {
+                                components
+                                    .into_iter()
+                                    .map(|(component, _)| (component.outcome, component.reason))
+                                    .collect::<Vec<_>>()
+                            };
+                            outcomes(context.classify(conjunct, ""))
+                                != outcomes(owner_context.classify(conjunct, ""))
+                        }),
+                    OntologyExpression::Restriction(on, _) => on.named().is_some_and(|property| {
+                        let key = (property.to_owned(), class_iri.to_owned());
+                        facts
+                            .ancestors
+                            .iter()
+                            .find(|&&ancestor| {
+                                class_facts
+                                    .get(ancestor)
+                                    .is_some_and(|facts| facts.owned.contains(&(axiom, conjunct)))
+                            })
+                            .is_none_or(|&owner| {
+                                statuses.get(&key)
+                                    != statuses.get(&(property.to_owned(), owner.to_owned()))
+                            })
+                    }),
+                    _ => false,
+                };
+            let inline_focus = matches!(
+                conjunct,
+                OntologyExpression::OneOf(_) | OntologyExpression::Complement(_)
+            );
+            if !record && !inline_focus {
+                continue;
+            }
+            let expression = infos
+                .get(&conjunct_key(conjunct))
+                .map_or_else(|| conjunct.canonical(), |info| info.canonical.clone());
+            for (component, on_focus) in context.classify(conjunct, &expression) {
                 if on_focus {
-                    focus.insert(conjunct.clone());
+                    if inline_focus {
+                        focus.insert(conjunct.clone());
+                    } else if owned {
+                        projected_disjunctions
+                            .entry(class_iri)
+                            .or_default()
+                            .push(conjunct.clone());
+                    }
+                }
+                if !record {
+                    continue;
                 }
                 if component.outcome == SchemaExpressionOutcome::Unrepresented {
                     unrepresented.insert(format!("{}: {}", component.expression, component.reason));
@@ -3745,6 +4328,78 @@ fn class_expression_report(
             class.focus = focus.into_iter().collect();
             class.unrepresented = unrepresented.into_iter().collect();
         }
+    }
+
+    // The fragments each owner holds, each referencing the nearest owning
+    // ancestors for the same slot.
+    let mut fragments: Fragments = BTreeMap::new();
+    for (&class_iri, facts) in class_facts {
+        for (&property, owned) in &facts.owned_restrictions {
+            let candidates: Vec<&str> = facts
+                .ancestors
+                .iter()
+                .copied()
+                .filter(|ancestor| {
+                    class_facts
+                        .get(ancestor)
+                        .is_some_and(|facts| facts.owned_restrictions.contains_key(property))
+                })
+                .collect();
+            let mut restrictions: Vec<Restriction> = owned
+                .iter()
+                .map(|&(_, restriction)| restriction.clone())
+                .collect();
+            restrictions.sort();
+            restrictions.dedup();
+            fragments.insert(
+                (class_iri.to_owned(), Some(property.to_owned())),
+                Fragment {
+                    restrictions,
+                    disjunctions: Vec::new(),
+                    parents: nearest(&candidates, class_facts)
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                },
+            );
+        }
+        let candidates: Vec<&str> = std::iter::once(class_iri)
+            .chain(facts.ancestors.iter().copied())
+            .filter(|owner| projected_disjunctions.contains_key(owner))
+            .collect();
+        if let Some(class) = classes.get_mut(class_iri) {
+            class.disjunction_owners = nearest(&candidates, class_facts)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        }
+    }
+    for (&class_iri, disjunctions) in &projected_disjunctions {
+        let candidates: Vec<&str> = class_facts
+            .get(class_iri)
+            .map(|facts| {
+                facts
+                    .ancestors
+                    .iter()
+                    .copied()
+                    .filter(|ancestor| projected_disjunctions.contains_key(ancestor))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut disjunctions = disjunctions.clone();
+        disjunctions.sort();
+        disjunctions.dedup();
+        fragments.insert(
+            (class_iri.to_owned(), None),
+            Fragment {
+                restrictions: Vec::new(),
+                disjunctions,
+                parents: nearest(&candidates, class_facts)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            },
+        );
     }
 
     let mut axioms: BTreeMap<SchemaCoverageProvenance, SchemaClassExpressionAxiom> =
@@ -3800,7 +4455,7 @@ fn class_expression_report(
             });
         }
     }
-    Ok(SchemaClassExpressionReport { mode, axioms })
+    Ok((SchemaClassExpressionReport { mode, axioms }, fragments))
 }
 
 #[cfg(test)]
@@ -4932,9 +5587,16 @@ mod tests {
              ex:rational a owl:DatatypeProperty ; rdfs:range owl:rational .",
         )
         .expect("the OWL 2 datatype map and the RDF 1.2 datatypes are datatypes");
+        // What main refused stays refused; what main accepted stays accepted.
+        complete(
+            "ex:Text owl:equivalentClass rdf:PlainLiteral .
+             ex:text a owl:ObjectProperty ; rdfs:range ex:Text .
+             ex:json a owl:ObjectProperty ; rdfs:range rdf:JSON .",
+        )
+        .expect("main accepts an object property ranging over these names, so this does too");
         for (invalid, needle) in [
             (
-                "ex:Text owl:equivalentClass rdf:PlainLiteral .
+                "ex:Text a rdfs:Datatype .
                  ex:text a owl:ObjectProperty ; rdfs:range ex:Text .",
                 "owl:ObjectProperty has datatype range",
             ),
@@ -5005,10 +5667,23 @@ mod tests {
                 .iter()
                 .any(|axiom| axiom.provenance.object == format!("<{EXS}B>"))
         );
-        // A malformed anonymous member is still refused.
-        let error =
+        // A malformed anonymous member is reported, not refused: main accepted
+        // (ignored) the axiom, and nothing main accepts is refused.
+        let malformed =
             complete("ex:A owl:disjointWith [ a owl:Restriction ; owl:someValuesFrom ex:B ] .")
-                .expect_err("a restriction without owl:onProperty is malformed anywhere");
+                .expect("an axiom main ignored is reported, never refused");
+        assert_eq!(
+            manifest_outcomes(&malformed, None, ANONYMOUS_INDIVIDUAL)
+                .iter()
+                .map(|(outcome, _)| *outcome)
+                .collect::<Vec<_>>(),
+            vec![SchemaExpressionOutcome::Unrepresented]
+        );
+        // The neighbour: the same malformed restriction as the object of
+        // rdfs:subClassOf, which main refused too, is still refused.
+        let error =
+            complete("ex:A rdfs:subClassOf [ a owl:Restriction ; owl:someValuesFrom ex:B ] .")
+                .expect_err("main refused this, and so does this");
         assert!(matches!(error, SchemaCompileError::InvalidOntology { .. }));
     }
 
@@ -5135,5 +5810,150 @@ mod tests {
             SchemaCoverageStatus::ExcludedDomain,
             "a class that carries no restriction stays out of the domain"
         );
+    }
+
+    #[test]
+    fn axioms_main_ignored_are_reported_not_refused_when_malformed() {
+        let surface = complete(
+            "[ a owl:Restriction ; owl:someValuesFrom ex:B ] rdfs:subClassOf ex:A .
+             [ rdfs:label \"no inverse\" ] rdfs:subPropertyOf ex:p .
+             ex:x a [ a owl:Restriction ; owl:onProperty ex:p ] .
+             ex:R a owl:Restriction ; owl:someValuesFrom ex:B .",
+        )
+        .expect("main accepted every one of these axioms");
+        let malformed = surface
+            .class_expressions
+            .axioms
+            .iter()
+            .flat_map(|axiom| &axiom.components)
+            .filter(|component| component.outcome == SchemaExpressionOutcome::Unrepresented)
+            .count();
+        assert_eq!(malformed, 4, "{:#?}", surface.class_expressions.axioms);
+    }
+
+    #[test]
+    fn named_subject_class_constructors_are_equivalences() {
+        let surface = complete(
+            "ex:Day a owl:Class ; owl:oneOf ( ex:mon ex:tue ) .
+             ex:B a owl:Class . ex:C a owl:Class .
+             ex:BC a owl:Class ; owl:unionOf ( ex:B ex:C ) .
+             ex:NotB a owl:Class ; owl:complementOf ex:B .
+             ex:R a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B .
+             ex:A a owl:Class ; rdfs:subClassOf ex:R .
+             ex:p a owl:ObjectProperty .
+             ex:q a owl:ObjectProperty ; rdfs:domain ex:BC .
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B ]
+                 owl:hasKey ( ex:p ) .",
+        )
+        .expect("named-subject constructors");
+        let predicates: BTreeSet<&str> = surface
+            .class_expressions
+            .axioms
+            .iter()
+            .map(|axiom| axiom.provenance.predicate.as_str())
+            .collect();
+        for predicate in [
+            "http://www.w3.org/2002/07/owl#oneOf",
+            "http://www.w3.org/2002/07/owl#unionOf",
+            "http://www.w3.org/2002/07/owl#complementOf",
+            "http://www.w3.org/2002/07/owl#onProperty",
+            "http://www.w3.org/2002/07/owl#hasKey",
+        ] {
+            assert!(
+                predicates.contains(predicate),
+                "{predicate} reported: {predicates:?}"
+            );
+        }
+        assert_eq!(
+            surface.classes[&format!("{EXS}Day")].focus.len(),
+            1,
+            "Day ≡ {{mon, tue}} enumerates its @id"
+        );
+        assert_eq!(
+            surface.classes[&format!("{EXS}A")].properties[&format!("{EXS}p")]
+                .restrictions
+                .len(),
+            1,
+            "A ⊑ R carries R's restriction"
+        );
+        assert_eq!(
+            class_status(&surface, &format!("{EXS}q"), &format!("{EXS}B")),
+            SchemaCoverageStatus::IncludedUnshaped,
+            "BC ≡ B ⊔ C makes B a subclass of BC"
+        );
+        // The neighbour: a named class with no constructor is no axiom.
+        let plain = complete("ex:Day a owl:Class .").expect("plain class");
+        assert_eq!(plain.class_expressions.axioms.len(), 0);
+    }
+
+    #[test]
+    fn approximate_named_datatype_ranges_are_reported_as_approximations() {
+        let surface = complete(
+            "ex:C a owl:Class .
+             ex:real a owl:DatatypeProperty ; rdfs:range owl:real .
+             ex:rational a owl:DatatypeProperty ; rdfs:range owl:rational .
+             ex:json a owl:DatatypeProperty ; rdfs:range rdf:JSON .
+             ex:xml a owl:DatatypeProperty ; rdfs:range rdf:XMLLiteral .
+             ex:html a owl:DatatypeProperty ; rdfs:range rdf:HTML .
+             ex:decimal a owl:DatatypeProperty ; rdfs:range xsd:decimal .",
+        )
+        .expect("datatype ranges");
+        let precision = |local: &str| {
+            property(&surface, &format!("{EXS}{local}"))
+                .classes
+                .iter()
+                .find(|row| row.class_iri == format!("{EXS}C"))
+                .expect("C row")
+                .precision
+        };
+        for local in ["real", "rational", "json", "xml", "html"] {
+            assert_eq!(
+                precision(local),
+                SchemaCoveragePrecision::RepresentationApproximation,
+                "{local}: the lexical form is not judged"
+            );
+        }
+        assert_eq!(precision("decimal"), SchemaCoveragePrecision::Exact);
+    }
+
+    #[test]
+    fn dense_iri_only_ranges_that_main_accepts_are_not_refused() {
+        use std::fmt::Write as _;
+        // 25,000 classes × 9 domainless properties × 5 ranges is over a
+        // million range expressions in 225,045 coverage cells, under main's
+        // one-million-cell ceiling.
+        let mut ontology = String::new();
+        for range in 0..5 {
+            let _ = writeln!(ontology, "ex:R{range} a owl:Class .");
+        }
+        for property in 0..9 {
+            let _ = write!(ontology, "ex:p{property} a owl:ObjectProperty ; rdfs:range");
+            for range in 0..5 {
+                let _ = write!(
+                    ontology,
+                    "{} ex:R{range}",
+                    if range == 0 { "" } else { " ," }
+                );
+            }
+            ontology.push_str(" .\n");
+        }
+        for class in 0..25_000 {
+            let _ = writeln!(ontology, "ex:C{class} a owl:Class .");
+        }
+        let shape_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES, None).expect("shape Turtle");
+        let shapes = from_dataset(&shape_dataset).expect("shape graph");
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{ontology}"), None)
+                .expect("ontology Turtle");
+        let report = SchemaCompileRequest::new(
+            &shapes,
+            &namespaces(),
+            dataset.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        )
+        .coverage_report()
+        .expect("main accepts this, so this does too");
+        assert_eq!(report.properties.len(), 9);
     }
 }

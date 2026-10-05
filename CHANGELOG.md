@@ -75,58 +75,95 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 - **Anonymous OWL class expressions in developer schemas:** the
   ontology-complete schema surface no longer refuses an `rdfs:subClassOf` or
-  `owl:equivalentClass` whose object (or subject) is a blank node. Restrictions
+  `owl:equivalentClass` whose object is a blank node. Restrictions
   (`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:hasSelf`,
   and the unqualified and qualified cardinalities over `owl:onClass` or
   `owl:onDataRange`) and the boolean forms (`owl:unionOf`,
   `owl:intersectionOf`, `owl:complementOf`, `owl:oneOf`) are recorded with
   their source axiom and inherited by subclasses. Data ranges
   (`owl:onDatatype`/`owl:withRestrictions`, `owl:datatypeComplementOf`, a
-  literal `owl:oneOf`) are read as fillers and ranges. `[ owl:inverseOf p ]`
-  is accepted wherever a property expression may stand, including in
-  `rdfs:subPropertyOf`, `owl:equivalentProperty` and `owl:inverseOf`. An
-  `owl:equivalentClass` between an IRI and a data range or a datatype is read
-  as a datatype definition. The IRI used to become a class, so an
-  `owl:DatatypeProperty` ranging over it was refused; it is now a datatype
-  whose values are held to the defining range. The JSON
+  literal `owl:oneOf`) are read as fillers and ranges, and
+  `[ owl:inverseOf p ]` wherever a property expression may stand. A
+  restriction on `inverse(p)` whose inverse is named is read as one on that
+  property. A class constructor on an IRI (`ex:Day owl:oneOf ( … )`, an IRI
+  typed `owl:Restriction`) is read as the equivalence OWL gives it. The JSON
   Schema and OpenAPI carriers, and the LinkML, TypeScript, GraphQL and
   Pydantic emitters that read them, carry what a schema can state:
-  `owl:allValuesFrom` as a value constraint, existentials and minimums as
-  required properties with `contains`/`minContains`, maximums as
-  `maxItems`/`maxContains`, datatype facets through the SHACL value compiler,
-  an `owl:oneOf` of individuals as an `@id` enumeration, the complement of a
-  named class as an `@type` exclusion, and a union of restrictions as `anyOf`.
-  Coverage rows these closed-world readings touch are marked
-  `representation_approximation`. The new
+  `owl:allValuesFrom` as a value constraint (`owl:Nothing` forbids the
+  property), existentials and minimums as required properties with
+  `contains`/`minContains`, maximums as `maxItems`/`maxContains`, datatype
+  facets through the SHACL value compiler, an `owl:oneOf` of individuals as an
+  `@id` enumeration, the complement of a named class as an `@type` exclusion,
+  and a union of restrictions as `anyOf`. An inherited restriction is
+  referenced through `allOf` to its owner's `<Class>.Restriction.<property>`
+  fragment rather than copied, so output grows with the restrictions and not
+  with the hierarchy's depth. A restricted property is emitted on the class
+  carrying the restriction whatever its declared domain. An existential
+  restriction places the class in the property's domain. A universal
+  restriction on `owl:Thing` is a global range. Coverage rows that closed-world
+  readings, class fillers, datatype complements or unchecked lexical forms
+  touch are marked `representation_approximation`. The new
   `SchemaCompileRequest::class_expression_report` and
   `compile_schema_with_class_expressions` return a class-expression manifest
-  (`SchemaClassExpressionReport`). It lists every such axiom once, with each
-  component's `SchemaExpressionOutcome` (projected, approximated,
-  unrepresented or excluded) and reason on every class that carries it, so
-  nothing is dropped silently. Typed refusals remain only for malformed
-  input: a restriction without `owl:onProperty`, conflicting or non-integer
-  cardinalities, an ill-formed or cyclic RDF list, or an expression that
-  contains itself. Schemas and coverage reports for ontologies with only IRI
-  objects are byte-identical, except where an `owl:equivalentClass` names a
-  datatype, which is now a datatype definition. Every schema cache key changes once, because
-  the policy salt moves to `owl-rdfs-fragment-v2`: axioms with a blank-node
-  subject, which the surface used to skip, now reach the manifest. A
-  restriction's source axiom is provenance only on the coverage rows of the
-  classes that carry it, so output and memory grow linearly with the classes.
-  A restricted property is emitted on the class carrying the restriction
-  whatever its declared domain. An existential restriction places the class in
-  the property's domain for the other properties of that domain. A universal
-  restriction on `owl:Thing` is a global range, and a restriction on
-  `inverse(p)` whose inverse is named is read as one on that property.
-  `owl:real`, `owl:rational`, `rdf:PlainLiteral`, `rdf:XMLLiteral`,
-  `rdf:dirLangString`, `rdf:HTML` and `rdf:JSON` are datatypes. Anonymous
-  classes under `owl:disjointWith`, `owl:AllDisjointClasses`,
-  `owl:disjointUnionOf` and in class assertions are reported. A class filler of
-  `owl:allValuesFrom` and a datatype complement are reported as approximations,
-  and `owl:allValuesFrom owl:Nothing` forbids the property.
+  (`SchemaClassExpressionReport`) listing every axiom with an anonymous class
+  once: subclass, equivalence, disjointness (`owl:disjointWith`,
+  `owl:AllDisjointClasses`, `owl:disjointUnionOf`), class assertions,
+  anonymous `owl:hasKey` and datatype definitions. Each component carries its
+  `SchemaExpressionOutcome` (projected, approximated, unrepresented or
+  excluded) and reason, on the axiom or on each class that owns it. A class
+  below an owner has its own row only where its outcome differs.
+- **Refusals:** nothing the surface accepted before is refused. A malformed
+  anonymous part of an axiom it used to skip (an anonymous subject,
+  disjointness, a class assertion, an IRI-named constructor, `owl:hasKey`) is
+  reported as unrepresented. An `owl:ObjectProperty` ranging over a datatype is
+  refused only where the datatype is XSD, `rdfs:Literal`, `rdf:langString` or
+  declared. A malformed expression in an axiom the surface always read (the
+  object of `rdfs:subClassOf`, `owl:equivalentClass`, `rdfs:subPropertyOf`,
+  `owl:equivalentProperty` or `owl:inverseOf` with a named subject, or an
+  `rdfs:domain`/`rdfs:range`) is refused with a typed error when it has:
+  a restriction without exactly one `owl:onProperty` or `owl:onProperties`;
+  conflicting values for one facet; a cardinality that is not a non-negative
+  integer literal within 64 bits; a qualified cardinality without its
+  qualifier, a qualifier without a qualified cardinality, or two qualifiers;
+  `owl:hasSelf` other than `true`; `owl:onProperties` with a facet other than
+  `owl:someValuesFrom`/`owl:allValuesFrom`; a blank node with no construct or
+  mixed constructs; an empty, mixed or triple-term `owl:oneOf`; a union or
+  intersection with fewer than two distinct members; an anonymous property
+  expression that is not `owl:inverseOf` one named property; a non-IRI
+  `owl:onDatatype`, an empty `owl:withRestrictions`, a facet restriction that is
+  not a blank node with one literal facet, or an `xsd:pattern` outside the XSD
+  regular-expression language; an ill-formed or cyclic RDF list; an expression
+  that contains itself; a data range where a class expression is required; or
+  a filler, `owl:hasValue` or `owl:hasSelf` that contradicts the restricted
+  property's kind.
+- **Output changes for ontologies without anonymous expressions:**
+  - Every schema cache key changes once: the policy salt moves to
+    `owl-rdfs-fragment-v2`.
+  - `ex:X owl:equivalentClass xsd:…` (or any datatype) defines `ex:X` as a
+    datatype. It is no longer a class: it gets no `$defs` entry and no coverage
+    class rows. A property that is not an `owl:ObjectProperty` and ranges over
+    it admits a literal tagged `ex:X` or a value of the defining datatype. An
+    `owl:DatatypeProperty` ranging over it, which used to be refused, is
+    accepted.
+  - A property that is not an `owl:ObjectProperty` and ranges over
+    `rdf:JSON`, `rdf:HTML`, `rdf:XMLLiteral`, `rdf:PlainLiteral`, `owl:real` or
+    `owl:rational` projects a literal of that datatype, not a node reference.
+    Its coverage rows are `representation_approximation`, because lexical
+    forms are not judged. An `owl:DatatypeProperty` ranging over one of them,
+    which used to be refused, is accepted.
+  - A class constructor on an IRI (`owl:oneOf`, `owl:unionOf`,
+    `owl:intersectionOf`, `owl:complementOf`, an IRI typed `owl:Restriction`),
+    which used to be ignored, is projected and reported as above.
+  - Nothing else changes. Ontologies whose axioms all have IRI objects and use
+    none of these forms produce byte-identical schemas and coverage reports.
 
 ### Fixed
 
+- **GraphQL emission of enumerated values beside their array form:** a
+  property whose values are an enumeration, written as one value or several
+  (a SHACL `sh:in` or an OWL literal `owl:oneOf`), no longer aborts with
+  `GraphqlError` "type name … collides". The wrapper object that carries the
+  enum in the `@oneOf` union is named `<Enum>Value`, apart from the enum.
 - **Premise IRIs:** every entailment service that takes premise IRIs now
   refuses one that is not an absolute IRI, such as `"::bad"`, `"lib"` or `""`,
   and names it. Before, it was accepted silently and could never match an

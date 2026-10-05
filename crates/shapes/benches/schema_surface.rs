@@ -140,7 +140,6 @@ fn bench_schema_surface(c: &mut Bench) {
     let sparse = fixture(256, 256, Density::Sparse, false);
     let dense = fixture(128, 256, Density::Dense, false);
     let restricted = fixture(128, 256, Density::Restricted, false);
-    let shared = fixture(1_000, 4, Density::SharedRestricted, false);
     let mut group = c.benchmark_group("shacl_schema_surface");
     group.sample_size(10);
 
@@ -194,6 +193,9 @@ fn bench_schema_surface(c: &mut Bench) {
     group.bench_function(
         "ontology_shared_restrictions_1000_classes_4_properties",
         |bencher| {
+            // Built here, untimed, so that only this lane pays for its
+            // thousand-class fixture.
+            let shared = fixture(1_000, 4, Density::SharedRestricted, false);
             bencher.iter(|| {
                 let request = SchemaCompileRequest::new(
                     &shared.shapes,

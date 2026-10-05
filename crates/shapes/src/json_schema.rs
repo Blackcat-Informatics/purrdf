@@ -157,7 +157,7 @@ use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
 use crate::report::{ConformanceDisallows, Severity};
 use crate::schema_surface::{
-    ExpressionTerm, OntologyExpression, OntologyPropertyKind, Restriction, SchemaSurface,
+    ExpressionTerm, Fragment, OntologyExpression, OntologyPropertyKind, Restriction, SchemaSurface,
     SurfaceClass, SurfaceProperty, facet_supported, non_negative_integer, projects_exactly,
     xsd_pattern_as_xpath,
 };
@@ -758,7 +758,12 @@ pub struct SchemaClassExpressionAxiom {
     /// or an axiom no caller-owned class carries — sorted.
     pub components: Vec<SchemaExpressionComponent>,
     /// Per-class components, sorted by class IRI: every caller-owned class that
-    /// carries the axiom or inherits it from a superclass.
+    /// owns the axiom (carries it, or inherits it with no caller-owned
+    /// superclass that also does), and every class below an owner whose
+    /// outcome differs from the owner's. A class below an owner with no row
+    /// of its own has the owner's outcome, reached through the class
+    /// hierarchy, so the manifest grows with the axioms rather than with the
+    /// hierarchy's depth.
     pub classes: Vec<SchemaClassExpressionCoverage>,
 }
 
@@ -1711,6 +1716,22 @@ fn compile_with_surface(
     for (key, definition) in vocab_enums.values() {
         defs.insert(key.clone(), definition.clone());
     }
+    // Restriction and disjunction fragments, inserted after the `Node`
+    // discriminator is built so that none is mistaken for a class.
+    for ((owner, property), fragment) in &surface.fragments {
+        if !surface.classes.contains_key(owner) {
+            continue;
+        }
+        if let Some(schema) = fragment_schema(
+            owner,
+            property.as_deref(),
+            fragment,
+            &surface.property_templates,
+            &mut ctx,
+        ) {
+            defs.insert(fragment_key(ns, owner, property.as_deref()), schema);
+        }
+    }
 
     if let Some(error) = ctx.pattern_error {
         return Err(error);
@@ -1746,6 +1767,15 @@ fn validate_surface_keys(
             });
         }
         insert_definition_key(&mut keys, key.clone(), class_iri)?;
+    }
+    for (owner, property) in surface.fragments.keys() {
+        if surface.classes.contains_key(owner) {
+            insert_definition_key(
+                &mut keys,
+                fragment_key(ns, owner, property.as_deref()),
+                &format!("{owner} {}", property.as_deref().unwrap_or("disjunctions")),
+            )?;
+        }
     }
     for (class_iri, class) in &surface.classes {
         let mut property_keys: BTreeMap<String, String> = BTreeMap::new();
@@ -1816,14 +1846,13 @@ fn augment_object_schema(
         let mut keys: Vec<String> = object
             .get("required")
             .and_then(Value::as_array)
-            .map(|items| {
+            .map_or_else(Vec::new, |items| {
                 items
                     .iter()
                     .filter_map(Value::as_str)
                     .map(str::to_owned)
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         keys.extend(required);
         keys.sort();
         keys.dedup();
@@ -1860,7 +1889,7 @@ fn augment_object_schema(
                     excluded_types.insert(ctx.ns.compact_iri(iri));
                 }
             }
-            _ => disjunctions.push(focus_schema(expression, class, class_iri, ctx)),
+            _ => disjunctions.push(focus_schema(expression, &class.properties, class_iri, ctx)),
         }
     }
     if let Some(identifiers) = identifiers
@@ -1892,6 +1921,11 @@ fn augment_object_schema(
             .collect();
         crate::json_model::insert_sorted(at_type, "not", json!({ "anyOf": matches }));
     }
+    disjunctions.extend(
+        class.disjunction_owners.iter().map(
+            |owner| json!({ "$ref": format!("#/$defs/{}", fragment_key(ctx.ns, owner, None)) }),
+        ),
+    );
     if !disjunctions.is_empty() {
         let mut all_of = object
             .get("allOf")
@@ -1940,87 +1974,154 @@ fn ontology_property_schema(
     class_iri: &str,
     ctx: &mut Ctx<'_>,
 ) -> (Value, bool) {
-    if property.restrictions.is_empty() {
-        let mut single = if property.ranges.is_empty() {
-            open_property_value_schema(property)
+    if property.restriction_owners.is_empty() {
+        debug_assert!(
+            property.restrictions.is_empty(),
+            "an inherited restriction has an owner"
+        );
+        let note = if property.functional {
+            "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
         } else {
-            let mut conjuncts: Vec<Value> = Vec::with_capacity(property.ranges.len());
-            for range in &property.ranges {
-                conjuncts.push(range_expression_schema(range, property, class_iri, ctx));
-            }
-            if conjuncts.len() == 1 {
-                conjuncts.pop().expect("one range expression")
-            } else {
-                json!({ "allOf": conjuncts })
-            }
+            "Optional OWL/RDFS-derived property; multiple values remain permitted."
         };
-        if let Value::Object(schema) = &mut single {
-            crate::json_model::insert_sorted(
-                schema,
-                "$comment".to_owned(),
-                Value::String(if property.functional {
-                    "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
-                        .to_owned()
-                } else {
-                    "Optional OWL/RDFS-derived property; multiple values remain permitted."
-                        .to_owned()
-                }),
-            );
-        }
-        let schema = if property.functional {
-            single
-        } else {
-            json!({
-                "anyOf": [
-                    single.clone(),
-                    { "type": "array", "items": single }
-                ]
-            })
-        };
-        return (schema, false);
+        return (
+            unrestricted_property_schema(property, class_iri, ctx, note),
+            false,
+        );
     }
-
-    // Every value is in each range and in each `owl:allValuesFrom` filler.
-    let mut conjuncts: Vec<Value> = Vec::new();
-    let universal = property
+    // Restricted: the unrestricted schema, and a reference to each nearest
+    // owner's restriction fragment, which in turn references its own nearest
+    // owning ancestors. The class requires the property when any restriction
+    // it inherits requires a value.
+    let note = if property.functional {
+        "OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation; the class's OWL restrictions are referenced through allOf."
+    } else {
+        "OWL/RDFS-derived property; the class's OWL restrictions are referenced through allOf."
+    };
+    let mut conjuncts = vec![unrestricted_property_schema(property, class_iri, ctx, note)];
+    conjuncts.extend(property.restriction_owners.iter().map(|owner| {
+        json!({ "$ref": format!("#/$defs/{}", fragment_key(ctx.ns, owner, Some(&property.iri))) })
+    }));
+    let required = property
         .restrictions
         .iter()
-        .filter_map(|restriction| match restriction {
-            Restriction::AllValues(filler) => Some(filler),
-            _ => None,
-        });
-    for expression in property.ranges.iter().chain(universal) {
-        let schema = range_expression_schema(expression, property, class_iri, ctx);
-        if !conjuncts.contains(&schema) {
-            conjuncts.push(schema);
+        .any(Restriction::is_existential);
+    (json!({ "allOf": conjuncts }), required)
+}
+
+/// A property's schema from its ranges and functionality alone.
+fn unrestricted_property_schema(
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+    note: &str,
+) -> Value {
+    let mut single = if property.ranges.is_empty() {
+        open_property_value_schema(property)
+    } else {
+        let mut conjuncts: Vec<Value> = Vec::with_capacity(property.ranges.len());
+        for range in &property.ranges {
+            conjuncts.push(range_expression_schema(range, property, class_iri, ctx));
         }
-    }
-    let mut single = match conjuncts.len() {
-        0 => open_property_value_schema(property),
-        1 => conjuncts.pop().expect("one value conjunct"),
-        _ => json!({ "allOf": conjuncts }),
+        if conjuncts.len() == 1 {
+            conjuncts.pop().expect("one range expression")
+        } else {
+            json!({ "allOf": conjuncts })
+        }
     };
     if let Value::Object(schema) = &mut single {
         crate::json_model::insert_sorted(
             schema,
             "$comment".to_owned(),
-            Value::String(if property.functional {
-                "OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation; the class's OWL restrictions are projected as closed-world value constraints."
-                    .to_owned()
-            } else {
-                "OWL/RDFS-derived property; the class's OWL restrictions are projected as closed-world value constraints."
-                    .to_owned()
-            }),
+            Value::String(note.to_owned()),
         );
     }
-    restricted_value_schema(
-        single,
-        &property.restrictions,
-        property.functional,
-        property,
-        class_iri,
-        ctx,
-    )
+    if property.functional {
+        single
+    } else {
+        json!({
+            "anyOf": [
+                single.clone(),
+                { "type": "array", "items": single }
+            ]
+        })
+    }
+}
+
+/// The `$defs` key of one owner's restriction fragment on `property`, or of its
+/// disjunction fragment when `property` is `None`.
+pub(crate) fn fragment_key(ns: &Namespaces, owner: &str, property: Option<&str>) -> String {
+    let owner = ns.def_key(owner);
+    match property {
+        Some(property) => {
+            let slot: String = ns
+                .compact_iri(property)
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                        character
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            format!("{owner}.Restriction.{slot}")
+        }
+        None => format!("{owner}.Disjunctions"),
+    }
+}
+
+/// The schema of one fragment: what its owner owns on the slot, conjoined with
+/// references to the nearest owning ancestors' fragments for the same slot.
+fn fragment_schema(
+    owner: &str,
+    property: Option<&str>,
+    fragment: &Fragment,
+    templates: &BTreeMap<String, SurfaceProperty>,
+    ctx: &mut Ctx<'_>,
+) -> Option<Value> {
+    let mut conjuncts: Vec<Value> = Vec::new();
+    match property {
+        Some(property) => {
+            let template = templates.get(property)?;
+            let mut values: Vec<Value> = Vec::new();
+            for restriction in &fragment.restrictions {
+                if let Restriction::AllValues(filler) = restriction {
+                    let schema = range_expression_schema(filler, template, owner, ctx);
+                    if !values.contains(&schema) {
+                        values.push(schema);
+                    }
+                }
+            }
+            let single = match values.len() {
+                0 => json!({}),
+                1 => values.pop().expect("one value conjunct"),
+                _ => json!({ "allOf": values }),
+            };
+            let (own, _) = restricted_value_schema(
+                single,
+                &fragment.restrictions,
+                false,
+                template,
+                owner,
+                ctx,
+            );
+            conjuncts.push(own);
+        }
+        None => {
+            for disjunction in &fragment.disjunctions {
+                conjuncts.push(focus_schema(disjunction, templates, owner, ctx));
+            }
+        }
+    }
+    conjuncts.extend(fragment.parents.iter().map(
+        |parent| json!({ "$ref": format!("#/$defs/{}", fragment_key(ctx.ns, parent, property)) }),
+    ));
+    Some(if conjuncts.len() == 1 {
+        conjuncts.pop().expect("one conjunct")
+    } else {
+        json!({ "allOf": conjuncts })
+    })
 }
 
 /// The value schema of a property with no range: any value of its kind.
@@ -2219,7 +2320,20 @@ fn restricted_value_schema(
             };
             json!({ "anyOf": [scalar, array] })
         }
-        (true, false) => scalar,
+        // A lone value is never an array: where only the lone form is
+        // permitted, an array is refused.
+        (true, false) => {
+            if rejects_arrays(&scalar) {
+                scalar
+            } else if without_comment(&scalar) == json!({}) {
+                json!({ "type": ["boolean", "number", "object", "string"] })
+            } else {
+                json!({
+                    "type": ["boolean", "number", "object", "string"],
+                    "allOf": [scalar]
+                })
+            }
+        }
         (false, true) => array,
         (false, false) => Value::Bool(false),
     };
@@ -2242,13 +2356,13 @@ fn without_comment(schema: &Value) -> Value {
 /// class from its `@type`.
 fn focus_schema(
     expression: &OntologyExpression,
-    class: &SurfaceClass,
+    properties: &BTreeMap<String, SurfaceProperty>,
     class_iri: &str,
     ctx: &mut Ctx<'_>,
 ) -> Value {
     match expression {
         OntologyExpression::Restriction(on, restriction) => {
-            let Some(property) = on.named().and_then(|iri| class.properties.get(iri)) else {
+            let Some(property) = on.named().and_then(|iri| properties.get(iri)) else {
                 debug_assert!(false, "a projected disjunct restricts an emitted property");
                 return json!({});
             };
@@ -2282,14 +2396,14 @@ fn focus_schema(
         OntologyExpression::Union(members) => {
             let alternatives: Vec<Value> = members
                 .iter()
-                .map(|member| focus_schema(member, class, class_iri, ctx))
+                .map(|member| focus_schema(member, properties, class_iri, ctx))
                 .collect();
             json!({ "anyOf": alternatives })
         }
         OntologyExpression::Intersection(members) => {
             let conjuncts: Vec<Value> = members
                 .iter()
-                .map(|member| focus_schema(member, class, class_iri, ctx))
+                .map(|member| focus_schema(member, properties, class_iri, ctx))
                 .collect();
             json!({ "allOf": conjuncts })
         }
@@ -2443,9 +2557,15 @@ fn named_range_schema(
     if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
         return json!({ "$ref": format!("#/$defs/{enum_key}") });
     }
+    // An object property's values are nodes: it projects only an XSD or
+    // declared datatype range as a literal, as it always has.
+    let as_literal = property.kind != OntologyPropertyKind::Object
+        || iri.starts_with(XSD_NS)
+        || property.datatype_iris.contains(iri);
     // A defined datatype admits a literal typed with it by name, or a value
     // that meets its defining data range.
-    if let Some(definition) = ctx.datatype_definitions.get(iri).cloned()
+    if as_literal
+        && let Some(definition) = ctx.datatype_definitions.get(iri).cloned()
         && !ctx.defining.iter().any(|defining| defining == iri)
     {
         ctx.defining.push(iri.to_owned());
@@ -2459,7 +2579,7 @@ fn named_range_schema(
     if iri == RDF_LANG_STRING || iri == RDF_DIR_LANG_STRING {
         return datatype_value_schema(iri, ctx.ns);
     }
-    if iri == RDF_PLAIN_LITERAL {
+    if as_literal && iri == RDF_PLAIN_LITERAL {
         // OWL 2 §4.3: the strings, with or without a language tag.
         return json!({
             "anyOf": [
@@ -2468,13 +2588,15 @@ fn named_range_schema(
             ]
         });
     }
-    if iri == OWL_REAL || iri == OWL_RATIONAL {
+    if as_literal && (iri == OWL_REAL || iri == OWL_RATIONAL) {
         return numeric_literal_schema(iri == OWL_REAL, ctx.ns);
     }
     if property.kind == OntologyPropertyKind::Datatype
         || property.datatype_iris.contains(iri)
-        || crate::schema_surface::is_builtin_datatype(iri)
-        || ctx.surface_datatypes.contains(iri)
+        || iri.starts_with(XSD_NS)
+        || (as_literal
+            && (crate::schema_surface::is_builtin_datatype(iri)
+                || ctx.surface_datatypes.contains(iri)))
     {
         return datatype_value_schema(iri, ctx.ns);
     }
