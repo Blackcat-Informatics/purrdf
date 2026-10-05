@@ -182,6 +182,16 @@ impl NativeSparqlEngine {
         .map_err(|error| {
             error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
         })?;
+        let publication = crate::user_fn::RefusalPublication::default();
+        let options = publication
+            .options(dataset, options)
+            .map_err(|diagnostic| {
+                super::fallible_admission_failure(
+                    dataset,
+                    super::bounded_workspace::AdmissionError::Query(diagnostic),
+                )
+                .map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+            })?;
         let evaluation = self.stage_construct_admitted(
             dataset,
             prepared,
@@ -192,7 +202,7 @@ impl NativeSparqlEngine {
             super::Sequencing::for_view::<D>(),
             &workspace,
         );
-        match dataset.operation_status() {
+        let result = match dataset.operation_status() {
             ViewOperationStatus::Failed { error, evidence } => {
                 Err(FallibleSparqlError::Operational {
                     error,
@@ -219,7 +229,10 @@ impl NativeSparqlEngine {
                     }
                 }
             }
-        }
+        };
+        publication.finish(result, |error| {
+            matches!(error, FallibleSparqlError::Query { .. })
+        })
     }
 
     #[allow(
@@ -242,7 +255,9 @@ impl NativeSparqlEngine {
             !substitutions.is_empty(),
             options,
         )?;
-        self.stage_construct_admitted(
+        let publication = crate::user_fn::RefusalPublication::default();
+        let options = publication.options(dataset, options)?;
+        let evaluation = self.stage_construct_admitted(
             dataset,
             prepared,
             substitutions,
@@ -251,7 +266,10 @@ impl NativeSparqlEngine {
             state,
             sequencing,
             &workspace,
-        )
+        );
+        publication.finish(evaluation, |error| {
+            matches!(error, GraphBuildError::Query(_))
+        })
     }
 
     /// Stage the complete graph under the caller's admitted guard. This body

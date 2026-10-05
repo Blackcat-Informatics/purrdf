@@ -359,28 +359,41 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
     let typed = engine.prepare_algebra(parsed, QueryOptions::EMPTY).unwrap();
     assert_eq!(text.query(), typed.query());
     let data = RdfDatasetBuilder::new().freeze().unwrap();
-    // Preparation accepts the parser's envelope. Execution measures the stack it runs
-    // on: on this test thread the recursive evaluator runs out of it and returns its
-    // typed diagnostic safely, and on a thread with room it answers.
+    // Preparation accepts the parser's envelope. Execution may answer on this
+    // thread or refuse its actual remaining stack; a fixed algebra length does
+    // not determine compiled frame sizes or the test runner's stack capacity.
+    // The controlled smaller-stack contract lives in `stack_refusal`.
+    let assert_answer_or_stack_refusal =
+        |answer: Result<_, purrdf_core::RdfDiagnostic>| match answer {
+            Ok(answer) => assert!(matches!(answer, SparqlResult::Boolean(true)), "{answer:?}"),
+            Err(refused) => assert_eq!(
+                refused.code,
+                purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
+                "{refused}"
+            ),
+        };
     for prepared in [&text, &typed] {
-        let refused = engine
-            .query_prepared(&data, prepared, &[], QueryOptions::EMPTY)
-            .expect_err("the spine does not evaluate on a test thread's stack");
-        assert_eq!(
-            refused.code,
-            purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
-            "{refused}"
-        );
-        assert!(
+        assert_answer_or_stack_refusal(engine.query_prepared(
+            &data,
+            prepared,
+            &[],
+            QueryOptions::EMPTY,
+        ));
+        assert_answer_or_stack_refusal(
             engine
                 .query_prepared_governed_in_operation(
                     &*data,
                     prepared,
                     &[],
                     QueryOptions::EMPTY,
-                    &Arc::new(GovernorState::new(&QueryGovernors::METERED))
+                    &Arc::new(GovernorState::new(&QueryGovernors::METERED)),
                 )
-                .is_err()
+                .map(|outcome| match outcome {
+                    purrdf_sparql_eval::GovernedOutcome::Complete { result, .. } => result,
+                    purrdf_sparql_eval::GovernedOutcome::BudgetExhausted(_) => {
+                        panic!("metering without ceilings must not truncate the answer")
+                    }
+                }),
         );
     }
     let answered = purrdf_stack::on_stack_scoped(512 * 1024 * 1024, || {

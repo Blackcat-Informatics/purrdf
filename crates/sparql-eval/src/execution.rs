@@ -435,6 +435,14 @@ impl PreparedExecution {
         self.workspace.retained_bytes()
     }
 
+    /// The original prepared query, before parameter substitution.
+    /// Invocation admission reads this together with [`Self::parameters`] so
+    /// absent optional bindings cannot narrow the declared pre-binding law.
+    #[must_use]
+    pub fn query(&self) -> &Query {
+        self.prepared.query()
+    }
+
     /// The declared parameters, in declaration order.
     #[must_use]
     pub fn parameters(&self) -> &[Variable] {

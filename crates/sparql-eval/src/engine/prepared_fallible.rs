@@ -116,6 +116,16 @@ impl NativeSparqlEngine {
         .map_err(|error| {
             error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
         })?;
+        let publication = crate::user_fn::RefusalPublication::default();
+        let options = publication
+            .options(dataset, options)
+            .map_err(|diagnostic| {
+                super::fallible_admission_failure(
+                    dataset,
+                    super::bounded_workspace::AdmissionError::Query(diagnostic),
+                )
+                .map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+            })?;
         let evaluation = self.query_governed_prepared_admitted(
             dataset,
             prepared,
@@ -125,7 +135,10 @@ impl NativeSparqlEngine {
             super::Sequencing::for_view::<D>(),
             &workspace,
         );
-        finish_governed_fallible_query(dataset, state, evaluation)
+        publication.finish(
+            finish_governed_fallible_query(dataset, state, evaluation),
+            |error| matches!(error, FallibleSparqlError::Query { .. }),
+        )
     }
 
     /// [`Self::query_prepared_governed_fallible_view`] with a federation source.

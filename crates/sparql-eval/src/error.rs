@@ -261,6 +261,10 @@ pub enum EvalError {
     /// offered as the complete one.
     Function(String),
 
+    /// A selected invocation law refused a SPARQL-bodied function. This is a
+    /// hard query failure, with the caller's exact cause retained through workers.
+    FunctionAdmission(crate::user_fn::UserFunctionRefusal),
+
     /// An `EXISTS`/`NOT EXISTS` body contains a `BIND`/`(expr AS ?v)` target or
     /// a `VALUES` column that collides with a variable already bound on the
     /// row being filtered — SEP-0007 Part 3's no-rebinding rule, enforced at
@@ -498,6 +502,7 @@ impl EvalError {
             | Self::ServiceHostFault { .. }
             | Self::Data(_)
             | Self::Function(_)
+            | Self::FunctionAdmission(_)
             | Self::ExistsScopeCollision { .. }
             | Self::Config(_)
             | Self::CompositeBound(_)
@@ -653,6 +658,7 @@ impl core::fmt::Display for EvalError {
                  filtered: the substitution semantics define no answer for a rebinding"
             ),
             Self::Function(msg) => write!(f, "host function error: {msg}"),
+            Self::FunctionAdmission(error) => write!(f, "host function error: {error}"),
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
             Self::CompositeBound(msg) => write!(
                 f,
@@ -702,6 +708,7 @@ impl std::error::Error for EvalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::XPathRegex(error) => Some(error),
+            Self::FunctionAdmission(error) => Some(error.cause()),
             _ => None,
         }
     }

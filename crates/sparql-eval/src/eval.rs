@@ -668,6 +668,9 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
     /// pointer, never a clone.
     pub(crate) user_functions: &'d crate::user_fn::BoundFunctionRegistry,
+    /// The request's explicit invocation law, borrowed without allocating on
+    /// healthy paths and inherited by function children and parallel workers.
+    pub(crate) user_function_admission: Option<&'d Arc<dyn crate::user_fn::UserFunctionAdmission>>,
     /// The caller-injected property-function table.
     /// [`crate::property_fn::PropertyFunctionRegistry::EMPTY`] (the default) means
     /// no relation is registered: a predicate IRI only reaches this table when the
@@ -1035,6 +1038,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             temporary_positive_numberings: 0,
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
+            user_function_admission: None,
             property_functions: &EMPTY_RELATIONS,
             aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
@@ -2265,6 +2269,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // depth: a worker that evaluates a `Function::Custom` user-function call
             // must see the same table and depth bound as its parent.
             user_functions: self.user_functions,
+            user_function_admission: self.user_function_admission,
             // Read-only shared registry (a `Copy` pointer), for the same reason: a
             // worker that evaluates a property-function call must resolve the
             // predicate IRI against the same table its parent would.
@@ -2318,6 +2323,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         registry: &'d crate::user_fn::BoundFunctionRegistry,
     ) -> Self {
         self.user_functions = registry;
+        self
+    }
+
+    /// Attach the invocation law for SPARQL-bodied functions, or clear it with
+    /// `None`. The same borrowed owner is inherited by children and workers.
+    #[must_use]
+    pub fn with_user_function_admission(
+        mut self,
+        admission: Option<&'d Arc<dyn crate::user_fn::UserFunctionAdmission>>,
+    ) -> Self {
+        self.user_function_admission = admission;
         self
     }
 
@@ -2479,6 +2495,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             temporary_positive_numberings: 0,
             base_iri: None,
             user_functions: self.user_functions,
+            user_function_admission: self.user_function_admission,
             // Inherited with the function table: a function body is SPARQL like any
             // other, so a property-function call inside it resolves against the same
             // relations the calling query sees.
