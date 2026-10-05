@@ -292,6 +292,52 @@ fn nn_ontology(bound: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
+/// `n` individuals in one `p`-chain, every one typed `C`, with `C ⊑ ∀p.C`: the universal fires
+/// along every edge, so every round reads every node's `p`-neighbourhood.
+///
+/// The shape a large ABox reaches the search in. A neighbourhood read once walked the WHOLE
+/// edge vector, so a round cost the node count times the edge count; it now walks the node's
+/// own indexed edges, so a round costs the node count times the degree (here, two).
+fn role_edge_ontology(n: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let ty = b.intern_iri(RDF_TYPE);
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+    let on_property = b.intern_iri(OWL_ONPROPERTY);
+    let all_values = b.intern_iri(OWL_ALLVALUESFROM);
+    let p = b.intern_iri(&format!("{EX}p"));
+    let c = b.intern_iri(&format!("{EX}C"));
+    let every = b.intern_blank("every", BlankScope::DEFAULT);
+    b.push_quad(every, on_property, p, None);
+    b.push_quad(every, all_values, c, None);
+    b.push_quad(c, sub_class, every, None);
+    let individuals: Vec<TermId> = (0..n).map(|i| b.intern_iri(&format!("{EX}i{i}"))).collect();
+    for &individual in &individuals {
+        b.push_quad(individual, ty, c, None);
+    }
+    for pair in individuals.windows(2) {
+        b.push_quad(pair[0], p, pair[1], None);
+    }
+    b.freeze().expect("freeze")
+}
+
+/// Report-only bench of a role-edge ABox of growing size: the per-round cost of reading
+/// neighbourhoods. See [`role_edge_ontology`].
+fn bench_role_edges(c: &mut Bench) {
+    let mut group = c.benchmark_group("owl_direct_consistency_role_edges");
+    for &n in &[1_000usize, 4_000, 16_000] {
+        let dataset = role_edge_ontology(n);
+        let reasoner = Reasoner::new(&dataset).expect("reverse-map the role-edge ontology");
+        group.bench_with_input(
+            BenchmarkId::from_parameter(n),
+            &reasoner,
+            |bencher, reasoner| {
+                bencher.iter(|| reasoner.consistency());
+            },
+        );
+    }
+    group.finish();
+}
+
 /// Report-only bench of the nominal-introduction path over spy-point ontologies of growing bound.
 fn bench_nominal_introduction(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_nominal_introduction");
@@ -379,6 +425,7 @@ fn bench_proof_recording(c: &mut Bench) {
 bench_group!(
     benches,
     bench_consistency,
+    bench_role_edges,
     bench_nominal_introduction,
     bench_proof_recording
 );
