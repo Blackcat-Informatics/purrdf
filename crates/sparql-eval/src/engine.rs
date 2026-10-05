@@ -49,6 +49,7 @@ use crate::plan_cache::{BoundedCache, BoundedOrderCache};
 use crate::plan_memory::{PlanCharge, PlanMemoryObserver};
 use crate::substitute::Prebindings;
 use crate::update::{GraphResolver, UpdateAbort, eval_update};
+use crate::xpath_regex::Selection;
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleScopedResult, FallibleSparqlError,
     FallibleSparqlResult, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
@@ -826,6 +827,8 @@ pub struct NativeSparqlEngine {
     /// production settings; tests and benches override individual flags through
     /// [`Self::with_eval_options`].
     eval_options: EvalOptions,
+    /// Explicit native regex law, inherited by every query and UPDATE context.
+    xpath_regex: Option<Selection>,
 }
 
 // `dyn GraphResolver` is not `Debug`, so derive can't apply; report its presence by
@@ -845,6 +848,7 @@ impl std::fmt::Debug for NativeSparqlEngine {
             .field("standpoint_predicates", &self.standpoint_predicates)
             .field("loss_vocabulary", &self.loss_vocabulary)
             .field("eval_options", &self.eval_options)
+            .field("xpath_regex", &self.xpath_regex)
             .finish()
     }
 }
@@ -863,6 +867,7 @@ impl NativeSparqlEngine {
             standpoint_predicates: None,
             loss_vocabulary: None,
             eval_options: EvalOptions::default(),
+            xpath_regex: None,
         }
     }
 
@@ -1364,6 +1369,7 @@ impl NativeSparqlEngine {
         // here — every value the materialised lane's single context would carry.
         let filtering = crate::property_fn_eval::FilterContext {
             options: self.eval_options,
+            xpath_regex: self.xpath_regex,
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
             base_iri: prepared
@@ -1851,6 +1857,7 @@ impl NativeSparqlEngine {
         let state = Arc::new(GovernorState::new(governors));
         let mut m = MutableDataset::new(Arc::clone(dataset));
         let cfg = crate::update::UpdateEvalConfig {
+            xpath_regex: self.xpath_regex,
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
             governors: Some(&state),
@@ -1949,6 +1956,7 @@ impl NativeSparqlEngine {
         // error drops `m` and leaves `*dataset` untouched.
         let mut m = MutableDataset::new(Arc::clone(dataset));
         let cfg = crate::update::UpdateEvalConfig {
+            xpath_regex: self.xpath_regex,
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
             // Exactly ungoverned, exactly as this seam was before governors existed —
@@ -2026,6 +2034,33 @@ impl NativeSparqlEngine {
     pub fn with_eval_options(mut self, options: EvalOptions) -> Self {
         self.eval_options = options;
         self
+    }
+
+    /// Select an explicit dated native XPath law and finite per-operation bounds.
+    ///
+    /// This configures ordinary, prepared, governed and fallible queries, worker
+    /// and function-body contexts, on-demand row filters and UPDATE `WHERE`.
+    /// No selection retains compatibility behavior. Pattern-language errors stay
+    /// expression errors; operational refusals abort the request with their code.
+    #[must_use]
+    pub const fn with_xpath_regex(
+        mut self,
+        profile: purrdf_core::xsd_regex::xpath::Profile,
+        limits: purrdf_core::xsd_regex::xpath::Limits,
+    ) -> Self {
+        self.xpath_regex = Some(Selection::new(profile, limits));
+        self
+    }
+
+    /// The explicitly selected native XPath law and finite bounds, if any.
+    #[must_use]
+    pub const fn xpath_regex(
+        &self,
+    ) -> Option<(
+        purrdf_core::xsd_regex::xpath::Profile,
+        purrdf_core::xsd_regex::xpath::Limits,
+    )> {
+        Selection::parts(self.xpath_regex)
     }
 
     /// Parse and feasibility-order one request against the environment that will be
@@ -2173,6 +2208,7 @@ impl NativeSparqlEngine {
         _workspace: &impl purrdf_core::WorkspaceReservation<Error = D::ReadError>,
     ) -> EvalCtx<'d, D> {
         let mut ctx = EvalCtx::new(dataset).with_eval_options(self.eval_options);
+        ctx.xpath_regex = self.xpath_regex;
         ctx.bounded_workspace = crate::eval::WorkspaceAdmission::Admitted;
         if dataset.storage_live_budget().is_some() {
             ctx.options.force_sequential = true;

@@ -125,6 +125,10 @@ simply not narrated here:
   `QueryEngine` reuse vs. fresh-engine construction.
 - `crates/iri/benches/parse.rs` — IRI parse/validate hot path over a mixed
   character-class corpus.
+- `crates/sparql-eval/benches/regex_eval.rs` — constant `REGEX`, constant
+  `REPLACE` and per-row unique patterns over the same 1,000- and 10,000-row
+  fixtures under compatibility routing and both dated native XPath laws;
+  the long-literal group measures the compatibility literal prefilter.
 - `crates/lex/benches/scan.rs` — the chunked byte-class scanners over a long
   clean run and a token-sized one, and the JSON string escaper in each of its
   four spellings over clean and stop-dense text.

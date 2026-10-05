@@ -7,8 +7,9 @@
 //! [`crate::vm`] evaluates an [`Expression`]; the operator semantics it applies to
 //! already-evaluated operands live here. An expression over one solution evaluates to
 //! `Ok(Some(term))` (a value), `Ok(None)` (a SPARQL **error / unbound** — the
-//! third truth value), or `Err` (a hard [`EvalError::Unsupported`] for a construct
-//! the evaluator does not support). The `Ok(None)` vs `Err` split is load-bearing: a
+//! third truth value), or `Err` (a hard unsupported-construct or operational
+//! failure, including a selected native pattern's resource refusal). The
+//! `Ok(None)` vs `Err` split is load-bearing: a
 //! type error is normal three-valued logic (it makes a FILTER drop the row), while
 //! an unimplemented builtin is a hard failure (never a wrong answer).
 //!
@@ -3830,7 +3831,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
     function: &Function,
     vals: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
-    replace_pattern: Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
+    replace_pattern: Option<&crate::xpath_regex::LinkedPattern>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match function {
         // ---- type tests (total: never a type error) -----------------------
@@ -5092,28 +5093,26 @@ fn eval_str_before_after<D: DatasetView + Sync>(
 fn eval_replace<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-    linked: Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
+    linked: Option<&crate::xpath_regex::LinkedPattern>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let Some((s, lang, dir)) = string_arg3(vals, 0) else {
         return Ok(None);
     };
-    let (Some(pattern), Some(replacement)) = (plain_string_arg(vals, 1), plain_string_arg(vals, 2))
+    let (Some(pattern), Some(replacement)) =
+        (plain_string_arg_ref(vals, 1), plain_string_arg_ref(vals, 2))
     else {
         return Ok(None);
     };
     let flags = match vals.get(3) {
-        None => String::new(),
+        None => "",
         Some(_) => {
-            let Some(flags) = plain_string_arg(vals, 3) else {
+            let Some(flags) = plain_string_arg_ref(vals, 3) else {
                 return Ok(None);
             };
             flags
         }
     };
-    let compiled = match linked {
-        Some(compiled) => compiled.clone(),
-        None => cached_regex(ctx, &pattern, &flags),
-    };
+    let compiled = crate::xpath_regex::resolve(ctx, pattern, flags, linked)?;
     let Some(compiled) = compiled else {
         return Ok(None);
     };
@@ -5121,10 +5120,10 @@ fn eval_replace<D: DatasetView + Sync>(
     // inside `replace_all`, so this call site cannot drop either. A malformed
     // replacement is F&O [err:FORX0004], which SPARQL 1.1 §17.4.3.15 makes a
     // type error: the expression is left unbound, never aborts the query.
-    let replaced = match compiled.replace_all(&s, &replacement) {
-        Ok(replaced) => replaced.into_owned(),
-        Err(_) => return Ok(None),
+    let Some(replaced) = compiled.replace_all(&s, replacement)? else {
+        return Ok(None);
     };
+    let replaced = replaced.into_owned();
     make_string_dir(ctx, replaced, lang, dir)
 }
 
@@ -5158,12 +5157,10 @@ pub(crate) fn cached_regex<D: DatasetView + Sync>(
 /// Build a compiled pattern from a SPARQL `REGEX`/`REPLACE` pattern plus its
 /// flag string (`i`, `s`, `m`, `x`, `q`).
 ///
-/// SPARQL 1.1 §17.4.3.14 defines `REGEX` as an invocation of XPath F&O 3.1
-/// `fn:matches`, and §17.4.3.15 defines `REPLACE` as `fn:replace`, so the
-/// governing dialect is XSD/XPath `regExp` — **not** the `regex` crate's. This
-/// delegates to [`purrdf_core::xsd_regex::compile`], the one shared translation
-/// from that dialect, so `REGEX`, `sh:pattern` and ShEx `PATTERN` carry the
-/// same accept set and the same semantics (ETHOS §O).
+/// SPARQL `REGEX` and `REPLACE` use XPath `fn:matches` and `fn:replace`.
+/// Unselected calls retain this compatibility translation through
+/// [`purrdf_core::xsd_regex::compile`]. An explicitly selected dated law uses
+/// [`purrdf_core::xsd_regex::xpath`] through the fallible expression boundary.
 ///
 /// Two behaviours change as a result, both deliberate:
 ///

@@ -158,6 +158,7 @@ fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
 /// query path's `EvalCtx` build (order cache + standpoint predicate table) so a
 /// `DELETE/INSERT … WHERE` evaluates identically to a `SELECT`.
 pub(crate) struct UpdateEvalConfig<'e> {
+    pub(crate) xpath_regex: Option<crate::xpath_regex::Selection>,
     pub(crate) standpoint_predicates: Option<&'e StandpointPredicates>,
     pub(crate) order_cache: &'e BoundedOrderCache,
     /// This request's live governor accounting, or `None` for an ungoverned request.
@@ -623,7 +624,8 @@ fn delete_insert(
         )
     })?;
 
-    let ctx = EvalCtx::new(&snap).with_bounded_order_cache(cfg.order_cache);
+    let mut ctx = EvalCtx::new(&snap).with_bounded_order_cache(cfg.order_cache);
+    ctx.xpath_regex = cfg.xpath_regex;
     // The property-function registry, the SHACL-AF function registry, the
     // blank-mint prefix and the `SERVICE` source, applied through the SAME seam a
     // governed/ungoverned query applies them — see `crate::engine::apply_query_options`.
@@ -1364,6 +1366,7 @@ mod tests {
     /// because that is the only vantage a consumer has on it.
     fn ungoverned(order_cache: &BoundedOrderCache) -> UpdateEvalConfig<'_> {
         UpdateEvalConfig {
+            xpath_regex: None,
             standpoint_predicates: None,
             order_cache,
             governors: None,
@@ -2055,6 +2058,7 @@ mod tests {
             &crate::governor::QueryGovernors::METERED,
         ));
         let cfg = UpdateEvalConfig {
+            xpath_regex: None,
             standpoint_predicates: None,
             order_cache: &cache,
             governors: Some(&state),
@@ -2260,6 +2264,7 @@ mod tests {
             &crate::governor::QueryGovernors::METERED,
         ));
         let cfg = UpdateEvalConfig {
+            xpath_regex: None,
             standpoint_predicates: None,
             order_cache: &cache,
             governors: Some(&state),
@@ -2312,6 +2317,7 @@ mod tests {
             ..QueryOptions::EMPTY
         };
         let cfg = UpdateEvalConfig {
+            xpath_regex: None,
             standpoint_predicates: None,
             order_cache: &cache,
             governors: None,
@@ -2348,6 +2354,7 @@ mod tests {
             ..QueryOptions::EMPTY
         };
         let cfg = UpdateEvalConfig {
+            xpath_regex: None,
             standpoint_predicates: None,
             order_cache: &cache,
             governors: None,

@@ -155,6 +155,20 @@ impl CompiledPattern {
         self.captures
     }
 
+    /// Owned program payload bytes, including retained buffer capacities.
+    ///
+    /// Shared Unicode tables and allocator metadata are excluded. A sum that
+    /// exceeds the host's address width saturates so bounded caches can decline
+    /// retention without changing execution or admission.
+    #[must_use]
+    pub fn storage_bytes(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(self.source.capacity())
+            .saturating_add(self.flags.capacity())
+            .saturating_add(self.nodes.capacity().saturating_mul(size_of::<Node>()))
+            .saturating_add(self.sets.capacity().saturating_mul(size_of::<Set>()))
+    }
+
     /// Admit a reused artifact without treating it as newly executed work.
     ///
     /// The source, program nodes and peak construction-storage contract are

@@ -1247,6 +1247,7 @@ impl From<&EvalError> for FailureCode {
             EvalError::StackExhausted { .. } => Self::EvaluationStackExhausted,
             EvalError::HostStackExhausted { .. } => Self::HostStackExhausted,
             EvalError::SourceRead(_)
+            | EvalError::XPathRegex(_)
             | EvalError::ExchangeIdExhausted
             | EvalError::WorkspaceUnpriced(_)
             | EvalError::WorkspaceBoundOverflow
