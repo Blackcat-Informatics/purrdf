@@ -36,6 +36,39 @@ fn select(
 }
 
 #[test]
+fn native_storage_refusals_preserve_the_resource_code_and_typed_cause() {
+    use purrdf_core::xsd_regex::xpath::Error as NativeError;
+
+    for resource in [
+        Resource::PatternBytes,
+        Resource::CompileSteps,
+        Resource::ProgramNodes,
+        Resource::CompileSlots,
+        Resource::MatchSteps,
+        Resource::MatchStates,
+        Resource::MatchSlots,
+        Resource::OutputBytes,
+    ] {
+        // Exercise the public conversion with a typed host refusal. This does
+        // not depend on forcing the host allocator to exhaust its memory.
+        let cause = NativeError::Allocation { resource, units: 7 };
+        let error = EvalError::XPathRegex(cause.clone());
+        assert_eq!(
+            error.diagnostic_code(),
+            Some(resource.code()),
+            "{resource:?}"
+        );
+        assert_eq!(error.code(), Some(resource.code()), "{resource:?}");
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<NativeError>(),
+            Some(&cause),
+        );
+    }
+}
+
+#[test]
 fn one_prepared_query_alternates_dated_laws_without_changing_compatibility() {
     let data = empty_dataset();
     let compatibility = NativeSparqlEngine::new();
