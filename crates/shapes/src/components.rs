@@ -636,6 +636,7 @@ pub(crate) fn eval_select_validator<
     annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
+    report: Option<crate::sparql::SparqlReportContext<'_>>,
 ) -> Result<Vec<ValidationResult>, String> {
     let ComponentValidator::Select { select } = validator else {
         return Err("expected SELECT validator, got ASK".to_owned());
@@ -658,6 +659,9 @@ pub(crate) fn eval_select_validator<
         let this_index = solutions.column("this");
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
+        let dated = report.is_some_and(crate::sparql::SparqlReportContext::dated);
+        let message_index = dated.then(|| solutions.column("message")).flatten();
+        let failure_index = dated.then(|| solutions.column("failure")).flatten();
         let annotation_columns =
             crate::sparql::annotation_columns(annotations, |name| solutions.column(name));
 
@@ -672,6 +676,13 @@ pub(crate) fn eval_select_validator<
             Vec::new()
         };
         for row in solutions.rows() {
+            let failure = failure_index.and_then(|i| solutions.cell(row, i));
+            let message = message_index.and_then(|i| solutions.cell(row, i));
+            let row_message = report
+                .map(|report| report.row_message(focus, failure.as_ref(), message.as_ref()))
+                .transpose()?
+                .flatten();
+            let selected_messages = row_message.as_ref().map_or(messages, std::slice::from_ref);
             let focus_node = this_index
                 .and_then(|i| solutions.cell(row, i))
                 .as_ref()
@@ -694,7 +705,7 @@ pub(crate) fn eval_select_validator<
                 .map(term_value_to_native)
                 .or_else(|| path.is_none().then(|| focus.clone()));
 
-            let messages = if messages.is_empty() {
+            let messages = if selected_messages.is_empty() {
                 Vec::new()
             } else {
                 // The row's own bindings first, so a projected variable outranks a
@@ -711,7 +722,7 @@ pub(crate) fn eval_select_validator<
                         template_bindings.push((name.clone(), value.clone()));
                     }
                 }
-                render_message_templates(messages, &template_bindings)
+                render_message_templates(selected_messages, &template_bindings)
             };
             // SHACL 1.2 SPARQL Extensions, "Annotation Properties": the solution's
             // binding of each annotation's variable — the pre-bound `$this` and
@@ -761,6 +772,7 @@ pub(crate) fn eval_select_validator<
             dataset,
             &query,
             &names,
+            report.and_then(|report| report.bnode_mint_prefix),
             |execution| {
                 crate::sparql::bind_focus(execution, 0, dataset, focus, focus_id)?;
                 let mut slot = 1;
@@ -791,7 +803,13 @@ pub(crate) fn eval_select_validator<
         });
     }
     crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
-    run_select_with_shacl_prebinding_view(dataset, &query, &subs, project)
+    run_select_with_shacl_prebinding_view(
+        dataset,
+        &query,
+        &subs,
+        report.and_then(|report| report.bnode_mint_prefix),
+        project,
+    )
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

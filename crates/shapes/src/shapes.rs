@@ -880,6 +880,9 @@ pub struct Shapes {
     /// The original frozen shapes dataset, retained so validation can expose it
     /// as a named graph to SHACL-SPARQL paths.
     pub(crate) shapes_dataset: Arc<RdfDataset>,
+    /// Original SPARQL constraint occurrences, captured at parser emission rather
+    /// than reconstructed from query text or validation-result equality.
+    pub(crate) sparql_sources: OnceLock<Arc<ConstraintSources>>,
     /// The caller-supplied inputs this parse ran with, recorded by the parser
     /// that consumed them.
     ///
@@ -902,6 +905,31 @@ pub struct Shapes {
 }
 
 impl Shapes {
+    /// Warm private occurrence evidence only when rich reporting asks for it.
+    /// Product memo admission need not parse its authenticated source again.
+    pub(crate) fn report_sources(&self) -> Result<&ConstraintSources, ShapesError> {
+        if let Some(sources) = self.sparql_sources.get() {
+            return Ok(sources);
+        }
+        let rebuilt = from_resolved_dataset(
+            &self.shapes_dataset,
+            self.parse_provenance.base(),
+            self.parse_provenance.doc_prefixes(),
+            self.parse_provenance.box_role_vocab().cloned(),
+            self.parse_provenance.shapes_graph().map(ToOwned::to_owned),
+        )?;
+        let sources = rebuilt
+            .sparql_sources
+            .get()
+            .expect("parser records source occurrences")
+            .clone();
+        let _ = self.sparql_sources.set(sources);
+        Ok(self
+            .sparql_sources
+            .get()
+            .expect("source occurrences warmed"))
+    }
+
     /// Every mandatory diagnostic of this shapes graph — one per shape with an empty
     /// `sh:in` or `sh:xone` list, ordered by rule id and then shape — which every
     /// validation, rules and entailment run reports beside its outcome. See
@@ -967,11 +995,44 @@ impl Default for Shapes {
             shapes_dataset: ::purrdf_rdf::RdfDatasetBuilder::new()
                 .freeze()
                 .expect("empty shapes dataset"),
+            sparql_sources: OnceLock::new(),
             parse_provenance: ParseProvenance::default(),
             mandatory_diagnostics: Vec::new(),
         }
     }
 }
+
+/// The source of one emitted SPARQL constraint. The retained definition admits
+/// use of this identity after callers modify the public shape AST: a different
+/// constraint in the same slot cannot inherit the original source node.
+#[derive(Debug, Clone)]
+pub(crate) struct SparqlOccurrence {
+    pub(crate) source_constraint: Term,
+    pub(crate) select: String,
+    pub(crate) messages: Vec<Literal>,
+    pub(crate) severity: Option<Severity>,
+    pub(crate) annotations: Vec<ResultAnnotation>,
+}
+
+/// Source declarations of a selected custom-component validator. The closed
+/// legacy AST keeps its historical merged messages; rich mapping reads these
+/// original ordered declarations from the actual parser occurrence.
+#[derive(Debug, Clone)]
+pub(crate) struct ComponentOccurrence {
+    pub(crate) definition: Constraint,
+    pub(crate) validator_messages: Vec<Literal>,
+    pub(crate) component_messages: Vec<Literal>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ConstraintOccurrence {
+    Sparql(SparqlOccurrence),
+    Component(ComponentOccurrence),
+}
+
+/// Fixed-key, direct parser-slot lookup; repeated visits to a shared inline
+/// shape record the same occurrence without growing the metadata.
+pub(crate) type ConstraintSources = FastMap<Term, FastMap<(bool, usize), ConstraintOccurrence>>;
 
 // ── Public entry point ─────────────────────────────────────────────────────────
 
@@ -1369,6 +1430,8 @@ pub(crate) struct Parser<'s> {
     /// The original frozen shapes dataset, retained so validation can expose it
     /// as a named graph to SHACL-SPARQL paths.
     shapes_dataset: Arc<RdfDataset>,
+    /// Per-source-shape occurrences populated while constraints are emitted.
+    sparql_sources: std::cell::RefCell<ConstraintSources>,
     /// The named-graph IRI under which the shapes dataset is exposed.
     shapes_graph: Option<String>,
     /// Registry of SHACL-AF `sh:SPARQLTargetType` declarations declared in the
@@ -1523,6 +1586,7 @@ impl<'s> Parser<'s> {
             box_role_vocab,
             component_registry: ComponentRegistry::default(),
             shapes_dataset,
+            sparql_sources: std::cell::RefCell::default(),
             shapes_graph,
             target_types: std::collections::BTreeMap::new(),
             node_shape_index: Arc::new(OnceLock::new()),
@@ -1812,6 +1876,7 @@ impl<'s> Parser<'s> {
                 .collect(),
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
+            sparql_sources: OnceLock::from(Arc::new(std::mem::take(self.sparql_sources.get_mut()))),
             // Recorded HERE, at the only site that has all four values in hand,
             // so the identity a `Shapes` reports is the one its parse used. The
             // prefix map goes out in the parser's own order — the fact, not a

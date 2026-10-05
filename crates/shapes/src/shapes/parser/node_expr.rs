@@ -15,7 +15,7 @@ use crate::expression::{
 };
 use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::spec::{ExprKind, non_function_keys, primary_keys};
-use crate::term::{NamedNode, Term};
+use crate::term::{Literal, NamedNode, Term};
 
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
@@ -548,6 +548,24 @@ impl Parser<'_> {
             if self.deactivated_of(&c_node)? {
                 continue;
             }
+            if !matches!(annotated, Annotated::Deactivated) {
+                self.sparql_sources
+                    .borrow_mut()
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(
+                        (is_property_shape, out.constraints.len()),
+                        crate::shapes::ConstraintOccurrence::Sparql(
+                            crate::shapes::SparqlOccurrence {
+                                source_constraint: c_node.clone(),
+                                select: select.clone(),
+                                messages: messages.clone(),
+                                severity: severity.clone(),
+                                annotations: annotations.clone(),
+                            },
+                        ),
+                    );
+            }
             out.push(
                 Constraint::Sparql {
                     select,
@@ -682,7 +700,13 @@ impl Parser<'_> {
         // pushed with its reifier annotations. Statements of a usage SHACL-SPARQL
         // says to ignore (no validator for this shape kind), or of a component
         // missing a required parameter, represent no constraint.
-        let mut usages: Vec<(Constraint, Vec<(String, Term)>)> = Vec::new();
+        struct Usage {
+            constraint: Constraint,
+            triples: Vec<(String, Term)>,
+            validator_messages: Vec<Literal>,
+            component_messages: Vec<Literal>,
+        }
+        let mut usages = Vec::new();
         let mut inert: Vec<(String, Term)> = Vec::new();
         let mut components: Vec<&Component> = self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
@@ -774,8 +798,8 @@ impl Parser<'_> {
                     .unwrap_or_default();
 
                 let triples = triples_of(&bindings);
-                usages.push((
-                    Constraint::Component {
+                usages.push(Usage {
+                    constraint: Constraint::Component {
                         component: component.id.clone(),
                         source_shape: id.clone(),
                         bindings,
@@ -785,18 +809,42 @@ impl Parser<'_> {
                         annotations: validator.annotations.clone(),
                     },
                     triples,
-                ));
+                    validator_messages: validator.messages.clone(),
+                    component_messages: component.messages.clone(),
+                });
             }
         }
         for (predicate, value) in &inert {
             self.apply_to_nothing(id, predicate, value)?;
         }
-        for (constraint, triples) in usages {
+        for Usage {
+            constraint,
+            triples,
+            validator_messages,
+            component_messages,
+        } in usages
+        {
             let triples: Vec<(&str, &Term)> = triples
                 .iter()
                 .map(|(predicate, value)| (predicate.as_str(), value))
                 .collect();
             let annotated = self.constraint_annotation(id, &triples)?;
+            if !matches!(annotated, Annotated::Deactivated) {
+                self.sparql_sources
+                    .borrow_mut()
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(
+                        (is_property_shape, out.constraints.len()),
+                        crate::shapes::ConstraintOccurrence::Component(
+                            crate::shapes::ComponentOccurrence {
+                                definition: constraint.clone(),
+                                validator_messages,
+                                component_messages,
+                            },
+                        ),
+                    );
+            }
             out.push(constraint, annotated);
         }
 

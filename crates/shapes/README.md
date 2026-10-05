@@ -204,6 +204,37 @@ places the shapes graph under its caller-provided name. Independently parsed
 documents must establish their separate blank scopes before shape preparation;
 retaining raw local IDs across datasets is never an identity rule.
 
+### Complete contextual reports
+
+`engine::validate_complete_dataset(Arc<RdfDataset>, Arc<Shapes>)` and
+`PreparedShapes::bind_complete_shared_dataset` retain the exact immutable data
+and shapes acquisitions alongside each report. Independently acquired graphs
+have separate blank identities even when their bytes and labels agree; passing
+the retained shapes dataset itself deliberately shares its identity. The
+projected-dataset and explicit shapes-graph binding doors preserve the same
+correspondence. Prepared complete bindings also accept bounded focus terms or
+their own `FocusId` values.
+
+`CompleteValidationReport::results()` preserves result multiplicity and exposes
+the actual `sh:sparql` source constraint, including recursive details. That
+evidence is captured at the evaluated parser occurrence. A changed public AST
+cannot inherit evidence merely because another query or result has equal text.
+`to_graph()` returns the emitted RDF graph, its report root, and correspondence
+from emitted blank nodes to their original scoped source identities. Report,
+path and query-minted blanks have no authored-source correspondence. Separate
+query acquisitions mint distinct blanks with deterministic execution identities.
+
+The complete doors use the compatibility law. Existing closed report types,
+default entry points and prepared-product bytes retain their contracts;
+`legacy()` projects a complete report to the existing closed value. A complete
+operation returns typed source-evidence or execution refusals rather than a
+partial conformance verdict. `validate_with_governors` shares one fresh budget
+among its queries and returns the actual tripped governor and consumption.
+
+Cold binding and warm validation costs are measured separately in the native
+`shared_views` benchmark's `shacl_complete_reports` group, using matched Core and
+SELECT fixtures.
+
 ### The change path after a data change
 
 Paths, SPARQL and custom expressions can depend on nodes well beyond the changed

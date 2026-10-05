@@ -1344,6 +1344,9 @@ impl<'a> ShapesProductView<'a> {
             shapes_graph: parts.shapes_graph,
             mandatory_diagnostics: crate::lint::mandatory_diagnostics(&dataset),
             shapes_dataset: dataset,
+            // Rich reporting re-derives source occurrences from the authenticated
+            // retained dataset on demand; the legacy memo restore stays cold.
+            sparql_sources: std::sync::OnceLock::new(),
             parse_provenance: self.provenance.clone(),
         };
 

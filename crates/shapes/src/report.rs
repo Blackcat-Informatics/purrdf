@@ -27,6 +27,917 @@ use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, sh, xsd};
 use crate::term::{Literal, NamedNode, Term};
 
+/// Evidence attached by the evaluator to one result, including its recursive
+/// details. It travels with the value throughout sorting and serialization.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResultEvidence {
+    pub(crate) source_constraint: Option<Term>,
+    pub(crate) details: Vec<Self>,
+}
+
+/// A result captured at its actual constraint occurrence.
+#[derive(Debug)]
+pub(crate) struct ResultRecord {
+    pub(crate) value: ValidationResult,
+    pub(crate) evidence: ResultEvidence,
+}
+
+impl ResultRecord {
+    /// Capture a result without a SPARQL source constraint. Details produced
+    /// directly by Core share this default evidence; evaluated details supply
+    /// their own occurrence evidence.
+    pub(crate) fn plain(value: ValidationResult) -> Self {
+        Self {
+            value,
+            evidence: ResultEvidence::default(),
+        }
+    }
+}
+
+/// A refusal to attach a source identity to a changed or unrecorded constraint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceConstraintRefusal {
+    shape: Term,
+    property: bool,
+    index: usize,
+}
+
+impl SourceConstraintRefusal {
+    /// The source shape containing the refused occurrence.
+    #[must_use]
+    pub const fn shape(&self) -> &Term {
+        &self.shape
+    }
+
+    /// Whether the occurrence belongs to a property shape.
+    #[must_use]
+    pub const fn is_property(&self) -> bool {
+        self.property
+    }
+
+    /// The constraint's position in that shape's parsed constraint list.
+    #[must_use]
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+}
+
+impl std::fmt::Display for SourceConstraintRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "constraint {} on {} has no matching original source occurrence",
+            self.index, self.shape
+        )
+    }
+}
+
+impl std::error::Error for SourceConstraintRefusal {}
+
+/// A query solution explicitly declared validation failure, rather than a
+/// constraint violation. The producing constraint and focus remain available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticFailure {
+    focus: Term,
+    source_constraint: Option<Term>,
+}
+
+impl SemanticFailure {
+    /// The focus node being evaluated when the failure was declared.
+    #[must_use]
+    pub const fn focus(&self) -> &Term {
+        &self.focus
+    }
+
+    /// The actual `sh:sparql` source node when this was a SPARQL constraint.
+    #[must_use]
+    pub const fn source_constraint(&self) -> Option<&Term> {
+        self.source_constraint.as_ref()
+    }
+}
+
+impl std::fmt::Display for SemanticFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "SPARQL solution declared validation failure at {}",
+            self.focus
+        )
+    }
+}
+
+impl std::error::Error for SemanticFailure {}
+
+/// A validation stopped by its actual execution governor. No partial report is
+/// carried because it cannot establish conformance.
+#[derive(Debug, Clone)]
+pub struct ResourceRefusal {
+    tripped: purrdf_sparql_eval::TrippedGovernor,
+    evidence: purrdf_sparql_eval::GovernorEvidence,
+}
+
+impl ResourceRefusal {
+    /// The governor that stopped this operation.
+    #[must_use]
+    pub const fn tripped(&self) -> purrdf_sparql_eval::TrippedGovernor {
+        self.tripped
+    }
+
+    /// Actual consumption and ceilings at the refusal.
+    #[must_use]
+    pub const fn evidence(&self) -> &purrdf_sparql_eval::GovernorEvidence {
+        &self.evidence
+    }
+}
+
+impl std::fmt::Display for ResourceRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "validation execution governor tripped: {}",
+            self.tripped
+        )
+    }
+}
+
+impl std::error::Error for ResourceRefusal {}
+
+/// Identity of one retained source acquisition. Equal graph bytes do not imply
+/// equal source identity; clones of this handle deliberately share identity.
+#[derive(Clone)]
+pub struct ReportSource {
+    dataset: Arc<RdfDataset>,
+}
+
+impl std::fmt::Debug for ReportSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReportSource")
+            .field("terms", &self.dataset.term_count())
+            .field("quads", &self.dataset.quad_count())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for ReportSource {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.dataset, &other.dataset)
+    }
+}
+
+impl Eq for ReportSource {}
+
+impl ReportSource {
+    /// The exact immutable source, kept alive by this handle.
+    #[must_use]
+    pub const fn dataset(&self) -> &Arc<RdfDataset> {
+        &self.dataset
+    }
+}
+
+/// Original scoped identity of a carried blank node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceBlank {
+    source: ReportSource,
+    scope: purrdf_core::BlankScope,
+    label: String,
+}
+
+impl SourceBlank {
+    /// The retained source acquisition of this blank.
+    #[must_use]
+    pub const fn source(&self) -> &ReportSource {
+        &self.source
+    }
+
+    /// Its original source-local blank scope.
+    #[must_use]
+    pub const fn scope(&self) -> purrdf_core::BlankScope {
+        self.scope
+    }
+
+    /// Its unqualified original label.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+/// Exact immutable sources and the kernel's source-to-validation blank mapping.
+/// Shared acquisitions retain shared blank identity; independent acquisitions
+/// remain distinct even when their bytes and supplied labels agree.
+pub struct ReportSourceContext {
+    data: ReportSource,
+    shapes: ReportSource,
+    pub(crate) blanks: FastMap<String, SourceBlank>,
+}
+
+purrdf_hash::debug_non_exhaustive!(ReportSourceContext { data, shapes });
+
+impl ReportSourceContext {
+    pub(crate) fn new(data: Arc<RdfDataset>, shapes: Arc<RdfDataset>) -> Self {
+        Self {
+            data: ReportSource { dataset: data },
+            shapes: ReportSource { dataset: shapes },
+            blanks: FastMap::default(),
+        }
+    }
+
+    /// The exact data source.
+    #[must_use]
+    pub const fn data(&self) -> &ReportSource {
+        &self.data
+    }
+
+    /// The exact shapes source.
+    #[must_use]
+    pub const fn shapes(&self) -> &ReportSource {
+        &self.shapes
+    }
+
+    /// Whether the caller deliberately supplied one acquisition for both roles.
+    #[must_use]
+    pub fn sources_share_identity(&self) -> bool {
+        self.data == self.shapes
+    }
+
+    /// The original identity of a canonical validation blank label.
+    #[must_use]
+    pub fn source_blank(&self, validation_label: &str) -> Option<&SourceBlank> {
+        self.blanks.get(validation_label)
+    }
+
+    pub(crate) fn record_blank(
+        &mut self,
+        validation_label: String,
+        shapes: bool,
+        label: &str,
+        scope: purrdf_core::BlankScope,
+    ) {
+        let source = if shapes { &self.shapes } else { &self.data };
+        self.blanks.insert(
+            validation_label,
+            SourceBlank {
+                source: source.clone(),
+                label: label.to_owned(),
+                scope,
+            },
+        );
+    }
+
+    /// A source-shape blank must name the retained shapes acquisition. Public
+    /// AST edits cannot turn an unrecorded blank into an apparently minted one.
+    pub(crate) fn admit_result_sources(
+        &self,
+        records: &[ResultRecord],
+    ) -> Result<(), CompleteValidationError> {
+        let mut pending = purrdf_lex::walk::WorkList::<_, 8>::new();
+        pending.extend(records.iter().map(|record| &record.value));
+        while let Some(result) = pending.pop() {
+            if let ControlFlow::Break(label) = result.source_shape.visit_nested(|term| {
+                if let Term::BlankNode(label) = term
+                    && !self
+                        .source_blank(label)
+                        .is_some_and(|blank| blank.source == self.shapes)
+                {
+                    return ControlFlow::Break(label);
+                }
+                ControlFlow::Continue(())
+            }) {
+                return Err(CompleteValidationError::SourceContext(format!(
+                    "source shape blank _:{label} does not name the retained shapes acquisition"
+                )));
+            }
+            pending.extend(result.details.iter());
+        }
+        Ok(())
+    }
+}
+
+/// Structured failure of an evidence-bearing validation operation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CompleteValidationError {
+    /// Parsing or admitting the underlying shape graph failed.
+    Shapes(crate::error::ShapesError),
+    /// An evaluated constraint no longer matches its original source occurrence.
+    SourceConstraint(SourceConstraintRefusal),
+    /// The source context could not be admitted for this operation.
+    SourceContext(String),
+    /// A SPARQL solution explicitly declared failure.
+    Semantic(Box<SemanticFailure>),
+    /// An execution governor stopped the operation before a complete verdict.
+    Resource(Box<ResourceRefusal>),
+    /// Execution failed independently of a semantic result.
+    Execution(String),
+}
+
+impl std::fmt::Display for CompleteValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shapes(error) => error.fmt(formatter),
+            Self::SourceConstraint(error) => error.fmt(formatter),
+            Self::Semantic(error) => error.fmt(formatter),
+            Self::Resource(error) => error.fmt(formatter),
+            Self::SourceContext(message) | Self::Execution(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for CompleteValidationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Shapes(error) => Some(error),
+            Self::SourceConstraint(error) => Some(error),
+            Self::Semantic(error) => Some(error.as_ref()),
+            Self::Resource(error) => Some(error.as_ref()),
+            Self::SourceContext(_) | Self::Execution(_) => None,
+        }
+    }
+}
+
+impl CompleteValidationError {
+    /// Read the actual operation ledger before any semantic/execution failure.
+    /// The governor's typed state is authoritative; diagnostics are not parsed.
+    pub(crate) fn resource(state: &purrdf_sparql_eval::GovernorState) -> Option<Self> {
+        state.tripped().map(|tripped| {
+            Self::Resource(Box::new(ResourceRefusal {
+                tripped,
+                evidence: state.evidence(),
+            }))
+        })
+    }
+}
+
+impl ReportFailure {
+    pub(crate) fn into_public(self) -> CompleteValidationError {
+        match self {
+            Self::SourceConstraint(error) => CompleteValidationError::SourceConstraint(error),
+            Self::Semantic(error) => CompleteValidationError::Semantic(Box::new(error)),
+        }
+    }
+}
+
+/// Read-only complete view of one result and its recursive occurrence evidence.
+#[derive(Debug, Clone, Copy)]
+pub struct CompleteValidationResult<'a> {
+    value: &'a ValidationResult,
+    evidence: Option<&'a ResultEvidence>,
+}
+
+impl<'a> CompleteValidationResult<'a> {
+    /// The existing closed result value.
+    #[must_use]
+    pub const fn legacy(&self) -> &'a ValidationResult {
+        self.value
+    }
+
+    /// The actual `sh:sparql` node that produced this result, when applicable.
+    #[must_use]
+    pub fn source_constraint(&self) -> Option<&'a Term> {
+        self.evidence
+            .and_then(|evidence| evidence.source_constraint.as_ref())
+    }
+
+    /// Recursive details in their declared order, with their own source evidence.
+    pub fn details(&self) -> impl ExactSizeIterator<Item = Self> + 'a + use<'a> {
+        let evidence = self.evidence;
+        self.value
+            .details
+            .iter()
+            .enumerate()
+            .map(move |(index, value)| Self {
+                value,
+                evidence: evidence.and_then(|evidence| evidence.details.get(index)),
+            })
+    }
+}
+
+/// An additive report retaining source context and exact occurrence evidence.
+#[derive(Debug, Clone)]
+pub struct CompleteValidationReport {
+    legacy: ValidationReport,
+    evidence: Box<[ResultEvidence]>,
+    context: Arc<ReportSourceContext>,
+    profile: crate::profile::ShaclProfile,
+}
+
+impl CompleteValidationReport {
+    pub(crate) fn from_records(
+        mut records: Vec<ResultRecord>,
+        shapes: &crate::shapes::Shapes,
+        context: Arc<ReportSourceContext>,
+        profile: crate::profile::ShaclProfile,
+    ) -> Self {
+        records.sort_by_cached_key(complete_record_sort_key);
+        let (results, evidence): (Vec<_>, Vec<_>) = records
+            .into_iter()
+            .map(|record| (record.value, record.evidence))
+            .unzip();
+        let legacy = ValidationReport::from_results(
+            results,
+            shapes.validation_options().conformance_disallows.clone(),
+        )
+        .with_shapes_graph_well_formed(true)
+        .with_diagnostics(shapes.mandatory_diagnostics().to_vec());
+        Self {
+            legacy,
+            evidence: evidence.into_boxed_slice(),
+            context,
+            profile,
+        }
+    }
+
+    /// The selected report law; a dated law is installed only by its full admitted
+    /// validation bundle, rather than inferred from this report's fields.
+    #[must_use]
+    pub const fn profile(&self) -> crate::profile::ShaclProfile {
+        self.profile
+    }
+
+    /// Projection to the existing closed report API.
+    #[must_use]
+    pub const fn legacy(&self) -> &ValidationReport {
+        &self.legacy
+    }
+
+    /// Consume the complete report and retain its legacy projection.
+    #[must_use]
+    pub fn into_legacy(self) -> ValidationReport {
+        self.legacy
+    }
+
+    /// Exact source acquisitions retained for interpreting every carried blank.
+    #[must_use]
+    pub const fn source_context(&self) -> &Arc<ReportSourceContext> {
+        &self.context
+    }
+
+    /// Every result, preserving multiplicity and paired occurrence evidence.
+    pub fn results(&self) -> impl ExactSizeIterator<Item = CompleteValidationResult<'_>> {
+        self.legacy
+            .results
+            .iter()
+            .zip(self.evidence.iter())
+            .map(|(value, evidence)| CompleteValidationResult {
+                value,
+                evidence: Some(evidence),
+            })
+    }
+
+    /// Emit the complete RDF graph and its exact source-blank correspondence.
+    #[must_use]
+    pub fn to_graph(&self) -> CompleteReportGraph {
+        let mut labels = CompleteBlankLabels::default();
+        let mut report = self.legacy.clone();
+        report.results = self
+            .legacy
+            .results
+            .iter()
+            .map(|result| map_result_terms(result, &mut |_, term| labels.term(&self.context, term)))
+            .collect();
+        let evidence: Vec<_> = self
+            .evidence
+            .iter()
+            .map(|evidence| labels.evidence(&self.context, evidence))
+            .collect();
+        let mint = mint_prefix(&report, Some(&evidence));
+        let dataset = report.dataset_as_carried_with_evidence(Some(&evidence));
+        CompleteReportGraph {
+            dataset,
+            root: Term::BlankNode(format!("{mint}report")),
+            labels,
+            context: Arc::clone(&self.context),
+        }
+    }
+
+    /// Materialize the complete graph. [`Self::to_graph`] additionally retains the
+    /// correspondence needed to interpret its blank nodes outside this report.
+    #[must_use]
+    pub fn to_dataset(&self) -> Arc<RdfDataset> {
+        self.to_graph().dataset
+    }
+}
+
+/// Blank correspondence produced by complete graph emission. Missing source
+/// correspondence identifies a node minted by validation/report construction.
+#[derive(Debug, Clone, Default)]
+pub struct CompleteBlankLabels {
+    forward: FastMap<String, String>,
+    back: FastMap<String, SourceBlank>,
+}
+
+impl CompleteBlankLabels {
+    /// Original source identity of this emitted blank, or `None` for a minted
+    /// report, path or computed value node.
+    #[must_use]
+    pub fn source_of(&self, report_label: &str) -> Option<&SourceBlank> {
+        self.back.get(report_label)
+    }
+
+    fn label(&mut self, context: &ReportSourceContext, original: &str) -> String {
+        if let Some(assigned) = self.forward.get(original) {
+            return assigned.clone();
+        }
+        let assigned = format!("cb{}", self.forward.len());
+        if let Some(source) = context.source_blank(original) {
+            self.back.insert(assigned.clone(), source.clone());
+        }
+        self.forward.insert(original.to_owned(), assigned.clone());
+        assigned
+    }
+
+    fn term(&mut self, context: &ReportSourceContext, term: &Term) -> Term {
+        map_term_blanks(term, &mut |label| self.label(context, label))
+    }
+
+    fn evidence(
+        &mut self,
+        context: &ReportSourceContext,
+        evidence: &ResultEvidence,
+    ) -> ResultEvidence {
+        ResultEvidence {
+            source_constraint: evidence
+                .source_constraint
+                .as_ref()
+                .map(|term| self.term(context, term)),
+            details: evidence
+                .details
+                .iter()
+                .map(|detail| self.evidence(context, detail))
+                .collect(),
+        }
+    }
+}
+
+/// Complete graph egress, with a named root and source correspondence kept
+/// beside its immutable dataset. Structural minted nodes carry no source blank.
+#[derive(Debug, Clone)]
+pub struct CompleteReportGraph {
+    dataset: Arc<RdfDataset>,
+    root: Term,
+    labels: CompleteBlankLabels,
+    context: Arc<ReportSourceContext>,
+}
+
+impl CompleteReportGraph {
+    /// The emitted complete RDF graph.
+    #[must_use]
+    pub const fn dataset(&self) -> &Arc<RdfDataset> {
+        &self.dataset
+    }
+
+    /// Its validation-report root, independent of any source label.
+    #[must_use]
+    pub const fn root(&self) -> &Term {
+        &self.root
+    }
+
+    /// Correspondence from emitted blanks to original source acquisitions.
+    #[must_use]
+    pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+        &self.labels
+    }
+
+    /// Exact source context retained beyond the caller's input lifetimes.
+    #[must_use]
+    pub const fn source_context(&self) -> &Arc<ReportSourceContext> {
+        &self.context
+    }
+}
+
+/// The compatibility ordering shared by both report collectors.
+type ResultSortKey = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    Severity,
+    String,
+);
+
+/// Exact compatibility key; complete reports append their evidence separately.
+pub(crate) fn result_sort_key(result: &ValidationResult) -> ResultSortKey {
+    (
+        result.focus_node.to_string(),
+        result.source_constraint_component.to_string(),
+        result.source_shape.to_string(),
+        result
+            .result_path
+            .as_ref()
+            .map_or_default(ToString::to_string),
+        result.value.as_ref().map_or_default(ToString::to_string),
+        messages_sort_key(&result.messages),
+        result.severity.clone(),
+        annotations_sort_key(&result.annotations),
+    )
+}
+
+/// Complete rows add source evidence and recursive detail topology to the
+/// compatibility key. Equal legacy values may serialize different evidence.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct CompleteNodeSortKey {
+    value: ResultSortKey,
+    source_constraint: Option<String>,
+    path_structure: Option<String>,
+    details: usize,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct CompleteRecordSortKey {
+    root: CompleteNodeSortKey,
+    details: Vec<CompleteNodeSortKey>,
+}
+
+fn complete_node_sort_key(
+    value: &ValidationResult,
+    evidence: Option<&ResultEvidence>,
+) -> CompleteNodeSortKey {
+    CompleteNodeSortKey {
+        value: result_sort_key(value),
+        source_constraint: evidence
+            .and_then(|evidence| evidence.source_constraint.as_ref())
+            .map(ToString::to_string),
+        path_structure: value
+            .path_structure
+            .as_ref()
+            .map(crate::path::path_to_sparql),
+        details: value.details.len(),
+    }
+}
+
+fn complete_record_sort_key(record: &ResultRecord) -> CompleteRecordSortKey {
+    let mut pending = purrdf_lex::walk::WorkList::<_, 8>::new();
+    pending.extend(
+        record
+            .value
+            .details
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(index, value)| (value, record.evidence.details.get(index))),
+    );
+    let mut details = Vec::new();
+    while let Some((value, evidence)) = pending.pop() {
+        details.push(complete_node_sort_key(value, evidence));
+        pending.extend(
+            value
+                .details
+                .iter()
+                .enumerate()
+                .rev()
+                .map(|(index, value)| {
+                    (
+                        value,
+                        evidence.and_then(|evidence| evidence.details.get(index)),
+                    )
+                }),
+        );
+    }
+    CompleteRecordSortKey {
+        root: complete_node_sort_key(&record.value, Some(&record.evidence)),
+        details,
+    }
+}
+
+/// Typed evidence failures retained beside the legacy evaluator's diagnostic.
+#[derive(Debug)]
+pub(crate) enum ReportFailure {
+    SourceConstraint(SourceConstraintRefusal),
+    Semantic(SemanticFailure),
+}
+
+/// Failure of one root focus traversal. A missing typed payload records an
+/// ordinary execution failure, so a later typed failure cannot replace it.
+struct CapturedFailure {
+    focus: Option<crate::engine::FocusNode>,
+    failure: Option<ReportFailure>,
+}
+
+/// One rich-report operation or serial focus traversal. Workers borrow the same
+/// immutable shapes source; root failures are merged in canonical focus order.
+pub(crate) struct ReportCapture<'a> {
+    pub(crate) shapes: &'a crate::shapes::Shapes,
+    pub(crate) profile: crate::profile::ShaclProfile,
+    failure: std::sync::Mutex<Option<CapturedFailure>>,
+}
+
+/// Location of an emitted parser constraint in its source shape.
+#[derive(Clone, Copy)]
+pub(crate) struct ConstraintSite<'a> {
+    pub(crate) shape: &'a Term,
+    pub(crate) property: bool,
+    pub(crate) index: Option<usize>,
+}
+
+impl<'a> ReportCapture<'a> {
+    pub(crate) const fn new(
+        shapes: &'a crate::shapes::Shapes,
+        profile: crate::profile::ShaclProfile,
+    ) -> Self {
+        Self {
+            shapes,
+            profile,
+            failure: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn take_failure(&self) -> Option<ReportFailure> {
+        self.failure
+            .lock()
+            .expect("report failure lock")
+            .take()
+            .and_then(|captured| captured.failure)
+    }
+
+    /// Preserve the same earliest focus as the ordered chunk runner, including
+    /// its interned-id tie-break for equal renderings. Keys are cloned only on
+    /// failure; healthy Core traversal allocates no focus-key storage.
+    pub(crate) fn record_focus_failure(
+        &self,
+        dataset: &impl crate::data_view::ShaclRead,
+        focus: &crate::engine::FocusNode,
+        failure: Option<ReportFailure>,
+    ) {
+        let mut recorded = self.failure.lock().expect("report failure lock");
+        if recorded.as_ref().is_none_or(|recorded| {
+            recorded
+                .focus
+                .as_ref()
+                .is_some_and(|previous| crate::engine::focus_cmp(dataset, focus, previous).is_lt())
+        }) {
+            *recorded = Some(CapturedFailure {
+                focus: Some(focus.clone()),
+                failure,
+            });
+        }
+    }
+
+    fn refuse(&self, failure: ReportFailure) -> String {
+        let message = match &failure {
+            ReportFailure::SourceConstraint(failure) => failure.to_string(),
+            ReportFailure::Semantic(failure) => failure.to_string(),
+        };
+        self.failure
+            .lock()
+            .expect("report failure lock")
+            .get_or_insert(CapturedFailure {
+                focus: None,
+                failure: Some(failure),
+            });
+        message
+    }
+
+    /// Admit the source recorded for this exact parser slot against the actual
+    /// constraint being evaluated. This is correspondence validation, never a
+    /// search for a constraint whose query happens to have equal text.
+    pub(crate) fn source_constraint(
+        &self,
+        site: ConstraintSite<'_>,
+        constraint: &crate::plan::PlannedConstraint<'_>,
+    ) -> Result<&Term, String> {
+        let crate::plan::PlannedConstraint::Sparql {
+            select,
+            messages,
+            severity,
+            annotations,
+        } = constraint
+        else {
+            unreachable!("SPARQL source requested for a SPARQL constraint");
+        };
+        let occurrence = site
+            .index
+            .and_then(|index| {
+                let source = self
+                    .shapes
+                    .sparql_sources
+                    .get()?
+                    .get(site.shape)?
+                    .get(&(site.property, index))?;
+                let crate::shapes::ConstraintOccurrence::Sparql(source) = source else {
+                    return None;
+                };
+                Some(source)
+            })
+            .filter(|source| {
+                source.select == *select
+                    && source.messages == *messages
+                    && source.severity.as_ref() == severity.as_ref()
+                    && source.annotations == *annotations
+            });
+        occurrence
+            .map(|source| &source.source_constraint)
+            .ok_or_else(|| self.refuse_source(site))
+    }
+
+    fn refuse_source(&self, site: ConstraintSite<'_>) -> String {
+        self.refuse(ReportFailure::SourceConstraint(SourceConstraintRefusal {
+            shape: site.shape.clone(),
+            property: site.property,
+            index: site.index.unwrap_or_default(),
+        }))
+    }
+
+    /// Ordered declaration messages of this actual custom-component occurrence.
+    pub(crate) fn component_messages<'b>(
+        &'b self,
+        site: ConstraintSite<'_>,
+        constraint: &crate::plan::PlannedConstraint<'_>,
+        fallback: &'b [Literal],
+    ) -> Result<&'b [Literal], String> {
+        use crate::plan::PlannedConstraint;
+        use crate::shapes::{ComponentValidator, Constraint, ConstraintOccurrence};
+        let PlannedConstraint::Component {
+            component,
+            source_shape,
+            bindings,
+            validator,
+            messages,
+            severity,
+            annotations,
+        } = constraint
+        else {
+            unreachable!("component messages requested for a component");
+        };
+        let occurrence = site
+            .index
+            .and_then(|index| {
+                let source = self
+                    .shapes
+                    .sparql_sources
+                    .get()?
+                    .get(site.shape)?
+                    .get(&(site.property, index))?;
+                let ConstraintOccurrence::Component(source) = source else {
+                    return None;
+                };
+                Some(source)
+            })
+            .filter(|source| {
+                let Constraint::Component {
+                    component: recorded_component,
+                    source_shape: recorded_shape,
+                    bindings: recorded_bindings,
+                    validator: recorded_validator,
+                    messages: recorded_messages,
+                    severity: recorded_severity,
+                    annotations: recorded_annotations,
+                } = &source.definition
+                else {
+                    return false;
+                };
+                let same_query = match (recorded_validator, *validator) {
+                    (
+                        ComponentValidator::Ask { ask: left },
+                        ComponentValidator::Ask { ask: right },
+                    ) => left == right,
+                    (
+                        ComponentValidator::Select { select: left },
+                        ComponentValidator::Select { select: right },
+                    ) => left == right,
+                    _ => false,
+                };
+                recorded_component == *component
+                    && recorded_shape == *source_shape
+                    && recorded_bindings == *bindings
+                    && same_query
+                    && recorded_messages == *messages
+                    && recorded_severity == *severity
+                    && recorded_annotations == *annotations
+            })
+            .ok_or_else(|| self.refuse_source(site))?;
+        let declared = [
+            &occurrence.validator_messages,
+            &occurrence.component_messages,
+        ]
+        .into_iter()
+        .find(|messages| !messages.is_empty());
+        Ok(declared.map_or_else(
+            || {
+                if self.profile == crate::profile::ShaclProfile::WD_20260918 {
+                    fallback
+                } else {
+                    &[]
+                }
+            },
+            Vec::as_slice,
+        ))
+    }
+
+    pub(crate) fn semantic_failure(
+        &self,
+        focus: &Term,
+        source_constraint: Option<&Term>,
+    ) -> String {
+        self.refuse(ReportFailure::Semantic(SemanticFailure {
+            focus: focus.clone(),
+            source_constraint: source_constraint.cloned(),
+        }))
+    }
+}
+
 // ── Severity ──────────────────────────────────────────────────────────────────
 
 /// SHACL result severity levels, ordered from most to least severe.
@@ -555,43 +1466,72 @@ impl ReportBlankLabels {
 
     /// `term` with its blank nodes, triple terms included, relabelled as `origin`'s.
     fn term(&mut self, origin: BlankOrigin, term: &Term) -> Term {
-        match term {
-            Term::BlankNode(label) => Term::BlankNode(self.label(origin, label)),
-            Term::Triple(triple) => Term::Triple(Box::new(crate::term::Triple {
-                subject: self.term(origin, &triple.subject),
-                predicate: triple.predicate.clone(),
-                object: self.term(origin, &triple.object),
-            })),
-            Term::NamedNode(_) | Term::Literal(_) => term.clone(),
-        }
+        map_term_blanks(term, &mut |label| self.label(origin, label))
     }
 
     /// `result` and its details with every carried blank node relabelled, visiting the
     /// fields in the order [`ValidationReport::with_report_blank_labels`] documents.
     fn relabel_result(&mut self, result: &ValidationResult) -> ValidationResult {
-        let mut out = result.clone();
-        out.focus_node = self.term(BlankOrigin::DataGraph, &result.focus_node);
-        out.source_shape = self.term(BlankOrigin::ShapesGraph, &result.source_shape);
-        // A blank result path paired with a path structure is a complex path the
-        // report MINTS, not a carried node; any other blank result path is carried.
-        if let (Some(path), None) = (&result.result_path, &result.path_structure) {
-            out.result_path = Some(self.term(BlankOrigin::ShapesGraph, path));
-        }
-        out.value = result
-            .value
-            .as_ref()
-            .map(|value| self.term(BlankOrigin::DataGraph, value));
-        out.annotations = result
-            .annotations
-            .iter()
-            .map(|(property, value)| (property.clone(), self.term(BlankOrigin::DataGraph, value)))
-            .collect();
-        out.details = result
-            .details
-            .iter()
-            .map(|detail| self.relabel_result(detail))
-            .collect();
-        out
+        map_result_terms(result, &mut |origin, term| self.term(origin, term))
+    }
+}
+
+/// The one result-field relabelling traversal, shared by legacy role labels and
+/// complete source-context labels.
+fn map_result_terms(
+    result: &ValidationResult,
+    term: &mut impl FnMut(BlankOrigin, &Term) -> Term,
+) -> ValidationResult {
+    let mut out = result.clone();
+    out.focus_node = term(BlankOrigin::DataGraph, &result.focus_node);
+    out.source_shape = term(BlankOrigin::ShapesGraph, &result.source_shape);
+    // A blank result path paired with a path structure is a complex path the
+    // report MINTS, not a carried node; any other blank result path is carried.
+    if let (Some(path), None) = (&result.result_path, &result.path_structure) {
+        out.result_path = Some(term(BlankOrigin::ShapesGraph, path));
+    }
+    out.value = result
+        .value
+        .as_ref()
+        .map(|value| term(BlankOrigin::DataGraph, value));
+    out.annotations = result
+        .annotations
+        .iter()
+        .map(|(property, value)| (property.clone(), term(BlankOrigin::DataGraph, value)))
+        .collect();
+    out.details = result
+        .details
+        .iter()
+        .map(|detail| map_result_terms(detail, term))
+        .collect();
+    out
+}
+
+/// Relabel blank leaves, including RDF 1.2 triple terms, on a heap work list.
+fn map_term_blanks(term: &Term, label: &mut impl FnMut(&str) -> String) -> Term {
+    let mapped = term.fold_nested(
+        label,
+        |label, term| {
+            Ok::<_, Infallible>(match term {
+                Term::BlankNode(blank) => Term::BlankNode(label(blank)),
+                Term::NamedNode(_) | Term::Literal(_) => term.clone(),
+                Term::Triple(_) => unreachable!("triple is assembled by the shared fold"),
+            })
+        },
+        |_, predicate| Ok(Term::NamedNode(predicate.clone())),
+        |_, subject, predicate, object| {
+            let Term::NamedNode(predicate) = predicate else {
+                unreachable!("triple predicate is an IRI")
+            };
+            Ok(Term::Triple(Box::new(crate::term::Triple {
+                subject,
+                predicate,
+                object,
+            })))
+        },
+    );
+    match mapped {
+        Ok(term) => term,
     }
 }
 
@@ -736,6 +1676,13 @@ impl ValidationReport {
     /// The report graph with the carried blank-node labels exactly as the results hold
     /// them: [`Self::to_dataset`] after relabelling.
     fn dataset_as_carried(&self) -> Arc<RdfDataset> {
+        self.dataset_as_carried_with_evidence(None)
+    }
+
+    fn dataset_as_carried_with_evidence(
+        &self,
+        evidence: Option<&[ResultEvidence]>,
+    ) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         // Complex-path structure roots already emitted (keyed by root label).
         let mut emitted_paths: FastSet<String> = FastSet::default();
@@ -745,7 +1692,7 @@ impl ValidationReport {
         // with the report's own structure. Empty (and so byte-identical to a
         // report with no such data) unless the report really does carry a
         // colliding label.
-        let mint = mint_prefix(self);
+        let mint = mint_prefix(self, evidence);
         let report_subj = RdfTerm::blank_node(format!("{mint}report"));
 
         // _:report rdf:type sh:ValidationReport
@@ -809,7 +1756,14 @@ impl ValidationReport {
                 sh::RESULT,
                 RdfTerm::blank_node(label.clone()),
             );
-            emit_result(&mut builder, &label, r, &mint, &mut emitted_paths);
+            emit_result(
+                &mut builder,
+                &label,
+                r,
+                evidence.and_then(|evidence| evidence.get(i)),
+                &mint,
+                &mut emitted_paths,
+            );
         }
 
         // `freeze` only rejects structural violations (out-of-range term ids, a
@@ -910,8 +1864,18 @@ impl ValidationReport {
 ///
 /// Linear in the report: the complex-path roots are collected once, and each
 /// carried label is then checked with a constant number of hash lookups.
-fn mint_prefix(report: &ValidationReport) -> String {
-    let carried = carried_blank_labels(report);
+fn mint_prefix<'a>(report: &'a ValidationReport, evidence: Option<&'a [ResultEvidence]>) -> String {
+    let mut carried = carried_blank_labels(report);
+    if let Some(evidence) = evidence {
+        let mut pending = purrdf_lex::walk::WorkList::<_, 8>::new();
+        pending.extend(evidence.iter());
+        while let Some(evidence) = pending.pop() {
+            if let Some(constraint) = &evidence.source_constraint {
+                collect_blank_labels(constraint, &mut carried);
+            }
+            pending.extend(evidence.details.iter());
+        }
+    }
     let roots = minted_path_roots(report);
     if !carried
         .iter()
@@ -1030,10 +1994,20 @@ fn emit_result(
     builder: &mut RdfDatasetBuilder,
     label: &str,
     r: &ValidationResult,
+    evidence: Option<&ResultEvidence>,
     mint: &str,
     emitted_paths: &mut FastSet<String>,
 ) {
     let result_subj = RdfTerm::blank_node(label.to_owned());
+
+    if let Some(source) = evidence.and_then(|evidence| evidence.source_constraint.as_ref()) {
+        push_triple(
+            builder,
+            result_subj.clone(),
+            sh::SOURCE_CONSTRAINT,
+            source.to_rdf_term(),
+        );
+    }
 
     // _:r rdf:type sh:ValidationResult
     push_triple(
@@ -1134,7 +2108,14 @@ fn emit_result(
             sh::DETAIL,
             RdfTerm::blank_node(detail_label.clone()),
         );
-        emit_result(builder, &detail_label, detail, mint, emitted_paths);
+        emit_result(
+            builder,
+            &detail_label,
+            detail,
+            evidence.and_then(|evidence| evidence.details.get(j)),
+            mint,
+            emitted_paths,
+        );
     }
 }
 
@@ -1967,7 +2948,11 @@ mod tests {
         report.results[0].focus_node = Term::blank("r1");
         report.results[0].value = Some(Term::blank("reports"));
 
-        assert_eq!(mint_prefix(&report), "", "no collision means no prefix");
+        assert_eq!(
+            mint_prefix(&report, None),
+            "",
+            "no collision means no prefix"
+        );
         let nt = report.to_ntriples();
         assert!(
             nt.contains("_:report "),
@@ -1985,7 +2970,7 @@ mod tests {
         report.results[0].focus_node = Term::blank("path0");
         report.results[4].focus_node = Term::blank("path0-1");
 
-        let mint = mint_prefix(&report);
+        let mint = mint_prefix(&report, None);
         assert_ne!(mint, "", "a carried root label must force a mint prefix");
 
         let dataset = report.dataset_as_carried();

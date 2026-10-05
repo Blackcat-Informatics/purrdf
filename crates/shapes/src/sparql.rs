@@ -171,7 +171,51 @@ pub fn eval_sparql_constraint(
         annotations,
         shapes_graph_iri,
         current_shape,
+        None,
     )
+}
+
+/// The report-mapping context of this actual SPARQL constraint occurrence.
+#[derive(Clone, Copy)]
+pub(crate) struct SparqlReportContext<'a> {
+    pub(crate) capture: &'a crate::report::ReportCapture<'a>,
+    pub(crate) source_constraint: Option<&'a Term>,
+    pub(crate) bnode_mint_prefix: Option<&'a str>,
+}
+
+impl SparqlReportContext<'_> {
+    pub(crate) fn dated(self) -> bool {
+        self.capture.profile != crate::profile::ShaclProfile::LEGACY
+    }
+
+    /// The shared dated solution-to-report law used by constraints and SELECT
+    /// validators: explicit failure wins; a literal row message has first priority.
+    pub(crate) fn row_message(
+        self,
+        focus: &Term,
+        failure: Option<&TermValue>,
+        message: Option<&TermValue>,
+    ) -> Result<Option<Literal>, String> {
+        if !self.dated() {
+            return Ok(None);
+        }
+        if let Some(failure) = failure
+            && let Term::Literal(literal) = term_value_to_native(failure)
+            && literal.datatype_str() == crate::model::xsd::BOOLEAN
+            && matches!(
+                purrdf_iri::terminals::trim_ws(literal.value()),
+                "true" | "1"
+            )
+        {
+            return Err(self.capture.semantic_failure(focus, self.source_constraint));
+        }
+        Ok(
+            message.and_then(|message| match term_value_to_native(message) {
+                Term::Literal(message) => Some(message),
+                _ => None,
+            }),
+        )
+    }
 }
 
 /// Internal view-generic implementation of [`eval_sparql_constraint`].
@@ -193,6 +237,7 @@ pub(crate) fn eval_sparql_constraint_view<
     annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
+    report: Option<SparqlReportContext<'_>>,
 ) -> Result<Vec<ValidationResult>, String> {
     // Pre-bind `$this` to THIS focus node.
     // This MUST be per-focus substitution, not an unsubstituted run grouped by a free
@@ -218,6 +263,9 @@ pub(crate) fn eval_sparql_constraint_view<
     let project = |solutions: &InternedSolutions<'_, '_, D>| {
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
+        let dated = report.is_some_and(SparqlReportContext::dated);
+        let message_index = dated.then(|| solutions.column("message")).flatten();
+        let failure_index = dated.then(|| solutions.column("failure")).flatten();
         // The column of each result annotation's variable, resolved once per
         // solution set; empty (and allocation-free) for the common constraint that
         // declares none.
@@ -235,6 +283,13 @@ pub(crate) fn eval_sparql_constraint_view<
 
         let mut out: Vec<ValidationResult> = Vec::with_capacity(solutions.len());
         for row in solutions.rows() {
+            let failure = failure_index.and_then(|i| solutions.cell(row, i));
+            let message = message_index.and_then(|i| solutions.cell(row, i));
+            let row_message = report
+                .map(|report| report.row_message(focus, failure.as_ref(), message.as_ref()))
+                .transpose()?
+                .flatten();
+            let selected_messages = row_message.as_ref().map_or(messages, std::slice::from_ref);
             let result_path = path_index
                 .and_then(|i| solutions.cell(row, i))
                 .as_ref()
@@ -257,7 +312,7 @@ pub(crate) fn eval_sparql_constraint_view<
             // This is also the ONE reader of every column, and the reason the
             // interned egress converts per cell rather than per row: a constraint
             // with no `sh:message` never asks for a cell it does not report.
-            let messages = if messages.is_empty() {
+            let messages = if selected_messages.is_empty() {
                 Vec::new()
             } else {
                 template_bindings.clear();
@@ -270,7 +325,7 @@ pub(crate) fn eval_sparql_constraint_view<
                 if !template_bindings.iter().any(|(n, _)| n == "this") {
                     template_bindings.push(("this".to_owned(), focus.clone()));
                 }
-                crate::components::render_message_templates(messages, &template_bindings)
+                crate::components::render_message_templates(selected_messages, &template_bindings)
             };
             // SHACL 1.2 SPARQL Extensions, "Annotation Properties": the solution's
             // binding of each annotation's variable, or its defaults when unbound.
@@ -305,8 +360,15 @@ pub(crate) fn eval_sparql_constraint_view<
         }
         Ok(out)
     };
-    run_cached_select_with_shacl_prebinding_view(dataset, select, parameters, bind, project)
-        .map_err(|e| format!("SPARQLConstraint {e}"))
+    run_cached_select_with_shacl_prebinding_view(
+        dataset,
+        select,
+        parameters,
+        report.and_then(|report| report.bnode_mint_prefix),
+        bind,
+        project,
+    )
+    .map_err(|e| format!("SPARQLConstraint {e}"))
 }
 
 /// The solution-set column of every result annotation's variable, looked up with
@@ -1824,6 +1886,7 @@ pub(crate) fn run_cached_select_with_shacl_prebinding_view<
     dataset: &D,
     select: &str,
     parameters: &[&str],
+    bnode_mint_prefix: Option<&str>,
     bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
@@ -1832,7 +1895,7 @@ pub(crate) fn run_cached_select_with_shacl_prebinding_view<
         select,
         parameters,
         ShaclPrebinding::Applied,
-        None,
+        bnode_mint_prefix,
         bind,
         |outcome| project_solutions(outcome, project),
     )
@@ -2426,14 +2489,16 @@ pub(crate) fn run_select_with_shacl_prebinding_view<
     dataset: &D,
     select: &str,
     substitutions: &[Prebinding<'_>],
+    bnode_mint_prefix: Option<&str>,
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    run_select_view(
+    run_query_view(
         dataset,
         select,
         substitutions,
         ShaclPrebinding::Applied,
-        project,
+        bnode_mint_prefix,
+        |outcome| project_solutions(outcome, project),
     )
 }
 

@@ -1050,6 +1050,8 @@ pub mod sh {
     /// `sh:sourceConstraintComponent` — the constraint component that produced a result.
     pub const SOURCE_CONSTRAINT_COMPONENT: &str =
         "http://www.w3.org/ns/shacl#sourceConstraintComponent";
+    /// The actual SPARQL-based constraint that produced a validation result.
+    pub const SOURCE_CONSTRAINT: &str = "http://www.w3.org/ns/shacl#sourceConstraint";
 
     /// `sh:sourceRule` — links, on a reifier, an inferred triple with its rule.
     pub const SOURCE_RULE: &str = "http://www.w3.org/ns/shacl#sourceRule";
