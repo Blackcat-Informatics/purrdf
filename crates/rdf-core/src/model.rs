@@ -4,6 +4,8 @@
 use crate::RdfLocation;
 use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
 
+mod traits;
+
 /// RDF term category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RdfTermKind {
@@ -178,7 +180,8 @@ impl RdfLiteral {
 /// Deliberately exhaustive (NOT `#[non_exhaustive]`): the RDF data model fixes the
 /// set of term kinds (IRI, blank node, literal, triple term), so consumers SHOULD
 /// match all four — there is no future variant to guard against.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Its value-trait walks use heap work lists rather than recursing through quoted
+/// triples; the published owned representation and destructuring remain unchanged.
 pub enum RdfTerm {
     /// An IRI, by its full string.
     Iri(String),
