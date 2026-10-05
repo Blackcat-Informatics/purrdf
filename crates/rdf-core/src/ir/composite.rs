@@ -556,17 +556,25 @@ impl CompositeSource {
                     .filter(move |q| matches_pattern(*q, s, p, o, g)),
             );
         }
+        // The native and delta arms name the INHERENT probes, whose cursors
+        // capture only the source borrow (`use<'_>`). Method syntax on the
+        // carried `Arc` resolves to the `DatasetView for Arc<T>` forwarder
+        // instead, and a trait method's opaque return type captures every input
+        // lifetime, so the cursor would hold the borrow of the local `plan` and
+        // outlive it: rejected on the MSRV compiler.
         match &self.carrier {
             Carrier::Native(ds) => {
                 let Some((s, p, o, g)) = local_native_pattern(s, p, o, g) else {
                     return Cursor::Empty;
                 };
                 Cursor::First(
-                    ds.quads_for_pattern_with_plan(&plan, s, p, o, g)
+                    RdfDataset::quads_for_pattern_with_plan(ds, &plan, s, p, o, g)
                         .map(|q| q.map_ids(LocalId::Base)),
                 )
             }
-            Carrier::Delta(ds) => Cursor::Second(ds.quads_for_pattern_with_plan(&plan, s, p, o, g)),
+            Carrier::Delta(ds) => Cursor::Second(DeltaDatasetView::quads_for_pattern_with_plan(
+                ds, &plan, s, p, o, g,
+            )),
             Carrier::Selected(selection) => {
                 // The projection reads the retained composite ONE selected graph
                 // at a time, so the physical pattern is graph-bound however the
