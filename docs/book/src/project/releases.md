@@ -29,7 +29,7 @@ version-coherence check in CI fails the build if the version sources
 
 The one exception is the C ABI. `libpurrdf`'s
 [`purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h)
-carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.8**), bumped
+carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.9**), bumped
 on every exported-signature change, pinned by
 `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through
 `purrdf_abi_version`. It is versioned separately from the workspace and stays

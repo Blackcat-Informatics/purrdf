@@ -304,16 +304,49 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
     builder.push_quad(p, p, p, None);
     builder.declare_named_graph(empty);
     let source = builder.freeze().unwrap();
-    let old = purrdf_core::PackBuilder::build_bytes(source.as_ref()).unwrap();
     let limits = SegmentedBuildLimits::new(100, 20_000, 30, 1024, 4).unwrap();
-    let migrated = SegmentedImage::from_pack_v1(&old, limits).unwrap();
+    let graph_count = |image: &SegmentedImage| {
+        session(image, 3)
+            .checked_read(|view| view.named_graphs().count())
+            .unwrap()
+    };
+
+    // A v1 pack carries a declaration-only graph as a zero-row partition, so the
+    // migration keeps it without a sidecar.
+    let current = purrdf_core::PackBuilder::build_bytes(source.as_ref()).unwrap();
+    let migrated = SegmentedImage::from_pack_v1(&current, limits).unwrap();
     let read = session(&migrated, 3);
     assert_eq!(read.checked_read(|view| view.quads().count()).unwrap(), 1);
     assert_eq!(
-        read.checked_read(|view| view.named_graphs().count())
-            .unwrap(),
+        graph_count(&migrated),
+        1,
+        "the pack carries the declaration"
+    );
+    // Restating a declaration the pack already carries is idempotent.
+    let restated = SegmentedImage::from_pack_v1_with_graphs(
+        &current,
+        &[TermValue::iri("http://example.org/empty")],
+        limits,
+    )
+    .unwrap();
+    assert_eq!(graph_count(&restated), 1);
+    let restored = purrdf_core::dataset_from_view(&read).unwrap();
+    assert!(purrdf_core::datasets_isomorphic(
+        source.as_ref(),
+        restored.as_ref()
+    ));
+    assert_eq!(restored.named_graphs().count(), 1);
+
+    // A pack written without the declaration (as every pack written before
+    // declarations were carried is) still needs the sidecar to restate it.
+    let mut builder = purrdf_core::RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    builder.push_quad(p, p, p, None);
+    let old = purrdf_core::PackBuilder::build_bytes(builder.freeze().unwrap().as_ref()).unwrap();
+    assert_eq!(
+        graph_count(&SegmentedImage::from_pack_v1(&old, limits).unwrap()),
         0,
-        "v1 carries no declaration-only graph"
+        "nothing in the pack names the graph"
     );
     let with_declarations = SegmentedImage::from_pack_v1_with_graphs(
         &old,
@@ -321,17 +354,7 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
         limits,
     )
     .unwrap();
-    assert_eq!(
-        session(&with_declarations, 3)
-            .checked_read(|view| view.named_graphs().count())
-            .unwrap(),
-        1
-    );
-    let restored = purrdf_core::dataset_from_view(&read).unwrap();
-    assert!(purrdf_core::datasets_isomorphic(
-        source.as_ref(),
-        restored.as_ref()
-    ));
+    assert_eq!(graph_count(&with_declarations), 1);
 }
 
 struct RetainedManifest([u8; purrdf_core::SegmentedReceipt::ENCODED_BYTES]);

@@ -45,6 +45,9 @@
 //!   "auxiliary-value closure" doc on `encode` for the exact mechanism
 //!   ([`super::side::SideTables`] is the consumer that needs every
 //!   such reference to resolve to a unified id).
+//! - The name of every named graph the view declares without giving it a row
+//!   ([`crate::DatasetView::named_graphs`]), which [`super::triples`] carries as a
+//!   zero-row partition keyed by that name's unified id.
 //!
 //! # Lookup rule (id_by_value vs. predicate_id_by_value)
 //!
@@ -848,6 +851,19 @@ impl PackDict {
             // (reifiers non-empty) the ingest path uses to intern it.
             if has_reifiers {
                 values.push(TermValue::Iri(RDF_REIFIES.to_owned()));
+            }
+
+            // Step 1.6: named-graph declarations. A graph the view declares but gives
+            // no row of any kind is carried by the TRIPLES section as a zero-row
+            // partition keyed by the graph's unified id, so its name needs an entry
+            // too. A graph that owns a base quad is already in `base_ids`; one that
+            // owns only statement-layer rows was pushed above, and the dedup below
+            // folds the repeat — so a view with no declaration-only graph produces
+            // exactly the value list it produced before declarations were carried.
+            for g in view.named_graphs() {
+                if !base_ids.contains(&g) {
+                    values.push(view.term_value(g)?);
+                }
             }
 
             // Deterministic regardless of hash-set iteration order: `values` is

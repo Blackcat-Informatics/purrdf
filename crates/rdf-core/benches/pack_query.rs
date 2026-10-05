@@ -8,8 +8,10 @@
 //! End-to-end latency harness for the succinct `pack` codec:
 //! [`PackBuilder::build_bytes`] (encode),
 //! [`PackView::from_bytes`] (open), [`DatasetView::quads_for_pattern`] over a
-//! [`PackView`] for a few representative pattern shapes, and [`verify_pack`] (the
-//! certified-projection RDFC-1.0 recompute). Report-only — no timing/speedup
+//! [`PackView`] for a few representative pattern shapes, [`verify_pack`] (the
+//! certified-projection RDFC-1.0 recompute), and the named-graph surface: encode
+//! and [`DatasetView::named_graphs`] over a many-graph dataset with and without
+//! declaration-only graphs. Report-only — no timing/speedup
 //! assertion, matching this workspace's bench discipline (see
 //! `crates/rdf-core/benches/pack_bits.rs` and `ir_layout.rs`); the harness's stdout
 //! summary is the report.
@@ -117,6 +119,61 @@ fn build_literal_heavy_dataset() -> Arc<RdfDataset> {
 
     b.freeze()
         .expect("literal-heavy dataset is structurally valid")
+}
+
+/// Named graphs that own rows in [`build_graph_heavy_dataset`].
+const GRAPH_ROWS: u32 = 1_000;
+
+/// Many named graphs, each with one base quad, a reifier-only graph every tenth row,
+/// and — when `declared` — as many again declared with no row. The two variants have
+/// identical rows, so their encode costs differ only by the declaration handling.
+fn build_graph_heavy_dataset(declared: bool) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    for n in 0..GRAPH_ROWS {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let g = b.intern_iri(&format!("http://example.org/g{n}"));
+        b.push_quad(s, p, o, Some(g));
+        if n % 10 == 0 {
+            let triple = b.intern_triple(s, p, o);
+            let r = b.intern_iri(&format!("http://example.org/r{n}"));
+            let side = b.intern_iri(&format!("http://example.org/side{n}"));
+            b.push_reifier_in_graph(r, triple, Some(side));
+        }
+        if declared {
+            let empty = b.intern_iri(&format!("http://example.org/empty{n}"));
+            b.declare_named_graph(empty);
+        }
+    }
+    b.freeze()
+        .expect("graph-heavy dataset is structurally valid")
+}
+
+/// Encode and enumerate over the graph-heavy fixture: `build_bytes` pays the
+/// declaration scan (and, with `declared`, writes a zero-row partition per declared
+/// graph); `named_graphs` merges the TRIPLES partitions with the side-table graphs.
+fn bench_named_graphs(c: &mut Bench) {
+    let mut group = c.benchmark_group("pack_query_named_graphs");
+    for (label, declared) in [("rows_only", false), ("declared_empty", true)] {
+        let ds = build_graph_heavy_dataset(declared);
+        group.bench_function(format!("build_bytes_{label}"), |b| {
+            b.iter(|| {
+                std::hint::black_box(PackBuilder::build_bytes(&ds).expect("graph-heavy packs"))
+            });
+        });
+        let bytes = PackBuilder::build_bytes(&ds).expect("graph-heavy packs");
+        let pack = PackView::from_bytes(&bytes).expect("pack opens");
+        println!(
+            "[pack_query_named_graphs] {label}: {} named graphs, {} pack bytes",
+            pack.named_graphs().count(),
+            bytes.len()
+        );
+        group.bench_function(format!("named_graphs_{label}"), |b| {
+            b.iter(|| std::hint::black_box(pack.named_graphs().count()));
+        });
+    }
+    group.finish();
 }
 
 /// Dictionary encode alone: [`PackDict::encode`] (term collection, closure,
@@ -251,6 +308,7 @@ bench_group!(
     bench_from_bytes,
     bench_restore_pack,
     bench_quads_for_pattern,
-    bench_verify_pack
+    bench_verify_pack,
+    bench_named_graphs
 );
 bench_main!(benches);

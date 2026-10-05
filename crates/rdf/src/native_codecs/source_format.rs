@@ -87,14 +87,15 @@ impl SourceFormat {
     }
 
     /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` when this
-    /// format carries no loss-ledger codec identity (a native format that itself has
-    /// none — TriX / HexTuples — or the pack container).
+    /// format carries no loss-ledger codec identity.
     ///
-    /// GTS resolves to the `"gts"` codec the RDF↔GTS loss matrix is keyed on.
+    /// The pack container resolves to the `"pack"` codec (quads, the RDF-1.2 statement
+    /// layer and declared empty named graphs); GTS resolves to the `"gts"` codec the
+    /// RDF↔GTS loss matrix is keyed on.
     pub fn loss_codec_name(self) -> Option<&'static str> {
         match self {
             Self::Native(format) => format.loss_codec_name(),
-            Self::Pack => None,
+            Self::Pack => Some("pack"),
             Self::Gts => Some("gts"),
         }
     }
@@ -197,7 +198,7 @@ mod tests {
     #[test]
     fn is_pack_and_loss_codec_name_are_consistent() {
         assert!(SourceFormat::Pack.is_pack());
-        assert_eq!(SourceFormat::Pack.loss_codec_name(), None);
+        assert_eq!(SourceFormat::Pack.loss_codec_name(), Some("pack"));
         assert!(!SourceFormat::Native(NativeRdfFormat::Turtle).is_pack());
         assert_eq!(
             SourceFormat::Native(NativeRdfFormat::Turtle).loss_codec_name(),
@@ -205,7 +206,7 @@ mod tests {
         );
         assert_eq!(
             SourceFormat::Native(NativeRdfFormat::TriX).loss_codec_name(),
-            None
+            Some("trix")
         );
     }
 

@@ -662,6 +662,17 @@ pub trait RdfEventSink {
         self.annotation(reifier, p, o)
     }
 
+    /// A named graph the source carries whether or not any row names it — a TriG
+    /// `<g> { }`, a JSON-LD `{"@id": g, "@graph": []}`. The id MAY be a forward
+    /// reference. Defaults to ignoring the declaration — additive, like
+    /// [`reifier_in_graph`](Self::reifier_in_graph), so a sink with no notion of an
+    /// empty graph needs no changes; a sink that builds a dataset overrides it so a
+    /// graph declared with no row survives the replay.
+    fn named_graph(&mut self, graph: EventTermId) -> Result<ControlFlow<()>, EventError> {
+        let _ = graph;
+        CONTINUE
+    }
+
     /// Open a fresh blank-node label namespace, returning its [`ScopeId`]. Blank-node
     /// *label* identity is namespaced per scope (see [`close_scope`](Self::close_scope));
     /// the drive-global [`EventTermId`] space is unaffected.

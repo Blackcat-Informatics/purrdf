@@ -127,3 +127,137 @@ fn visitor_stops_at_the_first_break_in_either_storage_layer() {
     let result: ControlFlow<()> = empty.visit_blank_identities(|_, _| panic!("no identity"));
     assert_eq!(result, ControlFlow::Continue(()));
 }
+
+/// The fresh-blank namespace law every mutable-destination allocator applies
+/// through [`MutableDataset::visit_blank_identities`] (SPARQL UPDATE's `INSERT DATA`,
+/// `INSERT … WHERE`, and LOAD-then-INSERT): with no default-scope identity in the
+/// destination the minter keeps its ordinary spelling, otherwise it takes the first
+/// `append{n}_` namespace no default-scope identity starts with.
+fn mint_namespace(destination: &MutableDataset) -> Option<String> {
+    let occupied = |prefix: &str| {
+        destination
+            .visit_blank_identities(|label, scope| {
+                if scope == BlankScope::DEFAULT && label.starts_with(prefix) {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
+            .is_break()
+    };
+    if !occupied("") {
+        return None;
+    }
+    for ordinal in 0_u64.. {
+        let candidate = format!("append{ordinal}_");
+        if !occupied(&candidate) {
+            return Some(candidate);
+        }
+    }
+    unreachable!("a finite destination cannot occupy every mint namespace")
+}
+
+/// The label an allocator mints for its first fresh blank (`c1` under the
+/// namespace, exactly as an update template's first blank is spelled).
+fn first_fresh_label(destination: &MutableDataset) -> String {
+    format!("{}c1", mint_namespace(destination).unwrap_or_default())
+}
+
+#[test]
+fn a_declared_blank_graph_name_is_a_retained_identity_fresh_blanks_avoid() {
+    let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().expect("empty base"));
+    let declared = TermValue::blank("c1");
+    assert_eq!(mutable.declare_named_graph(declared.clone()), Ok(true));
+    // The declaration owns no row, yet the dataset retains it as a graph.
+    assert_eq!(mutable.declared_named_graphs().count(), 1);
+
+    let fresh = first_fresh_label(&mutable);
+    assert_ne!(
+        TermValue::blank(fresh.clone()),
+        declared,
+        "a fresh blank must not merge with the declared graph name it would collide with"
+    );
+    assert_eq!(fresh, "append0_c1");
+
+    // Inserting the fresh blank keeps two distinct identities: a row whose subject is
+    // the fresh blank, and the still-empty declared graph.
+    mutable
+        .insert(QuadValues::triple(
+            TermValue::blank(fresh),
+            TermValue::iri(format!("{EX}p")),
+            TermValue::iri(format!("{EX}o")),
+        ))
+        .expect("fresh row");
+    let published = mutable.freeze().expect("fresh row with a declared graph");
+    assert_eq!(published.quad_count(), 1);
+    assert_eq!(published.named_graphs().count(), 1);
+    let subjects: Vec<_> = published
+        .quads()
+        .map(|quad| published.term_value(quad.s))
+        .collect();
+    let graphs: Vec<_> = published
+        .named_graphs()
+        .map(|g| published.term_value(g))
+        .collect();
+    assert_eq!(graphs, [declared]);
+    assert_ne!(subjects, graphs, "two identities, never one merged node");
+}
+
+#[test]
+fn declarations_add_only_their_blank_names_to_the_base_and_delta_visit() {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_blank("base", BlankScope(5));
+    let predicate = builder.intern_iri(&format!("{EX}p"));
+    let object = builder.intern_blank("object", BlankScope::DEFAULT);
+    builder.push_quad(subject, predicate, object, None);
+    let mut mutable = MutableDataset::new(builder.freeze().expect("visitor base"));
+    mutable
+        .insert(QuadValues::quad(
+            TermValue::blank("delta"),
+            TermValue::iri(format!("{EX}p")),
+            TermValue::iri(format!("{EX}o")),
+            TermValue::blank("delta-graph"),
+        ))
+        .expect("delta row");
+    let visit = |mutable: &MutableDataset| {
+        let mut seen = Vec::new();
+        let complete: ControlFlow<()> = mutable.visit_blank_identities(|label, scope| {
+            seen.push((label.to_owned(), scope));
+            ControlFlow::Continue(())
+        });
+        assert_eq!(complete, ControlFlow::Continue(()));
+        seen
+    };
+    let before = visit(&mutable);
+    let expected: Vec<_> = [
+        ("base", BlankScope(5)),
+        ("object", BlankScope::DEFAULT),
+        ("delta", BlankScope::DEFAULT),
+        ("delta-graph", BlankScope::DEFAULT),
+    ]
+    .into_iter()
+    .map(|(label, scope)| (label.to_owned(), scope))
+    .collect();
+    assert_eq!(before, expected, "base terms, then delta values, in order");
+    // A base or delta blank still answers the allocator exactly as before.
+    assert_eq!(first_fresh_label(&mutable), "append0_c1");
+
+    // An IRI-named declaration adds no identity.
+    assert_eq!(
+        mutable.declare_named_graph(TermValue::iri(format!("{EX}empty"))),
+        Ok(true)
+    );
+    assert_eq!(visit(&mutable), before);
+
+    // A blank-named declaration adds exactly its own name, after the delta, in its
+    // own scope.
+    let scoped = TermValue::Blank {
+        label: "declared".into(),
+        scope: BlankScope(9),
+    };
+    assert_eq!(mutable.declare_named_graph(scoped), Ok(true));
+    let mut extended = before;
+    extended.push(("declared".to_owned(), BlankScope(9)));
+    assert_eq!(visit(&mutable), extended);
+    assert_eq!(first_fresh_label(&mutable), "append0_c1");
+}
