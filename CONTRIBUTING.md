@@ -20,7 +20,7 @@ corpora that gate all of it. Issues and pull requests are welcome.
 ## Design constraints that PRs must respect
 
 - **No Cargo features.** The workspace deliberately has zero feature flags and CI
-  enforces it (`scripts/check-no-features.py`). PurRDF is a carrier: every consumer
+  enforces it (`helper-census --no-features`). PurRDF is a carrier: every consumer
   in every language must observe identical behavior. Do not add optionality; if a
   capability seems optional, discuss it in an issue first.
 - **The kernel stays clean.** `purrdf-core` must not grow a dependency on PyO3
