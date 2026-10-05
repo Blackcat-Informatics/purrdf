@@ -2781,7 +2781,7 @@ const HAS_SHAPE_REASON: &str =
     "a direct SHACL property shape on this class is authoritative for the restricted property";
 const NAMESPACE_REASON: &str =
     "the restricted property is outside the caller-declared vocabulary boundary";
-const DOMAIN_REASON: &str = "the class does not satisfy the restricted property's rdfs:domain, \
+const UNSATISFIED_SCOPE_REASON: &str = "the class does not satisfy the restricted property's rdfs:domain, \
      so the property is not emitted on it";
 const CLOSED_REASON: &str =
     "an authoritative sh:closed shape on this class excludes the restricted property";
@@ -2979,7 +2979,9 @@ impl ConjunctContext<'_> {
                     }
                     Some(SchemaCoverageStatus::HasShape) => excluded(HAS_SHAPE_REASON),
                     Some(SchemaCoverageStatus::ExcludedNamespace) => excluded(NAMESPACE_REASON),
-                    Some(SchemaCoverageStatus::ExcludedDomain) => excluded(DOMAIN_REASON),
+                    Some(SchemaCoverageStatus::ExcludedDomain) => {
+                        excluded(UNSATISFIED_SCOPE_REASON)
+                    }
                     Some(SchemaCoverageStatus::ExcludedClosedShape) => excluded(CLOSED_REASON),
                     Some(SchemaCoverageStatus::ExcludedShapedOnly) | None => {
                         excluded(SHAPED_ONLY_REASON)
