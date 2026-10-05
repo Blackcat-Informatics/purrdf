@@ -57,8 +57,8 @@ purrdf-stack = { workspace = true }
 purrdf-sparql-algebra = { workspace = true }
 purrdf-rdf = { workspace = true }
 purrdf-shapes = { workspace = true }
-# The shared `harness = false` runner `tests/determinism.rs` runs on, natively and
-# on wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped
+# The shared `harness = false` runner `tests/determinism.rs` runs on natively.
+# Path-only and unpublished, so it is stripped
 # from the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 

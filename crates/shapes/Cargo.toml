@@ -122,7 +122,7 @@ proc-macro2 = { workspace = true }
 purrdf-jsonschema = { workspace = true }
 # The shared test support: property-based generation for the never-panic,
 # monotonicity and product-refusal harnesses, and the `harness = false` runner
-# `tests/product_wasm.rs` runs on, natively and on wasm32-unknown-unknown alike.
+# `tests/product_wasm.rs` runs on natively.
 # Path-only and unpublished, so it is stripped from the packaged manifest;
 # wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }

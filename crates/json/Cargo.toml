@@ -34,7 +34,7 @@ purrdf-alloc-probe.workspace = true
 purrdf-rdf.workspace = true
 purrdf-sparql-eval.workspace = true
 # The shared test support, and the `harness = false` runner `tests/roundtrip.rs`
-# runs on, natively and on wasm32-unknown-unknown alike. Path-only and
+# runs on natively. Path-only and
 # unpublished, so it is stripped from the packaged manifest; wasm32-clean, so it
 # needs no target gate.
 purrdf-testkit.workspace = true

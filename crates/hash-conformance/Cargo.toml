@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash-conformance"
-description = "The frozen-vector conformance suites of purrdf-hash: digest differentials, BLAKE3 streaming boundaries, base16 rendering, length framing and the fixed-key table hasher's self-vectors and quality, replayed natively and on wasm32-unknown-unknown, plus the digest and base16 throughput bench and the table hasher's latency bench"
+description = "Native frozen-vector conformance suites and benchmarks of purrdf-hash, with focused WebAssembly backend-selection and SIMD-kernel checks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -29,8 +29,8 @@ bench = false
 purrdf-hash = { workspace = true }
 # The frozen vector format, the deterministic input stream the vectors are
 # drawn from, the libtest-compatible `harness = false` runner every target
-# below runs on, natively and on wasm32-unknown-unknown alike, and the bench
-# harness both benches run on.
+# below runs on natively, and the bench harness both native benches run on.
+# Focused WASM execution selects actual backend and SIMD-kernel checks only.
 purrdf-testkit = { workspace = true }
 
 # Digest throughput at 64 B, 1 KiB and 1 MiB per algorithm and per path the
@@ -63,21 +63,20 @@ harness = false
 name = "fixed_hasher"
 harness = false
 
-# Streaming tree boundaries replay the same frozen answers on native and wasm.
+# Native streaming tree boundaries replay frozen answers; focused WASM selects
+# actual backend admission and the explicit simd128 comparison.
 [[test]]
 name = "blake3"
 harness = false
 
 # SplitMix64's three streams and FNV-1a over structured corpora: frozen
-# answers replayed natively and on wasm32, where the 64-bit multiplies are
-# built from 32-bit halves.
+# answers replayed natively.
 [[test]]
 name = "splitmix_fnv"
 harness = false
 
 # Length framing, u64_le(len) || field: the frozen prefixes and framed-field
-# digests over structured corpora, replayed natively and on wasm32, where
-# usize is 32 bits wide.
+# digests over structured corpora, replayed natively.
 [[test]]
 name = "frame_le"
 harness = false

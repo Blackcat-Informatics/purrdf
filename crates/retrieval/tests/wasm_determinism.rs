@@ -315,7 +315,7 @@ fn a_fusion_profile_names_the_same_identity_on_both_targets() {
     assert_eq!(decoded.id().to_hex(), PROFILE_ID_HEX);
 }
 
-/// **The collided regime is the same answer on both targets too.**
+/// **The native collided regime preserves the pinned answer too.**
 ///
 /// The other tests here fuse at a unit weight, where every adjacent rank carries
 /// a distinct contribution and the fused score alone decides the order. Past the
@@ -488,8 +488,7 @@ fn framed(out: &mut Vec<u8>, part: &str) {
     out.extend_from_slice(part.as_bytes());
 }
 
-/// **An answer's evidence identity is the same bytes, and the same digest, on
-/// both targets.**
+/// **An answer's evidence identity has pinned native bytes and digest.**
 ///
 /// The evidence identity is what two holders of two answers compare to decide
 /// whether they were answered from the same indexes. A target that framed a
@@ -591,8 +590,8 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
     );
 }
 
-/// **A fusion under a declared candidate domain reads the same depth, and
-/// answers the same rows, on both targets.**
+/// **A native fusion under a declared candidate domain reads the pinned depth
+/// and answers the pinned rows.**
 ///
 /// A declaration that the two strata draw from disjoint blocks is what licenses
 /// the engine to certify a candidate before every stream has been consulted about

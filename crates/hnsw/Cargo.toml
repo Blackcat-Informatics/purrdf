@@ -31,9 +31,9 @@ purrdf-hash = { workspace = true }
 purrdf-lex = { workspace = true }
 
 [dev-dependencies]
-# The shared `harness = false` runner the two cross-target targets below run on,
-# natively and on wasm32-unknown-unknown alike. Path-only and unpublished, so it is
-# stripped from the packaged manifest; wasm32-clean, so it needs no target gate.
+# The shared `harness = false` runner for the native corpus and focused WASM
+# path-admission cases. Path-only and unpublished, so it is stripped from the
+# packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 
 [lints]

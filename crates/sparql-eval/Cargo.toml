@@ -103,8 +103,8 @@ purrdf-alloc-probe = { workspace = true }
 # against the SAME query and data run UNGOVERNED over generated (dataset, query,
 # budget) triples), the one deterministic test stream the kNN metric tests, the
 # kNN relation bench and the wasm32 reassociated-distance test draw from, and the
-# `harness = false` runner the two wasm32 kNN targets below run on, natively and
-# on wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped
+# `harness = false` runner for native kNN numeric pins and focused WASM dispatch
+# and simd128 comparisons. Path-only and unpublished, so it is stripped
 # from the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 

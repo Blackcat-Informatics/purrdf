@@ -8,7 +8,7 @@ The workspace's shared test support, written once instead of once per crate.
 Never published, never a runtime dependency: it appears only in
 `[dev-dependencies]`, so no release crate and no release wasm build ever sees
 it. It builds and runs on `wasm32-unknown-unknown` too, where the workspace's
-cross-target test targets run on its harness. Its
+focused target-specific cases run on its harness. Its
 one first-party dependency is `purrdf-hash`, the zero-dependency root, whose
 own tests and benches do not use this crate — every member's tests may use it,
 and any further first-party edge from here would close a cycle through that
@@ -78,5 +78,6 @@ member.
   `estimates.json` under `PURRDF_BENCH_HOME`, or else `purrdf-bench/` beside the
   build's `CARGO_TARGET_TMPDIR` (`target/purrdf-bench/` by default); `--test`
   runs each routine once instead, and an unknown option is refused by name. The
-  same binaries run on `wasm32-unknown-unknown` under the test runner, where
-  the store options are refused because there is no file system.
+  harness also supports `wasm32-unknown-unknown`, where the store options are
+  refused because there is no file system. `make wasm-test` runs only its
+  host-clock and store-refusal tests; general benchmark routines stay native.
