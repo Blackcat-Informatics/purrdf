@@ -845,98 +845,156 @@ fn declaration_only(base: &Arc<RdfDataset>, count: usize) -> MutableDataset {
     mutable
 }
 
-#[test]
-fn declaration_only_graphs_are_charged_before_the_snapshot_freezes_them() {
-    const DECLARED: usize = 64;
-    let base = complete_source();
-    // What a snapshot of these declarations actually retains, measured by
-    // publishing it under the default limits.
-    let admitted = declaration_only(&base, DECLARED)
+/// A retention limit set on one resource, the rest left at their defaults.
+type LimitOf = fn(usize) -> ViewLimits;
+
+/// The pre-freeze retention check of `build()`'s snapshot is exact on every
+/// counted resource: a limit one below what the snapshot actually retains is
+/// refused before any freeze, and a limit equal to it is admitted.
+fn assert_exact_snapshot_limits(build: impl Fn() -> MutableDataset) {
+    let admitted = build()
         .snapshot_view()
-        .expect("default limits admit 64 declarations")
+        .expect("default limits admit the fixture")
         .stats();
-    let over = |limits: ViewLimits| {
-        let mutable = declaration_only(&base, DECLARED);
+    let expected_graphs = build().snapshot_view().unwrap().named_graphs().count();
+    let limited: [(&str, LimitOf, usize); 3] = [
+        (
+            "terms",
+            |n| ViewLimits {
+                max_terms: n,
+                ..ViewLimits::default()
+            },
+            admitted.retained_terms,
+        ),
+        (
+            "payload bytes",
+            |n| ViewLimits {
+                max_payload_bytes: n,
+                ..ViewLimits::default()
+            },
+            admitted.retained_payload_bytes,
+        ),
+        (
+            "auxiliary bytes",
+            |n| ViewLimits {
+                max_auxiliary_bytes: n,
+                ..ViewLimits::default()
+            },
+            admitted.auxiliary_bytes,
+        ),
+    ];
+    for (name, limits, retained) in limited {
+        let mutable = build();
         let refused = mutable
-            .snapshot_view_with_limits(limits)
-            .expect_err("the declarations exceed the limit");
+            .snapshot_view_with_limits(limits(retained - 1))
+            .expect_err("one below the retained amount is refused");
         assert_eq!(refused.code, "view-retention-limit");
         assert_eq!(
             mutable.work_stats().freezes,
             0,
-            "refused before the freeze interns the declarations: {refused:?}"
+            "{name}: refused before the freeze: {refused:?}"
         );
-    };
-    let exact = |limits: ViewLimits| {
-        let mutable = declaration_only(&base, DECLARED);
+        let mutable = build();
         let view = mutable
-            .snapshot_view_with_limits(limits)
-            .expect("a limit the snapshot meets exactly admits it");
-        assert_eq!(
-            view.named_graphs().count(),
-            base.named_graphs().count() + DECLARED
-        );
+            .snapshot_view_with_limits(limits(retained))
+            .unwrap_or_else(|e| panic!("{name}: exactly the retained amount is admitted: {e:?}"));
+        assert_eq!(view.named_graphs().count(), expected_graphs);
         assert_eq!(mutable.work_stats().freezes, 1);
-    };
-    for (limit, admit) in [
-        (
-            ViewLimits {
-                max_terms: admitted.retained_terms - 1,
-                ..ViewLimits::default()
-            },
-            ViewLimits {
-                max_terms: admitted.retained_terms,
-                ..ViewLimits::default()
-            },
-        ),
-        (
-            ViewLimits {
-                max_payload_bytes: admitted.retained_payload_bytes - 1,
-                ..ViewLimits::default()
-            },
-            ViewLimits {
-                max_payload_bytes: admitted.retained_payload_bytes,
-                ..ViewLimits::default()
-            },
-        ),
-        (
-            ViewLimits {
-                max_auxiliary_bytes: admitted.auxiliary_bytes - 1,
-                ..ViewLimits::default()
-            },
-            ViewLimits {
-                max_auxiliary_bytes: admitted.auxiliary_bytes,
-                ..ViewLimits::default()
-            },
-        ),
-    ] {
-        over(limit);
-        exact(admit);
     }
 }
 
 #[test]
+fn declaration_only_graphs_are_charged_before_the_snapshot_freezes_them() {
+    let base = complete_source();
+    assert_exact_snapshot_limits(|| declaration_only(&base, 64));
+}
+
+#[test]
 fn a_declared_graph_that_owns_rows_is_charged_once() {
-    // The graph name is both a delta term (its rows name it) and a declaration; the
-    // frozen delta holds it once, so a limit the snapshot meets exactly admits it.
+    // The graph name is both a term of a row and a declaration; the frozen delta
+    // holds it once.
     let base = RdfDatasetBuilder::new().freeze().unwrap();
-    let build = || {
+    assert_exact_snapshot_limits(|| {
         let mut mutable = MutableDataset::new(Arc::clone(&base));
         assert_eq!(mutable.declare_named_graph(iri("g")), Ok(true));
         mutable
             .insert(QuadValues::quad(iri("s"), iri("p"), iri("o"), iri("g")))
             .unwrap();
         mutable
+    });
+}
+
+#[test]
+fn a_removed_rows_terms_are_not_charged_to_the_snapshot() {
+    // `x` and `y` stay in the delta interner after their only row is removed, but
+    // the freeze never interns them: the snapshot retains `s`, `p` and `z` alone.
+    let base = RdfDatasetBuilder::new().freeze().unwrap();
+    let build = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let removed = QuadValues::triple(iri("x"), iri("p"), iri("y"));
+        assert!(mutable.insert(removed.clone()).unwrap());
+        assert!(mutable.remove(&removed));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("s"), iri("p"), iri("z")))
+                .unwrap()
+        );
+        mutable
     };
-    let admitted = build().snapshot_view().unwrap().stats();
-    let limits = ViewLimits {
-        max_terms: admitted.retained_terms,
-        max_payload_bytes: admitted.retained_payload_bytes,
-        max_auxiliary_bytes: admitted.auxiliary_bytes,
-        ..ViewLimits::default()
+    assert_eq!(build().snapshot_view().unwrap().stats().retained_terms, 3);
+    assert_exact_snapshot_limits(build);
+}
+
+#[test]
+fn every_term_shape_is_charged_as_the_freeze_interns_it() {
+    // Over a base with literals, triple terms, a reifier and an annotation: rows
+    // that share base terms, nest a new triple around base components, carry a new
+    // datatype and a language tag, declare and annotate a reifier (whose
+    // `rdf:reifies` becomes a reifier row, not a term), a removed row, and a
+    // declared graph that also names a row.
+    let base = complete_source();
+    let build = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let same = TermValue::blank("same");
+        let p = TermValue::iri(P);
+        let inner = TermValue::Triple {
+            s: TermBox::new(same.clone()),
+            p: TermBox::new(p.clone()),
+            o: TermBox::new(iri("new-object")),
+        };
+        let rows = [
+            QuadValues::triple(same, p.clone(), inner.clone()),
+            QuadValues::quad(
+                iri("s"),
+                p.clone(),
+                TermValue::typed_literal("7", "http://example.org/datatype"),
+                iri("graph"),
+            ),
+            QuadValues::triple(
+                iri("s"),
+                iri("label"),
+                TermValue::Literal {
+                    lexical_form: "bonjour".into(),
+                    datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".into(),
+                    language: Some("fr".into()),
+                    direction: None,
+                },
+            ),
+            QuadValues::triple(iri("r"), TermValue::iri(REIFIES), inner),
+            QuadValues::triple(iri("r"), iri("note"), iri("o")),
+            QuadValues::quad(iri("s"), p, iri("o"), iri("declared")),
+        ];
+        for row in rows {
+            assert!(mutable.insert(row).unwrap());
+        }
+        let removed = QuadValues::triple(iri("gone"), iri("gone-p"), iri("gone-o"));
+        assert!(mutable.insert(removed.clone()).unwrap());
+        assert!(mutable.remove(&removed));
+        assert_eq!(mutable.declare_named_graph(iri("declared")), Ok(true));
+        assert_eq!(mutable.declare_named_graph(iri("empty")), Ok(true));
+        mutable
     };
-    let view = build().snapshot_view_with_limits(limits).unwrap();
-    assert_eq!(view.named_graphs().count(), 1);
+    assert_exact_snapshot_limits(build);
 }
 
 #[test]

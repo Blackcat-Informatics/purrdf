@@ -46,6 +46,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **core:** `MutableDataset::snapshot_view_with_limits` no longer refuses a
+  snapshot because of terms whose rows were all removed. Its check before the
+  freeze now charges exactly the terms, payload bytes and auxiliary bytes the
+  frozen delta retains, so a limit the published snapshot meets is admitted.
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
   with a non-ASCII character where the timezone suffix would be, such as
   `"2001-01-01€12345"`, is rejected as an invalid lexical form instead of

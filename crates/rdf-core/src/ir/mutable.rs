@@ -59,6 +59,7 @@ use super::term::TermId;
 use super::term_walk::{Nested, try_fold_nested};
 
 mod delta_view;
+mod frozen_charge;
 pub use delta_view::{DeltaDatasetView, DeltaViewId};
 
 /// The `rdf:reifies` predicate IRI — mirrors [`super::dataset`]'s private copy (kept
@@ -851,13 +852,19 @@ impl MutableDataset {
         let mut stats = super::view_accounting::ViewStats::default();
         stats.retain(&self.base);
         stats.retained_sources += 1;
-        stats.retained_terms = stats.retained_terms.saturating_add(self.delta.values.len());
+        let (terms, payload) = self.frozen_delta_charge();
+        stats.retained_terms = stats.retained_terms.saturating_add(terms);
         stats.retained_rows = stats.retained_rows.saturating_add(self.added.len());
-        stats.auxiliary_bytes = self
-            .suppressed
-            .len()
-            .saturating_mul(4 * size_of::<super::QuadIds>());
-        self.charge_declarations(&mut stats);
+        stats.retained_payload_bytes = stats.retained_payload_bytes.saturating_add(payload);
+        // The construction charge `DeltaDatasetView::new` makes for the same delta.
+        stats.auxiliary_bytes = terms
+            .saturating_mul(DeltaDatasetView::AUXILIARY_BYTES_PER_DELTA_TERM)
+            .saturating_add(
+                self.suppressed
+                    .len()
+                    .saturating_add(self.added.len())
+                    .saturating_mul(4 * size_of::<super::QuadIds>()),
+            );
         limits.check(&stats)?;
         let mut builder = self.base.rebuild_builder();
         self.append_delta(&mut builder);
@@ -898,43 +905,78 @@ impl MutableDataset {
         Ok(view)
     }
 
-    /// Charge the graphs declared through [`Self::declare_named_graph`] to a
-    /// snapshot's pre-freeze admission, which `append_delta` interns into the frozen
-    /// delta whether or not they own a row. Every declaration owns one entry of the
-    /// delta's graph-declaration table. A declared name the delta interner does not
-    /// already hold — so `self.delta.values` did not count it — is also one more
-    /// delta term: its text in the arena, its term record, and the per-term charge
-    /// [`DeltaDatasetView`] construction makes. Each charge is one the frozen delta
-    /// is certain to carry, so this check never refuses a snapshot the post-freeze
-    /// check would admit; it refuses a declaration-heavy one before the freeze
-    /// allocates it.
-    fn charge_declarations(&self, stats: &mut super::view_accounting::ViewStats) {
-        let mut terms = 0_usize;
-        let mut payload = self
-            .declared_graphs
-            .len()
-            .saturating_mul(size_of::<TermId>());
-        for graph in &self.declared_graphs {
-            if self.delta.find(graph).is_some() {
-                continue;
-            }
-            let text = match graph {
-                TermValue::Iri(iri) => iri.len(),
-                TermValue::Blank { label, .. } => label.len(),
-                TermValue::Literal { .. } | TermValue::Triple { .. } => {
-                    unreachable!("a declared named graph is an IRI or blank node")
+    /// The distinct terms and the payload bytes the frozen delta of a snapshot will
+    /// retain, counted before [`Self::append_delta`] builds it, so a retention limit
+    /// refuses an oversized delta before the freeze allocates it.
+    ///
+    /// Only what the freeze interns is charged: the terms of the live added rows —
+    /// with each literal's datatype and each triple component, as the builder stores
+    /// them; an `rdf:reifies` declaration becomes a reifier row, and the builder
+    /// interns its predicate all the same — and every declared graph name. A delta value whose rows
+    /// were all removed stays in the delta interner but is never frozen, so it is not
+    /// charged. The payload is the frozen delta's arena text, term records, row
+    /// records and named-graph entries. Each charge is one the frozen delta carries,
+    /// so this check never refuses a snapshot the post-freeze check would admit.
+    fn frozen_delta_charge(&self) -> (usize, usize) {
+        let mut terms = frozen_charge::FrozenTerms::new(&self.base);
+        let mut graphs: FastSet<MutTermId> = FastSet::default();
+        let mut row_bytes = 0_usize;
+        // Counting only: the visiting order of `added` is never observed.
+        for key in &self.added {
+            let declaration = self.is_reifier_declaration(key);
+            row_bytes = row_bytes.saturating_add(if declaration {
+                size_of::<super::dataset::ReifierRow>()
+            } else {
+                size_of::<super::dataset::QuadRow>().min(size_of::<super::dataset::AnnotationRow>())
+            });
+            let components = [Some(key.s), Some(key.p), Some(key.o), key.g];
+            for id in components.into_iter().flatten() {
+                match id {
+                    MutTermId::Base(id) => {
+                        terms.base_term(id);
+                    }
+                    MutTermId::Delta(id) => terms.value(self.delta.value(id)),
                 }
-            };
-            terms = terms.saturating_add(1);
-            payload = payload
-                .saturating_add(text)
-                .saturating_add(size_of::<super::term::InternedTerm>());
+            }
+            if let Some(graph) = key.g {
+                graphs.insert(graph);
+            }
         }
-        stats.retained_terms = stats.retained_terms.saturating_add(terms);
-        stats.retained_payload_bytes = stats.retained_payload_bytes.saturating_add(payload);
-        stats.auxiliary_bytes = stats
-            .auxiliary_bytes
-            .saturating_add(terms.saturating_mul(DeltaDatasetView::AUXILIARY_BYTES_PER_DELTA_TERM));
+        let mut graph_entries = graphs.len();
+        for graph in &self.declared_graphs {
+            terms.value(graph);
+            if self.find_value(graph).is_none_or(|id| graphs.insert(id)) {
+                graph_entries += 1;
+            }
+        }
+        let payload = terms
+            .text_bytes()
+            .saturating_add(
+                terms
+                    .terms()
+                    .saturating_mul(size_of::<super::term::InternedTerm>()),
+            )
+            .saturating_add(row_bytes)
+            .saturating_add(graph_entries.saturating_mul(size_of::<TermId>()));
+        (terms.terms(), payload)
+    }
+
+    /// Whether an added row is an `rdf:reifies` declaration — a triple-term object
+    /// under `rdf:reifies` — which [`Self::append_delta`] freezes as a reifier row.
+    fn is_reifier_declaration(&self, key: &QuadKey) -> bool {
+        let reifies = match key.p {
+            MutTermId::Base(id) => {
+                matches!(self.base.resolve(id), TermRef::Iri(iri) if iri == RDF_REIFIES)
+            }
+            MutTermId::Delta(id) => {
+                matches!(self.delta.value(id), TermValue::Iri(iri) if iri == RDF_REIFIES)
+            }
+        };
+        reifies
+            && match key.o {
+                MutTermId::Base(id) => matches!(self.base.resolve(id), TermRef::Triple { .. }),
+                MutTermId::Delta(id) => matches!(self.delta.value(id), TermValue::Triple { .. }),
+            }
     }
 
     /// One RDF 1.2 delta classifier shared by compaction and snapshot publication.
