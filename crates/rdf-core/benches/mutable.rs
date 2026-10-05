@@ -430,6 +430,53 @@ fn bench_declared_graph_removal(c: &mut Bench) {
     group.finish();
 }
 
+/// Added-row counts of the snapshot-publication lane.
+const SNAPSHOT_DELTA_ROWS: [u32; 3] = [1_000, 20_000, 200_000];
+
+/// The `BASE_QUADS` base with `rows` added quads over it: brand-new subjects and
+/// literal objects, every fourth row in one of eight named graphs, and every
+/// eighth row reusing a base subject.
+fn delta_of(base: &Arc<RdfDataset>, rows: u32) -> MutableDataset {
+    let mut cow = MutableDataset::new(Arc::clone(base));
+    for n in 0..rows {
+        let s = if n % 8 == 0 {
+            iri(&format!("s{}", n % BASE_QUADS))
+        } else {
+            iri(&format!("d{n}"))
+        };
+        let o = TermValue::typed_literal(n.to_string(), "http://www.w3.org/2001/XMLSchema#integer");
+        let quad = if n % 4 == 0 {
+            QuadValues::quad(s, iri("p"), o, iri(&format!("g{}", n % 8)))
+        } else {
+            QuadValues::triple(s, iri("p"), o)
+        };
+        let _ = cow.insert(quad).expect("bench fixtures are absolute");
+    }
+    cow
+}
+
+/// Snapshot publication of a delta of 1k, 20k and 200k added rows: the retention
+/// check, the freeze of the delta and the view's construction. Report-only.
+fn bench_snapshot_with_delta(c: &mut Bench) {
+    let base = build_base();
+    let mut group = c.benchmark_group("snapshot_with_delta");
+    group.sample_size(10);
+    for rows in SNAPSHOT_DELTA_ROWS {
+        let cow = delta_of(&base, rows);
+        group.bench_with_input(BenchmarkId::from_parameter(rows), &cow, |b, cow| {
+            b.iter(|| {
+                std::hint::black_box(
+                    cow.snapshot_view()
+                        .expect("the bench delta publishes")
+                        .stats()
+                        .retained_terms,
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Print the relative head-to-head context once: how many quads each store holds, so
 /// the timed numbers are read against the same effective set. No winner asserted.
 fn bench_context(_c: &mut Bench) {
@@ -466,6 +513,7 @@ bench_group!(
     bench_query,
     bench_freeze,
     bench_snapshot_graphs,
-    bench_declared_graph_removal
+    bench_declared_graph_removal,
+    bench_snapshot_with_delta
 );
 bench_main!(benches);
