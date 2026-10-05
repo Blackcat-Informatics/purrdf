@@ -38,7 +38,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   no operation touches survives. `declared_named_graphs` omits withdrawn base
   declarations. `visit_blank_identities` visits a declared blank graph name, so
   fresh blanks never reuse it, and `snapshot_view_with_limits` charges
-  declarations before it freezes the delta.
+  declarations before it freezes the delta. Declaring a base graph again after
+  a mutation withdrew it restores the base's declaration, so the graph is listed
+  once.
 - **events:** `RdfEventSink::named_graph`, a method with a default
   implementation that ignores the event. The frozen-dataset replay emits it for
   each named graph, and `DatasetSink` keeps the declarations it receives.

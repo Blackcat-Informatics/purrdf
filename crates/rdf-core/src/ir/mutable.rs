@@ -274,7 +274,16 @@ impl MutableDataset {
         check_value_absolute(&graph).map_err(|error| {
             crate::RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
         })?;
-        if self.declared_graphs.contains(&graph) || self.base_declares(&graph) {
+        // A base graph keeps its one declaration: declaring it again after a mutation
+        // withdrew it restores the base's, so it is never listed twice.
+        if let Some(id) = self.base_graph(&graph) {
+            if !self.withdrawn_graphs.contains(&id) {
+                return Ok(false);
+            }
+            Arc::make_mut(&mut self.withdrawn_graphs).remove(&id);
+            return Ok(true);
+        }
+        if self.declared_graphs.contains(&graph) {
             return Ok(false);
         }
         self.declared_graphs.push(graph);
@@ -292,10 +301,11 @@ impl MutableDataset {
             .chain(self.declared_graphs.iter().cloned())
     }
 
-    fn base_declares(&self, graph: &TermValue) -> bool {
-        self.base.term_id_by_value(graph).is_some_and(|id| {
-            !self.withdrawn_graphs.contains(&id) && self.base.named_graphs().any(|g| g == id)
-        })
+    /// The base's id for `graph` when the base names it as a graph.
+    fn base_graph(&self, graph: &TermValue) -> Option<TermId> {
+        self.base
+            .term_id_by_value(graph)
+            .filter(|&id| self.base.named_graphs().any(|g| g == id))
     }
 
     /// The shared frozen base this dataset branched from.
@@ -1428,6 +1438,62 @@ mod tests {
         assert!(names(&m).is_empty());
         assert_eq!(m.declare_named_graph(iri_val("e")), Ok(true));
         assert_eq!(names(&m), std::collections::BTreeSet::from([iri_val("e")]));
+    }
+
+    /// Declaring a withdrawn base graph again restores the base's declaration
+    /// rather than adding a second one: the graph is listed once whether or not a
+    /// row then lands in it, and the removal of that row withdraws it again.
+    #[test]
+    fn redeclaring_a_withdrawn_base_graph_lists_it_once() {
+        let listed = |m: &MutableDataset| m.declared_named_graphs().collect::<Vec<_>>();
+        let enumerated = |m: &MutableDataset| {
+            let view = m.snapshot_view().expect("publishes");
+            crate::DatasetView::named_graphs(&view).count()
+        };
+        let row = QuadValues::quad(iri_val("s"), iri_val("p"), iri_val("o"), iri_val("bg"));
+        // A base graph declared empty, and one that held a row the mutation removed.
+        let mut empty = RdfDatasetBuilder::new();
+        let bg = empty.intern_iri("http://example.org/bg");
+        empty.declare_named_graph(bg);
+        let mut populated = RdfDatasetBuilder::new();
+        let (s, p, o) = (
+            populated.intern_iri("http://example.org/s0"),
+            populated.intern_iri("http://example.org/p"),
+            populated.intern_iri("http://example.org/o0"),
+        );
+        let bg = populated.intern_iri("http://example.org/bg");
+        populated.push_quad(s, p, o, Some(bg));
+        for (base, emptied) in [(empty.freeze(), false), (populated.freeze(), true)] {
+            let mut m = MutableDataset::new(base.expect("base freezes"));
+            if emptied {
+                assert!(m.remove(&QuadValues::quad(
+                    iri_val("s0"),
+                    iri_val("p"),
+                    iri_val("o0"),
+                    iri_val("bg"),
+                )));
+            } else {
+                m.withdraw_graph_declaration(&iri_val("bg"));
+            }
+            assert_eq!(listed(&m), []);
+            assert_eq!(m.declare_named_graph(iri_val("bg")), Ok(true));
+            assert_eq!(listed(&m), [iri_val("bg")]);
+            assert_eq!(enumerated(&m), 1);
+            assert_eq!(m.declare_named_graph(iri_val("bg")), Ok(false));
+            ins(&mut m, row.clone());
+            assert_eq!(listed(&m), [iri_val("bg")], "listed once with a row");
+            assert_eq!(enumerated(&m), 1);
+            assert!(m.remove(&row));
+            assert_eq!(listed(&m), [], "removing its last row withdraws it");
+            assert_eq!(enumerated(&m), 0);
+        }
+        // A base graph that was never withdrawn is already declared.
+        let mut b = RdfDatasetBuilder::new();
+        let e = b.intern_iri("http://example.org/bg");
+        b.declare_named_graph(e);
+        let mut m = MutableDataset::new(b.freeze().expect("freezes"));
+        assert_eq!(m.declare_named_graph(iri_val("bg")), Ok(false));
+        assert_eq!(listed(&m), [iri_val("bg")]);
     }
 
     /// A base with three quads: (a,p,b), (a,p,c), (b,p,c) — and one reifier+annotation.
