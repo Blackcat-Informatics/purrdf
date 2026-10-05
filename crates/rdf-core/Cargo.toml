@@ -115,6 +115,12 @@ name = "ir_layout"
 harness = false
 
 [[bench]]
+# Complete-state identity construction over fixed native shapes. Report-only;
+# it does not alter or compare any preexisting identity's hot path.
+name = "dataset_state_digest"
+harness = false
+
+[[bench]]
 # COW `MutableDataset` measured-hypothesis harness: the shipped copy-on-
 # write suppression-delta dataset benched head-to-head against a simple hash-indexed
 # value-quad store, on a build/mutate/query workload. Reports both; asserts no winner.

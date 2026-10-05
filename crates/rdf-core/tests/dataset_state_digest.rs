@@ -11,10 +11,12 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, CanonHash, DatasetStateDigest, DatasetStateError, DatasetView, DrainCheckpoint,
-    FallibleDatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue, ViewOperationStatus,
-    WorkspaceReservation, canonicalize, graph_digest_view, try_flat_digest_view,
+    BlankScope, CanonHash, CompositeDatasetView, DatasetMut, DatasetStateDigest, DatasetStateError,
+    DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
+    MutableDataset, PagedDataset, PagedQueryLimits, QuadIds, QuadValues, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef,
+    TermValue, ViewLimits, ViewOperationStatus, WorkspaceReservation, canonicalize,
+    graph_digest_view, try_flat_digest_view,
 };
 use purrdf_iri::vocab::rdf::REIFIES;
 
@@ -477,6 +479,8 @@ enum FaultMode {
     Reservation,
     MissingEmbedded,
     WrongEmbedded,
+    Capacity,
+    InvalidDatatype,
 }
 
 struct Probe {
@@ -565,7 +569,17 @@ impl DatasetView for Probe {
             self.faulted.set(true);
             Err(SourceFault::new("point read refused"))
         } else {
-            Ok(self.source.as_ref().resolve(id))
+            let term = self.source.as_ref().resolve(id);
+            if self.mode == FaultMode::InvalidDatatype
+                && term == TermRef::Iri(purrdf_xsd::datatype::XSD_STRING)
+            {
+                Ok(TermRef::Blank {
+                    label: "not-a-datatype",
+                    scope: BlankScope::DEFAULT,
+                })
+            } else {
+                Ok(term)
+            }
         }
     }
 
@@ -589,7 +603,11 @@ impl DatasetView for Probe {
         self.source.capabilities()
     }
     fn term_count(&self) -> u64 {
-        self.source.term_count()
+        if self.mode == FaultMode::Capacity {
+            u64::MAX
+        } else {
+            self.source.term_count()
+        }
     }
     fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
         self.source.named_graphs().filter(|_| !self.omit_named)
@@ -942,6 +960,206 @@ fn fixed_search_exhaustion_refuses_a_real_ambiguous_state() {
     );
 }
 
+fn complete_state_agrees_across_production_view_carriers() {
+    let mut state = role_fixture(Role::Annotation);
+    state.graphs = vec![Node::Blank(0), Node::Iri(H)];
+    for row in &mut state.rows {
+        row.graph = Some(Node::Blank(0));
+    }
+    state.rows.push(Row {
+        role: Role::Ordinary,
+        terms: [
+            Node::Blank(0),
+            Node::Iri(Q),
+            Node::Composite {
+                chunks: ["[ ", ", [", "] ]"].map(str::to_owned).to_vec(),
+                blanks: vec![0, 0],
+                datatype: purrdf_cdt::CDT_LIST,
+            },
+        ],
+        graph: Some(Node::Blank(0)),
+    });
+    let source = state.materialize();
+    let expected = state.digest();
+    let independent =
+        CompositeDatasetView::new(vec![source.clone()], ViewLimits::default()).unwrap();
+    let shared = CompositeDatasetView::with_shared_scopes(
+        vec![source.clone(), source.clone()],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    let mut mutable = MutableDataset::new(source.clone());
+    let scratch = QuadValues::triple(
+        TermValue::iri("http://example.org/scratch"),
+        TermValue::iri(P),
+        TermValue::iri(H),
+    );
+    assert!(mutable.insert(scratch.clone()).unwrap());
+    assert!(mutable.remove(&scratch));
+    let delta = mutable.snapshot_view().unwrap();
+    let paged =
+        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![source]))).unwrap();
+    let reader = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    for (name, digest) in [
+        (
+            "independent composite",
+            DatasetStateDigest::from_view(&independent).unwrap(),
+        ),
+        (
+            "shared composite",
+            DatasetStateDigest::from_view(&shared).unwrap(),
+        ),
+        (
+            "mutated delta",
+            DatasetStateDigest::from_view(&delta).unwrap(),
+        ),
+        (
+            "paged query",
+            DatasetStateDigest::from_view(&reader).unwrap(),
+        ),
+    ] {
+        assert_eq!(digest, expected, "{name}");
+    }
+}
+
+fn nonautomorphic_same_color_orbits_are_not_pruned() {
+    let make = |split: bool, names: [u8; 7]| State {
+        graphs: Vec::new(),
+        rows: (0..7)
+            .map(|i| {
+                let next = if split && i < 3 {
+                    (i + 1) % 3
+                } else if split {
+                    3 + (i - 3 + 1) % 4
+                } else {
+                    (i + 1) % 7
+                };
+                Row {
+                    role: Role::Ordinary,
+                    terms: [
+                        Node::Blank(names[i]),
+                        Node::Iri(P),
+                        Node::Blank(names[next]),
+                    ],
+                    graph: None,
+                }
+            })
+            .collect(),
+    };
+    let split = make(true, [0, 1, 2, 3, 4, 5, 6]);
+    let mut renamed = make(true, [4, 5, 6, 0, 1, 2, 3]);
+    renamed.rows.rotate_left(3);
+    let connected = make(false, [0, 1, 2, 3, 4, 5, 6]);
+    assert!(isomorphic(&split, &renamed));
+    assert!(!isomorphic(&split, &connected));
+    assert_eq!(split.digest(), renamed.digest());
+    assert_ne!(split.digest(), connected.digest());
+}
+
+fn exact_lexical_bytes_and_maximum_accepted_nesting_have_neighbors() {
+    let mut state = State {
+        graphs: vec![Node::Blank(0)],
+        rows: vec![Row {
+            role: Role::Ordinary,
+            terms: [
+                Node::Blank(0),
+                Node::Iri(Q),
+                Node::Composite {
+                    chunks: ["[ ", " ]"].map(str::to_owned).to_vec(),
+                    blanks: vec![0],
+                    datatype: purrdf_cdt::CDT_LIST,
+                },
+            ],
+            graph: Some(Node::Blank(0)),
+        }],
+    };
+    let mut differently_spelled = state.clone();
+    let Node::Composite { chunks, .. } = &mut differently_spelled.rows[0].terms[2] else {
+        panic!("composite fixture")
+    };
+    assert_eq!(chunks[0].pop(), Some(' '));
+    assert!(!isomorphic(&state, &differently_spelled));
+    assert_ne!(state.digest(), differently_spelled.digest());
+
+    let mut nested = Node::Blank(0);
+    for _ in 0..purrdf_events::MAX_TERM_NESTING_DEPTH {
+        nested = Node::Triple(Box::new([Node::Blank(0), Node::Iri(P), nested]));
+    }
+    state.rows[0].terms[2] = nested;
+    let renamed = state.materialize_with(&|_| ("renamed".to_owned(), BlankScope(u32::MAX)));
+    assert_eq!(
+        state.digest(),
+        DatasetStateDigest::from_view(&renamed).unwrap()
+    );
+    let accepted = state.digest();
+    state.rows[0].terms[2] = Node::Triple(Box::new([Node::Blank(0), Node::Iri(Q), Node::Blank(0)]));
+    assert_ne!(accepted, state.digest());
+}
+
+fn authored_reserved_namespace_iris_remain_ordinary_terms() {
+    let mut state = State {
+        graphs: vec![Node::Iri("urn:purrdf:rdfc:authored")],
+        rows: vec![Row {
+            role: Role::Ordinary,
+            terms: [
+                Node::Iri("urn:purrdf:rdfc:authored"),
+                Node::Iri(P),
+                Node::Iri(H),
+            ],
+            graph: None,
+        }],
+    };
+    let ordinary = state.digest();
+    state.rows[0].role = Role::Annotation;
+    assert_ne!(ordinary, state.digest());
+}
+
+fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
+    let state = State {
+        graphs: Vec::new(),
+        rows: vec![Row {
+            role: Role::Ordinary,
+            terms: [
+                Node::Iri(G),
+                Node::Iri(P),
+                Node::Literal {
+                    lexical: "value",
+                    datatype: purrdf_xsd::datatype::XSD_STRING,
+                    language: None,
+                    direction: None,
+                },
+            ],
+            graph: None,
+        }],
+    };
+    let source = state.materialize();
+    let capacity = Probe::new(source.clone(), FaultMode::Capacity);
+    assert_eq!(
+        DatasetStateDigest::from_view(&capacity),
+        Err(DatasetStateError::Capacity)
+    );
+    assert_eq!(
+        capacity.reads.get(),
+        0,
+        "refuse before any row or term read"
+    );
+    assert_eq!(capacity.checkpoints.get(), 2);
+    assert!(!capacity.reservation_live.get());
+    let invalid = Probe::new(source.clone(), FaultMode::InvalidDatatype);
+    assert_eq!(
+        DatasetStateDigest::from_view(&invalid),
+        Err(DatasetStateError::InvalidTerm)
+    );
+    assert!(invalid.reads.get() > 0);
+    assert_eq!(invalid.checkpoints.get(), 2);
+    assert!(!invalid.reservation_live.get());
+    let ready = Probe::new(source, FaultMode::Ready);
+    assert_eq!(
+        DatasetStateDigest::from_view(&ready).unwrap(),
+        state.digest()
+    );
+}
+
 purrdf_testkit::harness_main!(
     legacy_canonical_form_omits_an_empty_named_declaration,
     legacy_flat_digest_erases_ordinary_annotation_roles,
@@ -960,4 +1178,9 @@ purrdf_testkit::harness_main!(
     scoped_blanks_share_one_mapping_with_cdt_lists_maps_and_all_roles,
     interchangeable_empty_blank_declarations_do_not_require_factorial_search,
     fixed_search_exhaustion_refuses_a_real_ambiguous_state,
+    complete_state_agrees_across_production_view_carriers,
+    nonautomorphic_same_color_orbits_are_not_pruned,
+    exact_lexical_bytes_and_maximum_accepted_nesting_have_neighbors,
+    authored_reserved_namespace_iris_remain_ordinary_terms,
+    capacity_and_invalid_datatype_refusals_have_ready_neighbors,
 );

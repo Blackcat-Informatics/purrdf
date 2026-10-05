@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Complete typed dataset state, canonically labeled by one global bijection.
+//!
+//! The versioned byte grammar and canonical terminal-family proof are specified
+//! in [`docs/DATASET-STATE-DIGEST.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/DATASET-STATE-DIGEST.md).
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
