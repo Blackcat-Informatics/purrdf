@@ -62,8 +62,10 @@ encoding and verified decoding. `cargo bench -p purrdf-json --bench
 ordered_json_alloc` reports allocations and RDF expansion in a separate process
 so allocation instrumentation does not affect latency measurements.
 
-The same corpus executes in Node through `make wasm-test`, with a pinned digest
-of all production RDF output bytes. For a report over real files, run `cargo
+Native Rust owns the complete corpus, metadata and profile refusals, and the
+pinned digest of production RDF output bytes. The release WASM build qualifies
+this crate's portability; the focused execution lane is documented in
+[WASM test ownership](../../docs/WASM_TESTING.md). For a report over real files, run `cargo
 bench -p purrdf-json --bench ordered_json_corpus -- /path/to/corpus`. This native
 profiling harness traverses JSON files in sorted order, reports accepted and
 refused inputs separately, reports absolute and base-relative Turtle sizes,

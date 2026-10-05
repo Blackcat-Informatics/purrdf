@@ -51,8 +51,8 @@ runs:
         echo "wasm-bindgen $found installed"
         # The same CLI is the wasm32 test runner's: scripts/wasm-test-runner.sh
         # generates each wasm32 test binary's Node bindings with it, so
-        # `make wasm-test`, `make geo-determinism` and `make hnsw-determinism` are
-        # held to this one wasm-bindgen pin rather than to a second one.
+        # `make wasm-test` and `make wasm-pkg-test` are held to this one
+        # wasm-bindgen pin rather than to a second one.
 
     - name: Install the pinned Binaryen validator and optimizer
       uses: ./.github/actions/binaryen-toolchain
