@@ -59,7 +59,6 @@ use super::term::TermId;
 use super::term_walk::{Nested, try_fold_nested};
 
 mod delta_view;
-mod frozen_charge;
 pub use delta_view::{DeltaDatasetView, DeltaViewId};
 
 /// The `rdf:reifies` predicate IRI — mirrors [`super::dataset`]'s private copy (kept
@@ -859,28 +858,10 @@ impl MutableDataset {
         &self,
         limits: super::view_accounting::ViewLimits,
     ) -> Result<DeltaDatasetView, crate::RdfDiagnostic> {
-        let mut stats = super::view_accounting::ViewStats::default();
-        stats.retain(&self.base);
-        stats.retained_sources += 1;
-        let charge = self.frozen_delta_charge();
-        stats.retained_terms = stats.retained_terms.saturating_add(charge.terms);
-        stats.retained_rows = stats.retained_rows.saturating_add(charge.rows);
-        stats.retained_payload_bytes = stats
-            .retained_payload_bytes
-            .saturating_add(charge.payload_bytes);
-        // The construction charge `DeltaDatasetView::new` makes for the same delta.
-        stats.auxiliary_bytes = charge
-            .terms
-            .saturating_mul(DeltaDatasetView::AUXILIARY_BYTES_PER_DELTA_TERM)
-            .saturating_add(
-                self.suppressed
-                    .len()
-                    .saturating_add(charge.rows)
-                    .saturating_mul(4 * size_of::<super::QuadIds>()),
-            );
-        limits.check(&stats)?;
         let mut builder = self.base.rebuild_builder();
-        self.append_delta(&mut builder);
+        let mut admission = DeltaAdmission::new(&self.base, self.suppressed.len(), limits);
+        self.append_delta(&mut builder, &mut admission)?;
+        let extent = admission.check(&builder)?;
         let delta = builder.freeze()?;
         debug_assert_eq!(
             (
@@ -888,12 +869,12 @@ impl MutableDataset {
                 delta.rdf_row_count(),
                 delta.rdf_payload_bytes()
             ),
-            (charge.terms, charge.rows, charge.payload_bytes),
-            "the pre-freeze charge is exactly what the frozen delta retains"
+            extent,
+            "the admitted extent is exactly what the frozen delta retains"
         );
         // `DeltaDatasetView::new` below checks the same limits once more, over stats
         // it computes from the frozen base and delta: sources, the base's share, and
-        // the delta's terms, rows and payload are the values charged above (the
+        // the delta's terms, rows and payload are the values admitted above (the
         // assertion pins the delta's), and its auxiliary charge is the same formula
         // over the same counts. Every quantity is equal, so a snapshot admitted above
         // is admitted there and its refusal is unreachable; the `?` keeps the view's
@@ -933,103 +914,17 @@ impl MutableDataset {
         Ok(view)
     }
 
-    /// What the frozen delta of a snapshot will retain — its distinct terms, its
-    /// distinct rows and its payload bytes — counted before [`Self::append_delta`]
-    /// builds it, so a retention limit refuses an oversized delta before the freeze
-    /// allocates it.
-    ///
-    /// Only what the freeze interns is charged: the terms of the live added rows and
-    /// every declared graph name, walked by [`frozen_charge::FrozenTerms`] under the
-    /// builder's own identity rules (see that module). A delta value whose rows were
-    /// all removed stays in the delta interner but is never frozen, so it is not
-    /// charged. Rows are counted as the builder stores them: each table keeps one
-    /// row per distinct tuple of interned ids, so two added rows whose objects fold
-    /// to one literal are one row. The payload is the frozen delta's arena text,
-    /// term records, row records and named-graph entries.
-    ///
-    /// The charge is exact, not an estimate: it equals what
-    /// [`RdfDataset::term_count`], [`RdfDataset::rdf_row_count`] and
-    /// [`RdfDataset::rdf_payload_bytes`] report for the frozen delta, which
-    /// [`Self::snapshot_view_with_limits`] asserts in debug builds.
-    fn frozen_delta_charge(&self) -> FrozenDeltaCharge {
-        let mut terms = frozen_charge::FrozenTerms::new(&self.base);
-        let mut delta_index: FastMap<DeltaTermId, u32> = FastMap::default();
-        let mut graphs: FastSet<MutTermId> = FastSet::default();
-        let mut rows: FastSet<(bool, u32, u32, u32, Option<u32>)> = FastSet::default();
-        let mut row_bytes = 0_usize;
-        // Counting only: the visiting order of `added` is never observed.
-        for key in &self.added {
-            let mut index = |id: MutTermId| match id {
-                MutTermId::Base(id) => terms.base_term(id),
-                MutTermId::Delta(id) => *delta_index
-                    .entry(id)
-                    .or_insert_with(|| terms.value(self.delta.value(id))),
-            };
-            let declaration = self.is_reifier_declaration(key);
-            let row = (
-                declaration,
-                index(key.s),
-                index(key.p),
-                index(key.o),
-                key.g.map(&mut index),
-            );
-            if rows.insert(row) {
-                row_bytes = row_bytes.saturating_add(if declaration {
-                    size_of::<super::dataset::ReifierRow>()
-                } else {
-                    size_of::<super::dataset::QuadRow>()
-                        .min(size_of::<super::dataset::AnnotationRow>())
-                });
-            }
-            if let Some(graph) = key.g {
-                graphs.insert(graph);
-            }
-        }
-        let mut graph_entries = graphs.len();
-        for graph in &self.declared_graphs {
-            terms.value(graph);
-            if self.find_value(graph).is_none_or(|id| graphs.insert(id)) {
-                graph_entries += 1;
-            }
-        }
-        let payload = terms
-            .text_bytes()
-            .saturating_add(
-                terms
-                    .terms()
-                    .saturating_mul(size_of::<super::term::InternedTerm>()),
-            )
-            .saturating_add(row_bytes)
-            .saturating_add(graph_entries.saturating_mul(size_of::<TermId>()));
-        FrozenDeltaCharge {
-            terms: terms.terms(),
-            rows: rows.len(),
-            payload_bytes: payload,
-        }
-    }
-
-    /// Whether an added row is an `rdf:reifies` declaration — a triple-term object
-    /// under `rdf:reifies` — which [`Self::append_delta`] freezes as a reifier row.
-    fn is_reifier_declaration(&self, key: &QuadKey) -> bool {
-        let reifies = match key.p {
-            MutTermId::Base(id) => {
-                matches!(self.base.resolve(id), TermRef::Iri(iri) if iri == RDF_REIFIES)
-            }
-            MutTermId::Delta(id) => {
-                matches!(self.delta.value(id), TermValue::Iri(iri) if iri == RDF_REIFIES)
-            }
-        };
-        reifies
-            && match key.o {
-                MutTermId::Base(id) => matches!(self.base.resolve(id), TermRef::Triple { .. }),
-                MutTermId::Delta(id) => matches!(self.delta.value(id), TermValue::Triple { .. }),
-            }
-    }
-
     /// One RDF 1.2 delta classifier shared by compaction and snapshot publication.
     /// Only added subjects probe the base reifier index; a small delta never builds
     /// a base-sized set of owned reifier values.
-    fn append_delta(&self, builder: &mut RdfDatasetBuilder) {
+    ///
+    /// `admission` sees every row and declaration as it is interned, and refuses the
+    /// delta as soon as it exceeds a retention limit, before the freeze.
+    fn append_delta(
+        &self,
+        builder: &mut RdfDatasetBuilder,
+        admission: &mut DeltaAdmission<'_>,
+    ) -> Result<(), crate::RdfDiagnostic> {
         let added_values: Vec<QuadValues> = self
             .added_in_order()
             .into_iter()
@@ -1061,6 +956,7 @@ impl MutableDataset {
             let triple = builder.intern_triple(s, p, o);
             let g = q.g.as_ref().map(|g| builder.intern_value(g));
             builder.push_reifier_in_graph(reifier, triple, g);
+            admission.row(builder, g)?;
         }
         for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
             if is_decl {
@@ -1090,22 +986,116 @@ impl MutableDataset {
             } else {
                 builder.push_quad(s, p, o, g);
             }
+            admission.row(builder, g)?;
         }
         // Declarations last, so a delta that declares nothing interns exactly as it
         // always did.
         for graph in &self.declared_graphs {
             let id = builder.intern_value(graph);
             builder.declare_named_graph(id);
+            admission.row(builder, Some(id))?;
         }
+        Ok(())
     }
 }
 
-/// What a snapshot's frozen delta retains, counted before the freeze (see
-/// [`MutableDataset::frozen_delta_charge`]).
-struct FrozenDeltaCharge {
-    terms: usize,
-    rows: usize,
-    payload_bytes: usize,
+/// The retention check of one snapshot, made while [`MutableDataset::append_delta`]
+/// interns the delta rather than over a second walk of it.
+///
+/// The builder's tables hold one entry per distinct term and row as it goes
+/// ([`RdfDatasetBuilder::pending_extent`]), and every quantity the limits bound
+/// only grows as interning proceeds. A check that fails part way therefore fails
+/// at the end too, and the check after the last row is the exact verdict on the
+/// frozen delta: a delta over a limit is refused before the freeze, with no work
+/// counted, and one within every limit is admitted.
+struct DeltaAdmission<'a> {
+    base: &'a RdfDataset,
+    suppressed: usize,
+    limits: super::view_accounting::ViewLimits,
+    /// The distinct named graphs the delta names, by row or by declaration — the
+    /// one table the freeze deduplicates.
+    graphs: FastSet<TermId>,
+    /// The graph of the previous row, so a run of rows in one graph probes the set
+    /// once.
+    last_graph: Option<TermId>,
+    rows_since_check: usize,
+}
+
+impl<'a> DeltaAdmission<'a> {
+    /// Rows interned between two checks part way through the delta. Only how soon an
+    /// oversized delta stops depends on it; the verdict is the final check's.
+    const CHECK_EVERY: usize = 1024;
+
+    fn new(
+        base: &'a RdfDataset,
+        suppressed: usize,
+        limits: super::view_accounting::ViewLimits,
+    ) -> Self {
+        Self {
+            base,
+            suppressed,
+            limits,
+            graphs: FastSet::default(),
+            last_graph: None,
+            rows_since_check: 0,
+        }
+    }
+
+    /// The snapshot's retention as of what `builder` holds now, and the delta's own
+    /// `(terms, rows, payload)`.
+    fn stats(
+        &self,
+        builder: &RdfDatasetBuilder,
+    ) -> (super::view_accounting::ViewStats, (usize, usize, usize)) {
+        let extent = builder.pending_extent(self.graphs.len());
+        let (terms, rows, payload) = extent;
+        let mut stats = super::view_accounting::ViewStats::default();
+        stats.retain(self.base);
+        stats.retained_sources += 1;
+        stats.retained_terms = stats.retained_terms.saturating_add(terms);
+        stats.retained_rows = stats.retained_rows.saturating_add(rows);
+        stats.retained_payload_bytes = stats.retained_payload_bytes.saturating_add(payload);
+        // The construction charge `DeltaDatasetView::new` makes for the same delta.
+        stats.auxiliary_bytes = terms
+            .saturating_mul(DeltaDatasetView::AUXILIARY_BYTES_PER_DELTA_TERM)
+            .saturating_add(
+                self.suppressed
+                    .saturating_add(rows)
+                    .saturating_mul(4 * size_of::<super::QuadIds>()),
+            );
+        (stats, extent)
+    }
+
+    /// Check the limits against what `builder` holds now.
+    fn check(
+        &self,
+        builder: &RdfDatasetBuilder,
+    ) -> Result<(usize, usize, usize), crate::RdfDiagnostic> {
+        let (stats, extent) = self.stats(builder);
+        self.limits.check(&stats)?;
+        Ok(extent)
+    }
+
+    /// Account one interned row (or declaration) naming `graph`, checking the limits
+    /// every [`Self::CHECK_EVERY`] rows.
+    fn row(
+        &mut self,
+        builder: &RdfDatasetBuilder,
+        graph: Option<TermId>,
+    ) -> Result<(), crate::RdfDiagnostic> {
+        if let Some(graph) = graph
+            && self.last_graph != Some(graph)
+        {
+            self.graphs.insert(graph);
+            self.last_graph = Some(graph);
+        }
+        self.rows_since_check += 1;
+        if self.rows_since_check == Self::CHECK_EVERY {
+            self.rows_since_check = 0;
+            self.check(builder)?;
+        }
+        Ok(())
+    }
 }
 
 /// Enforce the IR-boundary absoluteness invariant over every IRI a [`TermValue`]

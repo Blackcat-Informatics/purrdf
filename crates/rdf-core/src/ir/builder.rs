@@ -1300,6 +1300,26 @@ impl RdfDatasetBuilder {
         self.interner.term_count()
     }
 
+    /// The terms, RDF rows and payload bytes freezing this builder now would
+    /// retain, given the number of distinct named graphs it names: exactly what the
+    /// frozen dataset's [`term_count`](RdfDataset::term_count),
+    /// [`rdf_row_count`](RdfDataset::rdf_row_count) and
+    /// [`rdf_payload_bytes`](RdfDataset::rdf_payload_bytes) will report. Every
+    /// table already holds one entry per distinct term or row, and freezing only
+    /// sorts and boxes them; the named-graph table is the one that freezing
+    /// deduplicates, so its distinct count is the caller's. Each quantity only
+    /// grows as interning proceeds.
+    pub(crate) fn pending_extent(&self, named_graphs: usize) -> (usize, usize, usize) {
+        let rows = self.quads.len() + self.reifiers.len() + self.annotations.len();
+        let payload = self.interner.arena.len()
+            + size_of_val(self.interner.terms.as_slice())
+            + size_of_val(self.quads.as_slice())
+            + size_of_val(self.reifiers.as_slice())
+            + size_of_val(self.annotations.as_slice())
+            + named_graphs * size_of::<TermId>();
+        (self.interner.term_count(), rows, payload)
+    }
+
     /// The first IRI interned into this builder that violated the IR-boundary
     /// absoluteness invariant, with the typed reason.
     ///
