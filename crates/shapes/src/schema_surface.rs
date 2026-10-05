@@ -1015,7 +1015,7 @@ const DATATYPE_DEFINITION_REASON: &str = "a datatype definition: a value of the 
      range";
 const THING_RANGE_REASON: &str =
     "a universal restriction on owl:Thing is the property's rdfs:range for every class";
-const THING_DOMAIN_REASON: &str = "a universal restriction on owl:Thing over the inverse of a \
+const THING_INVERSE_RANGE_REASON: &str = "a universal restriction on owl:Thing over the inverse of a \
      property is that property's rdfs:domain for every class";
 const DISJOINT_REASON: &str = "disjointness relates the memberships of two classes, which a \
      developer schema judging one node against one class cannot state";
@@ -2363,7 +2363,7 @@ fn globalize_thing_universals(
                 facts.provenance.insert(provenance.clone());
                 let reason = if property.is_inverse() {
                     facts.domains.insert(sourced);
-                    THING_DOMAIN_REASON
+                    THING_INVERSE_RANGE_REASON
                 } else {
                     facts.ranges.insert(sourced);
                     THING_RANGE_REASON
