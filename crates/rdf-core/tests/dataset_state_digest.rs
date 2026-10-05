@@ -5,13 +5,16 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, CanonHash, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, canonicalize,
-    graph_digest_view, try_flat_digest_view,
+    BlankScope, CanonHash, DatasetStateDigest, DatasetStateError, DatasetView, DrainCheckpoint,
+    FallibleDatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue, ViewOperationStatus,
+    WorkspaceReservation, canonicalize, graph_digest_view, try_flat_digest_view,
 };
 use purrdf_iri::vocab::rdf::REIFIES;
 
@@ -25,17 +28,24 @@ const H: &str = "http://example.org/h";
 enum Node {
     Iri(&'static str),
     Blank(u8),
+    Literal {
+        lexical: &'static str,
+        datatype: &'static str,
+        language: Option<&'static str>,
+        direction: Option<RdfTextDirection>,
+    },
     Triple(Box<[Self; 3]>),
     Composite {
-        chunks: Vec<&'static str>,
+        chunks: Vec<String>,
         blanks: Vec<u8>,
+        datatype: &'static str,
     },
 }
 
 impl Node {
     fn blanks(&self, out: &mut BTreeSet<u8>) {
         match self {
-            Self::Iri(_) => {}
+            Self::Iri(_) | Self::Literal { .. } => {}
             Self::Blank(id) => {
                 out.insert(*id);
             }
@@ -52,6 +62,7 @@ impl Node {
         let mapped = |a, b| map.iter().any(|&(left, right)| left == a && right == b);
         match (self, other) {
             (Self::Iri(a), Self::Iri(b)) => a == b,
+            (a @ Self::Literal { .. }, b @ Self::Literal { .. }) => a == b,
             (Self::Blank(a), Self::Blank(b)) => mapped(*a, *b),
             (Self::Triple(a), Self::Triple(b)) => {
                 a.iter().zip(b.iter()).all(|(a, b)| a.agrees(b, map))
@@ -60,32 +71,67 @@ impl Node {
                 Self::Composite {
                     chunks: a,
                     blanks: x,
+                    datatype: da,
                 },
                 Self::Composite {
                     chunks: b,
                     blanks: y,
+                    datatype: db,
                 },
-            ) => a == b && x.len() == y.len() && x.iter().zip(y).all(|(&a, &b)| mapped(a, b)),
+            ) => {
+                da == db
+                    && a == b
+                    && x.len() == y.len()
+                    && x.iter().zip(y).all(|(&a, &b)| mapped(a, b))
+            }
             _ => false,
         }
     }
 
-    fn intern(&self, builder: &mut RdfDatasetBuilder) -> TermId {
+    fn intern(
+        &self,
+        builder: &mut RdfDatasetBuilder,
+        labels: &impl Fn(u8) -> (String, BlankScope),
+    ) -> TermId {
         match self {
             Self::Iri(iri) => builder.intern_iri(iri),
-            Self::Blank(id) => builder.intern_blank(&format!("n{id}"), BlankScope::DEFAULT),
+            Self::Blank(id) => {
+                let (label, scope) = labels(*id);
+                builder.intern_blank(&label, scope)
+            }
+            Self::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => builder.intern_literal(RdfLiteral {
+                lexical_form: (*lexical).to_owned(),
+                datatype: Some((*datatype).to_owned()),
+                language: language.map(str::to_owned),
+                direction: *direction,
+            }),
             Self::Triple(parts) => {
-                let [s, p, o] = parts.each_ref().map(|part| part.intern(builder));
+                let [s, p, o] = parts.each_ref().map(|part| part.intern(builder, labels));
                 builder.intern_triple(s, p, o)
             }
-            Self::Composite { chunks, blanks } => {
+            Self::Composite {
+                chunks,
+                blanks,
+                datatype,
+            } => {
                 assert_eq!(chunks.len(), blanks.len() + 1);
-                let mut lexical = chunks[0].to_owned();
+                let mut lexical = chunks[0].clone();
                 for (&blank, chunk) in blanks.iter().zip(&chunks[1..]) {
-                    write!(lexical, "_:n{blank}").expect("writing to a string cannot fail");
+                    let (label, scope) = labels(blank);
+                    let encoded = purrdf_core::blank_label::encode_blank_label(
+                        &label,
+                        scope,
+                        purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
+                    );
+                    write!(lexical, "_:{encoded}").expect("writing to a string cannot fail");
                     lexical.push_str(chunk);
                 }
-                builder.intern_literal(RdfLiteral::typed(lexical, purrdf_cdt::CDT_LIST))
+                builder.intern_literal(RdfLiteral::typed(lexical, *datatype))
             }
         }
     }
@@ -128,6 +174,9 @@ struct State {
 }
 
 impl State {
+    fn digest(&self) -> DatasetStateDigest {
+        DatasetStateDigest::from_view(&self.materialize()).expect("valid finite state")
+    }
     fn blanks(&self) -> Vec<u8> {
         let mut nodes = BTreeSet::new();
         for graph in &self.graphs {
@@ -144,28 +193,47 @@ impl State {
         nodes.into_iter().collect()
     }
 
+    fn graph_names(&self) -> impl Iterator<Item = &Node> {
+        self.graphs
+            .iter()
+            .chain(self.rows.iter().filter_map(|row| row.graph.as_ref()))
+    }
+
     fn agrees(&self, other: &Self, map: &[(u8, u8)]) -> bool {
-        self.graphs.len() == other.graphs.len()
-            && self.rows.len() == other.rows.len()
-            && self
-                .graphs
-                .iter()
-                .all(|a| other.graphs.iter().any(|b| a.agrees(b, map)))
+        self.graph_names()
+            .all(|a| other.graph_names().any(|b| a.agrees(b, map)))
+            && other
+                .graph_names()
+                .all(|b| self.graph_names().any(|a| a.agrees(b, map)))
             && self
                 .rows
                 .iter()
                 .all(|a| other.rows.iter().any(|b| a.agrees(b, map)))
+            && other
+                .rows
+                .iter()
+                .all(|b| self.rows.iter().any(|a| a.agrees(b, map)))
     }
 
     fn materialize(&self) -> Arc<RdfDataset> {
+        self.materialize_with(&|id| (format!("n{id}"), BlankScope::DEFAULT))
+    }
+
+    fn materialize_with(&self, labels: &impl Fn(u8) -> (String, BlankScope)) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         for graph in &self.graphs {
-            let graph = graph.intern(&mut builder);
+            let graph = graph.intern(&mut builder, labels);
             builder.declare_named_graph(graph);
         }
         for row in &self.rows {
-            let [s, p, o] = row.terms.each_ref().map(|term| term.intern(&mut builder));
-            let graph = row.graph.as_ref().map(|graph| graph.intern(&mut builder));
+            let [s, p, o] = row
+                .terms
+                .each_ref()
+                .map(|term| term.intern(&mut builder, labels));
+            let graph = row
+                .graph
+                .as_ref()
+                .map(|graph| graph.intern(&mut builder, labels));
             match row.role {
                 Role::Ordinary => builder.push_quad(s, p, o, graph),
                 Role::Reifier => {
@@ -245,6 +313,7 @@ fn legacy_canonical_form_omits_an_empty_named_declaration() {
         rows: Vec::new(),
     };
     assert!(!isomorphic(&a, &b));
+    assert_ne!(a.digest(), b.digest());
     assert_eq!(
         canonicalize(&a.materialize()).nquads,
         canonicalize(&b.materialize()).nquads
@@ -255,6 +324,7 @@ fn legacy_flat_digest_erases_ordinary_annotation_roles() {
     let a = role_fixture(Role::Ordinary);
     let b = role_fixture(Role::Annotation);
     assert!(!isomorphic(&a, &b));
+    assert_ne!(a.digest(), b.digest());
     assert_eq!(
         try_flat_digest_view(&*a.materialize(), CanonHash::Sha256).unwrap(),
         try_flat_digest_view(&*b.materialize(), CanonHash::Sha256).unwrap(),
@@ -267,6 +337,7 @@ fn legacy_flat_digest_erases_ordinary_reifier_roles() {
     let mut b = a.clone();
     b.rows[0].role = Role::Ordinary;
     assert!(!isomorphic(&a, &b));
+    assert_ne!(a.digest(), b.digest());
     assert_eq!(
         try_flat_digest_view(&*a.materialize(), CanonHash::Sha256).unwrap(),
         try_flat_digest_view(&*b.materialize(), CanonHash::Sha256).unwrap(),
@@ -277,6 +348,7 @@ fn per_graph_digests_do_not_enforce_a_global_bijection() {
     let a = crossing_fixture(false);
     let b = crossing_fixture(true);
     assert!(!isomorphic(&a, &b));
+    assert_ne!(a.digest(), b.digest());
     for graph in [G, H] {
         assert_eq!(
             graph_digest_view(&*a.materialize(), graph),
@@ -307,8 +379,9 @@ fn oracle_has_one_mapping_across_graphs_nested_and_composite_terms() {
                     Node::Blank(1),
                     Node::Iri(P),
                     Node::Composite {
-                        chunks: vec!["[", ", ", "]"],
+                        chunks: ["[", ", ", "]"].map(str::to_owned).to_vec(),
                         blanks: vec![inside, 1],
+                        datatype: purrdf_cdt::CDT_LIST,
                     },
                 ])),
             ],
@@ -318,6 +391,7 @@ fn oracle_has_one_mapping_across_graphs_nested_and_composite_terms() {
     let a = make(0);
     assert!(isomorphic(&a, &a));
     assert!(!isomorphic(&a, &make(1)));
+    assert_ne!(a.digest(), make(1).digest());
     assert!(a.materialize().quad_count() > 0);
 }
 
@@ -349,6 +423,7 @@ fn oracle_distinguishes_same_color_connected_and_disconnected_cycles() {
     let a = cycle_fixture(false, [0, 1, 2, 3, 4, 5]);
     let b = cycle_fixture(true, [0, 1, 2, 3, 4, 5]);
     assert!(!isomorphic(&a, &b));
+    assert_ne!(a.digest(), b.digest());
     assert_eq!(a.materialize().quad_count(), 6);
     assert_eq!(b.materialize().quad_count(), 6);
 }
@@ -358,9 +433,512 @@ fn oracle_accepts_global_relabeling_and_insertion_permutations() {
     let mut b = cycle_fixture(false, [9, 3, 7, 2, 8, 1]);
     b.rows.reverse();
     assert!(isomorphic(&a, &b));
+    assert_eq!(a.digest(), b.digest());
     assert_eq!(
         canonicalize(&a.materialize()).nquads,
         canonicalize(&b.materialize()).nquads
+    );
+}
+
+fn exhaustive_three_node_states_match_global_bijection_oracle() {
+    let states: Vec<_> = (0_u16..512)
+        .map(|mask| State {
+            graphs: Vec::new(),
+            rows: (0_u8..9)
+                .filter(|&edge| mask & (1 << edge) != 0)
+                .map(|edge| Row {
+                    role: Role::Ordinary,
+                    terms: [Node::Blank(edge / 3), Node::Iri(P), Node::Blank(edge % 3)],
+                    graph: None,
+                })
+                .collect(),
+        })
+        .collect();
+    let digests: Vec<_> = states.iter().map(State::digest).collect();
+    for (i, a) in states.iter().enumerate() {
+        for (j, b) in states.iter().enumerate().take(i + 1) {
+            assert_eq!(digests[i] == digests[j], isomorphic(a, b), "states {i}/{j}");
+        }
+    }
+}
+
+purrdf_lex::message_error! {
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct SourceFault;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FaultMode {
+    Ready,
+    Before,
+    Truncated,
+    After,
+    PointRead,
+    Reservation,
+    MissingEmbedded,
+    WrongEmbedded,
+}
+
+struct Probe {
+    source: Arc<RdfDataset>,
+    mode: FaultMode,
+    checkpoints: Cell<u32>,
+    reads: Cell<u32>,
+    faulted: Cell<bool>,
+    reservation_live: Cell<bool>,
+    reservation_peak: Cell<u64>,
+    duplicate_rows: bool,
+    omit_named: bool,
+}
+
+impl Probe {
+    fn new(source: Arc<RdfDataset>, mode: FaultMode) -> Self {
+        Self {
+            source,
+            mode,
+            checkpoints: Cell::new(0),
+            reads: Cell::new(0),
+            faulted: Cell::new(false),
+            reservation_live: Cell::new(false),
+            reservation_peak: Cell::new(0),
+            duplicate_rows: false,
+            omit_named: false,
+        }
+    }
+}
+
+struct Admission<'a>(&'a Probe);
+
+impl WorkspaceReservation for Admission<'_> {
+    type Error = SourceFault;
+    fn resize(&mut self, bytes: u64) -> Result<(), Self::Error> {
+        assert!(
+            self.0.reservation_live.get(),
+            "admission covers every allocation"
+        );
+        self.0
+            .reservation_peak
+            .set(self.0.reservation_peak.get().max(bytes));
+        if self.0.mode == FaultMode::Reservation && bytes > 0 {
+            Err(SourceFault::new("workspace refused"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for Admission<'_> {
+    fn drop(&mut self) {
+        self.0.reservation_live.set(false);
+    }
+}
+
+impl DatasetView for Probe {
+    type Id = TermId;
+    type ReadError = SourceFault;
+    type TermGuard<'a> = TermRef<'a>;
+    type ProbePlan = ();
+
+    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.reads.set(self.reads.get() + 1);
+        if self.mode == FaultMode::Truncated {
+            self.faulted.set(true);
+        }
+        let rows = self
+            .source
+            .quads()
+            .take(if self.mode == FaultMode::Truncated {
+                0
+            } else {
+                usize::MAX
+            });
+        rows.chain(
+            self.source
+                .quads()
+                .take(if self.duplicate_rows { usize::MAX } else { 0 }),
+        )
+    }
+
+    fn resolve(&self, id: TermId) -> Result<TermRef<'_>, SourceFault> {
+        self.reads.set(self.reads.get() + 1);
+        if self.mode == FaultMode::PointRead {
+            self.faulted.set(true);
+            Err(SourceFault::new("point read refused"))
+        } else {
+            Ok(self.source.as_ref().resolve(id))
+        }
+    }
+
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<TermId>, SourceFault> {
+        match self.mode {
+            FaultMode::MissingEmbedded => Ok(None),
+            FaultMode::WrongEmbedded => Ok(Some(self.source.quads().next().unwrap().p)),
+            _ => Ok(self.source.as_ref().term_id_by_value(value)),
+        }
+    }
+
+    fn reserve_workspace(
+        &self,
+        _: u64,
+    ) -> Result<impl WorkspaceReservation<Error = SourceFault> + '_, SourceFault> {
+        assert!(!self.reservation_live.replace(true), "one owned admission");
+        Ok(Admission(self))
+    }
+
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        self.source.capabilities()
+    }
+    fn term_count(&self) -> u64 {
+        self.source.term_count()
+    }
+    fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.source.named_graphs().filter(|_| !self.omit_named)
+    }
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.source.reifier_quads()
+    }
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.source.annotation_quads()
+    }
+    fn probe_plan(&self, _: bool, _: bool, _: bool, _: GraphMatch) {}
+    fn quads_for_pattern_with_plan(
+        &self,
+        (): &(),
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        self.quads_for_pattern(s, p, o, g)
+    }
+}
+
+impl FallibleDatasetView for Probe {
+    type Error = SourceFault;
+    type Evidence = (u32, u32);
+    fn operation_status(&self) -> ViewOperationStatus<SourceFault, Self::Evidence> {
+        let checkpoint = self.checkpoints.get() + 1;
+        self.checkpoints.set(checkpoint);
+        if self.mode == FaultMode::Before
+            || self.faulted.get()
+            || (self.mode == FaultMode::After && checkpoint == 2)
+        {
+            ViewOperationStatus::Failed {
+                error: SourceFault::new(if self.mode == FaultMode::PointRead {
+                    "point read refused"
+                } else {
+                    "source incomplete"
+                }),
+                evidence: (checkpoint, self.reads.get()),
+            }
+        } else {
+            ViewOperationStatus::Ready {
+                evidence: (checkpoint, self.reads.get()),
+            }
+        }
+    }
+}
+
+fn operational_failures_never_certify_partial_state() {
+    let state = crossing_fixture(false);
+    for (mode, expected) in [
+        (FaultMode::Before, DrainCheckpoint::Before),
+        (FaultMode::Truncated, DrainCheckpoint::After),
+        (FaultMode::After, DrainCheckpoint::After),
+        (FaultMode::PointRead, DrainCheckpoint::After),
+    ] {
+        let probe = Probe::new(state.materialize(), mode);
+        let Err(DatasetStateError::Operation(failure)) = DatasetStateDigest::from_view(&probe)
+        else {
+            panic!("an incomplete source must refuse")
+        };
+        assert_eq!(failure.checkpoint, expected);
+        assert_eq!(
+            failure.evidence,
+            (probe.checkpoints.get(), probe.reads.get())
+        );
+        if mode == FaultMode::Before {
+            assert_eq!(probe.reads.get(), 0);
+        }
+        if mode == FaultMode::PointRead {
+            assert_eq!(failure.error, SourceFault::new("point read refused"));
+        }
+        assert!(
+            !probe.reservation_live.get(),
+            "all owned workspace is released"
+        );
+    }
+    let neighbor = Probe::new(state.materialize(), FaultMode::Ready);
+    assert_eq!(
+        DatasetStateDigest::from_view(&neighbor).unwrap(),
+        state.digest()
+    );
+    assert_eq!(neighbor.checkpoints.get(), 2);
+    assert!(neighbor.reservation_peak.get() > 0);
+    assert!(!neighbor.reservation_live.get());
+}
+
+fn workspace_refusal_and_embedded_lookup_refusals_have_valid_neighbors() {
+    let state = State {
+        graphs: Vec::new(),
+        rows: vec![Row {
+            role: Role::Ordinary,
+            terms: [
+                Node::Iri(G),
+                Node::Iri(P),
+                Node::Composite {
+                    chunks: ["[", "]"].map(str::to_owned).to_vec(),
+                    blanks: vec![0],
+                    datatype: purrdf_cdt::CDT_LIST,
+                },
+            ],
+            graph: None,
+        }],
+    };
+    let refused = Probe::new(state.materialize(), FaultMode::Reservation);
+    assert_eq!(
+        DatasetStateDigest::from_view(&refused),
+        Err(DatasetStateError::Read(SourceFault::new(
+            "workspace refused"
+        )))
+    );
+    assert_eq!(
+        refused.reads.get(),
+        0,
+        "admission refuses before any term/row allocation"
+    );
+    assert!(!refused.reservation_live.get());
+    for mode in [FaultMode::MissingEmbedded, FaultMode::WrongEmbedded] {
+        let probe = Probe::new(state.materialize(), mode);
+        assert_eq!(
+            DatasetStateDigest::from_view(&probe),
+            Err(DatasetStateError::IncoherentEmbeddedBlank)
+        );
+        assert!(!probe.reservation_live.get());
+    }
+    let good = Probe::new(state.materialize(), FaultMode::Ready);
+    assert_eq!(
+        DatasetStateDigest::from_view(&good).unwrap(),
+        state.digest()
+    );
+}
+
+fn repeated_same_role_rows_are_set_semantic_before_refinement() {
+    let state = crossing_fixture(false);
+    let mut duplicate = Probe::new(state.materialize(), FaultMode::Ready);
+    duplicate.duplicate_rows = true;
+    assert_eq!(
+        DatasetStateDigest::from_view(&duplicate).unwrap(),
+        state.digest()
+    );
+    let mut explicit = state.clone();
+    explicit.graphs.extend([Node::Iri(G), Node::Iri(G)]);
+    explicit.rows.extend(state.rows.clone());
+    assert!(
+        isomorphic(&state, &explicit),
+        "the independent oracle compares row/declaration sets"
+    );
+    assert_eq!(state.digest(), explicit.digest());
+}
+
+fn named_graphs_from_each_role_are_part_of_state_even_without_a_declaration_iterator() {
+    for role in [Role::Ordinary, Role::Reifier, Role::Annotation] {
+        let mut state = role_fixture(Role::Ordinary);
+        state.rows.retain(|row| row.role == Role::Reifier);
+        if role == Role::Ordinary {
+            state.rows[0].role = Role::Ordinary;
+        }
+        if role == Role::Annotation {
+            state = role_fixture(Role::Annotation);
+        }
+        for row in &mut state.rows {
+            row.graph = Some(Node::Iri(G));
+        }
+        let mut probe = Probe::new(state.materialize(), FaultMode::Ready);
+        probe.omit_named = true;
+        assert_eq!(
+            DatasetStateDigest::from_view(&probe).unwrap(),
+            state.digest()
+        );
+        let mut default = state.clone();
+        for row in &mut default.rows {
+            row.graph = None;
+        }
+        assert_ne!(state.digest(), default.digest());
+    }
+}
+
+fn role_coexistence_and_empty_graph_kinds_remain_distinct() {
+    let ordinary = role_fixture(Role::Ordinary);
+    let annotation = role_fixture(Role::Annotation);
+    let mut both = ordinary.clone();
+    both.rows.push(annotation.rows[1].clone());
+    assert!(!isomorphic(&both, &ordinary));
+    assert!(!isomorphic(&both, &annotation));
+    assert_ne!(both.digest(), ordinary.digest());
+    assert_ne!(both.digest(), annotation.digest());
+    let iri = State {
+        graphs: vec![Node::Iri(G)],
+        rows: Vec::new(),
+    };
+    let blank = State {
+        graphs: vec![Node::Blank(0)],
+        rows: Vec::new(),
+    };
+    let two = State {
+        graphs: vec![Node::Blank(0), Node::Blank(1)],
+        rows: Vec::new(),
+    };
+    assert_ne!(iri.digest(), blank.digest());
+    assert_ne!(blank.digest(), two.digest());
+}
+
+fn exact_literal_lexical_datatype_language_and_direction_bytes_participate() {
+    use purrdf_iri::vocab::rdf::{DIR_LANG_STRING, LANG_STRING};
+    use purrdf_xsd::datatype::{XSD_INTEGER, XSD_STRING};
+    let literal = |lexical, datatype, language, direction| Node::Literal {
+        lexical,
+        datatype,
+        language,
+        direction,
+    };
+    let values = [
+        literal("1", XSD_INTEGER, None, None),
+        literal("01", XSD_INTEGER, None, None),
+        literal("1", XSD_STRING, None, None),
+        literal("1", LANG_STRING, Some("en"), None),
+        literal("1", LANG_STRING, Some("fr"), None),
+        literal(
+            "1",
+            DIR_LANG_STRING,
+            Some("en"),
+            Some(RdfTextDirection::Ltr),
+        ),
+        literal(
+            "1",
+            DIR_LANG_STRING,
+            Some("en"),
+            Some(RdfTextDirection::Rtl),
+        ),
+    ];
+    let states: Vec<_> = values
+        .into_iter()
+        .map(|object| State {
+            graphs: Vec::new(),
+            rows: vec![Row {
+                role: Role::Ordinary,
+                terms: [Node::Iri(G), Node::Iri(P), object],
+                graph: None,
+            }],
+        })
+        .collect();
+    for (i, a) in states.iter().enumerate() {
+        for b in states.iter().take(i) {
+            assert!(!isomorphic(a, b));
+            assert_ne!(a.digest(), b.digest());
+        }
+    }
+}
+
+fn scoped_blanks_share_one_mapping_with_cdt_lists_maps_and_all_roles() {
+    let composites = [
+        Node::Composite {
+            chunks: [
+                "[ 01, [ ",
+                " ], <<(",
+                " <http://example.org/p> ",
+                ")>>, \"_:not-a-reference\" ]",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            blanks: vec![0, 1, 0],
+            datatype: purrdf_cdt::CDT_LIST,
+        },
+        Node::Composite {
+            chunks: ["{ ", ": [", "], \"key\": ", " }"]
+                .map(str::to_owned)
+                .to_vec(),
+            blanks: vec![0, 1, 0],
+            datatype: purrdf_cdt::CDT_MAP,
+        },
+        Node::Composite {
+            chunks: vec![
+                "[\"[".to_owned(),
+                format!("]\"^^<{}>, \"{{\\\"k\\\": ", purrdf_cdt::CDT_LIST),
+                format!("}}\"^^<{}>, ", purrdf_cdt::CDT_MAP),
+                "]".to_owned(),
+            ],
+            blanks: vec![0, 1, 0],
+            datatype: purrdf_cdt::CDT_LIST,
+        },
+    ];
+    for object in composites {
+        let mut state = role_fixture(Role::Annotation);
+        state.graphs = vec![Node::Blank(1), Node::Iri(H)];
+        state.rows[0].graph = Some(Node::Blank(1));
+        state.rows[1].terms[2] = Node::Blank(1);
+        state.rows.push(Row {
+            role: Role::Ordinary,
+            terms: [Node::Blank(0), Node::Iri(Q), object],
+            graph: Some(Node::Blank(1)),
+        });
+        let renamed = state.materialize_with(&|id| {
+            (
+                "same label é".to_owned(),
+                BlankScope(u32::MAX - u32::from(id)),
+            )
+        });
+        assert_eq!(
+            state.digest(),
+            DatasetStateDigest::from_view(&renamed).unwrap()
+        );
+        let mut crossed = state.clone();
+        let Node::Composite { blanks, .. } = &mut crossed.rows[2].terms[2] else {
+            panic!("composite fixture")
+        };
+        blanks[0] = 1;
+        assert!(!isomorphic(&state, &crossed));
+        assert_ne!(state.digest(), crossed.digest());
+    }
+}
+
+fn interchangeable_empty_blank_declarations_do_not_require_factorial_search() {
+    let state = State {
+        graphs: (0..128).map(Node::Blank).collect(),
+        rows: Vec::new(),
+    };
+    let mut reversed = state.clone();
+    reversed.graphs.reverse();
+    let renamed = reversed.materialize_with(&|id| {
+        (
+            format!("different{}", 255 - id),
+            BlankScope(u32::from(id) + 1),
+        )
+    });
+    assert_eq!(
+        state.digest(),
+        DatasetStateDigest::from_view(&renamed).unwrap()
+    );
+}
+
+fn fixed_search_exhaustion_refuses_a_real_ambiguous_state() {
+    let state = State {
+        graphs: Vec::new(),
+        rows: (0..128_u8)
+            .map(|i| Row {
+                role: Role::Ordinary,
+                terms: [Node::Blank(i), Node::Iri(P), Node::Blank((i + 1) % 128)],
+                graph: None,
+            })
+            .collect(),
+    };
+    assert_eq!(
+        DatasetStateDigest::from_view(&state.materialize()),
+        Err(DatasetStateError::SearchBudgetExceeded)
+    );
+    assert!(
+        DatasetStateDigest::from_view(&cycle_fixture(false, [0, 1, 2, 3, 4, 5]).materialize())
+            .is_ok()
     );
 }
 
@@ -372,4 +950,14 @@ purrdf_testkit::harness_main!(
     oracle_has_one_mapping_across_graphs_nested_and_composite_terms,
     oracle_distinguishes_same_color_connected_and_disconnected_cycles,
     oracle_accepts_global_relabeling_and_insertion_permutations,
+    exhaustive_three_node_states_match_global_bijection_oracle,
+    operational_failures_never_certify_partial_state,
+    workspace_refusal_and_embedded_lookup_refusals_have_valid_neighbors,
+    repeated_same_role_rows_are_set_semantic_before_refinement,
+    named_graphs_from_each_role_are_part_of_state_even_without_a_declaration_iterator,
+    role_coexistence_and_empty_graph_kinds_remain_distinct,
+    exact_literal_lexical_datatype_language_and_direction_bytes_participate,
+    scoped_blanks_share_one_mapping_with_cdt_lists_maps_and_all_roles,
+    interchangeable_empty_blank_declarations_do_not_require_factorial_search,
+    fixed_search_exhaustion_refuses_a_real_ambiguous_state,
 );
