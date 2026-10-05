@@ -468,6 +468,13 @@ pub(super) fn prepare(
             purrdf_sparql_eval::QueryOptions::new().with_env(&env),
         )
         .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
+    // A declared parameter the query never mentions binds nothing, so it is refused by
+    // name rather than handed back as a slot that silently does nothing. The engine
+    // leaves this to the host (its SHACL callers declare `$this` unconditionally); this
+    // surface hands the caller the parameter list, so it is this surface's to check.
+    execution
+        .check_parameters_mentioned()
+        .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
     Ok(PyPreparedQuery {
         execution,
         store,
