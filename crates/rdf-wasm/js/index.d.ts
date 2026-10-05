@@ -823,6 +823,14 @@ export class SerializeLoss {
    * folded into the default graph.
    */
   readonly namedGraphRowsDropped: number;
+  /**
+   * Declared named graphs holding no row that the target has no spelling for
+   * (`nquads`, `hextuples` and every single-graph syntax), so the document omits
+   * them. They own no row, so no other count sees them. `0` for `trig`, `trix`,
+   * `jsonld` and `yamlld`, which write an empty graph, and for a dataset that
+   * declares none.
+   */
+  readonly emptyNamedGraphsDropped: number;
   free(): void;
 }
 

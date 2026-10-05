@@ -104,13 +104,17 @@ pub(super) fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDatase
     for node in core::mem::take(&mut document.default_nodes) {
         lowerer.lower_node(&node, None)?;
     }
+    // Every named graph the document declares, including one whose `@graph` is
+    // empty: it contributes no quad, so without the declaration it would vanish.
+    let mut declared_graphs = Vec::with_capacity(document.named_graphs.len());
     for mut graph in core::mem::take(&mut document.named_graphs) {
         let graph_name = id_term(&graph.id)?;
         for node in core::mem::take(&mut graph.nodes) {
             lowerer.lower_node(&node, Some(&graph_name))?;
         }
+        declared_graphs.push(graph_name);
     }
-    crate::dataset_from_quads(&lowerer.quads)
+    crate::native_quads::dataset_from_quads_declaring(&lowerer.quads, &declared_graphs)
         .map_err(|source| parse(format!("freeze JSON-LD-star quads: {source}")))
 }
 
@@ -291,6 +295,12 @@ impl Builder {
             .as_object_mut()
             .and_then(|object| object.remove(&plan.graph_key))
             .unwrap_or(JsonValue::Null);
+        // The graph is declared by its `@graph` member, not by its contents: an empty
+        // `{"@id": g, "@graph": []}` is a declared empty named graph, as the value-
+        // position path (`expand_graph_contents`) already records it.
+        if let Some(id) = graph_id.as_deref() {
+            self.graphs.entry(Some(id.to_owned())).or_default();
+        }
         for mut node in into_values(drained) {
             self.expand_graph_entry(&mut node, graph_id.as_deref(), &active.child_context())?;
         }

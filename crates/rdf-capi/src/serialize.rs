@@ -12,8 +12,9 @@ use std::sync::Arc;
 
 use purrdf_rs::{
     CompiledJsonLdContext, JsonLdSerializeMode, JsonLdSerializeOptions, SerializeGraph,
-    SerializeOptions, StatementLayer, classify, serialize_dataset_to_format,
-    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
+    SerializeOptions, StatementLayer, classify, empty_named_graphs_dropped,
+    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    serialize_dataset_to_writer_with,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -302,6 +303,63 @@ pub unsafe extern "C" fn purrdf_serialize(
                 *out_named_graph_rows_dropped = outcome.named_graph_rows_dropped;
             }
             *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Write to `*out_count` how many declared named graphs a whole-dataset
+/// serialization of `dataset` to `media_type` drops: graphs the dataset declares with
+/// no row (a TriG `<g> { }`) that the target has no spelling for. N-Quads and
+/// HexTuples name a graph only on a row and the single-graph syntaxes (Turtle,
+/// N-Triples, RDF/XML) have no graph at all, so `purrdf_serialize` to one of them
+/// omits each such graph — and none of its three row counts can see a graph that owns
+/// no row. `0` for TriG, TriX, JSON-LD and YAML-LD, which write an empty graph, and
+/// for a dataset that declares none.
+///
+/// The fourth realized count of `purrdf_serialize`, answered for the same dataset and
+/// target without serializing again: it is the same number the wasm
+/// `SerializeLoss.emptyNamedGraphsDropped` and Python's
+/// `SerializeLoss.empty_named_graphs_dropped` report, and the count of
+/// `empty-named-graph-dropped` entries `purrdf convert --loss-ledger` records. An
+/// added entry point rather than a fourth out-param, so `purrdf_serialize`'s
+/// prototype is unchanged.
+///
+/// Status: `PURRDF_STATUS_NULL_POINTER` for a null `dataset`, `media_type` or
+/// `out_count`; `PURRDF_STATUS_UNSUPPORTED_FORMAT` for a media type the registry does
+/// not know, exactly as `purrdf_serialize` refuses it.
+///
+/// # Safety
+/// `dataset` must be a live handle; `media_type` must be NUL-terminated; `out_count`
+/// must be writable; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_serialize_empty_named_graphs_dropped(
+    dataset: *const PurrdfDataset,
+    media_type: *const c_char,
+    out_count: *mut usize,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || media_type.is_null() || out_count.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_serialize_empty_named_graphs_dropped",
+                ));
+            }
+            let media = cstr_to_str(media_type)?;
+            let format = classify(media).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
+            })?;
+            let dropped = empty_named_graphs_dropped(
+                PurrdfDataset::dataset(dataset),
+                format,
+                SerializeGraph::Dataset,
+            )
+            .map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+            })?;
+            *out_count = dropped.len();
             Ok(PurrdfStatus::Ok)
         })
     }
