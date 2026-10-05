@@ -3276,6 +3276,75 @@ mod tests {
         }
     }
 
+    /// A premise IRI that is not absolute is refused by every conclusion-directed service,
+    /// naming it, through the shared boundary's one premise-IRI check; the neighbour call,
+    /// differing only in an absolute premise IRI, answers.
+    #[test]
+    fn capi_entail_refuses_a_premise_iri_that_is_not_absolute() {
+        let regime = CString::new("simple").expect("no interior NUL");
+        let document = CString::new(
+            "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n",
+        )
+        .expect("no interior NUL");
+        let pattern = CString::new("<https://example.org/x> <https://example.org/p> ?o .\n")
+            .expect("no interior NUL");
+        let bad = CString::new("::bad").expect("no interior NUL");
+        let good = CString::new("http://example.org/onto").expect("no interior NUL");
+        type Service = unsafe extern "C" fn(
+            *const c_char,
+            *const c_char,
+            *const c_char,
+            *const *const c_char,
+            *const *const c_char,
+            usize,
+            *const *const c_char,
+            usize,
+            *const u64,
+            *const u64,
+            *mut *mut PurrdfBuffer,
+            *mut *mut PurrdfBuffer,
+            *mut *mut PurrdfError,
+        ) -> i32;
+        let services: [(Service, &CString); 3] = [
+            (purrdf_entail_graph_entails, &document),
+            (purrdf_entail_verify_entailment, &document),
+            (purrdf_entail_certain_answers, &pattern),
+        ];
+        for (service, question) in services {
+            let run = |premise_iri: &CString| {
+                let premise_iris: [*const c_char; 1] = [premise_iri.as_ptr()];
+                // SAFETY: every C string is live, the one-element array holds a live C
+                // string, and `attempt` hands the call writable out-pointers.
+                unsafe {
+                    attempt(|a, c, e| {
+                        service(
+                            regime.as_ptr(),
+                            document.as_ptr(),
+                            question.as_ptr(),
+                            std::ptr::null(),
+                            std::ptr::null(),
+                            0,
+                            premise_iris.as_ptr(),
+                            1,
+                            std::ptr::null(),
+                            std::ptr::null(),
+                            a,
+                            c,
+                            e,
+                        )
+                    })
+                }
+            };
+            let refused = run(&bad).expect_err("a premise IRI that is not an IRI");
+            assert!(
+                refused.contains("premise IRI") && refused.contains("\"::bad\""),
+                "{refused}"
+            );
+            let (answer, _) = run(&good).expect("an absolute premise IRI");
+            assert!(answer.starts_with("mechanism "), "{answer}");
+        }
+    }
+
     /// Run a two-buffer entry point, returning both buffers or the error's message.
     ///
     /// # Safety
