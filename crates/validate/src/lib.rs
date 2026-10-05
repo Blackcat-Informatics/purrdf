@@ -102,14 +102,14 @@ pub use product::{
 pub use regime::{
     ABSENT_DL_PROOF, DL_PROOF_BANNER, DL_PROOF_CHECK_BANNER, DL_PROOF_GOLDEN_VECTORS,
     DlProofVector, INCONSISTENT_DOCUMENT, ImportList, MaterializeLimits, PROGRAM_REGIME_NAMES,
-    PROOF_SERVICE_NAMES, REGIME_GOLDEN_VECTOR_LIMITS, REGIME_GOLDEN_VECTORS, REGIME_NAMES,
-    REPORT_FORMAT_BANNER, RegimeClosure, RegimeHost, RegimeService, RegimeVector,
+    PROOF_SERVICE_NAMES, PremiseIriError, REGIME_GOLDEN_VECTOR_LIMITS, REGIME_GOLDEN_VECTORS,
+    REGIME_NAMES, REPORT_FORMAT_BANNER, RegimeClosure, RegimeHost, RegimeService, RegimeVector,
     certain_answers_to_string, check_absent_proof_is_not_verifiable, check_dl_proof,
-    check_dl_proof_golden_vectors, check_inconsistent_refusal, check_regime_golden_vectors,
-    decode_dl_proof, dl_proof_golden_vectors, graph_entails_to_string, implemented_rules_string,
-    materialize_to_nquads_string, materialize_to_nquads_string_with, parse_regime,
-    premise_import_map, prove_to_string, regime_golden_vectors, regime_name, regime_plan,
-    regime_rule_set, render_dl_proof, render_entail_error, render_entail_error_for,
+    check_dl_proof_golden_vectors, check_inconsistent_refusal, check_premise_iris,
+    check_regime_golden_vectors, decode_dl_proof, dl_proof_golden_vectors, graph_entails_to_string,
+    implemented_rules_string, materialize_to_nquads_string, materialize_to_nquads_string_with,
+    parse_regime, premise_import_map, prove_to_string, regime_golden_vectors, regime_name,
+    regime_plan, regime_rule_set, render_dl_proof, render_entail_error, render_entail_error_for,
     render_entail_error_in, render_reasoning_report, rules_string, verify_entailment_to_string,
 };
 // The engine's own change-path scope, re-exported because

@@ -14,7 +14,7 @@
 //! analyses outside this crate: the first visits every node before and after its
 //! children, the second computes one value per node from its children's values.
 
-use crate::algebra::{AggregateExpression, Expression, GraphPattern, OrderExpression};
+use crate::algebra::{AggregateExpression, Expression, GraphPattern, OrderExpression, Query};
 use crate::algebra::{Function, PropertyPathExpression};
 use crate::ast::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 use crate::worklist::WorkList;
@@ -311,6 +311,42 @@ impl NodeRef<'_> {
                 | Self::Ground(GroundTerm::Triple(_))
                 | Self::Expr(Expression::FunctionCall(Function::Triple, _))
         )
+    }
+}
+
+impl Query {
+    /// Call `visit` on every variable this query mentions: each variable of its
+    /// `CONSTRUCT` template (quoted triple terms and graph names included), each
+    /// variable `DESCRIBE` target, then every variable leaf of its graph pattern —
+    /// projections, `GROUP BY` keys and aggregate outputs, `BIND` and `VALUES`
+    /// targets, graph and `SERVICE` names, expression reads (inside `EXISTS` too),
+    /// property-function arguments and every triple and path term. A variable
+    /// mentioned twice is visited twice.
+    ///
+    /// The census reads [`NodeRef::for_each_variable`] over the shared walk, so it
+    /// needs no more machine stack for a taller query.
+    pub fn for_each_variable(&self, mut visit: impl FnMut(&Variable)) {
+        match self {
+            Self::Construct { template, .. } => {
+                for quad in template {
+                    crate::scope::for_each_quad_variable(quad, &mut visit);
+                }
+            }
+            Self::Describe { targets, .. } => {
+                for target in targets {
+                    if let NamedNodePattern::Variable(variable) = target {
+                        visit(variable);
+                    }
+                }
+            }
+            Self::Select { .. } | Self::Ask { .. } => {}
+        }
+        walk_pre_post(NodeRef::Pattern(self.pattern()), |phase, node| {
+            if phase == Visit::Enter {
+                node.for_each_variable(&mut visit);
+            }
+            Flow::Descend
+        });
     }
 }
 

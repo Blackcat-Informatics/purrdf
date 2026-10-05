@@ -18,8 +18,9 @@ use pyo3::types::{PyBytes, PyString};
 use super::query::{PyQueryQuads, PyQueryTriples};
 use super::term::PyQuad;
 use crate::{
-    NativeRdfFormat, ParseOptions, RdfDataset, RdfQuad, RdfTriple, SerializeGraph,
-    SerializeOptions, StatementLayer, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
+    NativeRdfFormat, ParseOptions, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SerializeGraph,
+    SerializeOptions, StatementLayer, TermValue, empty_named_graphs_dropped,
+    flat_dataset_from_quads, flat_dataset_from_quads_declaring, flat_rdf_quads_from_dataset,
     parse_dataset, parse_dataset_with, serialize_dataset_to_format, serialize_dataset_with,
 };
 
@@ -128,6 +129,7 @@ pub(crate) struct PySerializeLoss {
     statement_rows_dropped: usize,
     directional_literals_dropped: usize,
     named_graph_rows_dropped: usize,
+    empty_named_graphs_dropped: usize,
 }
 
 #[pymethods]
@@ -164,14 +166,28 @@ impl PySerializeLoss {
         self.named_graph_rows_dropped
     }
 
+    /// Declared named graphs that hold no row and that the target has no spelling for
+    /// (`N_QUADS`, `HEXTUPLES` and every single-graph syntax), so the document omits
+    /// them. They own no row, so no other count can see them. `0` for `TRIG`, `TRIX`,
+    /// `JSON_LD` and `YAML_LD`, which write an empty graph, and for a store that
+    /// declares none. The same number as the C ABI's
+    /// `purrdf_serialize_empty_named_graphs_dropped` and the wasm
+    /// `emptyNamedGraphsDropped`.
+    #[getter]
+    const fn empty_named_graphs_dropped(&self) -> usize {
+        self.empty_named_graphs_dropped
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "SerializeLoss(bytes={}, statement_rows_dropped={}, \
-             directional_literals_dropped={}, named_graph_rows_dropped={})",
+             directional_literals_dropped={}, named_graph_rows_dropped={}, \
+             empty_named_graphs_dropped={})",
             self.bytes.len(),
             self.statement_rows_dropped,
             self.directional_literals_dropped,
-            self.named_graph_rows_dropped
+            self.named_graph_rows_dropped,
+            self.empty_named_graphs_dropped
         )
     }
 }
@@ -185,15 +201,21 @@ impl PySerializeLoss {
 /// C ABI's `purrdf_serialize`, which has no selection parameter for the same reason.
 pub(super) fn dump_quads_with_loss(
     quads: &[RdfQuad],
+    declared_graphs: &[RdfTerm],
     format: NativeRdfFormat,
 ) -> Result<PySerializeLoss, String> {
-    let dataset = flat_dataset_from_quads(quads)?;
+    let dataset = dataset_from_quads_verbatim(quads, declared_graphs)?;
     let outcome = serialize_dataset_to_format(&dataset, format, None).map_err(|e| e.to_string())?;
+    let empty_named_graphs_dropped =
+        empty_named_graphs_dropped(&*dataset, format, SerializeGraph::Dataset)
+            .map_err(|e| e.to_string())?
+            .len();
     Ok(PySerializeLoss {
         bytes: outcome.bytes,
         statement_rows_dropped: outcome.statement_rows_dropped,
         directional_literals_dropped: outcome.directional_literals_dropped,
         named_graph_rows_dropped: outcome.named_graph_rows_dropped,
+        empty_named_graphs_dropped,
     })
 }
 
@@ -335,8 +357,10 @@ pub(crate) fn parse_quads(
     Ok(flat_rdf_quads_from_dataset(&dataset))
 }
 
-/// A parsed document's quads and the prefix bindings it declared.
-pub(crate) type LoadedDocument = (Vec<RdfQuad>, Vec<(String, String)>);
+/// A parsed document's quads, the prefix bindings it declared, and the named graphs it
+/// declared without giving them any row (TriG `<g> { }`, an empty TriX `<graph>`,
+/// JSON-LD `{"@id": g, "@graph": []}`).
+pub(crate) type LoadedDocument = (Vec<RdfQuad>, Vec<(String, String)>, Vec<TermValue>);
 
 /// [`parse_quads`], also returning the document's prefix map from the SAME parse: the
 /// `@prefix` / `PREFIX` bindings a Turtle or TriG document left in force at its end,
@@ -350,10 +374,39 @@ pub(crate) fn parse_quads_and_prefixes(
 ) -> Result<LoadedDocument, String> {
     let outcome = parse_dataset_with(data, format.media_type(), base, &ParseOptions::default())
         .map_err(|e| e.to_string())?;
+    // The graphs a format that names a graph only on a row would drop are exactly the
+    // ones the document declared with no row; N-Quads is that format.
+    let declared_empty = empty_named_graphs_dropped(
+        &*outcome.dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+    )
+    .map_err(|e| e.to_string())?;
     Ok((
         flat_rdf_quads_from_dataset(&outcome.dataset),
         outcome.document_prefixes,
+        declared_empty,
     ))
+}
+
+/// Declare on `inner` each graph a loaded document declared without rows, under the
+/// load's blank scope exactly as its quads were inserted, so `_:g { }` in one document
+/// and `_:g` in another stay distinct graphs. Shared by `Store.load` and
+/// `MutableDataset.load`.
+pub(super) fn declare_loaded_graphs(
+    inner: &mut purrdf_core::ir::MutableDataset,
+    declared: Vec<TermValue>,
+    scope: purrdf_core::BlankScope,
+) -> PyResult<()> {
+    for graph in declared {
+        let term = graph
+            .to_rdf_term()
+            .expect("a declared graph name has an owned form");
+        inner
+            .declare_named_graph(TermValue::from_rdf_term_in_scope(&term, scope))
+            .map_err(|diagnostic| PyValueError::new_err(diagnostic.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Serialize triples through the native codec under an optional document `base`.
@@ -429,10 +482,14 @@ pub(crate) fn serialize_quads(
 
 /// Freeze a flat native quad list into the IR verbatim — RDF 1.2 triple-term objects
 /// preserved as triple-term objects (no statement-layer fold), named graphs kept —
-/// for native serialization. Shared by the `Store`/`MutableDataset` dump
-/// paths.
-pub(super) fn dataset_from_quads_verbatim(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, String> {
-    flat_dataset_from_quads(quads)
+/// for native serialization, declaring each of `declared_graphs` so a graph the store
+/// holds with no quad is written where the target can spell it. Shared by the
+/// `Store`/`MutableDataset` dump paths.
+pub(super) fn dataset_from_quads_verbatim(
+    quads: &[RdfQuad],
+    declared_graphs: &[RdfTerm],
+) -> Result<Arc<RdfDataset>, String> {
+    flat_dataset_from_quads_declaring(quads, declared_graphs)
 }
 
 pub(crate) fn read_input(

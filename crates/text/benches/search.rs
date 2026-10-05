@@ -388,6 +388,21 @@ fn fielded_arithmetic(criterion: &mut Bench) {
     group.bench_function("score_eight_terms_sixteen_fields", |bencher| {
         bencher.iter(|| query.score(black_box(&document)).expect("score"));
     });
+    let sparse_profile = profile.clone().with_field_populations();
+    let sparse =
+        PreparedCorpus::with_field_populations(&sparse_profile, 4096, &[65_536; 16], &[2048; 16])
+            .expect("sparse corpus");
+    let sparse_query = sparse.prepare_query(&terms).expect("query");
+    assert_eq!(
+        query.score(&document).expect("dense score"),
+        sparse_query.score(&document).expect("same field means")
+    );
+    group.bench_function("prepare_eight_idfs_sparse_fields", |bencher| {
+        bencher.iter(|| sparse.prepare_query(black_box(&terms)).expect("prepare"));
+    });
+    group.bench_function("score_eight_terms_sixteen_sparse_fields", |bencher| {
+        bencher.iter(|| sparse_query.score(black_box(&document)).expect("score"));
+    });
     group.finish();
 }
 

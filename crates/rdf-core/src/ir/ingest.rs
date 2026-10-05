@@ -110,6 +110,8 @@ pub struct DatasetSink {
     raw_reifiers: Vec<(EventTermId, EventTriple, Option<EventTermId>)>,
     /// RAW annotation rows `(reifier, predicate, object, graph)`, resolved in phase 2.
     raw_annotations: Vec<(EventTermId, EventTermId, EventTermId, Option<EventTermId>)>,
+    /// RAW named-graph declarations, resolved and declared in phase 2.
+    raw_named_graphs: Vec<EventTermId>,
     /// Open scopes. [`ScopeId::DEFAULT`] is always open; [`open_scope`](Self::open_scope)
     /// adds more, [`close_scope`](Self::close_scope) removes (seals) them. Openness is
     /// determined solely by membership here, so a sealed OR never-opened scope id both
@@ -147,6 +149,7 @@ impl DatasetSink {
             raw_quads: Vec::new(),
             raw_reifiers: Vec::new(),
             raw_annotations: Vec::new(),
+            raw_named_graphs: Vec::new(),
             // The default scope is open from the start (see the doc comment above).
             open_scopes: vec![ScopeId::DEFAULT],
             next_scope: 0,
@@ -337,6 +340,11 @@ impl RdfEventSink for DatasetSink {
         Ok(ControlFlow::Continue(()))
     }
 
+    fn named_graph(&mut self, graph: EventTermId) -> Result<ControlFlow<()>, EventError> {
+        self.raw_named_graphs.push(graph);
+        Ok(ControlFlow::Continue(()))
+    }
+
     fn open_scope(&mut self) -> Result<ScopeId, EventError> {
         // Hard-fail on ordinal exhaustion rather than wrapping (no degraded fallback).
         let next = self.next_scope.checked_add(1).ok_or_else(|| {
@@ -430,6 +438,17 @@ impl RdfEventSink for DatasetSink {
                 .push_annotation_in_graph(r, p, v, g);
         }
 
+        // Named-graph declarations, after every row so a drive that declares nothing
+        // interns exactly as it always did.
+        let raw_named_graphs = std::mem::take(&mut self.raw_named_graphs);
+        for g in raw_named_graphs {
+            let g = self.resolve(g, 0)?;
+            self.builder
+                .as_mut()
+                .expect("builder present")
+                .declare_named_graph(g);
+        }
+
         let builder = self.builder.take().expect("builder present");
         let dataset = builder
             .freeze()
@@ -454,7 +473,9 @@ impl DatasetSink {
 
 /// An [`RdfEventSource`] that replays an already-frozen [`RdfDataset`] *into* any
 /// [`RdfEventSink`]: a `term` event per term in [`TermId`] order (declares-before-
-/// reference), then quad / reifier / annotation events.
+/// reference), then quad / reifier / annotation events, then one
+/// [`named_graph`](RdfEventSink::named_graph) event per named graph, so a graph
+/// declared with no row survives the replay.
 #[derive(Debug)]
 pub struct FrozenDatasetSource<'a> {
     dataset: &'a RdfDataset,
@@ -595,6 +616,14 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
                 return Ok(());
             }
         }
+        // Every named graph the dataset carries, so a graph declared with no row
+        // survives a replay into a dataset-building sink.
+        for g in self.dataset.named_graphs() {
+            let event = EventTermId(u64::try_from(g.index()).expect("bounded local term index"));
+            if sink.named_graph(event)? == ControlFlow::Break(()) {
+                return Ok(());
+            }
+        }
         sink.finish()
     }
 
@@ -612,6 +641,39 @@ mod tests {
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    /// A graph declared with no row — IRI- or blank-named — survives a replay into a
+    /// [`DatasetSink`]; a dataset that declares none replays exactly as before.
+    #[test]
+    fn frozen_replay_keeps_declared_empty_graphs() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p, o, None);
+        let plain = b.freeze().expect("freezes");
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p, o, None);
+        let g = iri(&mut b, "g");
+        b.declare_named_graph(g);
+        let bg = b.intern_blank("bg", BlankScope::DEFAULT);
+        b.declare_named_graph(bg);
+        let declared = b.freeze().expect("freezes");
+
+        for (source, graphs) in [(&plain, 0), (&declared, 2)] {
+            let mut sink = DatasetSink::new();
+            FrozenDatasetSource::new(source)
+                .drive(&mut sink)
+                .expect("replays");
+            let replayed = sink.into_dataset().expect("freezes");
+            assert_eq!(replayed.named_graphs().count(), graphs);
+            assert!(datasets_isomorphic(&**source, &*replayed));
+        }
     }
 
     /// Declare a term on the sink, asserting it did not cancel — keeps the tests free

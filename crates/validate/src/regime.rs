@@ -3544,6 +3544,119 @@ fn configuration(
     Ok((parsed, premise_import_map(imports, premise_iris)?))
 }
 
+/// A premise IRI that is not an absolute IRI, refused by [`check_premise_iris`].
+///
+/// A premise IRI is the IRI the premise document was read under, declared loaded so an
+/// `owl:imports` of it resolves in place. An `owl:imports` object is an absolute IRI once
+/// parsed, so a premise IRI that is not one could never equal it: carried silently, it would be
+/// configuration that never applies — the same reason [`ImportMap::check_key`] refuses a
+/// non-absolute import key.
+///
+/// [`Display`](fmt::Display) names the refused IRI and renders the IRI parser's own condition;
+/// [`Self::presentation`] is the same refusal as a typed presentation, for a host that reads
+/// the condition without parsing English.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PremiseIriError {
+    /// The refused premise IRI, verbatim.
+    iri: String,
+    /// The workspace IRI parser's condition: its parse refusal ([`purrdf_core::IriError::Empty`]
+    /// for the empty string), or [`purrdf_core::IriError::NotAbsoluteByGrammar`] for a
+    /// well-formed relative reference, since no base is ever applied to a premise IRI.
+    cause: purrdf_core::IriError,
+}
+
+impl PremiseIriError {
+    /// The refused premise IRI, verbatim.
+    #[must_use]
+    pub fn iri(&self) -> &str {
+        &self.iri
+    }
+
+    /// The workspace IRI parser's condition for [`Self::iri`].
+    #[must_use]
+    pub const fn cause(&self) -> &purrdf_core::IriError {
+        &self.cause
+    }
+
+    /// The refusal as a typed presentation: identity `premise-iri-not-absolute`, the refused
+    /// IRI as the `iri` text argument and the IRI parser's rendering as `reason`, with the
+    /// parser's own `iri-*` presentation as its detail. Its English is this error's
+    /// [`Display`](fmt::Display) rendering.
+    #[must_use]
+    pub fn presentation(&self) -> purrdf_core::DiagnosticPresentation {
+        use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
+        // Unreachable refusals: `DiagnosticPresentation::new` judges only the identity,
+        // the template and the parameter names, all literals here, and the IRI
+        // parser's presentation carries no detail of its own to nest.
+        // `the_presentation_nests_the_iri_parser_condition` builds this for every kind of
+        // refusal, so a drifted template fails the suite rather than a caller.
+        DiagnosticPresentation::new(
+            "premise-iri-not-absolute",
+            PREMISE_IRI_TEMPLATE,
+            vec![
+                DiagnosticParameter::new("iri", DiagnosticValue::Text(self.iri.clone())),
+                DiagnosticParameter::new("reason", DiagnosticValue::Text(self.reason())),
+            ],
+        )
+        .and_then(|presentation| presentation.with_detail(self.cause.presentation()))
+        .expect("the premise-IRI template agrees with its arguments")
+    }
+
+    /// The IRI parser's condition as the `reason` the message renders: its stable code, then
+    /// its English, the spelling every other IRI refusal on these hosts leads with.
+    fn reason(&self) -> String {
+        format!("{}: {}", self.cause.diagnostic_code(), self.cause)
+    }
+}
+
+/// The English of [`PremiseIriError`], shared by its `Display` and its presentation.
+const PREMISE_IRI_TEMPLATE: &str = "the premise IRI {iri:?} is not an absolute IRI, so no \
+     owl:imports object can ever equal it: {reason}";
+
+impl fmt::Display for PremiseIriError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.presentation().english())
+    }
+}
+
+impl std::error::Error for PremiseIriError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
+/// Check that every premise IRI is an absolute IRI, in order, refusing the first that is not.
+///
+/// The workspace IRI parser ([`purrdf_iri::is_absolute`]) judges each one. A string it refuses
+/// carries its parse condition (the empty string carries [`purrdf_core::IriError::Empty`]); a
+/// well-formed relative reference carries [`purrdf_core::IriError::NotAbsoluteByGrammar`]
+/// with no base in scope, because a
+/// premise IRI is compared with absolute `owl:imports` objects and no base is ever applied to
+/// it. [`premise_import_map`] runs this first, so every entailment service on this boundary —
+/// and every host that calls one — refuses the same premise IRI with the same message; a host
+/// that raises typed errors calls it directly for [`PremiseIriError::presentation`].
+///
+/// # Errors
+///
+/// The first premise IRI that is not absolute, as a [`PremiseIriError`].
+pub fn check_premise_iris(premise_iris: &[&str]) -> Result<(), PremiseIriError> {
+    for iri in premise_iris {
+        let cause = match purrdf_iri::is_absolute(iri) {
+            Ok(true) => continue,
+            Ok(false) => purrdf_core::IriError::NotAbsoluteByGrammar {
+                reference: (*iri).to_owned(),
+                base: purrdf_iri::BaseInScope::Absent,
+            },
+            Err(cause) => cause,
+        };
+        return Err(PremiseIriError {
+            iri: (*iri).to_owned(),
+            cause,
+        });
+    }
+    Ok(())
+}
+
 /// The caller's [`ImportList`] and `premise_iris` as the [`ImportMap`] every entailment
 /// service on this boundary resolves a premise's `owl:imports` against — for a host that
 /// hands the map to a Rust entry point rather than to a string service here (the
@@ -3555,12 +3668,15 @@ fn configuration(
 ///
 /// # Errors
 ///
-/// As [`certain_answers_to_string`]'s import table: a document that is not N-Quads, an empty
-/// ontology IRI, or one ontology IRI declared twice.
+/// A premise IRI [`check_premise_iris`] refuses, rendered as its [`PremiseIriError`]; then, as
+/// [`certain_answers_to_string`]'s import table: a document that is not N-Quads, an empty
+/// ontology IRI, or one ontology IRI declared twice. The premise IRIs are checked before the
+/// import table, so every host reports the same one of two bad arguments first.
 pub fn premise_import_map(
     imports: &ImportList<'_>,
     premise_iris: &[&str],
 ) -> Result<ImportMap, String> {
+    check_premise_iris(premise_iris).map_err(|error| error.to_string())?;
     let mut map = build_import_map(imports)?;
     for iri in premise_iris {
         map.declare_loaded(*iri);
