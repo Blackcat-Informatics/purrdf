@@ -437,12 +437,7 @@ pub fn explain(
             "document {document} is not in this index, so there is nothing to explain"
         )));
     };
-    let stats = index.partition_stats(partition).ok_or_else(|| {
-        TextError::data(format!(
-            "document {document} names a partition the index does not hold"
-        ))
-    })?;
-    let corpus = prepared_corpus(index, partition, stats.document_count())?;
+    let corpus = index.prepared_corpus(partition)?;
     let query = prepare_terms(index, partition, &corpus, &terms)?;
     let mut out = Vec::with_capacity(terms.len());
     for (ordinal, term) in terms.into_iter().enumerate() {
@@ -579,11 +574,11 @@ fn candidates(
     terms: &[&str],
     work: &mut ScoringWork,
 ) -> Result<Vec<Candidate>, TextError> {
-    let Some(stats) = index.partition_stats(partition).copied() else {
+    if index.partition_stats(partition).is_none() {
         // Not a partition this index holds, so it holds no documents there. That
         // is the true answer rather than a failure.
         return Ok(Vec::new());
-    };
+    }
 
     // `(document, term ordinal, predicate frequencies)`. Sorting this groups the whole
     // working set by document while leaving each document's terms in the sorted
@@ -601,7 +596,7 @@ fn candidates(
     work.posting_lists += terms.len() as u64;
     work.postings += occurrences.len() as u64;
     occurrences.sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
-    let corpus = prepared_corpus(index, partition, stats.document_count())?;
+    let corpus = index.prepared_corpus(partition)?;
     let query = prepare_terms(index, partition, &corpus, terms)?;
 
     let mut out: Vec<Candidate> = Vec::new();
@@ -619,23 +614,6 @@ fn candidates(
         at += run;
     }
     Ok(out)
-}
-
-/// One partition's corpus, prepared from the statistics the index already holds.
-///
-/// Nothing here walks the corpus: the population is the partition's stored count
-/// and the field totals were summed once, when the index was built. So preparing
-/// it costs a function of the ranking profile's field count, whether the caller
-/// then scores a thousand candidates or one.
-fn prepared_corpus<'i>(
-    index: &'i TextIndex,
-    partition: &PartitionKey,
-    documents: u64,
-) -> Result<PreparedCorpus<'i>, TextError> {
-    let totals = index
-        .field_totals(partition)
-        .ok_or_else(|| TextError::data("partition has no field totals"))?;
-    PreparedCorpus::new(index.ranking_profile(), documents, totals)
 }
 
 /// `terms`' inverse document frequencies over `corpus`, in their sorted order.
@@ -735,12 +713,7 @@ pub(crate) fn score_located(
             "document {document} is not in this index, so there is nothing to score"
         ))
     })?;
-    let stats = index.partition_stats(partition).copied().ok_or_else(|| {
-        TextError::data(format!(
-            "document {document} names a partition the index does not hold"
-        ))
-    })?;
-    let corpus = prepared_corpus(index, partition, stats.document_count())?;
+    let corpus = index.prepared_corpus(partition)?;
     let query = prepare_terms(index, partition, &corpus, terms)?;
     let scored = score_document(index, &query, document, located.iter().copied(), work)?;
     Ok((scored.score, scored.matched))

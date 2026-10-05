@@ -258,8 +258,12 @@ and reopening. Persisted handles include the exact snapshot identity; reject a
 handle attached to another snapshot even when its ordinal is in range. Reopening
 requires an authenticated complete-certification receipt, which attests truthful
 indexes and RDF closure. Hashing arbitrary unvalidated input is insufficient.
-The existing eager pack reader remains available. Pack v1 did not encode
-declaration-only empty graphs; restate them from an explicit trusted sidecar
-when migrating. See
+The existing eager pack reader remains available. Pack v1 now carries
+declaration-only empty named graphs, IRI- and blank-named, as zero-row named
+partitions inside its existing sections: the format version and section count are
+unchanged, every 3.0.x reader opens such a pack and enumerates the graphs, and a
+dataset without declaration-only graphs writes the same bytes as before. Only a
+pack written before this change lacks them; restate those from an explicit
+trusted sidecar when migrating. See
 [storage contracts](../crates/rdf-core/STORAGE.md) for admission, certification,
 range-provider and migration details.

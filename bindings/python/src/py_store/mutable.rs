@@ -12,7 +12,10 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
+use super::io::{
+    PyRdfFormat, dataset_from_quads_verbatim, declare_loaded_graphs, parse_quads_and_prefixes,
+    read_input,
+};
 use super::quad_store::PyQuadStore;
 use super::term::{
     PyQuad, extract_graph_name, extract_term, rdf_quad_to_values, rdf_quad_to_values_scoped,
@@ -65,7 +68,7 @@ impl PyMutableDataset {
         // Parse + insert run detached (GIL released); only plain Rust data is touched.
         py.detach(move || {
             let base_ref = base.as_deref();
-            let (quads, prefixes) =
+            let (quads, prefixes, declared) =
                 parse_quads_and_prefixes(&data, format.to_native(), base_ref)
                     .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?;
             for quad in quads {
@@ -73,6 +76,7 @@ impl PyMutableDataset {
                     .insert(rdf_quad_to_values_scoped(&quad, blank_scope))
                     .map_err(|e| iri_value_error(&e))?;
             }
+            declare_loaded_graphs(inner, declared, blank_scope)?;
             Ok(prefixes)
         })
     }
@@ -200,7 +204,8 @@ impl PyMutableDataset {
         // run detached (GIL released).
         let buf: Vec<u8> = py.detach(move || {
             let quads = store.collect_all_quads();
-            let dataset = dataset_from_quads_verbatim(&quads).map_err(PyValueError::new_err)?;
+            let dataset = dataset_from_quads_verbatim(&quads, &store.declared_graphs())
+                .map_err(PyValueError::new_err)?;
             let selection = match (&graph_filter, explicit_from_graph) {
                 (Some(name), _) => SerializeGraph::Named(name),
                 // An explicit default-graph (`from_graph=DefaultGraph`) selection.

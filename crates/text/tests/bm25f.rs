@@ -20,6 +20,7 @@ mod bm25f_reference;
 #[test]
 fn independent_integer_reference_corpus_matches_every_raw_unit() {
     bm25f_reference::verify_reference_corpus();
+    bm25f_reference::verify_reference_corpus_with_population_mode(true);
 }
 
 #[test]

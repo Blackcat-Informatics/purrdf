@@ -637,8 +637,20 @@ impl<'a> SideTablesRef<'a> {
     /// base quad of its own, so [`super::triples::TriplesRef`]'s partitions
     /// alone would miss it).
     fn has_graph_reference(&self) -> bool {
-        (0..self.reifier_graph.len()).any(|i| self.reifier_graph.get(i) != 0)
-            || (0..self.annotation_graph.len()).any(|i| self.annotation_graph.get(i) != 0)
+        self.graph_references().next().is_some()
+    }
+
+    /// The named-graph slot of every reifier and annotation row that has one, in
+    /// row order, repeats included — the graphs the side tables name, some of
+    /// which own no base quad and so have no [`super::triples::TriplesRef`]
+    /// partition.
+    pub(crate) fn graph_references(&self) -> impl Iterator<Item = PackTermId> + '_ {
+        (0..self.reifier_graph.len())
+            .filter_map(|i| decode_graph(self.reifier_graph.get(i)))
+            .chain(
+                (0..self.annotation_graph.len())
+                    .filter_map(|i| decode_graph(self.annotation_graph.get(i))),
+            )
     }
 }
 

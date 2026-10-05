@@ -200,6 +200,19 @@ pub(super) fn freeze_classic_rows(
     rows: Vec<ClassicRow>,
     alphabet: LabelAlphabet,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    freeze_classic_rows_declaring(rows, Vec::new(), alphabet)
+}
+
+/// [`freeze_classic_rows`], additionally DECLARING every name in `declared_graphs` as
+/// a named graph of the dataset — so a graph the document names but gives no triples
+/// (an empty TriX `<graph>` block) survives as a declared empty graph rather than
+/// vanishing. The names are interned after the rows, so a document without empty
+/// graphs freezes exactly as it did before.
+pub(super) fn freeze_classic_rows_declaring(
+    rows: Vec<ClassicRow>,
+    declared_graphs: Vec<ClassicTerm>,
+    alphabet: LabelAlphabet,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
     let mut fold_rows: Vec<FoldRow> = Vec::with_capacity(rows.len());
     for (subject, predicate, object, graph) in rows {
@@ -219,5 +232,9 @@ pub(super) fn freeze_classic_rows(
         });
     }
     fold_statement_layer(&mut builder, fold_rows)?;
+    for name in declared_graphs {
+        let id = name.intern(&mut builder, alphabet)?;
+        builder.declare_named_graph(id);
+    }
     builder.freeze()
 }

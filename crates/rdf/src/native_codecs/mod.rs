@@ -83,9 +83,10 @@ pub use stream::parse_dataset_from_reader;
 #[doc(hidden)]
 pub use parse::parse_dataset_forced_sequential;
 pub use serialize::{
-    SerializeOptions, SerializeOutcome, SerializeReport, StatementLayer, serialize_dataset,
-    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
-    serialize_dataset_to_writer, serialize_dataset_to_writer_with, serialize_dataset_with,
+    SerializeOptions, SerializeOutcome, SerializeReport, StatementLayer,
+    empty_named_graphs_dropped, serialize_dataset, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer,
+    serialize_dataset_to_writer_with, serialize_dataset_with,
     serialize_dataset_with_jsonld_options,
 };
 
@@ -639,12 +640,12 @@ mod tests {
                 None => unnamed.push(format),
             }
         }
-        // Exactly TriX and HexTuples carry no loss codec name, so no format silently
-        // escapes the consistency check.
+        // Every format carries a loss codec name, so no format silently escapes the
+        // consistency check.
         assert_eq!(
             unnamed,
-            vec![NativeRdfFormat::TriX, NativeRdfFormat::HexTuples],
-            "only TriX / HexTuples may lack a loss codec name"
+            Vec::new(),
+            "every format must carry a loss codec name"
         );
     }
 
