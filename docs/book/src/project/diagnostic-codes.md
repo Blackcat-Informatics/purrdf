@@ -150,6 +150,10 @@ whose terms do not form a well-formed dataset.
 | `native-sparql-update-parse` | The update request does not parse. | Fix the update at the reported position. |
 | `native-sparql-query-explain` | Evaluation under `--explain` failed; the evaluator's error is in the message. | Address the underlying evaluation error. |
 | `native-sparql-query-eval` | Query evaluation failed with an error no more specific code classifies; the evaluator's error is in the message. | Address the underlying evaluation error. |
+| `native-sparql-internal` | An evaluator invariant was violated. The execution cannot produce a valid answer. | Report the failure with its query and input; it requires an engine repair. |
+| `native-sparql-composite-bound` | Constructing a composite datatype value exceeded its element or lexical-byte resource bound. | Reduce the value being constructed. |
+| `native-sparql-float-environment` | The calling thread's floating-point environment cannot preserve the distance arithmetic's specified IEEE-754 results. | Evaluate on a thread with the supported floating-point environment. |
+| `native-sparql-function-operational` | A host function or relation failed during execution: an opaque returned error, a caught panic, a resource ceiling, or an invalid protocol response. | Repair the callee or adjust the resource limit; this cannot establish a validation verdict. |
 | `native-sparql-source-read` | Operational storage refused a forward/reverse lookup or complete row drain. The error is fatal, including inside `SERVICE SILENT`; no partial answer is published. | Repair the source or adjust its explicit resource limits before retrying. |
 | `native-sparql-workspace-unpriced` | A bounded operational view was given an execution shape without a certified working-memory bound, or a raw evaluator entry without a held drain reservation. | Use the engine's fallible projected basic-graph-pattern `SELECT` entry with its default dataset and empty extension configuration, or choose a resident view. |
 | `native-sparql-workspace-bound-overflow` | Certified workspace arithmetic exceeds `u64`. | Reduce the query's intermediate cardinality or pattern count. |

@@ -100,21 +100,67 @@ impl PlanError {
         }
     }
 
-    /// The diagnostic code this failure must be reported under. The single chokepoint
+    /// Preserve an operational cause's code, falling back to the ordinary admission
+    /// seam only when the cause has no distinct code. The single chokepoint
     /// both `crate::engine::PlanCache::prepare_with_relations` and
     /// `crate::update::delete_insert` read, so the two admission call sites can never
     /// again drift into hard-coding the wrong seam's code.
-    pub(crate) const fn diagnostic_code(&self) -> &'static str {
-        match self.seam {
+    pub(crate) fn diagnostic_code(&self) -> &str {
+        self.error.code().unwrap_or(match self.seam {
             PlanSeam::PropertyFunction => "native-sparql-property-function",
             PlanSeam::Aggregate => "native-sparql-aggregate-function",
-        }
+        })
     }
 }
 
 impl core::fmt::Display for PlanError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         core::fmt::Display::fmt(&self.error, f)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod diagnostic_code_tests {
+    use purrdf_core::RdfDiagnostic;
+    use purrdf_core::xsd_regex::xpath::{Error, Resource};
+
+    use super::{EvalError, PlanError};
+
+    #[test]
+    fn admission_keeps_operational_codes_and_ordinary_seam_fallbacks() {
+        for error in [
+            EvalError::function_operational("host metadata panic"),
+            EvalError::source_read("source refused"),
+            EvalError::XPathRegex(Error::Allocation {
+                resource: Resource::CompileSlots,
+                units: 1,
+            }),
+        ] {
+            let property = PlanError::property_function(error.clone());
+            let aggregate = PlanError::aggregate(error.clone());
+            assert_eq!(Some(property.diagnostic_code()), error.code());
+            assert_eq!(Some(aggregate.diagnostic_code()), error.code());
+        }
+        assert_eq!(
+            PlanError::property_function(EvalError::function("wrong arity")).diagnostic_code(),
+            "native-sparql-property-function"
+        );
+        assert_eq!(
+            PlanError::aggregate(EvalError::function("missing registration")).diagnostic_code(),
+            "native-sparql-aggregate-function"
+        );
+    }
+
+    #[test]
+    fn a_borrowed_dataset_code_becomes_an_owned_diagnostic() {
+        let diagnostic = {
+            let error = PlanError::property_function(EvalError::Dataset(RdfDiagnostic::error(
+                String::from("caller-storage-failed"),
+                "source refused",
+            )));
+            RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
+        };
+        assert_eq!(diagnostic.code, "caller-storage-failed");
     }
 }
 
@@ -3259,7 +3305,7 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] if a registered relation's declaration methods panic —
+/// [`EvalError::FunctionOperational`] if a registered relation's declaration methods panic —
 /// [`PropertyFunctionRegistry::describe`]'s own failure, propagated unchanged. Never
 /// raised when `relations` is empty (which [`PropertyFunctionRegistry::EMPTY`] — the
 /// canonical "no registry" value — always is): that case returns before any
@@ -3364,7 +3410,7 @@ const CONTENT_VERSION: u16 = 2;
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] if a registered relation's declaration methods panic —
+/// [`EvalError::FunctionOperational`] if a registered relation's declaration methods panic —
 /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)'s
 /// own failure, propagated unchanged.
 pub fn content_fingerprint(

@@ -2388,7 +2388,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] if an **ungoverned** call would exceed
+    /// [`EvalError::FunctionOperational`] if an **ungoverned** call would exceed
     /// [`MAX_UDF_DEPTH`] — mutually-recursive functions still fail closed rather than
     /// overflow the stack when there is no governed outcome channel.
     pub(crate) fn child_for_user_fn(&self) -> Result<Option<Self>, EvalError> {
@@ -2416,7 +2416,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return Ok(None);
         }
         if next_depth > MAX_UDF_DEPTH {
-            return Err(EvalError::function(format!(
+            return Err(EvalError::function_operational(format!(
                 "SHACL-AF function recursion exceeded the depth bound of {MAX_UDF_DEPTH}"
             )));
         }

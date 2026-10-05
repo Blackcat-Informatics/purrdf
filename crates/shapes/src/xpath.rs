@@ -311,7 +311,9 @@ pub(crate) fn capture(cause: Cause) {
 
 pub(crate) fn query_error(error: RdfDiagnostic) -> String {
     let message = format!("query evaluation error: {error}");
-    capture(Cause::Query(error));
+    if purrdf_sparql_eval::EvalError::diagnostic_requires_propagation(&error.code) {
+        capture(Cause::Query(error));
+    }
     message
 }
 

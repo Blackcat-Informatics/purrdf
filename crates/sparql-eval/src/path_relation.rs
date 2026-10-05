@@ -1444,12 +1444,12 @@ impl Prepared {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] on a breach. Charged BEFORE the prune, because an edge
+    /// [`EvalError::FunctionOperational`] on a breach. Charged BEFORE the prune, because an edge
     /// that is examined and discarded is still an edge the traversal read.
     fn charge_expansion(&mut self, graph: &PathGraph, seed: u32) -> Result<(), EvalError> {
         self.expansions += 1;
         if self.expansions > self.limits.max_expansions_per_invocation() {
-            return Err(EvalError::function(format!(
+            return Err(EvalError::function_operational(format!(
                 "{} traversal exceeded max_expansions_per_invocation ({}) while exploring from \
                  seed {:?}; this is a resource guard over edges actually traversed, so whether \
                  it fires depends on the row ceiling the engine granted — the same query under \
@@ -1466,11 +1466,11 @@ impl Prepared {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] on a breach.
+    /// [`EvalError::FunctionOperational`] on a breach.
     fn charge_candidate(&mut self, graph: &PathGraph, seed: u32) -> Result<(), EvalError> {
         self.candidates += 1;
         if self.candidates > self.limits.max_paths_per_seed() {
-            return Err(EvalError::function(format!(
+            return Err(EvalError::function_operational(format!(
                 "{} traversal exceeded max_paths_per_seed ({}) at seed {:?}; this is a resource \
                  guard over candidate walks actually enumerated, so whether it fires depends on \
                  the row ceiling the engine granted — the same query under a LIMIT may stop \
@@ -1983,7 +1983,7 @@ trait WitnessTraversal {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] when a resource guard is breached.
+    /// [`EvalError::FunctionOperational`] when a resource guard is breached.
     fn step(&mut self) -> Result<bool, EvalError>;
 }
 
@@ -2190,7 +2190,7 @@ impl ShortestPathWitnessCursor {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] when the expansion guard is breached.
+    /// [`EvalError::FunctionOperational`] when the expansion guard is breached.
     fn search(&mut self, seed: u32) -> Result<(), EvalError> {
         self.visits.clear();
         self.visits.push(Visit {
@@ -2697,7 +2697,11 @@ mod tests {
             error.to_string().contains("max_paths_per_seed"),
             "got {error}"
         );
-        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        assert!(
+            matches!(error, EvalError::FunctionOperational(_)),
+            "got {error:?}"
+        );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
     }
 
     #[test]
@@ -2712,6 +2716,7 @@ mod tests {
             error.to_string().contains("max_expansions_per_invocation"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
     }
 
     #[test]
@@ -3629,6 +3634,7 @@ mod tests {
             error.to_string().contains("shortest path witness"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
 
         let relation =
             ShortestPathWitnessRelation::new(graph, PathLimits::new(1, 3, 4096, 1).expect("env"));
@@ -3637,6 +3643,7 @@ mod tests {
             error.to_string().contains("max_expansions_per_invocation"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
     }
 
     #[test]
