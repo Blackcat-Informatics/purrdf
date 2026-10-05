@@ -468,6 +468,15 @@ an engine diagnostic's own (`native-sparql-query-parse`, `native-sparql-load-den
 (`purrdf-wasm-options`, `purrdf-wasm-usage`, …). Switch on `code`, never on the
 message. A cancellation with a `signal.reason` rejects with that reason itself.
 
+A SPARQL parse failure also carries its typed condition as `error.presentation`: a
+stable `messageId` (`sparql-parse-lex`, `sparql-parse-syntax`,
+`sparql-parse-unsupported`, `sparql-parse-iri` or `sparql-parse-cdt-arity`) and named
+typed `parameters`. Integers are exact decimal strings, for example
+`at: { kind: "unsigned", value: "5" }`. When the IRI checker refused the IRI in an IRI
+failure, its own condition is nested as `detail`, such as `iri-bad-percent-encoding`
+with its `offset`. A failure without a typed presentation has no `presentation`
+property. `message` and `code` are unchanged.
+
 ### Answering `SERVICE`: `resolveService`
 
 `resolveService(request, ctx)` is called once for each distinct `SERVICE` request a job
