@@ -323,8 +323,8 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
             let index = self.blank(&label, scope)?;
             blanks.entry(scope).or_default().insert(label, index);
         }
-        // Framing/option tags need at most64 bytes. Every replacement is ASCII
-        // and at most23 bytes even for a full u64 ordinal;32 bytes per occurrence
+        // Framing/option tags need at most 64 bytes. Every replacement is ASCII
+        // and at most 23 bytes even for a full u64 ordinal; 32 bytes per occurrence
         // bounds growth in nested typed strings without conflating byte layout
         // with the larger scanner/map workspace admission above.
         let bytes = occurrences
