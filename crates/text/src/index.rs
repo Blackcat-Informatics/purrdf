@@ -507,6 +507,8 @@ pub struct TextIndex {
     field_lengths: Vec<Vec<u64>>,
     /// Exact field token totals by partition.
     field_totals: Vec<Vec<u128>>,
+    /// Positive-token carrier counts by partition and ranking field.
+    field_populations: Vec<Vec<u64>>,
     /// The Unicode table versions the analyzer resolved against at build time.
     unicode: UnicodeVersions,
     /// Documents in id order — that is, sorted by `(graph, subject, language)`.
@@ -694,6 +696,35 @@ impl TextIndex {
             .map(|at| self.field_totals[at as usize].as_slice())
     }
 
+    /// Documents with positive analyzed length in each field, in ranking order.
+    pub fn field_populations(&self, partition: &PartitionKey) -> Option<&[u64]> {
+        self.partition_index(partition)
+            .map(|at| self.field_populations[at as usize].as_slice())
+    }
+
+    /// Admit a partition under its selected population law without walking documents.
+    pub(crate) fn prepared_corpus(
+        &self,
+        partition: &PartitionKey,
+    ) -> Result<PreparedCorpus<'_>, TextError> {
+        let at = self
+            .partition_index(partition)
+            .ok_or_else(|| TextError::data("ranking partition is absent"))?
+            as usize;
+        let documents = self.partitions[at].1.document_count;
+        let totals = &self.field_totals[at];
+        if self.ranking.uses_field_populations() {
+            PreparedCorpus::with_field_populations(
+                &self.ranking,
+                documents,
+                totals,
+                &self.field_populations[at],
+            )
+        } else {
+            PreparedCorpus::new(&self.ranking, documents, totals)
+        }
+    }
+
     /// A document's field lengths, in ranking field order.
     pub fn field_lengths(&self, document: u32) -> Option<&[u64]> {
         self.field_lengths.get(document as usize).map(Vec::as_slice)
@@ -784,6 +815,7 @@ impl TextIndex {
             .collect::<Result<_, _>>()?;
         self.field_lengths = Vec::with_capacity(self.documents.len());
         self.field_totals = vec![vec![0; self.ranking.fields().len()]; self.partitions.len()];
+        self.field_populations = vec![vec![0; self.ranking.fields().len()]; self.partitions.len()];
         for document in &self.documents {
             let mut lengths = vec![0_u64; self.ranking.fields().len()];
             for &(predicate, length) in &document.predicate_lengths {
@@ -795,16 +827,18 @@ impl TextIndex {
                     return Err(TextError::data("merged field length exceeds 2^24"));
                 }
             }
-            for (total, &length) in self.field_totals[document.partition as usize]
+            for ((total, population), &length) in self.field_totals[document.partition as usize]
                 .iter_mut()
+                .zip(&mut self.field_populations[document.partition as usize])
                 .zip(&lengths)
             {
                 *total += u128::from(length);
+                *population += u64::from(length != 0);
             }
             self.field_lengths.push(lengths);
         }
-        for ((_, stats), totals) in self.partitions.iter().zip(&self.field_totals) {
-            PreparedCorpus::new(&self.ranking, stats.document_count, totals)?;
+        for (partition, _) in &self.partitions {
+            self.prepared_corpus(partition)?;
         }
         Ok(())
     }
@@ -1128,6 +1162,7 @@ impl TextIndex {
             predicate_fields: Vec::new(),
             field_lengths: Vec::new(),
             field_totals: Vec::new(),
+            field_populations: Vec::new(),
             unicode: unicode_versions(),
             documents: table,
             subject_order,

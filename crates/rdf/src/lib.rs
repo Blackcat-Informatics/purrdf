@@ -142,16 +142,17 @@ pub use purrdf_gts::transport::{
 pub use native_codecs::{
     GTS_EXTENSIONS, GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseFailure, ParseOptions,
     ParseOutcome, SerializeOptions, SerializeOutcome, SerializeReport, SourceFormat, SpanTable,
-    StatementLayer, classify, classify_source, parse_dataset, parse_dataset_from_reader,
-    parse_dataset_reporting_failure, parse_dataset_with, serialize_dataset,
-    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
-    serialize_dataset_to_writer, serialize_dataset_to_writer_with, serialize_dataset_with,
+    StatementLayer, classify, classify_source, empty_named_graphs_dropped, parse_dataset,
+    parse_dataset_from_reader, parse_dataset_reporting_failure, parse_dataset_with,
+    serialize_dataset, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer,
+    serialize_dataset_to_writer_with, serialize_dataset_with,
     serialize_dataset_with_jsonld_options, transcode_under_document_base,
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,
-    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads, flat_rdf_quads,
-    flat_rdf_quads_from_dataset,
+    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads,
+    flat_dataset_from_quads_declaring, flat_rdf_quads, flat_rdf_quads_from_dataset,
 };
 pub use projections::{
     CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CSVW_TERMS_PROFILE,

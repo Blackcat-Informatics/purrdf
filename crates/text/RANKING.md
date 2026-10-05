@@ -8,7 +8,7 @@ profile's BLAKE3 identity includes that name and revision, the index corpus
 construction law `purrdf-text-corpus-graph-language-v1`, the integer logarithm
 algorithm, operation order and rounding, scale, `k1`, all bounds, field names
 and order, weights, length coefficients, sorted predicate mappings, and the
-explicit unclassified destination. A semantic change changes this identity.
+explicit unclassified destination and population mode. A semantic change changes this identity. The default dense mode preserves the published revision-1 canonical bytes; the explicit carrier mode binds `relative=length*field_documents/total` instead of `relative=length*N/total`.
 
 There is one scoring implementation. Single-field BM25F is its one-field case.
 The previous classic BM25 expression was algebraically equivalent over real
@@ -28,9 +28,11 @@ representable result merely because its unscaled multiplication exceeds i128.
 For each distinct analyzed query term, in ascending term order:
 
 1. Prepare `idf = ln(1 + (N - df + 0.5)/(df + 0.5))` once per corpus.
-2. In profile field order, compute `relative = floor(length*N*S/total)` from
-   exact counts. This is the field's length divided by its exact mean. Taking
-   the ratio directly avoids rounding a sparse field's mean to zero.
+2. In profile field order, compute `relative = floor(length*population*S/total)` from
+   exact counts. Dense mode uses the corpus population `N`; carrier mode uses
+   the number of documents carrying that field. This is the field's length
+   divided by its exact mean. Taking the ratio directly avoids rounding the
+   mean before division.
 3. Compute `normalization = 1 - b + mul(b, relative)`.
 4. Accumulate `pseudo += mul(div(tf, normalization), weight)`.
 5. Saturate once: `sat = div(mul(pseudo, k1+1), pseudo+k1)`.
@@ -52,6 +54,29 @@ each. Its result is
 `trunc((e*693147180559945309 + 2*sum)/10^6)`.
 There is no convergence test, floating point or target-dependent math call.
 
+## Sparse field populations
+
+`RankingProfile::with_field_populations()` selects carrier normalization and
+changes the ranking identity. `PreparedCorpus::with_field_populations(profile,
+documents, totals, populations)` accepts exact totals and u64 carrier counts
+in field order. `PreparedCorpus::new` keeps dense normalization. Each constructor
+refuses the other mode rather than score under an incorrect fingerprint.
+
+A population may not exceed the corpus size, and its total may not exceed
+`population * FIELD_LENGTH_MAX`. A nonzero total therefore requires a nonzero
+population. Both zero populations with zero totals and nonzero populations with
+zero totals are admitted. Corpus-wide `N` still determines IDF; carrier counts
+only change length normalization. If every document carries every field, both
+modes give the same raw score, including each intermediate truncation.
+
+`TextIndex` derives carrier counts per partition from positive analyzed field
+lengths. Rerouting several predicates to one field counts each document once;
+reranking reuses retained facts. Its ranking and explanation paths use these
+stored statistics. A document missing a field does not consume one of that
+field's carriers. Positive-length field inputs must leave enough carriers to
+hold the remaining token total. These checks remain active for zero-frequency
+and zero-weight contributions.
+
 ## Bounds and proof
 
 The profile admits:
@@ -69,7 +94,7 @@ The profile admits:
 
 Weights and coefficients cannot be negative. Exact field totals use u128
 because the maximum total is `2^40 * 2^24 = 2^64`. Corpus preparation verifies
-that total, field count, population and document frequencies. Query preparation
+that total against its selected population, field count, population and document frequencies. Query preparation
 requires explicit nonempty term keys in strictly sorted, distinct order. The
 arithmetic API accepts already-analyzed keys; the index uses its declared
 analyzer to produce them. Document scoring
@@ -121,7 +146,7 @@ score: zero-weight fields and rounded zero IDFs preserve matching rows and
 their canonical tie order. `python
 tests/reference/bm25f.py --check` checks the committed values; Rust compares
 every raw unit against the same corpus with no tolerance. The corpus has a
-fixed nonzero count.
+fixed nonzero count. Native Rust also checks every dense vector under carrier populations equal to `N`, and compares sparse and boundary scores against testkit's independent unbounded integer arithmetic with exact raw-unit equality.
 
 The index retains predicate-level field lengths and term frequencies. Mapping
 predicates to fields and computing per-partition field totals is a projection

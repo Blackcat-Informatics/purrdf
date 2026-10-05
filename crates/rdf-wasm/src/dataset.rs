@@ -20,7 +20,7 @@ use purrdf::ir::MutableDataset;
 use purrdf::{
     CanonHash, JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
     SerializeGraph, SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify,
-    datasets_isomorphic, parse_dataset, serialize_dataset_to_format,
+    datasets_isomorphic, empty_named_graphs_dropped, parse_dataset, serialize_dataset_to_format,
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
     serialize_dataset_with, try_canonicalize_flat_view,
 };
@@ -628,6 +628,10 @@ impl Dataset {
         let fmt = resolve_format(format).map_err(|e| JsError::new(&e))?;
         let outcome = serialize_dataset_to_format(&frozen, fmt, base.as_deref())
             .map_err(|e| diag_to_err(&e))?;
+        let empty_named_graphs_dropped =
+            empty_named_graphs_dropped(&*frozen, fmt, SerializeGraph::Dataset)
+                .map_err(|e| diag_to_err(&e))?
+                .len();
         let text = String::from_utf8(outcome.bytes)
             .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))?;
         Ok(SerializeLoss {
@@ -635,6 +639,7 @@ impl Dataset {
             statement_rows_dropped: outcome.statement_rows_dropped,
             directional_literals_dropped: outcome.directional_literals_dropped,
             named_graph_rows_dropped: outcome.named_graph_rows_dropped,
+            empty_named_graphs_dropped,
         })
     }
 
@@ -897,6 +902,7 @@ pub struct SerializeLoss {
     statement_rows_dropped: usize,
     directional_literals_dropped: usize,
     named_graph_rows_dropped: usize,
+    empty_named_graphs_dropped: usize,
 }
 
 #[wasm_bindgen]
@@ -935,6 +941,15 @@ impl SerializeLoss {
     #[wasm_bindgen(getter, js_name = namedGraphRowsDropped)]
     pub fn named_graph_rows_dropped(&self) -> usize {
         self.named_graph_rows_dropped
+    }
+
+    /// Declared named graphs holding no row that the target has no spelling for
+    /// (N-Quads, HexTuples and every single-graph syntax), so the document omits them.
+    /// They own no row, so no other count sees them. `0` for TriG, TriX, JSON-LD and
+    /// YAML-LD, which write an empty graph, and for a dataset that declares none.
+    #[wasm_bindgen(getter, js_name = emptyNamedGraphsDropped)]
+    pub fn empty_named_graphs_dropped(&self) -> usize {
+        self.empty_named_graphs_dropped
     }
 }
 
