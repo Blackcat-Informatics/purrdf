@@ -45,18 +45,11 @@
 //! integer series — a fixed iteration count, never a convergence test — so its
 //! result is a pure function of its input on every target.
 //!
-//! The two halves of what that buys are proven in different places, so they are
-//! claimed separately rather than as one sentence. The **ranking** — the row
-//! order together with every score's decimal lexical — is pinned by a single
-//! test body per case on one shared `harness = false` runner, so `make
-//! wasm-test` executes it on `wasm32-unknown-unknown` against the very
-//! expectations `cargo test` asserts natively. That is the half a divergent
-//! `ln` could actually move, and it is proven on both targets. Byte identity of
-//! the **serialized** answer — two independently built indexes, queried through
-//! the property-function seam and compared as SPARQL-JSON strings — is asserted
-//! natively. Neither the seam nor the serializer holds a target-dependent
-//! quantity, but only the ranking claim is executed on both targets, so only it
-//! is stated for both.
+//! Native Rust pins the **ranking** — row order and every score's decimal lexical —
+//! against independent expectations. It also asserts byte identity of the
+//! **serialized** answer from two independently built indexes queried through the
+//! property-function seam. `make wasm` separately builds this release crate;
+//! WASM execution is reserved for actual target paths and host interfaces.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]

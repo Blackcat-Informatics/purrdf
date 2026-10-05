@@ -14,9 +14,8 @@
 //! disagreement is a defect in `purrdf_hash::hex`, never a reason to edit a
 //! vector.
 //!
-//! The target is `harness = false` on `purrdf_testkit`'s runner, so the same
-//! cases run natively under `cargo test` and on `wasm32-unknown-unknown` in
-//! Node (`make wasm-test`), baseline and `+simd128`.
+//! Native Rust runs the complete target on the shared harness. `make wasm-test`
+//! selects only the explicit simd128 encoder comparison and dispatch assertion.
 
 use purrdf_hash::Backend as _;
 use purrdf_hash::backend::HexBackend;

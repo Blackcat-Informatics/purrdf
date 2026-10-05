@@ -23,8 +23,8 @@ failure names itself in the job list. That is a reasonable choice, and it is
 exactly what creates the second list. So this gate's subject is the AGREEMENT
 between the lists rather than either list's contents.
 
-Scope, stated rather than implied: only invocations of a ``scripts/`` (or in-repo
-``crates/.../*.py``) program are compared. ``cargo`` steps and the ``node`` schema
+Scope: invocations of a ``scripts/`` (or in-repo ``crates/.../*.py``) program and
+helper-census policy/self-test modes are compared. Other ``cargo`` and ``node``
 oracles are out of scope — CI distributes those across jobs (``wasm``, ``pytest``,
 ``capi``) and spells several differently on purpose, so requiring textual equality
 there would refuse a correct workflow. The explicit preserve-order consumer is a
@@ -100,13 +100,10 @@ def strip_yaml_comments(text: str) -> str:
 # an exemption cannot outlive its reason, and a NEW divergence is still a failure. That is
 # the difference between a stated exception and the silence this file was written to end.
 ONE_SIDED_BY_DESIGN: dict[str, str] = {
-    "scripts/check-geo-determinism.sh": (
-        "cross-checks native against wasm32 output, so it needs the pinned wasm toolchain "
-        "that only the wasm job installs"
-    ),
-    "scripts/check-hnsw-determinism.sh": (
-        "same as the geo determinism check: a native-versus-wasm32 comparison needing the "
-        "wasm toolchain"
+    "scripts/check-wasm-dataset-identity.sh": (
+        "exercises the exact >2^53 Dataset/exchange ABI in Node and TypeScript, so it "
+        "needs the wasm32 target, pinned wasm-bindgen CLI and package Node dependencies; "
+        "`make wasm-pkg-test` is the local entry point"
     ),
     "scripts/check-wasm-test-runner.sh": (
         "observes the wasm32 test runner failing a planted panic, a refused flag and a "
@@ -143,7 +140,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
 # refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
 # both the changelog and the PR body is the proof that nothing noticed. Growth is now a
 # deliberate, visible edit to this number.
-ONE_SIDED_COUNT = 8
+ONE_SIDED_COUNT = 7
 
 
 def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:
@@ -178,33 +175,16 @@ def merge_blocking(workflow_texts: dict[str, str]) -> dict[str, str]:
 # `scripts/a.py && python3 scripts/b.py` -- the second program never seen, and one list
 # spelling a pair on one line while the other spells it on two reported divergence in BOTH
 # directions over an equivalent spelling. No such line today; the regex is the hazard.
-# An invocation of an in-repo program. `python3 scripts/x.py --flag`,
-# `bash scripts/x.sh`, `./scripts/x.py`, `python -u scripts/x.py`.
-#
-# The first version hardcoded `python3|bash` and a bare `scripts/` prefix, so it REFUSED
-# equivalent spellings: `scripts/check-no-features.py` is mode 100755 with a shebang, and
-# `./scripts/check-no-features.py` was reported as a workflow not running a gate it
-# demonstrably runs. The argument run also stopped at `;&|` but not `#`, so a trailing
-# comment became part of a gate's identity.
-# The interpreter (or `./`) is REQUIRED, not optional. Making it optional matched every
-# bare `scripts/…` or `crates/…` path in the tree -- YAML path filters, `cp` arguments,
-# quoted strings inside a `run: |` block -- and produced twenty-one refusals naming things
-# that are not gates at all. An invocation is a program being RUN, and that is what the
-# prefix establishes.
-# PROSE IS EXCLUDED BY WHAT IT IS, NOT BY WHERE IT SITS. The first attempt anchored the
-# interpreter in command position, which is wrong twice: it still admitted an unquoted
-# `name:` field, and it REJECTED a real invocation, because `uv run --project … python
-# crates/shapes/tests/pydantic_oracle.py` has its interpreter mid-command behind a runner.
-#
-# What distinguishes prose from a command is that prose lives inside a quoted string or a
-# YAML metadata value. Four shapes read as invocations before this: an `echo "…"`, a step
-# `name:` field, an inline trailing comment, and a quoted YAML list item. Demonstrated: a
-# full divergence was silenced by adding `run: true # reproduce locally with python3
-# scripts/check-no-features.py`, and an `echo` inside the recipe produced a false refusal
-# naming a gate that does not exist.
+# An interpreter or executable prefix establishes an actual script invocation;
+# quoted strings, YAML metadata and comments are removed before either scan.
 INVOCATION = re.compile(  # noqa: E501
     r"(?:\b(?:python3?|bash|sh)\s+(?:-\w+\s+)*|(?<![\w/])\./)"
     r"((?:scripts|crates)/[^\s]+)([^\n;&|#]*)",
+    re.MULTILINE,
+)
+HELPER_POLICY_INVOCATION = re.compile(
+    r"\bcargo\s+run\b[^\n;&|#]*?\s(?:-p|--package)\s+helper-census\s+--\s+"
+    r"(--(?:no-features|python-binding-tests|self-test))([^\n;&|#]*)",
     re.MULTILINE,
 )
 
@@ -269,7 +249,7 @@ def _join_continuations(text: str) -> str:
 # By NAME: a `check-*` program, the conformance matrix, the workload acquirer, a query
 # instantiator, or an in-repo `crates/**` reference oracle.
 GATE_BY_NAME = re.compile(
-    r"^(?:scripts/(?:check-|conformance-matrix|benchmark-acquire|[\w-]+-queries)|crates/)"
+    r"^(?:scripts/(?:check-|conformance-matrix|benchmark-acquire|[\w-]+-queries)|crates/|helper-census )"
 )
 # By ARGUMENT: a `--self-test` or `--offline-self-test` run is a gate whatever the program
 # is called. `publish-release-crates.sh` and `bootstrap-crates-io.sh` PUBLISH when invoked
@@ -382,7 +362,10 @@ def invocations(text: str) -> set[str]:
     # whole-line comments, so a trailing `# ... python3 scripts/check-x.py` was read as a
     # running gate.
     prepared = _drop_prose(_join_continuations(strip_yaml_comments(_uncomment(text, ("#",)))))
-    return {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(prepared)}
+    return {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(prepared)} | {
+        _normalise("helper-census", m.group(1) + m.group(2))
+        for m in HELPER_POLICY_INVOCATION.finditer(prepared)
+    }
 
 
 def workflow_invocations(text: str, makefile_text: str) -> set[str]:
@@ -520,7 +503,7 @@ def self_test() -> int:
     # Direction 1: a gate in `make check` that no workflow runs.
     invented = "\tpython3 scripts/check-invented-local-only.py\n"
     mutated = real_makefile.replace("\ncheck: ", "\ncheck: ", 1)
-    marker = "\tpython3 scripts/check-no-features.py\n"
+    marker = "\tcargo run -q --locked -p helper-census -- --no-features\n"
     if marker not in mutated:
         print("SELF-TEST FAIL: the anchor line for the mutation is not in the Makefile")
         return 1
@@ -534,7 +517,7 @@ def self_test() -> int:
 
     # Direction 2: a gate in ci.yaml that `make check` does not run.
     ci_text = real_workflows[CI_WORKFLOW.name]
-    anchor = "        run: python3 scripts/check-no-features.py\n"
+    anchor = "        run: cargo run -q --locked -p helper-census -- --no-features\n"
     if anchor not in ci_text:
         print("SELF-TEST FAIL: the anchor line for the mutation is not in ci.yaml")
         return 1
@@ -703,8 +686,8 @@ def self_test() -> int:
     # A COLUMN-0 COMMENT INSIDE A RECIPE IS LEGAL MAKE and used to end it, taking `local`
     # from forty gates to one and emitting thirty-nine false messages.
     commented = real_makefile.replace(
-        "\tpython3 scripts/check-no-features.py\n",
-        "\tpython3 scripts/check-no-features.py\n# the licence gates follow\n",
+        "\tcargo run -q --locked -p helper-census -- --no-features\n",
+        "\tcargo run -q --locked -p helper-census -- --no-features\n# the licence gates follow\n",
         1,
     )
     if len(gates_only(invocations_with_recursion(commented, "check"))) != len(
@@ -736,12 +719,12 @@ def self_test() -> int:
     # A gate present in BOTH but with different arguments is a divergence too:
     # `--self-test` and the bare run are different rules.
     argument_drift = real_makefile.replace(
-        "\tpython3 scripts/check-no-features.py\n",
-        "\tpython3 scripts/check-no-features.py --self-test\n",
+        "\tcargo run -q --locked -p helper-census -- --no-features\n",
+        "\tcargo run -q --locked -p helper-census -- --no-features --self-test\n",
         1,
     )
     found = divergence(argument_drift, real_workflows)
-    if any("check-no-features.py --self-test" in problem for problem in found):
+    if any("helper-census --no-features --self-test" in problem for problem in found):
         print("OK: self-test — the same gate with different arguments is refused")
     else:
         print(f"SELF-TEST FAIL: argument drift was not refused (reported: {found})")

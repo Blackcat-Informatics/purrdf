@@ -54,7 +54,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Enforce no Cargo features
-        run: python3 scripts/check-no-features.py
+        run: cargo run -q --locked -p helper-census -- --no-features
 
       - name: Check every workflow installs the toolchain rust-toolchain.toml pins
         run: python3 scripts/check-toolchain-pin.py
@@ -89,11 +89,8 @@ jobs:
       - name: Check no serializer takes back output it already produced
         run: python3 scripts/check-serializer-rewinds.py
 
-      - name: Check the PyO3-extension test-module gate can still fail
-        run: python3 scripts/check-python-binding-tests.py --self-test
-
       - name: Check no Rust test module hides in the PyO3 extension crate
-        run: python3 scripts/check-python-binding-tests.py
+        run: cargo run -q --locked -p helper-census -- --python-binding-tests
 
       - name: Check the terminal-predicate gate can still fail
         run: python3 scripts/check-terminal-predicates.py --self-test
@@ -173,7 +170,7 @@ jobs:
       - name: Check every first-party crate edge is one layers.toml allows
         run: python3 scripts/check-layers.py
 
-      - name: Check the helper census can still find a copy
+      - name: Check the helper census and Rust policy guards can still fail
         run: cargo run -q --locked -p helper-census -- --self-test
 
       # A pull request is compared with the merge-base of its merge commit and its base
@@ -511,59 +508,8 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: "1.98"
 
-  # Four independent jobs, split from one 30-minute `wasm` job that was being
-  # cancelled mid-run (`gh run view --json jobs`, step startedAt/completedAt,
-  # consistently showed the 30-minute timeout hit before every step
-  # finished). Each of the four groups below was ALREADY a self-contained
-  # build in the old single job -- none of them read another group's output:
-  #   * `make geo-determinism` / `make hnsw-determinism` build their own
-  #     workspace-excluded `cdylib` helper (`crates/geo/determinism`,
-  #     `crates/hnsw/determinism`) into a scratch `--target-dir` of their own
-  #     (`target/geo-determinism`, `target/hnsw-determinism`), never the
-  #     workspace's.
-  #   * `make wasm-pkg` sets its own RUSTFLAGS (`--remap-path-prefix`,
-  #     `+simd128`), which Cargo fingerprints separately from every other
-  #     step's build, so it was already a from-scratch compile in the old job.
-  #   * `make wasm-test` runs `cargo test --target wasm32-unknown-unknown`
-  #     (debug profile, no `--release`) against the WORKSPACE target dir, a
-  #     different profile directory from every `--release` step around it, so
-  #     it also never reused another step's output.
-  # So the split below costs nothing in wall-clock work that the old serial
-  # job was not already redoing; it only adds each new job's own setup
-  # (checkout + toolchain, ~26s-40s) and lets the four groups run in
-  # PARALLEL instead of serialized behind one timeout. Every job reuses the
-  # same `./.github/actions/wasm-toolchain` composite action and its
-  # `Swatinem/rust-cache` key (`wasm-toolchain`) the old job used, so the
-  # cache key set is unchanged.
-  #
-  # Measured per-step (`gh run view --json jobs`, 2026-09-25 branch run,
-  # cancelled mid-oracle at the old 30-minute timeout):
-  #   Checkout 3s, Install Rust 11s, wasm-toolchain action 12s (~26s setup)
-  #   Build release crates on wasm32       246s
-  #   geo-determinism                      342s
-  #   hnsw-determinism                     203s
-  #   Build the optimized wasm package     317s
-  #   Set up Node.js                         3s
-  #   Run npm package gates                 14s
-  #   wasm-test (cross-target determinism) 477s
-  #   TypeScript emitter schema oracle     251s (last completed measurement, 2026-09-24)
-  #   GraphQL emitter schema oracle          4s (last completed measurement, 2026-09-24)
-  # Every one of these grew 1.3x-2x over the three days of measurements this
-  # split is based on (e.g. hnsw-determinism 89s -> 111s -> 203s), so each
-  # timeout below carries headroom past the bare ~1.5x this file's other gates
-  # use, sized per job against its own growth rate rather than a single shared
-  # number.
-
-  # release crates on wasm32 + both wasm32/native determinism digests: kept
-  # together (the coordinator's suggested seam) because their combined
-  # measured time (26s + 246s + 342s + 203s = 817s, ~13.6min) already sits
-  # inside the ~12-15 minute band asked for, so splitting hnsw-determinism out
-  # again would trade a real parallel job for no wall-clock benefit. Kept
-  # under the `wasm` name because `docs/design/purrdf-geo-exactness.md` and
-  # `docs/design/purrdf-hnsw.md` both say "CI runs it in the `wasm` job" about
-  # exactly these two steps.
-  # 817s * 1.5 ~= 1226s (~20.4min); rounded up to 25 minutes for the
-  # documented growth trend above.
+  # Release builds, package host interfaces, focused WASM execution and native
+  # schema oracles run separately. Complete semantic corpora remain native.
   wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -658,6 +604,11 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
 
+      - name: Verify exact Dataset and exchange identity ABIs
+        # Reuse the existing >2^53 Node/TypeScript fixture and private Cargo
+        # artifact guard; native corpus execution cannot prove this host ABI.
+        run: ./scripts/check-wasm-dataset-identity.sh
+
       - name: Run the Worker recipe under workerd
         # The README's Worker recipe and the Cloudflare adapter, served from the package
         # built above by real workerd through Miniflare: a joined SERVICE, SERVICE SILENT
@@ -676,16 +627,11 @@ jobs:
             --ignore-scripts --no-audit --no-fund miniflare@4.20260730.0
           node tests/workerd/run-worker-recipe.mjs
 
-  # The wasm32 execution gates, one per runner. Each builds its own test targets
-  # natively and for wasm32 and runs them in Node, so together with the wasm
-  # job's release build and package they do not fit one 30-minute job.
+  # Only actual WASM dispatch, SIMD kernels, shadow-stack floors and host
+  # interfaces execute here; docs/WASM_TESTING.md lists every exact selection.
   wasm-exec:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        gate: [geo-determinism, hnsw-determinism, wasm-test]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -706,37 +652,13 @@ jobs:
         with:
           node-version: 24
 
-      - name: Prove purrdf-geo's native and wasm32 answers are byte-identical
-        if: matrix.gate == 'geo-determinism'
-        # purrdf-geo claims that every geometric answer is the same on both
-        # targets because every computation is integer arithmetic. This RUNS the
-        # same named test cases on both (wasm32 through scripts/wasm-test-runner.sh,
-        # the one cargo runner every wasm32 test uses) and compares the digest each
-        # reports, rather than trusting the argument.
-        run: make geo-determinism
-
-      - name: Prove purrdf-hnsw's native and wasm32 canonical bytes are identical
-        if: matrix.gate == 'hnsw-determinism'
-        # purrdf-hnsw claims its canonical index image is a pure function of the
-        # input, so a native build and a wasm32 build must produce the same bytes.
-        # This RUNS the same named test cases natively, on wasm32 and on wasm32
-        # +simd128 (through scripts/wasm-test-runner.sh) and compares the FNV-1a
-        # digest of the canonical payload each reports, rather than trusting the
-        # argument.
-        run: make hnsw-determinism
-
-      - name: Execute the cross-target determinism tests on wasm32 (Node)
-        if: matrix.gate == 'wasm-test'
-        # The wasm job proves the crates COMPILE for wasm32. This one proves
-        # they ANSWER the same way there: the embedding kNN surface ranks by binary64
-        # arithmetic, and a reassociated sum or a fused multiply-add would swap two
-        # near-tied neighbours rather than merely shift a last digit. Same test body,
-        # same pinned expectations, executed on both targets: every target is
-        # `harness = false` on the shared test runner, and Cargo hands each wasm32
-        # binary to scripts/wasm-test-runner.sh, which runs it in Node. The runner
-        # is itself observed failing a planted panic first. The reassociated HNSW
-        # index is built, recorded, decoded, verified and searched here too, on the
-        # baseline (wasm-scalar) and +simd128 (wasm-simd128) builds alike.
+      - name: Execute WASM dispatch, SIMD kernels, stack and host-interface probes (Node)
+        # Native workspace tests own complete semantic/conformance corpora.
+        # docs/WASM_TESTING.md records every retained named target obligation.
+        # Existing exact filters select the retained cases; runner preflight
+        # observes panic, refused flags and sealed host reads.
+        # SIMD kernels execute only in the +simd128 build; target-path admission
+        # uses both builds, and shadow-stack/host-clock probes use the baseline.
         run: make wasm-test
 
   # Native schema oracles need no wasm package and run in parallel.
@@ -809,7 +731,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
       - name: Measure and check this configuration
-        run: make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 --report target/asm-reports/${{ matrix.config }}.json"
+        run: |
+          # Bound scalar WASM compilation through the existing Cargo job budget.
+          # Other configurations keep their current scheduling.
+          if [ "${{ matrix.config }}" = wasm32 ]; then
+            export CARGO_BUILD_JOBS=2
+          fi
+          make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 --report target/asm-reports/${{ matrix.config }}.json"
       - name: Upload checked evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -844,11 +772,10 @@ jobs:
       - name: Check complete matrix and document parity
         run: make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-reports"
 
-  # The third ISA the distance arithmetic's bit-identity claim is EXECUTED on. The
-  # exact law pins one summation order in source, so its results must be the same
-  # bits on x86_64, wasm32 and aarch64; the asm gate above can only show NEON code
-  # exists, and this job runs it. The pinned goldens these tests compare against are
-  # the ones x86_64 and wasm32 already hold, so a divergent aarch64 fold fails here.
+  # Native aarch64 distance arithmetic is checked against the same literal
+  # goldens as native x86_64. The exact law pins one summation order; this job
+  # executes the NEON path rather than only checking that its assembly exists.
+  # Focused WASM checks select dispatch and SIMD kernels separately.
   # The reassociated arithmetic runs its NEON path too, against its error bound, and
   # the CSV field scanner runs its NEON kernel against its portable one.
   aarch64:

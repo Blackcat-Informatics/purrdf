@@ -23,6 +23,7 @@ mod layout;
 mod ledger;
 mod non_rust;
 mod normalize;
+mod policy;
 mod rules;
 mod source;
 mod structure;
@@ -53,6 +54,10 @@ Modes:
   --index            print the JSON index scripts/check-shared-helpers.py reads
   --dump-ledger      print the parsed ledger as JSON
   --self-test        run the seeded fixtures and exit
+  --no-features      refuse Cargo features except the empty cargo-c marker,
+                     and feature predicates in Rust cfg invocations
+  --python-binding-tests
+                     refuse Rust tests that the PyO3 extension never runs
   --non-rust-ratchet fail when TARGET adds a non-Rust file without a
                      `Why not Rust:` explanation, or grows a legacy one under
                      a ratcheted root, compared with BASE (see AGENTS.md)
@@ -82,6 +87,8 @@ enum Mode {
     Index,
     DumpLedger,
     SelfTest,
+    NoFeatures,
+    PythonBindingTests,
     NonRustRatchet,
     Help,
 }
@@ -136,6 +143,8 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
             "--index" => set(Mode::Index, &mut mode)?,
             "--dump-ledger" => set(Mode::DumpLedger, &mut mode)?,
             "--self-test" => set(Mode::SelfTest, &mut mode)?,
+            "--no-features" => set(Mode::NoFeatures, &mut mode)?,
+            "--python-binding-tests" => set(Mode::PythonBindingTests, &mut mode)?,
             "--non-rust-ratchet" => set(Mode::NonRustRatchet, &mut mode)?,
             "--base" | "--merge-base-with" => {
                 let rev = args
@@ -206,6 +215,8 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Mode::SelfTest => return Ok(self_test()),
+        Mode::NoFeatures => return policy::no_features(&arguments.root),
+        Mode::PythonBindingTests => return policy::python_binding_tests(&arguments.root),
         Mode::NonRustRatchet => {
             let (Some(base), Some(target)) = (&arguments.base, &arguments.target) else {
                 unreachable!("parse_arguments requires both");
@@ -291,7 +302,12 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
             );
         }
         Mode::Index => println!("{}", census::index(&workspace, &ledger)),
-        Mode::DumpLedger | Mode::SelfTest | Mode::NonRustRatchet | Mode::Help => {
+        Mode::DumpLedger
+        | Mode::SelfTest
+        | Mode::NonRustRatchet
+        | Mode::Help
+        | Mode::NoFeatures
+        | Mode::PythonBindingTests => {
             unreachable!("handled above")
         }
     }
@@ -821,6 +837,7 @@ fn self_test_cases() -> Vec<(&'static str, bool)> {
     ];
     cases.extend(distinct_cases());
     cases.extend(near_miss_cases());
+    cases.extend(policy::self_test_cases());
     cases
 }
 

@@ -171,8 +171,8 @@ mitigating it.
   assembled with `f64::from_bits`. The crate root denies
   `clippy::float_arithmetic`, so there is no second float path to find.
 
-The cross-target claim is executed, not argued: `make geo-determinism` runs
-the same corpus natively and on wasm32 and compares bytes.
+Native Rust pins the complete geometry corpus against committed digest bytes.
+`make wasm` separately builds the crate for the WASM target.
 
 ## What is here, and what is not
 

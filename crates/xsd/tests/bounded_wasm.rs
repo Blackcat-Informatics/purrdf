@@ -4,8 +4,8 @@
 //! The bounded numeric contract gives one answer on every target.
 //!
 //! The target is `harness = false` and hands its named cases to
-//! `purrdf_testkit::harness`, so they run natively under `cargo test` and on
-//! `wasm32-unknown-unknown` in Node:
+//! `purrdf_testkit::harness`, so they run natively under `cargo test` and can be
+//! executed on `wasm32-unknown-unknown` in Node:
 //!
 //! ```text
 //! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \

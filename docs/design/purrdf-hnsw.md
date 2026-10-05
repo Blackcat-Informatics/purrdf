@@ -238,10 +238,11 @@ as tampering. A header whose arithmetic field is not `1` is refused by the exact
 `HnswError::ArithmeticMismatch`; the reassociated index records its path's code there
 instead (§3.1). The exact canonical image is byte-identical across worker counts,
 across the exact arithmetic's dispatch paths (portable, AVX2 and AVX-512F on x86-64),
-and across `wasm32-unknown-unknown` with and without `+simd128`; `make hnsw-determinism` executes
-all three wasm-side and native digests against the one golden; the `shape` and
-`identity` fields are never written into an exact image, so its bytes are the ones
-version 2 always had. A reassociated image is byte-identical across worker counts and
+and across `wasm32-unknown-unknown` with and without `+simd128` by its fixed
+arithmetic and encoding law. Native tests pin the exact image against the golden;
+WASM selections exercise actual dispatch, build-shape identity and foreign-path
+refusal. The `shape` and `identity` fields are never written into an exact image,
+so its bytes are the ones version 2 always had. A reassociated image is byte-identical across worker counts and
 bound to its build shape and dispatch path.
 
 Every build, rebuild, decode and search resolves the exact arithmetic on its own thread
@@ -431,24 +432,12 @@ would make the digest move for reasons unrelated to the graph, which is exactly
 the false signal the harness exists to remove. A golden that moves under a
 toolchain bump is therefore a serialization defect, never a hasher change.
 
-Two proofs share the one constant:
-
-* `crates/hnsw/tests/determinism.rs` pins the golden at 1, 2, 4 and 8 rayon
-  workers natively and asserts a serial-insert build produces a different digest;
-  it is `harness = false` on the shared test runner, so its named cases (all but
-  the worker-count one, since wasm32 has no threads) run on
-  `wasm32-unknown-unknown` too, each printing the digest it computed;
-* `scripts/check-hnsw-determinism.sh` runs that target natively, on wasm32 and on
-  wasm32 with `+simd128`, in Node through `scripts/wasm-test-runner.sh`, and fails
-  unless every named case reports the same digest on all three, equal to its
-  native golden over the same corpus length, and the two wasm modules differ. The
-  digests are computed with every host clock and entropy source sealed, so a
-  build that reached one fails by that source's name.
-
-`make hnsw-determinism` runs the gate. It needs the wasm32 target, the
-wasm-bindgen CLI and Node, so
-it is **not** part of `make check`; CI runs it in the wasm job where both are
-present, and hard-fails there if the target is absent.
+`crates/hnsw/tests/determinism.rs` pins the golden at 1, 2, 4 and 8 rayon
+workers natively and asserts that a serial-insert build produces a different
+digest. `make check` runs the complete native target. `make wasm` builds the
+release crate, while `make wasm-test` selects the actual WASM arithmetic-path,
+build-shape and foreign-path refusal cases described in
+[WASM test ownership](../WASM_TESTING.md).
 
 ---
 
