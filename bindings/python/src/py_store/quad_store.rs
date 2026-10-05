@@ -722,12 +722,13 @@ impl PyQuadStore {
 
     /// Dump the WHOLE store in `format`, with the realized loss of doing so attached.
     ///
-    /// The counting twin of `dump` (on `Store` and `MutableDataset`): same bytes, plus the three
+    /// The counting twin of `dump` (on `Store` and `MutableDataset`): same bytes, plus the four
     /// independent loss counts a `SerializeLoss` carries. `dump(format=RdfFormat.TURTLE)`
     /// on a store holding named graphs returns a well-formed document with every
     /// graph-scoped statement missing and no signal at all; this is the entry point that
-    /// says how many. Mirrors the C ABI's `purrdf_serialize` count out-params and the
-    /// wasm `Dataset.serializeWithLoss`, so one serialization reports the same three
+    /// says how many. Mirrors the C ABI's `purrdf_serialize` count out-params with
+    /// `purrdf_serialize_empty_named_graphs_dropped`, and the wasm
+    /// `Dataset.serializeWithLoss`, so one serialization reports the same four
     /// numbers on every host.
     ///
     /// There is deliberately no `from_graph` and no JSON-LD configuration here: a graph
@@ -802,7 +803,6 @@ impl PyQuadStore {
             .map_err(|e| PyValueError::new_err(format!("store change snapshot failed: {e}")))
     }
 
-    /// Every quad in the store, graph names intact (for the dataset-format dump path).
     /// Every named graph the store carries as a declaration — one a loaded document
     /// declared without rows, say — in the owned model the quads use, so a dump writes
     /// it where the target can spell an empty graph and counts it where it cannot.
@@ -817,6 +817,7 @@ impl PyQuadStore {
             .collect()
     }
 
+    /// Every quad in the store, graph names intact (for the dataset-format dump path).
     pub(super) fn collect_all_quads(&self) -> Vec<RdfQuad> {
         self.inner
             .quads_for_pattern(None, None, None, GraphMatchValue::Any)
