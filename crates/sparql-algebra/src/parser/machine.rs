@@ -39,7 +39,7 @@ use purrdf_hash::fixed::FixedState;
 use super::{
     ExistsScopeBasis, Modifiers, Parser, PendingExistsScopeCheck, ScopeConstruct, SelectPosition,
     VarScope, aggregate_function, builtin_function, collect_vars, compute_lateral_left_scope,
-    expect_arity, find_scope_conflict, join, repeated_bound_clause, split_trailing_filter,
+    expect_arity, find_scope_conflict, join, repeated_bound_clause, split_trailing_filters,
     visible_variables,
 };
 
@@ -336,6 +336,9 @@ pub(super) struct GroupValue {
     pub(super) pattern: GraphPattern,
     pub(super) scope: VarScope,
     pub(super) intro: bool,
+    /// Filters belonging to this group, rather than a nested group whose
+    /// empty-BGP join was simplified. OPTIONAL must lift only its own filters.
+    pub(super) filter_count: usize,
 }
 
 /// What a finished production hands to the one it was nested in.
@@ -1462,6 +1465,7 @@ impl Parser<'_, '_> {
                     pattern,
                     scope,
                     intro,
+                    filter_count: 0,
                 }
             }
             _ => unreachable!("a sub-SELECT is a Query::Select"),
@@ -1490,6 +1494,7 @@ impl Parser<'_, '_> {
                     intro,
                     ..
                 } = group;
+                let filter_count = filters.len();
                 for expr in filters {
                     g = GraphPattern::Filter {
                         expr,
@@ -1500,6 +1505,7 @@ impl Parser<'_, '_> {
                     pattern: g,
                     scope,
                     intro,
+                    filter_count,
                 })));
             }
             if self.block_boundary() && !self.peek_kw("FILTER") {
@@ -1598,6 +1604,7 @@ impl Parser<'_, '_> {
                             pattern: GraphPattern::union(chain.pattern, arm.pattern),
                             scope: chain.scope,
                             intro: chain.intro || arm.intro,
+                            filter_count: 0,
                         }
                     }
                 };
@@ -1616,7 +1623,7 @@ impl Parser<'_, '_> {
             }
             Element::Optional => {
                 let inner = val.group();
-                let (right, expression) = split_trailing_filter(inner.pattern);
+                let (right, expression) = split_trailing_filters(inner.pattern, inner.filter_count);
                 self.note_element_vars(&mut group.scope, &inner.scope);
                 group.g = GraphPattern::LeftJoin {
                     left: Child::new(group.g),
@@ -1968,6 +1975,7 @@ impl Parser<'_, '_> {
                     pattern,
                     scope,
                     intro,
+                    ..
                 } = val.group();
                 // The WHERE pattern's scope mirrored into this SELECT's own frame, so the
                 // solution modifiers see it whatever built it — a group's elements, or a

@@ -55,6 +55,13 @@ pub enum XfailReason {
     NonDeterministic,
     /// Known upstream erratum in the vendored fixture.
     UpstreamErratum,
+    /// A frozen older specification's expectation conflicts with the current
+    /// RDF/SPARQL contract. The entry cites the changed normative rule.
+    HistoricalSemantics,
+    /// A frozen result requires a different permitted numeric lexical mapping
+    /// from the shipped canonical mapping. Independent native literal answers
+    /// pin value, datatype and exact representation outside the ledger.
+    RepresentationDifference,
     /// Requires an entailment regime (RDF/RDFS/D/OWL) whose closure the native
     /// reasoner does not (yet, or by spec-inherent boundary) materialize.
     Entailment,
@@ -87,6 +94,8 @@ impl XfailReason {
             Self::PendingService => "pending-service",
             Self::NonDeterministic => "non-deterministic",
             Self::UpstreamErratum => "upstream-erratum",
+            Self::HistoricalSemantics => "historical-semantics",
+            Self::RepresentationDifference => "representation-difference",
             Self::Entailment => "entailment",
             Self::CustomFunction => "custom-function",
             Self::ResultFormat => "result-format",
@@ -127,6 +136,77 @@ pub fn matches(case_iri: &str, iri_tail: &str) -> bool {
 /// The registry. Each entry is justified inline. Vendored W3C cases that the
 /// native engine cannot yet pass are recorded here rather than skipped.
 pub const XFAIL: &[Xfail] = &[
+    // === W3C SPARQL 1.0 data-r2 ============================================
+    // RDF 1.2 Concepts §3.4.1 makes a simple literal syntactic sugar for the
+    // same xsd:string term: https://www.w3.org/TR/rdf12-concepts/#section-Graph-Literal
+    // SPARQL 1.2 §15.1 therefore orders all eight string values together:
+    // https://www.w3.org/TR/sparql12-query/#modOrderBy
+    // The frozen extension instead places all four plain spellings before
+    // all four typed spellings. The native independent eight-row oracle in
+    // data_r2_harness.rs pins the current order without changing this fixture.
+    Xfail {
+        iri_tail: "w3c-sparql10/sort/#dawg-sort-11",
+        reason: XfailReason::HistoricalSemantics,
+    },
+    // These four frozen cases require mf:KnownTypesDefault2Neq and mark
+    // mf:IllFormedLiteral in their manifest. Their old rule treats the ill-typed
+    // integer "xyz" as unequal to a known string/language value. SPARQL 1.2
+    // §17.4.2.2 instead requires that literal comparison to raise an error:
+    // https://www.w3.org/TR/sparql12-query/#func-sameValue
+    // The independently specified native 8×8 truth tables in data_r2_harness.rs
+    // prove the complete current pair sets (34/44/44/18 rows); the frozen sets
+    // are 42/52/52/10. Known language inequality is repaired, not expected to
+    // fail; unknown datatype errors, same-term equality and non-literal
+    // inequality remain covered by the same native oracle and the exact ledger.
+    Xfail {
+        iri_tail: "data-r2/open-world/manifest#open-eq-08",
+        reason: XfailReason::HistoricalSemantics,
+    },
+    Xfail {
+        iri_tail: "data-r2/open-world/manifest#open-eq-10",
+        reason: XfailReason::HistoricalSemantics,
+    },
+    Xfail {
+        iri_tail: "data-r2/open-world/manifest#open-eq-11",
+        reason: XfailReason::HistoricalSemantics,
+    },
+    Xfail {
+        iri_tail: "data-r2/open-world/manifest#open-eq-12",
+        reason: XfailReason::HistoricalSemantics,
+    },
+    // XSD 1.1 §3.3.4.2 / §3.3.5.2 permits more than one float/double
+    // character mapping: https://www.w3.org/TR/xmlschema11-2/#float
+    // The native computed mapping uses §E.1's exponential representation,
+    // while these frozen results use bare whole numbers (e.g. "6" vs
+    // "6.0E0"). Neither spelling is an invalid value. The independent native
+    // literal oracle verifies all 64 binary type pairs and eight unary rows,
+    // including promoted result types and verbatim echoed source bindings.
+    // Keep exact literal comparison: do not normalize source or result terms
+    // merely to make these six representation expectations match.
+    Xfail {
+        iri_tail: "data-r2/expr-ops/manifest#add-numbers-cast",
+        reason: XfailReason::RepresentationDifference,
+    },
+    Xfail {
+        iri_tail: "data-r2/expr-ops/manifest#subtract-numbers-cast",
+        reason: XfailReason::RepresentationDifference,
+    },
+    Xfail {
+        iri_tail: "data-r2/expr-ops/manifest#multiply-numbers-cast",
+        reason: XfailReason::RepresentationDifference,
+    },
+    Xfail {
+        iri_tail: "data-r2/expr-ops/manifest#divide-numbers-cast",
+        reason: XfailReason::RepresentationDifference,
+    },
+    Xfail {
+        iri_tail: "data-r2/expr-ops/manifest#unplus-2",
+        reason: XfailReason::RepresentationDifference,
+    },
+    Xfail {
+        iri_tail: "data-r2/expr-ops/manifest#unminus-2",
+        reason: XfailReason::RepresentationDifference,
+    },
     // === Full W3C sparql11 query-eval groups (commit 426c7df) ===============
     //
     // Every case below is a real gap the full vendored suite exposes; the

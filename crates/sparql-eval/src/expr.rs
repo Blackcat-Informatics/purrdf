@@ -552,6 +552,39 @@ fn term_is_literal<D: DatasetView + Sync>(
     })
 }
 
+/// A well-formed language literal has a known RDF value even though it has no
+/// XSD value. Check borrowed views without materializing the lexical form.
+fn term_has_language_value<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Result<bool, EvalError> {
+    match term {
+        SolutionTerm::Existing(id) => ctx
+            .dataset
+            .with_term(id, |term| match term {
+                TermRef::Literal {
+                    datatype,
+                    language: Some(_),
+                    direction,
+                    ..
+                } => ctx.dataset.with_term(datatype, |term| {
+                    matches!(term, TermRef::Iri(iri)
+                        if iri == purrdf_iri::vocab::language_datatype_iri(direction.is_some()))
+                }),
+                _ => Ok(false),
+            })
+            .map_err(EvalError::source_read)?
+            .map_err(EvalError::source_read),
+        SolutionTerm::Computed(sid) => Ok(has_language_value(ctx.scratch.computed_value(sid))),
+    }
+}
+
+fn has_language_value(value: &TermValue) -> bool {
+    matches!(value, TermValue::Literal {
+        datatype, language: Some(_), direction, ..
+    } if datatype == purrdf_iri::vocab::language_datatype_iri(direction.is_some()))
+}
+
 /// Whether a solution term is a triple term, checked on the borrowed view (no
 /// materialization) — mirrors [`term_is_literal`].
 fn term_is_triple<D: DatasetView + Sync>(
@@ -674,8 +707,9 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
 /// are equal, value-comparable literals compare in the XSD value space
 /// ([`sparql_value_eq`], including the `sameValue`-only cross-type NaN
 /// carve-out its docs explain), distinct terms where at least one is a
-/// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error), and two
-/// incomparable literals are a type error (`None`). This is the equality companion to
+/// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error). Distinct known
+/// language values are unequal; an unknown or ill-typed literal comparison is a
+/// type error (`None`). This is the equality companion to
 /// the ordering [`compare_terms`]; using it for `=` would wrongly turn a distinct
 /// IRI pair into an error. Note that `sameValue` "cannot be used directly in
 /// expressions" (its own spec text) — it names the semantics `=` embeds, not a
@@ -723,12 +757,19 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     }
     let ax = xsd_of_term(ctx, ta)?;
     let bx = xsd_of_term(ctx, tb)?;
-    let eq = match (ax, bx) {
-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
+    let eq = match (ax.as_ref(), bx.as_ref()) {
+        (Some(ax), Some(bx)) => sparql_value_eq(ax, bx),
         _ => {
             if term_is_literal(ctx, ta)? && term_is_literal(ctx, tb)? {
-                // Two different literals neither side could value-compare.
-                None
+                // sameValue distinguishes known unequal language values from
+                // unknown datatypes and ill-typed XSD literals, which still error.
+                if (ax.is_some() || term_has_language_value(ctx, ta)?)
+                    && (bx.is_some() || term_has_language_value(ctx, tb)?)
+                {
+                    Some(false)
+                } else {
+                    None
+                }
             } else {
                 // Distinct terms of (at least one) non-literal kind: known unequal.
                 Some(false)
@@ -810,14 +851,21 @@ fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
     if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
         return crate::cdt_fn::compare(crate::cdt_fn::CdtRelation::Equal, a, b);
     }
-    match (xsd_of(a), xsd_of(b)) {
-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
+    let ax = xsd_of(a);
+    let bx = xsd_of(b);
+    match (ax.as_ref(), bx.as_ref()) {
+        (Some(ax), Some(bx)) => sparql_value_eq(ax, bx),
         _ => {
             if a == b {
                 Some(true)
             } else if is_literal(a) && is_literal(b) {
-                // Two different literals neither side could value-compare.
-                None
+                if (ax.is_some() || has_language_value(a))
+                    && (bx.is_some() || has_language_value(b))
+                {
+                    Some(false)
+                } else {
+                    None
+                }
             } else {
                 // Distinct terms of (at least one) non-literal kind: known unequal.
                 Some(false)
@@ -833,7 +881,8 @@ fn is_xsd_nan(x: &XsdValue) -> bool {
 
 /// `=` / `sameValue` equality between two already-typed XSD values (SPARQL 1.2
 /// §17.4.2.2 `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1"):
-/// [`value_cmp`]'s value-space comparison, EXCEPT for one carve-out `sameValue`
+/// [`value_equal`]'s value-space equality, with the known inequality of the disjoint
+/// dateTime/date primitive value spaces and the NaN carve-out `sameValue`
 /// states explicitly and `value_cmp` cannot: *"`NaN`^^xsd:double and
 /// `NaN`^^xsd:float are considered to represent the same value. If term1 and
 /// term2 are both `NaN` for either xsd:double or xsd:float, then return TRUE."*
@@ -852,6 +901,14 @@ fn is_xsd_nan(x: &XsdValue) -> bool {
 pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
     if is_xsd_nan(ax) && is_xsd_nan(bx) {
         return Some(true);
+    }
+    // XSD 1.1 §2.2.2: these primitive value spaces are disjoint. Their
+    // partial ordering is undefined, but sameValue knows they are unequal.
+    if matches!(
+        (ax, bx),
+        (XsdValue::DateTime(_), XsdValue::Date(_)) | (XsdValue::Date(_), XsdValue::DateTime(_))
+    ) {
+        return Some(false);
     }
     value_equal(ax, bx)
 }
@@ -5947,6 +6004,111 @@ mod tests {
             Child::new(typed_lit("NaN", XFLOAT)),
         );
         assert_eq!(ebv(&ds, &lt), None);
+    }
+
+    /// The same literal pair through borrowed dataset terms, computed terms,
+    /// their mixed pairs, IN's owned comparison and a triple-term component.
+    fn assert_literal_equality_paths(a: &TermValue, b: &TermValue, expected: Option<bool>) {
+        for (a, b) in [(a, b), (b, a)] {
+            assert_eq!(rdf_equal(a, b), expected, "owned {a:?} = {b:?}");
+            let triple = |object: &TermValue| TermValue::Triple {
+                s: TermBox::new(TermValue::iri("https://example.org/s")),
+                p: TermBox::new(TermValue::iri("https://example.org/p")),
+                o: TermBox::new(object.clone()),
+            };
+            assert_eq!(rdf_equal(&triple(a), &triple(b)), expected);
+            for existing in [[false, false], [true, false], [false, true], [true, true]] {
+                let mut builder = RdfDatasetBuilder::new();
+                for (value, existing) in [(a, existing[0]), (b, existing[1])] {
+                    if existing {
+                        let TermValue::Literal {
+                            lexical_form,
+                            datatype,
+                            language,
+                            direction,
+                        } = value
+                        else {
+                            panic!("literal fixture");
+                        };
+                        builder.intern_literal(RdfLiteral {
+                            lexical_form: lexical_form.clone(),
+                            datatype: Some(datatype.clone()),
+                            language: language.clone(),
+                            direction: *direction,
+                        });
+                    }
+                }
+                let ds = builder.freeze().unwrap();
+                let mut ctx = EvalCtx::new(&ds);
+                let ta = intern_leaf(&mut ctx, a.clone()).unwrap().unwrap();
+                let tb = intern_leaf(&mut ctx, b.clone()).unwrap().unwrap();
+                let answer = equal_terms(&mut ctx, Some(ta), Some(tb)).unwrap();
+                assert_eq!(
+                    answer.and_then(|term| ebv_term(&mut ctx, term).unwrap()),
+                    expected,
+                    "storage {existing:?}: {a:?} = {b:?}"
+                );
+                assert_eq!(in_candidate(&ctx, ta, a, tb).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn language_value_inequality_preserves_unknown_and_ill_typed_errors() {
+        let a = TermValue::lang_literal("xyz", "en");
+        for b in [
+            TermValue::lang_literal("abc", "en"),
+            TermValue::lang_literal("xyz", "fr"),
+            TermValue::simple_literal("xyz"),
+            TermValue::typed_literal("7", XINT),
+            TermValue::typed_literal("true", XSD_BOOLEAN),
+        ] {
+            assert_literal_equality_paths(&a, &b, Some(false));
+        }
+        assert_literal_equality_paths(&a, &TermValue::lang_literal("xyz", "EN"), Some(true));
+        for b in [
+            TermValue::typed_literal("xyz", XINT),
+            TermValue::typed_literal("xyz", "https://example.org/unknown"),
+        ] {
+            assert_literal_equality_paths(&a, &b, None);
+            assert_literal_equality_paths(&b, &b, Some(true));
+        }
+        // A language datatype without a tag has no value; the dataset admission
+        // gate refuses this shape, so it is not a dataset/computed-pair fixture.
+        assert_eq!(
+            rdf_equal(&a, &TermValue::typed_literal("xyz", RDF_LANG_STRING)),
+            None
+        );
+        let directional = |direction| TermValue::Literal {
+            lexical_form: "xyz".to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(direction),
+        };
+        let ltr = directional(RdfTextDirection::Ltr);
+        let rtl = directional(RdfTextDirection::Rtl);
+        assert_literal_equality_paths(&ltr, &rtl, Some(false));
+        assert_literal_equality_paths(&ltr, &a, Some(false));
+        assert_literal_equality_paths(&ltr, &ltr, Some(true));
+    }
+
+    #[test]
+    fn date_and_datetime_equality_is_false_without_giving_them_an_order() {
+        use purrdf_xsd::datatype::{XSD_DATE, XSD_DATE_TIME};
+        let datetime = TermValue::typed_literal("2006-08-23T09:00:00+01:00", XSD_DATE_TIME);
+        let date = TermValue::typed_literal("2006-08-23", XSD_DATE);
+        assert_literal_equality_paths(&datetime, &date, Some(false));
+        assert_eq!(
+            value_cmp(&xsd_of(&datetime).unwrap(), &xsd_of(&date).unwrap()),
+            None
+        );
+        // One primitive type's timezone uncertainty remains a type error.
+        let unzoned = TermValue::typed_literal("2006-08-23T08:00:00", XSD_DATE_TIME);
+        assert_literal_equality_paths(&datetime, &unzoned, None);
+        let equal = TermValue::typed_literal("2006-08-23T08:00:00Z", XSD_DATE_TIME);
+        assert_literal_equality_paths(&datetime, &equal, Some(true));
+        let invalid = TermValue::typed_literal("not-a-date", XSD_DATE_TIME);
+        assert_literal_equality_paths(&invalid, &date, None);
     }
 
     #[test]
