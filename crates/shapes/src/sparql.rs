@@ -939,6 +939,7 @@ pub struct AmbientContext {
     sources: Option<Arc<QuerySources>>,
     cached_env: Option<CachedEnv>,
     call_depth: u32,
+    native_xpath: Option<crate::xpath::Runtime>,
 }
 
 impl std::fmt::Debug for AmbientContext {
@@ -952,6 +953,7 @@ impl std::fmt::Debug for AmbientContext {
             .field("sources", &self.sources)
             .field("cached_env", &self.cached_env.is_some())
             .field("call_depth", &self.call_depth)
+            .field("native_xpath", &self.native_xpath.is_some())
             .finish()
     }
 }
@@ -967,6 +969,7 @@ impl AmbientContext {
             && self.aggregates.is_none()
             && self.governors.is_none()
             && self.sources.is_none()
+            && self.native_xpath.is_none()
             && self.call_depth == 0
     }
 }
@@ -984,6 +987,7 @@ pub fn replace_ambient_context(next: AmbientContext) -> AmbientContext {
         sources: CURRENT_SOURCES.with(|slot| slot.replace(next.sources)),
         cached_env: CACHED_ENV.with(|slot| slot.replace(next.cached_env)),
         call_depth: CURRENT_CALL_DEPTH.with(|slot| slot.replace(next.call_depth)),
+        native_xpath: crate::xpath::replace(next.native_xpath),
     }
 }
 
@@ -1067,14 +1071,14 @@ fn run_query_view<
     let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
             .with(|engine| engine.query_interned_view(dataset, request, options, visit))
-            .map_err(|e| format!("query evaluation error: {e}"))?;
+            .map_err(crate::xpath::query_error)?;
     };
 
     let outcome = SPARQL_ENGINE
         .with(|engine| {
             engine.query_governed_interned_in_operation(dataset, request, options, state, visit)
         })
-        .map_err(|e| format!("query evaluation error: {e}"))?;
+        .map_err(crate::xpath::query_error)?;
     certify_governed(outcome)
 }
 
@@ -1165,6 +1169,7 @@ struct AmbientScopes {
     /// The custom-function call depth, so a recursion that reaches SPARQL and comes
     /// back keeps counting instead of restarting at zero.
     call_depth: u32,
+    native_xpath: Option<crate::xpath::Configuration>,
 }
 
 impl AmbientScopes {
@@ -1194,6 +1199,7 @@ impl AmbientScopes {
             governors,
             sources,
             call_depth: current_call_depth(),
+            native_xpath: crate::xpath::current(),
         })
     }
 
@@ -1237,7 +1243,7 @@ impl AmbientScopes {
             .as_deref()
             .and_then(|sources| sources.load.as_deref())
             .map(|load| load as &(dyn GraphResolver + Sync));
-        QueryOptions::new()
+        let options = QueryOptions::new()
             .with_prebinding(prebinding)
             .with_functions(functions)
             .with_env(&self.env)
@@ -1245,7 +1251,10 @@ impl AmbientScopes {
             .with_focus_graph(focus_graph)
             .with_call_depth(self.call_depth)
             .with_remote(remote)
-            .with_load(load)
+            .with_load(load);
+        self.native_xpath.as_ref().map_or(options, |configuration| {
+            options.with_xpath_regex(configuration.profile, configuration.limits)
+        })
     }
 
     /// The configuration a prepared plan's admission depends on, held so a handle
@@ -1414,7 +1423,7 @@ impl ShaclExecution {
             .with_env(&scopes.env);
         let execution = SPARQL_ENGINE
             .with(|engine| engine.prepare_execution(query, None, parameters, options))
-            .map_err(|e| format!("query evaluation error: {e}"))?;
+            .map_err(crate::xpath::query_error)?;
         Ok(Self {
             execution,
             prepared_under: scopes.plan_configuration(),
@@ -1519,7 +1528,7 @@ fn run_bound_view<
     let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
             .with(|engine| engine.execute(&mut handle.execution, dataset, options, visit))
-            .map_err(|e| format!("query evaluation error: {e}"))?;
+            .map_err(crate::xpath::query_error)?;
     };
 
     let outcome = SPARQL_ENGINE
@@ -1532,7 +1541,7 @@ fn run_bound_view<
                 visit,
             )
         })
-        .map_err(|e| format!("query evaluation error: {e}"))?;
+        .map_err(crate::xpath::query_error)?;
     certify_governed(outcome)
 }
 

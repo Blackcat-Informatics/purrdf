@@ -118,7 +118,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL 1.2 unlisted vendored files | the 3 files of `vectors/shacl12/tests/` no upstream manifest includes | **3 / 3** graded apart from the approved suite: 2 exactly as written · 1 with a proven delta |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **73 / 73** frozen expected reports |
 | SHACL prepared-product equivalence | the three SHACL corpora, `vectors/shacl/` (129) + the `sht:Validate` entries of `vectors/shacl12/tests/` (174) + `crates/shapes/corpus/` (73) | **364 / 364** shapes graphs whose validation report is byte-identical when the shapes graph is parsed from source, packed and admitted, and packed and rebuilt from the dataset the product carries · 0 ledgered refusals. Not a second SHACL grading: the two rows above already decide whether the engine's answer is right, and a case whose answer is wrong is wrong identically in all three lanes. This row decides whether the prepared-product codec CHANGES the answer, which neither of those rows can see because each runs exactly one lane. The comparison surface is the report graph's N-Triples compared as bytes, so `sh:sourceShape` and `sh:resultMessage` are both in it and a restore that attributed a violation to the wrong shape fails here even when every focus node, path and component still matched. The ledger column is the **over-refusal** guard, and an empty ledger is the measurement: every shapes graph any of the three corpora contains that parses at all can be packed and restored, so the product format is not a subset of what the validator accepts. The 12 cases outside the comparison are the entries the two vendored suites mark `sht:Failure` — inputs a validator is required to reject, so there is nothing to pack; no other entry's shapes graph is refused at load, and that correspondence is enforced case by case rather than counted. `sparql/component/validator-001` is compared in both suites, loaded with an empty import table: its `owl:imports` sits on a node that is not an import anchor, so the triple is data |
-| XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **292 / 292** cases · 0 ledgered. The dialect `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified in, graded once at the shared compiler (`purrdf_core::xsd_regex`) instead of three times at the call sites. Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Seven construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, quantifiers (including F&O §5.6.1's reluctant forms), the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the shared compiler's back-reference refusal, trailing-newline differences for both multiline anchors, and case-variant differences under `i`, and [the recognizer boundary and the liberal edges](#xsdxpath-regex-the-recognizer-boundary-and-the-liberal-edges) for what the compiler now rejects outright and what it deliberately accepts more liberally |
+| XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **292 / 292** cases · 0 ledgered. The shared compatibility translation (`purrdf_core::xsd_regex::compile`) used by unselected `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` is graded once. Explicit dated native programs have separate native Rust vectors; see [Dated native XPath programs](#dated-native-xpath-programs). Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Seven construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, quantifiers (including F&O §5.6.1's reluctant forms), the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the shared compiler's back-reference refusal, trailing-newline differences for both multiline anchors, and case-variant differences under `i`, and [the recognizer boundary and the liberal edges](#xsdxpath-regex-the-recognizer-boundary-and-the-liberal-edges) for what the compiler now rejects outright and what it deliberately accepts more liberally |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **264 / 264** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 67, turtle 110) · 0 gaps. The RDF 1.2 `syntax/` + `eval/` sub-suites, plus the `iri/` sub-suite: the `IRI-resolution-01/02/07/08`, `IRIREF_datatype` and `IRI_with_*_numeric_escape` cases, which exist only in the RDF 1.1 Turtle/TriG suites upstream because RDF 1.2 publishes no base-resolution eval tests — this is the end-to-end half of the base-IRI contract `crates/iri/tests/` pins unit-by-unit against RFC 3986 §5.4 |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC + first-party RDF 1.2 vectors | **73 / 73** applicable toRDF · **13 / 13** exact compaction · 0 gaps; frozen provenance and checksums |
@@ -181,10 +181,11 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   `sh:expression`).
 - `crates/rdf-core/corpus/xsd-regex/` — PurRDF's own XSD/XPath `regExp` corpus:
   292 cases across seven `.cases` files, grading
-  `purrdf_core::xsd_regex::compile` — the single shared dialect translation
-  that `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` all route
-  through, so a dialect regression surfaces once rather than three times or
-  not at all. Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1
+  `purrdf_core::xsd_regex::compile` — the shared compatibility translation
+  used by unselected `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN`.
+  Explicit dated native execution has separate native Rust vectors described
+  under [Dated native XPath programs](#dated-native-xpath-programs).
+  Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1
   §5.6; its README specifies the line format and cites the clause behind each
   group.
 - `crates/shapes/src/schema_import.rs`, `crates/shapes/src/linkml/importer.rs`,
@@ -669,36 +670,28 @@ way the matrix stays honest:
   vocabularies declare and what the engine implements at zero, and
   `crates/shapes/tests/shacl_shacl_differential.rs` holds the parser's
   refusals to the verdicts of the specification's own `shacl-shacl.ttl`.
-- **XSD/XPath regex back-references — refused by design, permanently.**
-  `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified
-  in the XSD/XPath `regExp` dialect (SHACL §4.5.3 → SPARQL 1.1 §17.4.3.14 →
-  XPath F&O 3.1 §5.6), and F&O §5.6.1.4 adds `backReference ::= "\"
-  [1-9][0-9]*` to the `fn:matches` grammar. So a back-reference is a real,
-  spec-mandated construct — and one this implementation will never execute.
-  PurRDF **translates** that dialect onto the `regex` crate rather than
-  subsuming a second regex engine (`purrdf_core::xsd_regex`, one shared
-  compiler for all three call sites), and the `regex` crate's finite-automaton
-  engine cannot backtrack, which is precisely the capability a back-reference
-  needs. No rewriting of the source text reaches it. The refusal is therefore
-  architectural, not a missing feature: a pattern containing one is a hard
-  error naming the exact spelling it found, because a clear refusal beats a
-  wrong answer. Pinned by
+- **Compatibility XSD/XPath regex back-references.** The unselected
+  `purrdf_core::xsd_regex::compile` translation retains its public
+  `regex::Regex` representation and refuses backreferences, naming the exact
+  spelling. Explicit dated native programs execute backreferences under both
+  selected laws. The compatibility refusal remains pinned by
   `crates/rdf-core/corpus/xsd-regex/rejected-constructs.cases` (four cases,
   including a multi-digit reference, which must be named whole rather than
   read as a reference plus a literal digit).
-- **XSD/XPath multiline anchors at a trailing newline.** XPath F&O 3.1
+- **Compatibility XSD/XPath multiline anchors at a trailing newline.** XPath F&O 3.1
   §5.6.2 excludes the position after a final LF for both `^` and `$` under
   `m`. Rust regex includes it: on `"a\n"`, `^` matches positions `[0, 2]`
   instead of `[0]`, and `$` matches `[1, 2]` instead of `[1]`. The shared
-  validator's unit test pins these existing engine behaviors. The ECMA-262
-  emitter implements the exact XPath rules with assertions.
-- **XSD/XPath case variants under `i`.** XPath F&O 3.1 §5.6.2 defines case
+  validator's unit test pins these existing engine behaviors. The dated native
+  matcher and ECMA-262 emitter implement the XPath rules.
+- **Compatibility XSD/XPath case variants under `i`.** XPath F&O 3.1 §5.6.2 defines case
   variants using equal full lower-case strings or equal full upper-case
   strings. Rust regex uses Unicode simple case folding. For example, both
   `i` and dotless `ı` uppercase to `I`, but the Rust validator's `^i$` under
   `i` rejects `ı`. The validator also folds `\p{Lu}` under `i`, which XPath
   leaves unaffected. Unit tests pin these existing validator differences. The
-  ECMA-262 emitter implements the exact XPath rule: it writes each normal
+  dated native matcher uses generated full case variants. The ECMA-262 emitter
+  implements the XPath rule: it writes each normal
   character's and character range's case variants into the pattern and leaves
   every escape unaffected.
 
@@ -739,10 +732,38 @@ The reverse schema importer uses the same proven grammar and translates
 explicit Unicode escapes into XSD scalar ranges. Unsupported input returns
 `SchemaImportError` instead of copying a foreign pattern into `sh:pattern`.
 
+### Dated native XPath programs
+
+`purrdf_core::xsd_regex::xpath` executes an explicitly selected
+[XPath F&O 2.0 Second Edition (2010-12-14)](https://www.w3.org/TR/2010/REC-xpath-functions-20101214/#regex-syntax)
+or [XPath F&O 3.1 (2017-03-21)](https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/#regex-syntax)
+law. Both support backreferences, ordered captures and replacement; only the
+3.1 law admits non-capturing groups and `q`. The native parser, matcher and
+replacement modules carry dated grammar/matching vectors, invalid neighbors,
+independent finite-language enumeration and resource-bound tests. Host-native
+tests exercise the selected law through SPARQL, SHACL and ShEx. These are
+first-party vectors, separate from the unchanged 292-case compatibility corpus.
+
+The native program checks finite source, compiler, program-storage, matching
+and output bounds. Resource and allocation refusal remains operational through
+negation, alternate branches, cached programs and partial results. Successful
+program reuse rechecks current source/storage admission, and matching receives
+current finite limits. Replacement implements `FORX0003` for a pattern that
+matches the empty string and `FORX0004` for malformed replacement text; the
+empty-match check also preserves operational refusal. Unicode categories,
+blocks and the non-transitive full-case-variant relation use generated Unicode
+data. JSON Schema's ECMA-262 engine and its existing limits remain unchanged.
+
+The core API and each host's README document the explicit selection doors.
+Unselected entry points retain the compatibility behavior below. General
+grammar, matching and host semantics run in native Rust; WASM compilation and
+its target-sensitive obligations stay separate.
+
 ### XSD/XPath regex: the recognizer boundary and the liberal edges
 
-`sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` all compile through
-one shared compiler (`purrdf_core::xsd_regex`). Two of its decisions move in
+Unselected `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` compile
+through the shared compatibility compiler (`purrdf_core::xsd_regex::compile`).
+Two of its decisions move in
 opposite directions and are recorded here because downstream consumers copy
 `sh:pattern` text into other dialects and need both in view.
 
@@ -788,9 +809,9 @@ constructs. The families refused by name:
   defensively-escaped pattern. The first-party corpus pins `[a\&b]`/`[\~]`, and
   the vendored ShExTest corpus pins `\$` as its literal-dollar spelling. It is
   recorded as a decision, not an accident.
-* `fn:replace`'s F&O §5.6.2 `err:FORX0003` (the pattern matches a zero-length
-  string) is **not** implemented; `err:FORX0004` (a malformed replacement
-  string) **is**.
+* Compatibility `fn:replace` does not implement F&O §5.6.2 `err:FORX0003`
+  (the pattern matches a zero-length string); `err:FORX0004` (a malformed
+  replacement string) is implemented. Dated native replacement implements both.
 
 **The resource bounds.** Compilation is bounded by three named limits, each a
 hard error rather than a truncation or a fallback:

@@ -104,6 +104,9 @@ simply not narrated here:
   composite and pack carriers.
 - `crates/shapes/benches/graph_membership.rs` — per-row named-graph membership
   through the SHACL data view on native and mutation-snapshot carriers.
+- `crates/shapes/benches/pattern_validate.rs` — matched compatibility and dated
+  native XPath pattern validation over shared preparations and data bindings,
+  with cold and warm programs, current finite limits and long-literal neighbors.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
   LinkML import/lowering throughput and one-operation allocation traffic,
   including the change path's conforming-versus-violating contrast over one
@@ -215,7 +218,7 @@ target obligations and native owners are in [WASM test ownership](WASM_TESTING.m
 
 ### Native benchmark inventory
 
-This table documents 30 of the 104 `[[bench]]` targets registered across the
+This table documents 31 of the 104 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -241,6 +244,7 @@ here.
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/sparql-eval/benches/graph_constant_membership.rs` | Addressing named graphs by constant over 10,000 graphs: a graph that exists (`GRAPH <g> { ?s ?p ?o }`, one row), a phantom IRI that names no graph (no row), and one membership probe per row of `?s ?p ?o LATERAL { GRAPH ?o { ... } }`, on the frozen dataset, a delta snapshot, a composite view and a pack. |
 | `crates/shapes/benches/graph_membership.rs` | The `LATERAL { GRAPH ?o { ... } }` membership-probe shape over 10,000 named graphs read through the SHACL data view, on a native source and a mutation snapshot. |
+| `crates/shapes/benches/pattern_validate.rs` | Compatibility and both dated native XPath laws over matched shapes and literals, cold and warm native programs under current finite limits, plus long-literal pattern neighbors. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
 | `crates/shapes/benches/srl_closure.rs` | SPARQL 1.2 RL transitive closure: parse-and-check of the closure program, then `srl::infer` over chains of 16, 64, and 128 `:link` edges, asserting the `n(n + 1)/2` inferred triples. |
