@@ -127,7 +127,79 @@ pub(crate) struct GeneratedRoot {
     pub(crate) index: u32,
 }
 
+/// What a round's match at a node can observe of it, cheaply: labels only grow and edges
+/// only accumulate within one branch, and the one path that can shrink a label — a merge —
+/// also moves the discarded node's root, so a change to any of these is a change to what a
+/// match there can read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Seen {
+    root: usize,
+    label: usize,
+    degree: usize,
+    nominals: usize,
+    neq: usize,
+    concrete: bool,
+    value_class: Option<u32>,
+}
+
 impl State {
+    /// The current [`Seen`] signature of every node.
+    pub(crate) fn signatures(&self) -> Vec<Seen> {
+        (0..self.nodes.len())
+            .map(|x| {
+                let node = &self.nodes[x];
+                let root = find(self, x);
+                Seen {
+                    root,
+                    label: node.label.len(),
+                    degree: self.class_edges(root).len(),
+                    nominals: node.nominals.len(),
+                    neq: node.neq.len(),
+                    concrete: node.concrete,
+                    value_class: node.value_class,
+                }
+            })
+            .collect()
+    }
+
+    /// The roots whose signature differs from the last round's, or that are new. A node
+    /// merged away since marks the root it now resolves to.
+    pub(crate) fn changed_since_seen(&self, now: &[Seen]) -> Vec<bool> {
+        let mut changed = vec![false; self.nodes.len()];
+        for (x, current) in now.iter().enumerate() {
+            if self.seen.get(x) != Some(current) {
+                changed[x] = true;
+                changed[current.root] = true;
+            }
+        }
+        changed
+    }
+
+    /// Every root within `radius` edges of a `changed` root, by undirected edge steps.
+    pub(crate) fn affected(&self, changed: &[bool], radius: usize) -> Vec<bool> {
+        let mut affected = changed.to_vec();
+        let mut frontier: Vec<usize> = (0..changed.len()).filter(|&x| changed[x]).collect();
+        for _ in 0..radius {
+            let mut next = Vec::new();
+            for &y in &frontier {
+                for &edge in self.class_edges(y) {
+                    let (from, to, _) = self.edges[edge];
+                    for z in [find(self, from), find(self, to)] {
+                        if !affected[z] {
+                            affected[z] = true;
+                            next.push(z);
+                        }
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        affected
+    }
+
     /// Append the edge `from → to` over `property`, indexing it under both endpoints' roots.
     pub(crate) fn push_edge(&mut self, from: usize, to: usize, property: u32) {
         let edge = self.edges.len();
@@ -211,6 +283,11 @@ pub(crate) struct State {
     /// them in the order the scan did, which keeps every neighbourhood — and so every search,
     /// verdict and proof — identical.
     pub(crate) adjacency: Vec<Vec<usize>>,
+    /// Each node's [`Seen`] signature and blocked status when the last saturation round
+    /// started: what that round matched against. A node whose neighbourhood still reads the
+    /// same derives nothing new, so delta saturation revisits only what changed since.
+    pub(crate) seen: Vec<Seen>,
+    pub(crate) seen_blocked: Vec<bool>,
     /// Named individual term id → its root node index.
     pub(crate) root_of: BTreeMap<u32, usize>,
     /// Generated (nominal-introduction) root identity → its root node index. Kept separate
@@ -506,31 +583,33 @@ fn cap_base(kb: &Kb) -> u64 {
 ///
 /// * **the ledgered fixtures** (`crates/validate/tests/dl_step_ledger.rs`, pinned by
 ///   `every_ledgered_search_costs_exactly_what_it_is_pinned_to`). The equivalence-over-
-///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 2,724
+///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 2,544
 ///   units; its `rdfs:subClassOf` control — the same seventeen triples with BOTH
 ///   restrictions moved off the equivalence — 206.
 /// * **the differential corpora** of [`crate::owl_dl::oracle`] — 9,800 generated,
 ///   deliberately adversarial knowledge bases (pinned by
 ///   `the_enumerated_search_spaces_are_pinned`). Their most expensive DECIDING case spends
-///   6.1 million units, over a THREE-axiom knowledge base whose completion graph reaches 101
-///   nodes. That case is what fixes the constant term: work is a function of the SEARCH
-///   rather than of the input's size, so a size-derived cap has to carry a floor generous
-///   enough for a small ontology whose search is not, and 64 million is that measurement
-///   times ten.
+///   4,124,422 units, over a knowledge base whose completion graph reaches 87 nodes. That
+///   case is what fixes the constant term: work is a function of the SEARCH rather than of
+///   the input's size, so a size-derived cap has to carry a floor generous enough for a
+///   small ontology whose search is not, and 64 million keeps over fifteen times that
+///   measurement in hand. (Before delta saturation re-matched only around what a round
+///   changed, the same case spent 43,967,562 units, and the floor kept less than one and a
+///   half times it.)
 /// * **the two block families** of this crate's consistency bench (`benches/consistency.rs`),
-///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 2,724 /
-///   17,750 / 177,461 / 2,398,087 / 40,349,307 units and decides at every size, the largest
-///   with fifteen times its budget left. The STACKED family — the same blocks co-typed on
-///   ONE individual, which is the shape this cap exists for — spends 2,724 / 185,099 /
-///   75,826,178 at 1/2/4 blocks and decides them (the two-block knowledge base is the same
-///   one the step ledger pins as `co-typed-equivalence-blocks`, at the same 185,099), and
+///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 2,544 /
+///   11,752 / 82,809 / 841,183 / 10,634,203 units and decides at every size. The STACKED
+///   family — the same blocks co-typed on ONE individual, which is the shape this cap exists
+///   for — spends 2,544 / 91,883 / 17,800,826 at 1/2/4 blocks and decides them (the
+///   two-block knowledge base is the same one the step ledger pins as
+///   `co-typed-equivalence-blocks`, at the same 91,883), and
 ///   from five blocks on it reaches the cap: `unknown` under `completeness
 ///   budget-exhausted`, with `work` equal to `work-budget` in the certificate — the same
 ///   signature `crates/validate/tests/dl_work_budget.rs` pins at ten co-typed copies. Run
-///   UNCAPPED the same family spends 5,194,168 units at three blocks, 75,826,178 at four,
-///   687,884,004 at five and 4.4 BILLION at six — roughly a factor of nine per added block —
-///   so ten blocks is some 10¹³ units of grinding, which is what this class did before the
-///   cap existed while its round count sat at a few percent of the round budget.
+///   UNCAPPED the same family spends 1,603,648 units at three blocks, 17,800,826 at four,
+///   138,048,744 at five and 805,460,809 at six — a factor of six to eleven per added block —
+///   so ten blocks is on the order of 10¹² units of grinding, which is what this class did
+///   before the cap existed while its round count sat at a few percent of the round budget.
 ///
 /// The base is [`cap_base`] — the same size the round cap is derived from — and the formula is
 /// `64,000,000 + base³ × 256`. CUBIC rather than the round cap's quadratic, because the two
@@ -846,6 +925,8 @@ impl<'a> Graph<'a> {
             nodes: Vec::new(),
             edges: Vec::new(),
             adjacency: Vec::new(),
+            seen: Vec::new(),
+            seen_blocked: Vec::new(),
             root_of: BTreeMap::new(),
             generated_root_of: BTreeMap::new(),
             clash: false,
@@ -1687,6 +1768,8 @@ mod tests {
             nodes: vec![bare_node(true), bare_node(true)],
             edges: Vec::new(),
             adjacency: Vec::new(),
+            seen: Vec::new(),
+            seen_blocked: Vec::new(),
             root_of: BTreeMap::new(),
             generated_root_of: BTreeMap::new(),
             clash: false,

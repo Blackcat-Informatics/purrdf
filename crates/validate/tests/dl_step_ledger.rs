@@ -380,7 +380,9 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 11,
-        work: 2724,
+        // Was 2,724 before delta saturation re-matched only around what changed; the same
+        // eleven rounds, nodes and branches.
+        work: 2544,
         peak_nodes: 4,
         disjunctions: 3,
         peak_depth: 3,
@@ -422,7 +424,8 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 71,
-        work: 185_099,
+        // Was 185,099 before delta saturation; the same 71 rounds, 15 nodes and 28 branches.
+        work: 91_883,
         peak_nodes: 15,
         disjunctions: 28,
         peak_depth: 28,

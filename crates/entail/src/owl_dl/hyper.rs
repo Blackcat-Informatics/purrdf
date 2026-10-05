@@ -402,6 +402,8 @@ struct Hyper<'a> {
     g: Graph<'a>,
     /// The DL-clauses derived from it.
     clauses: ClauseSet,
+    /// [`ClauseSet::match_radius`]: how far a change reaches the matches a round must redo.
+    radius: usize,
     /// Derivation rounds consumed so far.
     steps: u64,
     /// Hard round cap; exceeding it is a hard error (a termination-bug backstop).
@@ -540,8 +542,10 @@ impl<'a> Hyper<'a> {
     /// The one constructor both entry points share.
     fn build(kb: &'a Kb, budget: Budget, trace: Option<RefCell<Recorder>>) -> Self {
         let g = Graph::new(kb, budget.work);
+        let clauses = derive(g.kb());
         Self {
-            clauses: derive(g.kb()),
+            radius: clauses.match_radius(),
+            clauses,
             g,
             steps: 0,
             cap: budget.steps,
@@ -875,12 +879,27 @@ impl<'a> Hyper<'a> {
             // measured rather than discarded — that branch is exactly the one a reader of this
             // counter is looking for.
             self.observe(st);
-            if let Some(node) = self.concrete_domain_clashes(st) {
+            // Delta saturation: what the last round matched against, against what is there now.
+            // Only a root whose own reading changed can newly clash in the data domain, and only
+            // a root within `radius` of a change — or whose blocking flipped — can match
+            // anything new. Everything else already matched exactly this, and derived it.
+            let now = st.signatures();
+            let mut moved = st.changed_since_seen(&now);
+            if let Some(node) = self.concrete_domain_clashes(st, &moved) {
                 self.record_data_clash(st, node);
                 st.clash = true;
                 return Ok(false);
             }
-            let changed = self.round(st);
+            let blocked = self.blocking(st);
+            for (x, &now_blocked) in blocked.iter().enumerate() {
+                if st.seen_blocked.get(x) != Some(&now_blocked) {
+                    moved[x] = true;
+                }
+            }
+            let affected = st.affected(&moved, self.radius);
+            let changed = self.round(st, &blocked, &affected);
+            st.seen = now;
+            st.seen_blocked = blocked;
             self.observe(st);
             Self::check_clique(st)?;
             // A round whose enumerations stopped for want of budget derived less than the
@@ -947,8 +966,10 @@ impl<'a> Hyper<'a> {
     /// node it closed on. The scan is the same scan: `find` short-circuits at the first `true`
     /// exactly as the `any` it replaced did, so the same nodes are examined, the same work is
     /// charged, and the same state closes.
-    fn concrete_domain_clashes(&self, st: &State) -> Option<usize> {
-        (0..st.nodes.len()).find(|&x| find(st, x) == x && self.g.data_clashes(st, x))
+    fn concrete_domain_clashes(&self, st: &State, moved: &[bool]) -> Option<usize> {
+        // A node's data-domain answer is a function of its own reading, so only a root whose
+        // reading moved since it was last checked can have changed it.
+        (0..st.nodes.len()).find(|&x| moved[x] && find(st, x) == x && self.g.data_clashes(st, x))
     }
 
     /// One derivation round: every non-disjunctive clause instance, applied once.
@@ -957,8 +978,7 @@ impl<'a> Hyper<'a> {
     /// minted witness — changes the graph the others were found in. A match invalidated that
     /// way is re-checked against the current state before it is applied (every node index is
     /// resolved through [`find`]), so the worst a stale match can be is redundant.
-    fn round(&self, st: &mut State) -> bool {
-        let blocked = self.blocking(st);
+    fn round(&self, st: &mut State, blocked: &[bool], affected: &[bool]) -> bool {
         let mut changed = false;
         // Labelled so the trigger and clause scans below can bail out of the WHOLE round the
         // moment the meter reports exhausted, rather than finishing the node they were on and
@@ -970,7 +990,7 @@ impl<'a> Hyper<'a> {
             if self.g.work().exhausted() {
                 break 'nodes;
             }
-            if find(st, x) != x {
+            if find(st, x) != x || !affected.get(x).copied().unwrap_or(true) {
                 continue;
             }
             // A general concept inclusion quantifies over `owl:Thing`, so a TBox clause is
@@ -1009,7 +1029,7 @@ impl<'a> Hyper<'a> {
                     if !object_domain && self.clauses.is_tbox(index) {
                         continue;
                     }
-                    changed |= self.fire(st, index, x, &blocked);
+                    changed |= self.fire(st, index, x, blocked);
                     if st.clash {
                         return changed;
                     }
@@ -1023,7 +1043,7 @@ impl<'a> Hyper<'a> {
                 if !object_domain && self.clauses.is_tbox(index) {
                     continue;
                 }
-                changed |= self.fire(st, index, x, &blocked);
+                changed |= self.fire(st, index, x, blocked);
                 if st.clash {
                     return changed;
                 }
@@ -2210,7 +2230,10 @@ mod tests {
         let h = Hyper::new(&kb, budget);
         let mut st = h.g.init_state(&Assumptions::of_kb());
 
-        h.round(&mut st);
+        // A first round: nothing was seen before, so every node is affected.
+        let blocked = h.blocking(&st);
+        let affected = vec![true; st.nodes.len()];
+        h.round(&mut st, &blocked, &affected);
 
         assert!(
             h.g.work().exhausted(),

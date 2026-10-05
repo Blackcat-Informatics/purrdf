@@ -469,6 +469,28 @@ impl ClauseSet {
     }
 
     /// The clauses no concept triggers — tried at every node.
+    /// How many edges a clause match rooted at one node can reach: an upper bound on every
+    /// body's variable-tree depth (each `Role` or `Successors` atom descends at most one
+    /// level), plus one for a head that inspects the bound node's neighbours (an at-least
+    /// head counting existing successors). A node farther than this from every change since
+    /// its last match cannot match anything new, which is what delta saturation relies on.
+    pub(crate) fn match_radius(&self) -> usize {
+        self.clauses
+            .iter()
+            .map(|clause| {
+                clause
+                    .body
+                    .iter()
+                    .filter(|atom| {
+                        matches!(atom, BodyAtom::Role { .. } | BodyAtom::Successors { .. })
+                    })
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
     pub(crate) fn untriggered(&self) -> &[usize] {
         &self.untriggered
     }
