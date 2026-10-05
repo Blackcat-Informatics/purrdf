@@ -68,6 +68,7 @@
 #![forbid(unsafe_code)]
 
 pub mod build;
+pub mod complete;
 pub mod entail;
 pub mod expr_selector;
 pub mod governors;
@@ -84,6 +85,11 @@ pub use build::{
     SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
     build_report_sarif_with, diagnostics_to_sarif_string, report_to_sarif_string,
 };
+pub use complete::{
+    CompleteValidationStatus, complete_profile, complete_report_payload, complete_report_to_json,
+    complete_report_to_sarif_string, complete_validation_status, validate_complete_documents,
+    validate_complete_product, validate_complete_sources,
+};
 pub use entail::{
     EntailOutcome, EntailRequest, entail_to_ntriples, entail_to_ntriples_string,
     entail_to_ntriples_string_with_shapes_graph,
@@ -95,9 +101,9 @@ pub use product::{
     certify_shapes_product, diff_shapes_products, explain_shapes_product, pack_shapes_product,
     pack_shapes_product_from_dataset, pack_shapes_product_with_shapes_graph, parse_identity_digest,
     prepared_to_product, prepared_to_product_with_implementations, rebuild_shapes_product,
-    rebuild_shapes_product_expecting, validate_with_rebuilt_shapes_product,
-    validate_with_rebuilt_shapes_product_expecting, validate_with_shapes_product,
-    validate_with_shapes_product_expecting,
+    rebuild_shapes_product_expecting, restore_shapes_product_with_options,
+    validate_with_rebuilt_shapes_product, validate_with_rebuilt_shapes_product_expecting,
+    validate_with_shapes_product, validate_with_shapes_product_expecting,
 };
 pub use regime::{
     ABSENT_DL_PROOF, DL_PROOF_BANNER, DL_PROOF_CHECK_BANNER, DL_PROOF_GOLDEN_VECTORS,

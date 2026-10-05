@@ -384,6 +384,8 @@ impl ReportSourceContext {
 pub enum CompleteValidationError {
     /// Parsing or admitting the underlying shape graph failed.
     Shapes(crate::error::ShapesError),
+    /// The existing authenticated prepared-product boundary refused restoration.
+    Preparation(crate::product::ShapesProductError),
     /// An evaluated constraint no longer matches its original source occurrence.
     SourceConstraint(SourceConstraintRefusal),
     /// A dated execution cannot establish its original query role or parameters.
@@ -396,19 +398,31 @@ pub enum CompleteValidationError {
     Resource(Box<ResourceRefusal>),
     /// A dated query law refused the actual declaration or invocation.
     Admission(Box<crate::profile::AdmissionRefusal>),
+    /// A caller supplied a regex law incompatible with the dated SHACL bundle.
+    XPathProfile(crate::profile::XPathProfileConflict),
+    /// The selected native XPath executor refused the actual operation.
+    XPath(Box<crate::xpath::XPathValidationError>),
     /// Execution failed independently of a semantic result.
     Execution(String),
 }
+
+purrdf_lex::variant_from!(CompleteValidationError {
+    Shapes(crate::error::ShapesError),
+    Preparation(crate::product::ShapesProductError), Execution(String)
+});
 
 impl std::fmt::Display for CompleteValidationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Shapes(error) => error.fmt(formatter),
+            Self::Preparation(error) => error.fmt(formatter),
             Self::SourceConstraint(error) => error.fmt(formatter),
             Self::QuerySource(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
             Self::Resource(error) => error.fmt(formatter),
             Self::Admission(error) => error.fmt(formatter),
+            Self::XPathProfile(error) => error.fmt(formatter),
+            Self::XPath(error) => error.fmt(formatter),
             Self::SourceContext(message) | Self::Execution(message) => formatter.write_str(message),
         }
     }
@@ -418,17 +432,64 @@ impl std::error::Error for CompleteValidationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Shapes(error) => Some(error),
+            Self::Preparation(error) => Some(error),
             Self::SourceConstraint(error) => Some(error),
             Self::QuerySource(error) => Some(error.as_ref()),
             Self::Semantic(error) => Some(error.as_ref()),
             Self::Resource(error) => Some(error.as_ref()),
             Self::Admission(error) => Some(error.as_ref()),
+            Self::XPathProfile(error) => Some(error),
+            Self::XPath(error) => Some(error.as_ref()),
             Self::SourceContext(_) | Self::Execution(_) => None,
         }
     }
 }
 
 impl CompleteValidationError {
+    /// Resolve the caller's exact error and its canonically selected native cause.
+    /// Typed report/source/governor evidence remains authoritative; only the
+    /// generic execution lane projects an attached native diagnostic.
+    pub(crate) fn from_native_run(error: crate::xpath::RunError<Self>) -> Self {
+        match error.into_parts() {
+            (
+                Some(cause),
+                None
+                | Some(Self::Execution(_) | Self::Shapes(crate::error::ShapesError::Invalid(_))),
+            ) => Self::XPath(Box::new(cause.into_public())),
+            (_, Some(error)) => error,
+            (None, None) => unreachable!("a refused run retains an actual error"),
+        }
+    }
+
+    /// Reuse the native public error vocabulary while retaining richer dated causes.
+    pub(crate) fn into_xpath(self) -> crate::xpath::XPathValidationError {
+        match self {
+            Self::XPath(error) => *error,
+            Self::Shapes(error) => crate::xpath::XPathValidationError::Shapes(error),
+            Self::Execution(error) => crate::xpath::XPathValidationError::Execution(error),
+            error => crate::xpath::XPathValidationError::Complete(Box::new(error)),
+        }
+    }
+
+    /// Preserve existing product dimensions on the closed compatibility door.
+    pub(crate) fn into_product(self) -> crate::product::ShapesProductError {
+        match self {
+            Self::Preparation(error) => error,
+            error => crate::product::ShapesProductError::new(
+                crate::product::ProductDimension::Malformed,
+                error.to_string(),
+            ),
+        }
+    }
+
+    /// Project through an existing closed compatibility error without changing it.
+    pub(crate) fn into_shapes(self) -> crate::error::ShapesError {
+        match self {
+            Self::Shapes(error) => error,
+            error => crate::error::ShapesError::Invalid(error.to_string()),
+        }
+    }
+
     /// Read the actual operation ledger before any semantic/execution failure.
     /// The governor's typed state is authoritative; diagnostics are not parsed.
     pub(crate) fn resource(state: &purrdf_sparql_eval::GovernorState) -> Option<Self> {
@@ -607,6 +668,14 @@ impl CompleteBlankLabels {
     #[must_use]
     pub fn source_of(&self, report_label: &str) -> Option<&SourceBlank> {
         self.back.get(report_label)
+    }
+
+    /// Every emitted source blank and its exact acquisition-local identity.
+    /// Iteration order is unspecified; serializers sort the emitted labels.
+    pub fn sources(&self) -> impl ExactSizeIterator<Item = (&str, &SourceBlank)> {
+        self.back
+            .iter()
+            .map(|(label, source)| (label.as_str(), source))
     }
 
     fn label(&mut self, context: &ReportSourceContext, original: &str) -> String {

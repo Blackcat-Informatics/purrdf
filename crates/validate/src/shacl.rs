@@ -266,9 +266,18 @@ pub fn validate_changes_to_sarif_string_with_shapes_graph(
     // The data graph this validation reads is the MUTATED one, so its links are read off
     // the snapshot: a change may add or retract a `sh:shapesGraph` link like any other row.
     table.link_data_graph(snapshot.as_ref(), &[])?;
-    let mut shapes =
-        engine::parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, &table)?;
-    shapes.set_validation_options(options.validation.clone());
+    let shapes = engine::parse_shapes_with_options(
+        shapes_ttl,
+        shapes_base,
+        None,
+        shapes_graph,
+        &table,
+        &options.validation,
+    )
+    .map_err(|error| match error {
+        purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
+        error => ShapesError::Invalid(error.to_string()),
+    })?;
     // `None` here is no override: the binding exposes the IRI the shapes were parsed
     // under, if any.
     let validator = PreparedShapes::new(Arc::new(shapes)).bind_delta_with_shapes_graph(

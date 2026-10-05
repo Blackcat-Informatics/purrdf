@@ -81,7 +81,8 @@ pub(crate) fn register_declared_sparql_functions(
     reached: &[Arc<CustomFunction>],
     node_shapes: &[crate::shapes::Shape],
     registry: &mut UserFunctionRegistry,
-) -> Result<BTreeSet<String>, String> {
+    profile: crate::profile::ShaclProfile,
+) -> Result<BTreeSet<String>, crate::report::CompleteValidationError> {
     let mut parser = Parser::new(
         dataset.as_ref(),
         provenance.base().map(ToOwned::to_owned),
@@ -89,13 +90,16 @@ pub(crate) fn register_declared_sparql_functions(
         provenance.box_role_vocab().cloned(),
         Arc::clone(dataset),
         provenance.shapes_graph().map(ToOwned::to_owned),
-        crate::profile::ShaclProfile::LEGACY,
+        profile,
     );
-    let linked = parser.discover_custom_functions()?;
-    parser.custom_fns = linked.custom;
-    parser.parse_sparql_functions(registry)?;
-    parser.register_unreached_list_functions(reached, node_shapes, registry)?;
-    Ok(linked.native_list)
+    let mut register = |parser: &mut Parser<'_>| {
+        let linked = parser.discover_custom_functions()?;
+        parser.custom_fns = linked.custom;
+        parser.parse_sparql_functions(registry)?;
+        parser.register_unreached_list_functions(reached, node_shapes, registry)?;
+        Ok(linked.native_list)
+    };
+    register(&mut parser).map_err(|message| parser.load_complete_error(message))
 }
 
 impl Parser<'_> {

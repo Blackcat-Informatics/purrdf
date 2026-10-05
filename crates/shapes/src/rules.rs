@@ -788,7 +788,32 @@ pub fn infer(
     shapes: &Shapes,
     options: &RuleOptions,
 ) -> Result<Inference, String> {
-    infer_with(data, shapes, options, srl::eval::Reexecution::Incremental)
+    infer_complete(data, shapes, options).map_err(|error| error.to_string())
+}
+
+/// Execute rules under the shapes' current dated/native request, preserving
+/// typed admission and resource refusals independently of rule failure.
+/// # Errors
+/// Returns the actual current profile, source, governor or rule-execution refusal.
+pub fn infer_complete(
+    data: &ShaclData,
+    shapes: &Shapes,
+    options: &RuleOptions,
+) -> Result<Inference, crate::report::CompleteValidationError> {
+    let execute = || {
+        infer_with(data, shapes, options, srl::eval::Reexecution::Incremental)
+            .map_err(crate::report::CompleteValidationError::Execution)
+    };
+    if shapes.validation_options.shacl_profile == crate::profile::ShaclProfile::LEGACY
+        && shapes.validation_options.xpath_regex.is_none()
+    {
+        return execute();
+    }
+    let prepared = crate::engine::PreparedShapes::new(Arc::new(shapes.clone()));
+    match crate::profile::Request::admit(&prepared)? {
+        Some(request) => request.run(execute),
+        None => execute(),
+    }
 }
 
 /// The four rule-evaluation limits a host names, each `None` for the engine default.

@@ -1031,6 +1031,10 @@ pub fn enter_execution_scope(state: Arc<GovernorState>, sources: QuerySources) -
 /// in whatever order the validations finish. [`Self::default`] is the context of a
 /// thread with no validation in progress.
 ///
+/// Dated query admission and native XPath execution retain independent typed
+/// request/cause slots. Swapping both preserves each owner's source admission or
+/// regex selection and exact failure through suspension and nested restoration.
+///
 /// What is here, and what is deliberately not:
 ///
 /// * the function, property-function and aggregate registries, the parser options, the

@@ -221,7 +221,7 @@ target obligations and native owners are in [WASM test ownership](WASM_TESTING.m
 
 ### Native benchmark inventory
 
-This table documents 31 of the 104 `[[bench]]` targets registered across the
+This table documents 32 of the 104 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row

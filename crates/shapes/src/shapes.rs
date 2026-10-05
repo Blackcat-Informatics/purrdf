@@ -963,32 +963,19 @@ impl Shapes {
         {
             return Ok(Arc::clone(sources));
         }
-        let mut parser = Parser::new(
-            self.shapes_dataset.as_ref(),
-            self.parse_provenance.base().map(ToOwned::to_owned),
-            self.parse_provenance.doc_prefixes(),
-            self.parse_provenance.box_role_vocab().cloned(),
-            Arc::clone(&self.shapes_dataset),
-            self.parse_provenance.shapes_graph().map(ToOwned::to_owned),
-            profile,
-        );
-        if let Err(message) = parser.prepare_with_expressions(&[], Preparation::SourceOccurrences) {
-            return Err(match parser.admission_refusal.borrow_mut().take() {
-                Some(refusal) => {
-                    crate::report::CompleteValidationError::Admission(Box::new(refusal))
-                }
-                None => crate::report::CompleteValidationError::Shapes(parser.load_error(message)),
-            });
-        }
-        let mut sources = std::mem::take(parser.sparql_sources.get_mut());
-        sources.admission = Some(SourceAdmission {
-            profile,
-            dataset: Arc::clone(&self.shapes_dataset),
-            provenance: self.parse_provenance.clone(),
-        });
-        let sources = Arc::new(sources);
+        let sources = source_occurrences(&self.shapes_dataset, &self.parse_provenance, profile)?;
         let _ = self.sparql_sources.set(Arc::clone(&sources));
         Ok(sources)
+    }
+
+    /// Attach the resolver's retained import closure without re-reading declarations.
+    pub(crate) fn record_included_graphs(&mut self, included: Vec<String>) {
+        self.parse_provenance.set_included_graphs(included);
+        if let Some(sources) = self.sparql_sources.get_mut()
+            && let Some(admission) = &mut Arc::make_mut(sources).admission
+        {
+            admission.provenance = self.parse_provenance.clone();
+        }
     }
 
     /// Every mandatory diagnostic of this shapes graph — one per shape with an empty
@@ -1161,6 +1148,99 @@ struct SourceAdmission {
 /// required structural data (e.g. `sh:path`) is missing.
 pub fn from_dataset(dataset: &Arc<RdfDataset>) -> Result<Shapes, ShapesError> {
     from_dataset_with_prefixes(dataset, &[])
+}
+
+/// Parse a shapes acquisition under one exact validation request, including
+/// imports and its original prefix/base/graph inputs. Execution and target
+/// acquisition later use the retained request's mandatory native XPath law.
+///
+/// # Errors
+/// Returns typed dated admission, incompatible override, import or model errors.
+pub fn from_dataset_with_options(
+    dataset: &Arc<RdfDataset>,
+    base: Option<&str>,
+    doc_prefixes: &[(String, String)],
+    box_role_vocab: Option<BoxRoleVocab>,
+    shapes_graph: Option<String>,
+    imports: &ShapesImports,
+    options: &crate::engine::ValidationOptions,
+) -> Result<Shapes, crate::report::CompleteValidationError> {
+    options
+        .shacl_profile
+        .resolve_xpath(options.xpath_regex)
+        .map_err(crate::report::CompleteValidationError::XPathProfile)?;
+    let loaded: Vec<&str> = base.into_iter().collect();
+    let resolved = resolve_shapes_imports(dataset, doc_prefixes, &loaded, imports)
+        .map_err(|error| crate::report::CompleteValidationError::Shapes(error.into()))?;
+    let mut shapes = from_resolved_dataset_with_options(
+        &resolved.dataset,
+        base,
+        &resolved.prefixes,
+        box_role_vocab,
+        shapes_graph,
+        options,
+    )?;
+    shapes.record_included_graphs(resolved.included);
+    Ok(shapes)
+}
+
+/// The source-context reconstruction home used before current-request memo linking.
+/// This walks declarations only; it rebuilds no class catalog or lowered shape model.
+pub(crate) fn source_occurrences(
+    dataset: &Arc<RdfDataset>,
+    provenance: &ParseProvenance,
+    profile: crate::profile::ShaclProfile,
+) -> Result<Arc<ConstraintSources>, crate::report::CompleteValidationError> {
+    let mut parser = Parser::new(
+        dataset.as_ref(),
+        provenance.base().map(ToOwned::to_owned),
+        provenance.doc_prefixes(),
+        provenance.box_role_vocab().cloned(),
+        Arc::clone(dataset),
+        provenance.shapes_graph().map(ToOwned::to_owned),
+        profile,
+    );
+    if let Err(message) = parser.prepare_with_expressions(&[], Preparation::SourceOccurrences) {
+        return Err(parser.load_complete_error(message));
+    }
+    let mut sources = std::mem::take(parser.sparql_sources.get_mut());
+    sources.admission = Some(SourceAdmission {
+        profile,
+        dataset: Arc::clone(dataset),
+        provenance: provenance.clone(),
+    });
+    Ok(Arc::new(sources))
+}
+
+/// Product/source reconstruction uses the same parser and actual requested law;
+/// it never resolves an already retained import closure a second time.
+pub(crate) fn from_resolved_dataset_with_options(
+    dataset: &Arc<RdfDataset>,
+    base: Option<&str>,
+    doc_prefixes: &[(String, String)],
+    box_role_vocab: Option<BoxRoleVocab>,
+    shapes_graph: Option<String>,
+    options: &crate::engine::ValidationOptions,
+) -> Result<Shapes, crate::report::CompleteValidationError> {
+    options
+        .shacl_profile
+        .resolve_xpath(options.xpath_regex)
+        .map_err(crate::report::CompleteValidationError::XPathProfile)?;
+    let mut parser = Parser::new(
+        dataset.as_ref(),
+        base.map(ToOwned::to_owned),
+        doc_prefixes,
+        box_role_vocab,
+        Arc::clone(dataset),
+        shapes_graph,
+        options.shacl_profile,
+    );
+    let mut shapes = parser
+        .parse_with_expressions(&[])
+        .map(|(shapes, _)| shapes)
+        .map_err(|message| parser.load_complete_error(message))?;
+    shapes.validation_options = options.clone();
+    Ok(shapes)
 }
 
 /// What the linker ([`crate::spec`]) made of a shapes graph's DECLARATIONS: the
@@ -1742,6 +1822,13 @@ impl<'s> Parser<'s> {
         self.parse_with_expressions(&[])
             .map(|(shapes, _)| shapes)
             .map_err(|message| self.load_error(message))
+    }
+
+    fn load_complete_error(&self, message: String) -> crate::report::CompleteValidationError {
+        match self.admission_refusal.borrow_mut().take() {
+            Some(refusal) => crate::report::CompleteValidationError::Admission(Box::new(refusal)),
+            None => crate::report::CompleteValidationError::Shapes(self.load_error(message)),
+        }
     }
 
     /// Record that a check refused the SHACL-JS term `term` on `node` with `message`,

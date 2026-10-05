@@ -862,10 +862,9 @@ fn validate_with_rebuilt_product(
     expected_identity: Option<&[u8; 32]>,
     options: &SarifOptions,
 ) -> Result<String, ShapesProductRefusal> {
-    let prepared = match expected_identity {
-        None => rebuild_shapes_product(product)?,
-        Some(expected) => rebuild_shapes_product_expecting(product, expected)?,
-    };
+    let prepared =
+        restore_shapes_product_with_options(product, &options.validation, expected_identity, true)
+            .map_err(request_refusal)?;
     validate_prepared(&prepared, data_nt, options)
 }
 
@@ -882,10 +881,9 @@ fn validate_with_product(
     expected_identity: Option<&[u8; 32]>,
     options: &SarifOptions,
 ) -> Result<String, ShapesProductRefusal> {
-    let prepared = match expected_identity {
-        None => admit_shapes_product(product)?,
-        Some(expected) => admit_shapes_product_expecting(product, expected)?,
-    };
+    let prepared =
+        restore_shapes_product_with_options(product, &options.validation, expected_identity, false)
+            .map_err(request_refusal)?;
     validate_prepared(&prepared, data_nt, options)
 }
 
@@ -918,6 +916,42 @@ fn validate_prepared(
     }
     .map_err(ShapesProductRefusal::Shapes)?;
     Ok(report_to_sarif_string(&report, options))
+}
+
+/// Restore through the existing product seam under the current validation bundle.
+/// Options are admitted before declaration reconstruction and registry installation.
+/// # Errors
+/// Returns actual product dimensions, dated admission or profile conflicts.
+pub fn restore_shapes_product_with_options(
+    product: &[u8],
+    options: &engine::ValidationOptions,
+    expected_identity: Option<&[u8; 32]>,
+    rebuild: bool,
+) -> Result<PreparedShapes, purrdf_shapes::report::CompleteValidationError> {
+    let view = ShapesProduct::open(product)?;
+    let host = HostBindings::empty();
+    match (rebuild, expected_identity) {
+        (false, None) => view.admit_with_options(&ShapesProfile::CORE, &host, options),
+        (false, Some(expected)) => {
+            view.admit_expecting_with_options(&ShapesProfile::CORE, &host, expected, options)
+        }
+        (true, None) => view.rebuild_with_options(&ShapesProfile::CORE, &host, options),
+        (true, Some(expected)) => {
+            view.rebuild_expecting_with_options(&ShapesProfile::CORE, &host, expected, options)
+        }
+    }
+}
+
+fn request_refusal(error: purrdf_shapes::report::CompleteValidationError) -> ShapesProductRefusal {
+    match error {
+        purrdf_shapes::report::CompleteValidationError::Preparation(error) => {
+            ShapesProductRefusal::Admission(error)
+        }
+        purrdf_shapes::report::CompleteValidationError::Shapes(error) => {
+            ShapesProductRefusal::Shapes(error)
+        }
+        error => ShapesProductRefusal::Shapes(ShapesError::Invalid(error.to_string())),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -475,7 +475,7 @@ mod tests {
     }
 
     /// The swapped entries are exactly the statics of the two contexts `JobAmbient` moves:
-    /// the five of `purrdf_stack::Context` and the nine of the SHACL `AmbientContext`.
+    /// the five of `purrdf_stack::Context` and the ten of the SHACL `AmbientContext`.
     #[test]
     fn the_swapped_entries_are_the_two_contexts() {
         let swapped: Vec<_> = LEDGER

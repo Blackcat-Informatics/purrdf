@@ -253,6 +253,106 @@ impl fmt::Display for XPathProfileConflict {
 
 impl std::error::Error for XPathProfileConflict {}
 
+/// The admitted law, source occurrences and existing native execution home of
+/// one immutable preparation/binding. No request is allocated for Legacy's
+/// unselected path.
+#[derive(Clone, Debug)]
+pub(crate) struct Request {
+    pub(crate) profile: ShaclProfile,
+    native: Option<crate::xpath::Configuration>,
+    sources: Option<std::sync::Arc<crate::shapes::ConstraintSources>>,
+}
+
+impl Request {
+    pub(crate) const fn sources(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::shapes::ConstraintSources>> {
+        self.sources.as_ref()
+    }
+
+    pub(crate) fn admit(
+        prepared: &crate::engine::PreparedShapes,
+    ) -> Result<Option<Self>, crate::report::CompleteValidationError> {
+        let options = &prepared.shapes().validation_options;
+        let requested = options
+            .shacl_profile
+            .resolve_xpath(options.xpath_regex)
+            .map_err(crate::report::CompleteValidationError::XPathProfile)?;
+        let selection = if requested.is_some()
+            && let Some(native) = crate::xpath::current()
+        {
+            options
+                .shacl_profile
+                .resolve_xpath(Some((native.profile, native.limits)))
+                .map_err(crate::report::CompleteValidationError::XPathProfile)?
+        } else {
+            requested
+        };
+        if options.shacl_profile == ShaclProfile::LEGACY && selection.is_none() {
+            return Ok(None);
+        }
+        let sources = if options.shacl_profile == ShaclProfile::LEGACY {
+            None
+        } else {
+            Some(
+                prepared
+                    .shapes()
+                    .report_sources_with_profile(options.shacl_profile)?,
+            )
+        };
+        let native =
+            selection.map(|(profile, limits)| prepared.xpath_configuration(profile, limits));
+        if options.shacl_profile != ShaclProfile::LEGACY
+            && let Some(configuration) = &native
+        {
+            configuration
+                .admit_declared_patterns()
+                .map_err(|error| crate::report::CompleteValidationError::XPath(Box::new(error)))?;
+        }
+        Ok(Some(Self {
+            profile: options.shacl_profile,
+            native,
+            sources,
+        }))
+    }
+
+    /// Carry this law through the existing query/native scopes, and defer error
+    /// projection until the actual governor and typed source/report result agree.
+    pub(crate) fn run<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, crate::report::CompleteValidationError>,
+    ) -> Result<T, crate::report::CompleteValidationError> {
+        let execute = || {
+            let scope = crate::query_law::enter(self.profile, self.sources.as_ref());
+            let outcome = operation();
+            if let Some(state) = crate::sparql::current_governors()
+                && let Some(error) = crate::report::CompleteValidationError::resource(&state)
+            {
+                return Err(error);
+            }
+            outcome.map_err(|error| {
+                let failure = scope
+                    .runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.take_failure());
+                match error {
+                    crate::report::CompleteValidationError::Execution(_)
+                    | crate::report::CompleteValidationError::Shapes(
+                        crate::error::ShapesError::Invalid(_),
+                    ) => failure.map_or(error, crate::report::ReportFailure::into_public),
+                    error => error,
+                }
+            })
+        };
+        match &self.native {
+            Some(configuration) => configuration
+                .run(execute)
+                .map_err(crate::report::CompleteValidationError::from_native_run),
+            None => execute(),
+        }
+    }
+}
+
 /// The role determining a query's pre-bound variables and permitted query form.
 ///
 /// AF rules, functions and targets, and draft node expressions retain their own
