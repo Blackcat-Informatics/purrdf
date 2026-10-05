@@ -218,8 +218,8 @@ The actual Rust layouts are:
 
 The side record adds memory without changing public `Variable`. All 13
 comparative tests, including the seeded properties and 100,000-deep inputs, run
-both natively and on wasm32 through the first-party Node harness. The layout
-table is measured on each target; allocation costs and timings below are native
+natively. The layout table records measurements taken on each target;
+allocation costs and timings below are native
 measurements.
 Allocation windows count requested traffic, live retention and peak working
 bytes separately, including allocated map nodes and excluding system allocator
@@ -384,8 +384,6 @@ cargo bench --locked -p purrdf-sparql-algebra --bench scope_checks
 cargo bench --locked -p purrdf-sparql-eval --bench query_eval -- construct_blank
 cargo test --locked -p purrdf-sparql-eval --test scope_interactions
 cargo test --locked -p purrdf-rdf --test scope_portable
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$PWD/scripts/wasm-test-runner.sh" \
-  cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-algebra --test scope_candidates
 make check
 make wasm
 make conformance

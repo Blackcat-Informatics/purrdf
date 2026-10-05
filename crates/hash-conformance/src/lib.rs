@@ -20,7 +20,7 @@
 //! | `benches/hasher.rs` | the table hasher's latency per key class |
 //!
 //! The vector files are in `tests/vectors/`. Every test target runs natively
-//! under `cargo test` and on `wasm32-unknown-unknown` under `make wasm-test`.
+//! under `cargo test`. `make wasm-test` selects actual WASM dispatch and SIMD kernels.
 
 use purrdf_testkit::vectors::{VectorFile, decode_str};
 

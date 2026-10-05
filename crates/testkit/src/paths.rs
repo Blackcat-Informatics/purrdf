@@ -63,6 +63,18 @@ pub fn workspace_root() -> PathBuf {
 /// skipped an unreadable directory would pass over exactly the sources it was
 /// written to check.
 pub fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
+    collect_rs_filtered(dir, out, &|_| true);
+}
+
+/// Append Rust sources as [`collect_rs`] does, entering only directories for
+/// which `descend` returns true. The predicate also sees symbolic-link
+/// directories, so a repository scan can exclude build trees and worktrees
+/// without reimplementing the deterministic source walk.
+///
+/// # Panics
+///
+/// When an entered directory cannot be read, as for [`collect_rs`].
+pub fn collect_rs_filtered(dir: &Path, out: &mut Vec<PathBuf>, descend: &impl Fn(&Path) -> bool) {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
         .map(|entry| {
@@ -74,7 +86,9 @@ pub fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     entries.sort();
     for path in entries {
         if path.is_dir() {
-            collect_rs(&path, out);
+            if descend(&path) {
+                collect_rs_filtered(&path, out, descend);
+            }
         } else if path.extension().is_some_and(|ext| ext == "rs") {
             out.push(path);
         }
@@ -83,7 +97,7 @@ pub fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use super::{collect_rs, workspace_root, workspace_root_from};
+    use super::{collect_rs, collect_rs_filtered, workspace_root, workspace_root_from};
     use crate::TempDir;
 
     #[test]
@@ -178,6 +192,25 @@ mod tests {
             out,
             [dir.path().join("earlier.rs"), dir.path().join("one.rs")]
         );
+    }
+
+    #[test]
+    fn a_filtered_walk_keeps_nested_sources_and_excludes_whole_directories() {
+        let dir = TempDir::for_unit_test().expect("temp dir");
+        for path in [
+            "src/nested/a.rs",
+            "target/hidden.rs",
+            "src/target/hidden.rs",
+        ] {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            std::fs::write(path, "").expect("source");
+        }
+        let mut out = Vec::new();
+        collect_rs_filtered(dir.path(), &mut out, &|path| {
+            path.file_name().is_none_or(|name| name != "target")
+        });
+        assert_eq!(out, [dir.path().join("src/nested/a.rs")]);
     }
 
     #[test]

@@ -208,7 +208,7 @@ makes it removable).
 * **NO semantic Cargo features, ever.** The sole exception is the empty,
   non-semantic `purrdf-capi:capi = []` marker that `cargo-c` requires. It gates
   no code and must never appear in `cfg(feature = ...)`; CI checks both facts
-  with `scripts/check-no-features.py`. PurRDF is a carrier; optionality changes
+  with `helper-census --no-features`. PurRDF is a carrier; optionality changes
   semantics per consumer, which is forbidden. Do not add any other feature,
   optional dependency, or feature-gated behavior.
 * **Tooling and tests are Rust.** Checks, generators, gates and tests are written

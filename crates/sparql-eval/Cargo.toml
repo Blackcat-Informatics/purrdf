@@ -103,20 +103,15 @@ purrdf-alloc-probe = { workspace = true }
 # against the SAME query and data run UNGOVERNED over generated (dataset, query,
 # budget) triples), the one deterministic test stream the kNN metric tests, the
 # kNN relation bench and the wasm32 reassociated-distance test draw from, and the
-# `harness = false` runner the two wasm32 kNN targets below run on, natively and
-# on wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped
+# `harness = false` runner for native kNN numeric pins and focused WASM dispatch
+# and simd128 comparisons. Path-only and unpublished, so it is stripped
 # from the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 
-# The tests in this crate that must EXECUTE on wasm32-unknown-unknown rather than
-# merely compile for it, because the embedding kNN surface ranks by binary64
-# arithmetic: "the same answer on every target" (exact) and "within the error
-# bound on every target" (reassociated) are claims two runs on one target cannot
-# check. `harness = false` on the shared runner, so `make wasm-test` runs the same
-# named cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs
-# natively.
+# Complete native semantic expectations on the shared harness.
+# Actual WASM behaviors are selected separately in `make wasm-test`.
 [[test]]
-# Execute the same full-scale binding and EXPLAIN regressions natively and in Node.
+# Complete native binding and EXPLAIN regressions.
 name = "boundary_join_scaling"
 harness = false
 

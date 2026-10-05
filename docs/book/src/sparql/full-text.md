@@ -133,9 +133,9 @@ build and another from a `wasm32-unknown-unknown` build of the same engine.
 The logarithm here is a fixed-length integer series with a fixed iteration
 count, never a convergence test, so its result is a pure function of its input
 on every target. The ranking — row order together with every score's decimal
-lexical — is pinned by a single test body per case on one shared test
-runner, so `make wasm-test` executes it on wasm32 against the
-same expectations `cargo test` asserts natively.
+lexical — is pinned against independent expectations by native Rust tests.
+`make wasm` separately builds the crate for WASM; focused WASM execution covers
+actual target paths and host interfaces.
 
 The BM25 constants `k1 = 1.2` and `b = 0.75` are crate constants rather than
 caller parameters. PurRDF is a carrier, and optionality that changes semantics

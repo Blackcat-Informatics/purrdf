@@ -51,6 +51,13 @@ export GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE="$snapshot"
 
 failed=0
 
+if ! cargo run -q --locked -p helper-census -- --root "$snapshot" \
+    --python-binding-tests >"$logs/python-binding-tests" 2>&1; then
+    echo "pre-commit: Python-extension Rust test policy failed:" >&2
+    sed 's/^/  /' "$logs/python-binding-tests" >&2
+    failed=1
+fi
+
 # Formatting, for the staged Rust sources only.
 mapfile -t rust < <(grep -E '\.rs$' <<<"$staged" || true)
 if [ "${#rust[@]}" -gt 0 ]; then
@@ -68,7 +75,6 @@ gates=(
     check-stream-chunk
     check-iri-resolver-singleton
     check-serializer-rewinds
-    check-python-binding-tests
     check-terminal-predicates
     check-thread-locals
     check-shapes-parser-drops
