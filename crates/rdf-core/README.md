@@ -44,7 +44,7 @@ crate everything else in the workspace builds on. It owns:
 - **Complete dataset state identity** — additive `DatasetStateDigest` includes
   empty named declarations and distinct ordinary/reifier/annotation roles under
   one global blank bijection, including nested and CDT positions. See the
-  [versioned format and completeness proof](../../docs/DATASET-STATE-DIGEST.md).
+  [versioned format and completeness proof](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/DATASET-STATE-DIGEST.md).
 - **Store/backend traits** — the narrow parser-ingress, serializer-egress, and
   `SparqlEngine` seams concrete adapters implement in sibling crates.
 - **Provenance and the loss ledger** — a generic provenance sidecar for the
