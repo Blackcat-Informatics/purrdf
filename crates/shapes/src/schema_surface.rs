@@ -3285,16 +3285,12 @@ fn insert_propagated_fact<T: Ord>(
 }
 
 /// The canonical rendering of one carried conjunct, and of a union's members,
-/// computed once however many classes inherit the conjunct.
+/// computed once however many classes inherit the conjunct, keyed by the
+/// carried conjunct's address.
 #[derive(Debug)]
 struct ConjunctInfo {
     canonical: String,
     union_members: Option<BTreeSet<String>>,
-}
-
-/// The address of a carried conjunct, the key of its [`ConjunctInfo`].
-fn conjunct_key(conjunct: &OntologyExpression) -> usize {
-    std::ptr::from_ref(conjunct) as usize
 }
 
 fn conjunct_infos(class_axioms: &[ClassAxiom]) -> BTreeMap<usize, ConjunctInfo> {
@@ -3303,7 +3299,7 @@ fn conjunct_infos(class_axioms: &[ClassAxiom]) -> BTreeMap<usize, ConjunctInfo> 
         for (_, conjuncts) in &axiom.carriers {
             for conjunct in conjuncts {
                 infos
-                    .entry(conjunct_key(conjunct))
+                    .entry(std::ptr::from_ref(conjunct).addr())
                     .or_insert_with(|| ConjunctInfo {
                         canonical: conjunct.canonical(),
                         union_members: match conjunct {
@@ -3376,7 +3372,7 @@ impl<'a> ClassExpressionFacts<'a> {
                 }
                 _ => {}
             }
-            if let Some(info) = infos.get(&conjunct_key(conjunct)) {
+            if let Some(info) = infos.get(&std::ptr::from_ref(conjunct).addr()) {
                 facts.anonymous.canonical.insert(info.canonical.as_str());
                 if let Some(members) = &info.union_members {
                     facts.anonymous.unions.push(members);
@@ -4293,7 +4289,7 @@ fn class_expression_report(
                 continue;
             }
             let expression = infos
-                .get(&conjunct_key(conjunct))
+                .get(&std::ptr::from_ref(conjunct).addr())
                 .map_or_else(|| conjunct.canonical(), |info| info.canonical.clone());
             for (component, on_focus) in context.classify(conjunct, &expression) {
                 if on_focus {
