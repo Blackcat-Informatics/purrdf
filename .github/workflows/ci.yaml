@@ -738,7 +738,7 @@ jobs:
           # Bound scalar WASM compilation through the existing Cargo job budget.
           # Other configurations keep their current scheduling.
           if [ "${{ matrix.config }}" = wasm32 ]; then
-            export CARGO_BUILD_JOBS=1
+            export CARGO_BUILD_JOBS=2
           fi
           make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 --report target/asm-reports/${{ matrix.config }}.json"
       - name: Upload checked evidence
