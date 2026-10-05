@@ -131,6 +131,12 @@ pub struct CompiledPattern {
 }
 
 impl CompiledPattern {
+    /// Whether this program belongs to the exact requested grammar and text.
+    #[must_use]
+    pub fn matches_source(&self, profile: Profile, pattern: &str, flags: &str) -> bool {
+        self.profile == profile && self.source == pattern && self.flags == flags
+    }
+
     /// The dated Recommendation used for recognition and execution.
     #[must_use]
     pub const fn profile(&self) -> Profile {

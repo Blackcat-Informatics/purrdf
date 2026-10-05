@@ -7,6 +7,7 @@
 
 use purrdf_xsd::{XsdDatatype, XsdValue, value_cmp};
 
+use super::error::CheckError;
 use super::pattern::PatternCache;
 use crate::ast::{
     IriExclusion, LanguageExclusion, LiteralExclusion, NodeConstraint, NodeKind, NumericLiteral,
@@ -70,7 +71,7 @@ pub(crate) fn check_node_constraint(
     nc: &NodeConstraint,
     facts: &NodeFacts<'_>,
     patterns: &mut PatternCache,
-) -> Result<(), String> {
+) -> Result<(), CheckError> {
     if let Some(kind) = nc.node_kind {
         check_node_kind(kind, facts)?;
     }
@@ -164,7 +165,7 @@ fn check_string_facets(
     nc: &NodeConstraint,
     facts: &NodeFacts<'_>,
     patterns: &mut PatternCache,
-) -> Result<(), String> {
+) -> Result<(), CheckError> {
     let needs_lexical = nc.length.is_some()
         || nc.minlength.is_some()
         || nc.maxlength.is_some()
@@ -173,7 +174,9 @@ fn check_string_facets(
         return Ok(());
     }
     if facts.kind == FactKind::Triple {
-        return Err("string facets cannot apply to a triple term".to_owned());
+        return Err("string facets cannot apply to a triple term"
+            .to_owned()
+            .into());
     }
     // Facets count Unicode scalar values, not bytes (spec §5.4.5).
     let len = facts.lexical.chars().count() as u64;
@@ -183,7 +186,8 @@ fn check_string_facets(
         return Err(format!(
             "LENGTH {length} violated: {} has length {len}",
             facts.describe()
-        ));
+        )
+        .into());
     }
     if let Some(minlength) = nc.minlength
         && len < minlength
@@ -191,7 +195,8 @@ fn check_string_facets(
         return Err(format!(
             "MINLENGTH {minlength} violated: {} has length {len}",
             facts.describe()
-        ));
+        )
+        .into());
     }
     if let Some(maxlength) = nc.maxlength
         && len > maxlength
@@ -199,19 +204,18 @@ fn check_string_facets(
         return Err(format!(
             "MAXLENGTH {maxlength} violated: {} has length {len}",
             facts.describe()
-        ));
+        )
+        .into());
     }
-    if let Some(pattern) = &nc.pattern {
-        let re = patterns
-            .compiled(pattern, nc.flags.as_deref())
-            .map_err(|e| e.to_string())?;
-        if !re.is_match(facts.lexical) {
-            return Err(format!(
-                "pattern /{pattern}/{} does not match {}",
-                nc.flags.as_deref().unwrap_or(""),
-                facts.describe()
-            ));
-        }
+    if let Some(pattern) = &nc.pattern
+        && !patterns.is_match(pattern, nc.flags.as_deref(), facts.lexical)?
+    {
+        return Err(format!(
+            "pattern /{pattern}/{} does not match {}",
+            nc.flags.as_deref().unwrap_or(""),
+            facts.describe()
+        )
+        .into());
     }
     Ok(())
 }

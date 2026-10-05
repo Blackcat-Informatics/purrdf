@@ -273,6 +273,28 @@ pub fn validate_shape_map(
     Ok(validate_with(schema, data, &resolved, options))
 }
 
+/// [`validate_shape_map`] under an explicit native XPath law and finite limits.
+///
+/// # Errors
+/// Preserves map parse/admission errors and typed native operational refusal.
+/// Pattern-language errors remain nonconformant entries.
+pub fn validate_shape_map_with_xpath(
+    schema: &Schema,
+    data: &RdfDataset,
+    map_src: &str,
+    base: Option<&str>,
+    options: &ValidationOptions<'_>,
+    profile: purrdf_core::xsd_regex::xpath::Profile,
+    limits: purrdf_core::xsd_regex::xpath::Limits,
+) -> core::result::Result<ResultShapeMap, crate::error::XPathValidationError> {
+    let map = parse_shape_map(map_src, base)?;
+    refuse_undeclared_shapes(schema, &map)?;
+    let resolved = resolve_shape_map(&map, data);
+    Ok(crate::validate::validate_with_xpath(
+        schema, data, &resolved, options, profile, limits,
+    )?)
+}
+
 /// Refuse a shape map naming a shape `schema` does not declare.
 ///
 /// Checked BEFORE the node selectors are expanded, so the refusal does not

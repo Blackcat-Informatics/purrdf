@@ -129,9 +129,7 @@ fn cached<D: DatasetView + Sync>(
     // are rejected by str equality without scanning an arbitrarily long input.
     let key = purrdf_hash::fixed::FixedState::default().hash_one((profile, pattern));
     if let Some(compiled) = ctx.xpath_regex_cache.get(&key)
-        && compiled.profile() == profile
-        && compiled.source() == pattern
-        && compiled.flags() == flags
+        && compiled.matches_source(profile, pattern, flags)
     {
         compiled.admit(limits).map_err(EvalError::XPathRegex)?;
         return Ok(Some(Program::Native(compiled, limits)));

@@ -48,8 +48,8 @@ other compares two different questions.
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 93 `[[bench]]`
-targets in total; this section and the inventory table below document 23 of
+They live under `crates/*/benches/`. The workspace registers 104 `[[bench]]`
+targets in total; this section and the inventory table below document 30 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -79,8 +79,15 @@ simply not narrated here:
   observations.
 - `crates/sparql-algebra/benches/tokenize.rs` — SPARQL/Turtle lexer hot path
   (`IRIREF`, string literals, comments).
+- `crates/shex/benches/pattern_validate.rs` — matched shared-valid,
+  shared-invalid and distinct-pattern validation fixtures under compatibility
+  and both explicit native XPath laws, including cold native calls and reused
+  validator products with current finite limits.
 - `crates/sparql-eval/benches/query_eval.rs` — end-to-end SPARQL SELECT
   evaluation over synthetic datasets.
+- `crates/sparql-eval/benches/governed_eval.rs` — governor costs and fixed-length
+  paths versus explicit triple expansion over typed-endpoint chains, including
+  planning and execution with cold join-order caches.
 - `crates/sparql-eval/benches/cost_based_bgp_planner.rs` — regression watch on
   the cost-based BGP join planner; the deterministic win over the retired
   structural heuristic is gated by the `bgp` unit tests (which count real
@@ -92,6 +99,11 @@ simply not narrated here:
   pinned by operation counts in `nested_exists_gate`, not by these timings).
 - `crates/sparql-eval/benches/lateral_service.rs` — variable-endpoint
   `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
+- `crates/sparql-eval/benches/graph_constant_membership.rs` — constant and
+  per-row graph membership over 10,000 named graphs on frozen, delta,
+  composite and pack carriers.
+- `crates/shapes/benches/graph_membership.rs` — per-row named-graph membership
+  through the SHACL data view on native and mutation-snapshot carriers.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
   LinkML import/lowering throughput and one-operation allocation traffic,
   including the change path's conforming-versus-violating contrast over one
@@ -203,7 +215,7 @@ target obligations and native owners are in [WASM test ownership](WASM_TESTING.m
 
 ### Native benchmark inventory
 
-This table documents 23 of the 93 `[[bench]]` targets registered across the
+This table documents 30 of the 104 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -221,6 +233,7 @@ here.
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, dataset-description, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
+| `crates/shex/benches/pattern_validate.rs` | Shared-valid, shared-invalid and distinct-pattern validation under compatibility and both dated native XPath laws, with cold calls and reused validators under current finite limits. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
 | `crates/sparql-eval/benches/governed_eval.rs` | Governor cost comparisons and fixed-length paths versus explicit triple expansion over 16, 64, and 256 typed-endpoint chains. The linear-path cases prepare outside timing and use a fresh engine per sample, measuring planning plus execution with cold join-order caches; projected answers and their order must agree before sampling. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
@@ -238,6 +251,7 @@ here.
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
+| `crates/sparql-eval/benches/regex_eval.rs` | Constant REGEX/REPLACE and per-row unique patterns over matched 1,000- and 10,000-row fixtures under compatibility and both dated native laws; compatibility literal-prefilter costs on long inputs. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
 
 ### PURREMB companion format

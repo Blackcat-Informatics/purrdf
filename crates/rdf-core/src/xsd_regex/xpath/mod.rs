@@ -10,11 +10,13 @@
 
 use std::fmt;
 
+mod cache;
 mod compile;
 mod r#match;
 mod replace;
 mod unicode_tables;
 
+pub use cache::PatternCache;
 pub use compile::{CompiledPattern, compile};
 pub use r#match::Captures;
 
