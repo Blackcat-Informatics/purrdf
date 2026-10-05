@@ -61,6 +61,39 @@
 //! zero-padded up to the next 8-byte boundary before the next section starts
 //! (no padding after the LAST section — the file ends exactly at its end).
 //!
+//! # Named-graph declarations
+//!
+//! A named graph the source declares without giving it any row — no base quad, no
+//! reifier row, no annotation row — is carried inside the existing sections rather
+//! than in a fourth one: its name has a DICT entry like every other term, and the
+//! TRIPLES section holds a zero-row partition keyed by that name's unified id (the
+//! same empty partition the default graph has always been allowed to be; see
+//! [`super::triples`]). The frame is unchanged — `FORMAT_VERSION` stays `1`,
+//! `SECTION_COUNT` stays `3` — and the header's `named_graphs` flag is set, because a
+//! declared named graph is a named graph the pack carries. [`PackView`] lists the graph
+//! among [`DatasetView::named_graphs`], and every reconstruction
+//! ([`super::certify::dataset_from_view`], [`super::certify::restore_pack`]) declares
+//! it again.
+//!
+//! Compatibility in both directions follows from using the existing grammar:
+//!
+//! - a pack written before declarations were carried has no zero-row named partition
+//!   and opens exactly as it always did;
+//! - a pack carrying declarations is decoded by every version-1 reader, an older
+//!   release's included: the 3.0.x reader opens it, enumerates the declared graphs and
+//!   certifies it, because the frame, every section grammar and every structural check
+//!   are the ones it already applies;
+//! - a source with no declaration-only graph writes byte-for-byte the pack it wrote
+//!   before. A graph that owns only statement-layer rows is not declaration-only: it
+//!   gets no partition, and [`PackView`] enumerates it from the side tables.
+//!
+//! The `rdfc_digest` is the SHA-256 of the canonical N-Quads, which has no spelling
+//! for an empty graph, so a declaration never changes it: a dataset and the same
+//! dataset with extra declared empty graphs share their canonical digest, and
+//! [`super::certify::verify_pack`] certifies both. The pack BYTES — the DICT and
+//! TRIPLES sections, their directory digests, and therefore any digest of the whole
+//! file — do differ, and only for a source that declares a graph with no row.
+//!
 //! # Determinism
 //!
 //! [`PackBuilder::build_bytes`] is a pure function of the source's VALUE content
@@ -435,13 +468,11 @@ impl PackBuilder {
     ///
     /// # Declaration-only graphs
     ///
-    /// The pack format derives its graphs from rows: a named graph that owns no
-    /// quad, reifier or annotation row leaves no bytes here, exactly as it leaves
-    /// none through [`build_bytes`](Self::build_bytes) over the frozen dataset
-    /// that declared it. A view path that encoded the declaration would change
-    /// the format, so it deliberately does not; a caller that must carry an
-    /// empty declaration across this boundary states it explicitly on the far
-    /// side, the same discipline every row-derived output surface asks for.
+    /// A named graph the view lists in [`DatasetView::named_graphs`] that owns no
+    /// quad, reifier or annotation row is written as a zero-row TRIPLES partition,
+    /// exactly as [`build_bytes`](Self::build_bytes) writes it for the frozen dataset
+    /// that declared it, so the declaration survives the pack (see "Named-graph
+    /// declarations" in the [module docs](self)).
     ///
     /// # Operational refusal
     ///

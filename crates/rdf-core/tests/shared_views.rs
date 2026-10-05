@@ -803,8 +803,11 @@ fn blanks_referenced_only_inside_composite_literals_stay_independent() {
     ));
 }
 
+/// The pre-freeze check charges exactly what the frozen delta retains, so an
+/// oversized delta is refused before any freeze: no work is done or counted, and a
+/// later admitted snapshot counts its one freeze and the text it copied.
 #[test]
-fn post_freeze_retention_refusal_counts_completed_work_without_publishing() {
+fn an_oversized_delta_is_refused_before_the_freeze_and_counts_no_work() {
     let base = RdfDatasetBuilder::new().freeze().unwrap();
     let mut mutable = MutableDataset::new(base.clone());
     mutable
@@ -824,13 +827,300 @@ fn post_freeze_retention_refusal_counts_completed_work_without_publishing() {
         ..ViewLimits::default()
     };
     assert!(mutable.snapshot_view_with_limits(limited).is_err());
-    assert_eq!(mutable.work_stats().freezes, 1);
-    assert_eq!(mutable.work_stats().materializations, 0);
-    assert!(mutable.work_stats().copied_text_bytes >= 8192);
+    assert_eq!(mutable.work_stats(), ViewWork::default());
     assert_eq!(base.quad_count(), 0);
     let successful = mutable.snapshot_view().unwrap();
     assert_eq!(successful.quads().count(), 1);
-    assert_eq!(mutable.work_stats().freezes, 2);
+    assert_eq!(mutable.work_stats().freezes, 1);
+    assert_eq!(mutable.work_stats().materializations, 0);
+    assert!(mutable.work_stats().copied_text_bytes >= 8192);
+}
+
+/// `count` graphs declared on a mutable layer over `base`, none owning a row.
+fn declaration_only(base: &Arc<RdfDataset>, count: usize) -> MutableDataset {
+    let mut mutable = MutableDataset::new(Arc::clone(base));
+    for n in 0..count {
+        assert_eq!(
+            mutable.declare_named_graph(iri(&format!("declared/{n}"))),
+            Ok(true)
+        );
+    }
+    mutable
+}
+
+/// A retention limit set on one resource, the rest left at their defaults.
+type LimitOf = fn(usize) -> ViewLimits;
+
+/// The pre-freeze retention check of `build()`'s snapshot is exact on every
+/// counted resource: a limit one below what the snapshot actually retains is
+/// refused before any freeze, and a limit equal to it is admitted.
+fn assert_exact_snapshot_limits(build: impl Fn() -> MutableDataset) {
+    let admitted = build()
+        .snapshot_view()
+        .expect("default limits admit the fixture")
+        .stats();
+    let expected_graphs = build().snapshot_view().unwrap().named_graphs().count();
+    let limited: [(&str, LimitOf, usize); 3] = [
+        (
+            "terms",
+            |n| ViewLimits {
+                max_terms: n,
+                ..ViewLimits::default()
+            },
+            admitted.retained_terms,
+        ),
+        (
+            "payload bytes",
+            |n| ViewLimits {
+                max_payload_bytes: n,
+                ..ViewLimits::default()
+            },
+            admitted.retained_payload_bytes,
+        ),
+        (
+            "auxiliary bytes",
+            |n| ViewLimits {
+                max_auxiliary_bytes: n,
+                ..ViewLimits::default()
+            },
+            admitted.auxiliary_bytes,
+        ),
+    ];
+    for (name, limits, retained) in limited {
+        let mutable = build();
+        let refused = mutable
+            .snapshot_view_with_limits(limits(retained - 1))
+            .expect_err("one below the retained amount is refused");
+        assert_eq!(refused.code, "view-retention-limit");
+        assert_eq!(
+            mutable.work_stats().freezes,
+            0,
+            "{name}: refused before the freeze: {refused:?}"
+        );
+        let mutable = build();
+        let view = mutable
+            .snapshot_view_with_limits(limits(retained))
+            .unwrap_or_else(|e| panic!("{name}: exactly the retained amount is admitted: {e:?}"));
+        assert_eq!(view.named_graphs().count(), expected_graphs);
+        assert_eq!(mutable.work_stats().freezes, 1);
+    }
+}
+
+#[test]
+fn declaration_only_graphs_are_charged_before_the_snapshot_freezes_them() {
+    let base = complete_source();
+    assert_exact_snapshot_limits(|| declaration_only(&base, 64));
+}
+
+#[test]
+fn a_declared_graph_that_owns_rows_is_charged_once() {
+    // The graph name is both a term of a row and a declaration; the frozen delta
+    // holds it once.
+    let base = RdfDatasetBuilder::new().freeze().unwrap();
+    assert_exact_snapshot_limits(|| {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        assert_eq!(mutable.declare_named_graph(iri("g")), Ok(true));
+        mutable
+            .insert(QuadValues::quad(iri("s"), iri("p"), iri("o"), iri("g")))
+            .unwrap();
+        mutable
+    });
+}
+
+#[test]
+fn a_removed_rows_terms_are_not_charged_to_the_snapshot() {
+    // `x` and `y` stay in the delta interner after their only row is removed, but
+    // the freeze never interns them: the snapshot retains `s`, `p` and `z` alone.
+    let base = RdfDatasetBuilder::new().freeze().unwrap();
+    let build = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let removed = QuadValues::triple(iri("x"), iri("p"), iri("y"));
+        assert!(mutable.insert(removed.clone()).unwrap());
+        assert!(mutable.remove(&removed));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("s"), iri("p"), iri("z")))
+                .unwrap()
+        );
+        mutable
+    };
+    assert_eq!(build().snapshot_view().unwrap().stats().retained_terms, 3);
+    assert_exact_snapshot_limits(build);
+}
+
+/// A language-tagged literal spelled with the tag exactly as given — not folded,
+/// as a caller holding a raw `TermValue` may spell it.
+fn tagged(lexical: &str, tag: &str) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lexical.into(),
+        datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".into(),
+        language: Some(tag.into()),
+        direction: None,
+    }
+}
+
+#[test]
+fn composite_literals_are_charged_with_the_blanks_they_embed() {
+    // Delta-held: the freeze interns `_:fresh1` and `_:fresh2` beside the literal.
+    let empty = RdfDatasetBuilder::new().freeze().unwrap();
+    let delta_held = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(
+                    iri("s"),
+                    iri("p"),
+                    TermValue::typed_literal("[_:fresh1, _:fresh2]", LIST),
+                ))
+                .unwrap()
+        );
+        mutable
+    };
+    assert_eq!(
+        delta_held().snapshot_view().unwrap().stats().retained_terms,
+        6
+    );
+    assert_exact_snapshot_limits(delta_held);
+
+    // Base-held: a row that names a base composite literal re-interns it, its
+    // datatype and both embedded blanks; a map embeds blanks in keys and values.
+    let mut b = RdfDatasetBuilder::new();
+    let list = b.intern_literal(RdfLiteral::typed("[_:b1, _:b2]", LIST));
+    let map = b.intern_literal(RdfLiteral::typed("{_:k : _:v}", MAP));
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri(P);
+    b.push_quad(s, p, list, None);
+    b.push_quad(s, p, map, None);
+    let base = b.freeze().unwrap();
+    let base_held = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        for literal in [
+            TermValue::typed_literal("[_:b1, _:b2]", LIST),
+            TermValue::typed_literal("{_:k : _:v}", MAP),
+        ] {
+            assert!(
+                mutable
+                    .insert(QuadValues::triple(iri("t"), iri("q"), literal))
+                    .unwrap()
+            );
+        }
+        mutable
+    };
+    assert_exact_snapshot_limits(base_held);
+}
+
+#[test]
+fn language_tags_are_charged_folded_as_the_freeze_interns_them() {
+    // "x"@EN and "x"@en are one frozen literal: the snapshot retains `a`, `b`, `c`,
+    // the literal and `rdf:langString`.
+    let empty = RdfDatasetBuilder::new().freeze().unwrap();
+    let distinct_rows = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("a"), iri("b"), tagged("x", "EN")))
+                .unwrap()
+        );
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("a"), iri("c"), tagged("x", "en")))
+                .unwrap()
+        );
+        mutable
+    };
+    assert_eq!(
+        distinct_rows()
+            .snapshot_view()
+            .unwrap()
+            .stats()
+            .retained_terms,
+        5
+    );
+    assert_exact_snapshot_limits(distinct_rows);
+
+    // Two added rows that differ only in the tag's case are one frozen row.
+    let one_row = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        for tag in ["EN", "en", "En"] {
+            assert!(
+                mutable
+                    .insert(QuadValues::triple(iri("a"), iri("b"), tagged("x", tag)))
+                    .unwrap()
+            );
+        }
+        mutable
+    };
+    assert_eq!(one_row().snapshot_view().unwrap().quads().count(), 1);
+    assert_exact_snapshot_limits(one_row);
+
+    // A mixed-case tag that folds to a literal the base holds is that base term.
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/a");
+    let p = b.intern_iri("http://example.org/b");
+    let o = b.intern_literal(RdfLiteral::language_tagged("x", "en"));
+    b.push_quad(s, p, o, None);
+    let base = b.freeze().unwrap();
+    assert_exact_snapshot_limits(|| {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("z"), iri("b"), tagged("x", "EN")))
+                .unwrap()
+        );
+        mutable
+    });
+}
+
+#[test]
+fn every_term_shape_is_charged_as_the_freeze_interns_it() {
+    // Over a base with literals, triple terms, a reifier and an annotation: rows
+    // that share base terms, nest a new triple around base components, carry a new
+    // datatype and a language tag, declare and annotate a reifier (whose
+    // `rdf:reifies` becomes a reifier row, not a term), a removed row, and a
+    // declared graph that also names a row.
+    let base = complete_source();
+    let build = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let same = TermValue::blank("same");
+        let p = TermValue::iri(P);
+        let inner = TermValue::Triple {
+            s: TermBox::new(same.clone()),
+            p: TermBox::new(p.clone()),
+            o: TermBox::new(iri("new-object")),
+        };
+        let rows = [
+            QuadValues::triple(same, p.clone(), inner.clone()),
+            QuadValues::quad(
+                iri("s"),
+                p.clone(),
+                TermValue::typed_literal("7", "http://example.org/datatype"),
+                iri("graph"),
+            ),
+            QuadValues::triple(
+                iri("s"),
+                iri("label"),
+                TermValue::Literal {
+                    lexical_form: "bonjour".into(),
+                    datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".into(),
+                    language: Some("fr".into()),
+                    direction: None,
+                },
+            ),
+            QuadValues::triple(iri("r"), TermValue::iri(REIFIES), inner),
+            QuadValues::triple(iri("r"), iri("note"), iri("o")),
+            QuadValues::quad(iri("s"), p, iri("o"), iri("declared")),
+        ];
+        for row in rows {
+            assert!(mutable.insert(row).unwrap());
+        }
+        let removed = QuadValues::triple(iri("gone"), iri("gone-p"), iri("gone-o"));
+        assert!(mutable.insert(removed.clone()).unwrap());
+        assert!(mutable.remove(&removed));
+        assert_eq!(mutable.declare_named_graph(iri("declared")), Ok(true));
+        assert_eq!(mutable.declare_named_graph(iri("empty")), Ok(true));
+        mutable
+    };
+    assert_exact_snapshot_limits(build);
 }
 
 #[test]
