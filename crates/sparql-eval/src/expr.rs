@@ -42,9 +42,11 @@ use purrdf_sparql_algebra::{
     ArithmeticOperator, Expression, Function, GraphPattern, PurrdfFn, Variable,
 };
 use purrdf_xsd::{
-    XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_ceil, numeric_floor,
-    numeric_round, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div, value_equal,
-    value_mul, value_sub,
+    XsdDatatype, XsdValue, effective_boolean_value,
+    numeric::{CostOp, numeric_cost},
+    numeric_abs, numeric_ceil, numeric_floor, numeric_round,
+    ops::value_div_with_policy,
+    parse_by_iri, parse_xsd10, value_add, value_cmp, value_equal, value_mul, value_sub,
 };
 use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
 
@@ -4407,6 +4409,8 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
             | XsdValue::Float(_)
             | XsdValue::Double(_)
             | XsdValue::Boolean(_)
+            | XsdValue::BigInteger { .. }
+            | XsdValue::BigDecimal(_)
     )
 }
 
@@ -4431,12 +4435,15 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
 ///   `1.0000001E0` (truncation `1.0E0`), and `3.4028235677973366e38`, halfway
 ///   between the largest float and 2^128, gives `INF` (truncation the largest
 ///   float).
-/// - to `xsd:decimal`: an integer or decimal is exact; a float or double is the
-///   decimal closest to its binary value ([`purrdf_xsd::Decimal::from_f64_closest`]),
-///   and `NaN`, the infinities and magnitudes past the decimal range are errors.
+/// - to `xsd:decimal`: an integer or decimal is exact, at any size; a float or
+///   double below `2^127` in magnitude is the decimal closest to its binary value
+///   at eighteen fractional digits ([`purrdf_xsd::Decimal::from_f64_closest`]), and
+///   one at or above it — always an integer — is its exact value; `NaN` and the
+///   infinities are errors.
 /// - to `xsd:integer` and its derived types: the value with its fractional part
-///   discarded, an error for `NaN`, the infinities, and values outside `i128` or the
-///   target's own range (`xsd:byte` of `128.5` is an error).
+///   discarded, at any size, an error for `NaN`, the infinities, and a value outside
+///   the target's own value space (`xsd:byte` of `128.5` is an error;
+///   `xsd:integer` of `1e300` is the exact integer).
 /// - to `xsd:boolean`: XPath's numeric effective boolean value (zero or `NaN` is
 ///   `false`, everything else `true`) — the same rule SPARQL's own effective boolean
 ///   value uses for numerics ([`effective_boolean_value`]).
@@ -4457,6 +4464,8 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
             XsdValue::Float(f) => f64::from(*f),
             XsdValue::Double(d) => *d,
             XsdValue::Boolean(b) => f64::from(u8::from(*b)),
+            XsdValue::BigInteger { value, .. } => value.to_f64(),
+            XsdValue::BigDecimal(d) => d.to_f64(),
             _ => return None,
         })),
         // An exact source is rounded ONCE, straight to single precision: going
@@ -4468,6 +4477,8 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
             XsdValue::Float(f) => *f,
             XsdValue::Double(d) => *d as f32,
             XsdValue::Boolean(b) => f32::from(u8::from(*b)),
+            XsdValue::BigInteger { value, .. } => value.to_f32(),
+            XsdValue::BigDecimal(d) => d.to_f32(),
             _ => return None,
         })),
         XsdDatatype::Boolean => Some(XsdValue::Boolean(match source {
@@ -4476,38 +4487,66 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
             XsdValue::Float(f) => *f != 0.0 && !f.is_nan(),
             XsdValue::Double(d) => *d != 0.0 && !d.is_nan(),
             XsdValue::Boolean(b) => *b,
+            XsdValue::BigInteger { value, .. } => !value.is_zero(),
+            XsdValue::BigDecimal(d) => !d.is_zero(),
             _ => return None,
         })),
-        XsdDatatype::Decimal => Some(XsdValue::Decimal(match source {
-            XsdValue::Integer { value, .. } => purrdf_xsd::Decimal::from_integer(*value),
-            XsdValue::Decimal(d) => *d,
-            XsdValue::Float(f) => purrdf_xsd::Decimal::from_f64_closest(f64::from(*f))?,
-            XsdValue::Double(d) => purrdf_xsd::Decimal::from_f64_closest(*d)?,
-            XsdValue::Boolean(b) => purrdf_xsd::Decimal::from_integer(i128::from(*b)),
-            _ => return None,
-        })),
+        XsdDatatype::Decimal => match source {
+            XsdValue::Integer { value, .. } => {
+                Some(XsdValue::Decimal(purrdf_xsd::Decimal::from_integer(*value)))
+            }
+            XsdValue::Decimal(d) => Some(XsdValue::Decimal(*d)),
+            XsdValue::Float(f) => decimal_of_binary(f64::from(*f)),
+            XsdValue::Double(d) => decimal_of_binary(*d),
+            XsdValue::Boolean(b) => Some(XsdValue::Decimal(purrdf_xsd::Decimal::from_integer(
+                i128::from(*b),
+            ))),
+            XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => {
+                source.to_exact_decimal().map(XsdValue::from_exact_decimal)
+            }
+            _ => None,
+        },
         target if target.is_integer_family() => {
             let value = match source {
-                XsdValue::Integer { value, .. } => *value,
+                XsdValue::Integer { value, .. } => purrdf_xsd::exact::Integer::from_i128(*value),
                 // Exact truncation: through `f64` a decimal's integer part would
                 // round past 2^53 (`12345678901234567.5` would become `…568`).
-                XsdValue::Decimal(d) => d.whole_part(),
-                XsdValue::Float(f) => truncate_to_i128(f64::from(*f))?,
-                XsdValue::Double(d) => truncate_to_i128(*d)?,
-                XsdValue::Boolean(b) => i128::from(*b),
+                XsdValue::Decimal(d) => purrdf_xsd::exact::Integer::from_i128(d.whole_part()),
+                XsdValue::Float(f) => truncate_to_integer(f64::from(*f))?,
+                XsdValue::Double(d) => truncate_to_integer(*d)?,
+                XsdValue::Boolean(b) => purrdf_xsd::exact::Integer::from_i128(i128::from(*b)),
+                XsdValue::BigInteger { value, .. } => value.clone(),
+                XsdValue::BigDecimal(d) => d.to_integer_truncated(),
                 _ => return None,
             };
-            if let Some((min, max)) = target.integer_range()
-                && !(min..=max).contains(&value)
-            {
-                return None;
-            }
-            Some(XsdValue::Integer {
-                value,
-                datatype: target,
-            })
+            target
+                .admits_integer(&value)
+                .then(|| XsdValue::from_exact_integer(value, target))
         }
         _ => None,
+    }
+}
+
+/// The `xsd:float`/`xsd:double` to `xsd:decimal` cast of a binary value: the
+/// closest decimal at eighteen fractional digits below `2^127` in magnitude, the
+/// exact value (an integer) at or above it, `None` for `NaN` and the infinities
+/// (`err:FOCA0002`).
+fn decimal_of_binary(value: f64) -> Option<XsdValue> {
+    match purrdf_xsd::Decimal::from_f64_closest(value) {
+        Some(decimal) => Some(XsdValue::Decimal(decimal)),
+        None => purrdf_xsd::exact::Decimal::from_f64(value)
+            .ok()
+            .map(XsdValue::from_exact_decimal),
+    }
+}
+
+/// `value` with its fractional part discarded, at any magnitude, or `None` for
+/// `NaN` and the infinities (`err:FOCA0002`). Inside `i128` this is the machine
+/// truncation; outside it, the exact integer the binary value already is.
+fn truncate_to_integer(value: f64) -> Option<purrdf_xsd::exact::Integer> {
+    match truncate_to_i128(value) {
+        Some(small) => Some(purrdf_xsd::exact::Integer::from_i128(small)),
+        None => purrdf_xsd::exact::Integer::from_f64_truncated(value).ok(),
     }
 }
 
@@ -4540,6 +4579,7 @@ fn numeric_or_bool_to_xpath_string(value: &XsdValue) -> Option<String> {
         XsdValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_owned()),
         XsdValue::Integer { value, .. } => Some(value.to_string()),
         XsdValue::Decimal(d) => Some(d.canonical_lexical()),
+        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => Some(value.canonical_lexical()),
         XsdValue::Float(f) => Some(xpath_float_to_string(*f)),
         XsdValue::Double(d) => Some(xpath_double_to_string(*d)),
         _ => None,
@@ -5473,17 +5513,32 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) else {
         return Ok(None);
     };
+    // An operation on the arbitrary-precision tower is charged by operand size
+    // before it runs (machine-word operands cost nothing here).
+    let cost_op = match op {
+        ArithmeticOperator::Add | ArithmeticOperator::Subtract => CostOp::Add,
+        ArithmeticOperator::Multiply => CostOp::Mul,
+        ArithmeticOperator::Divide => CostOp::Div(ctx.division),
+    };
+    if let Err(tripped) = ctx.charge_exact_numeric(numeric_cost(&xa, &xb, cost_op)) {
+        ctx.expression_barrier.record(tripped);
+        return Ok(None);
+    }
     let result = match op {
         ArithmeticOperator::Add => value_add(&xa, &xb),
         ArithmeticOperator::Subtract => value_sub(&xa, &xb),
         ArithmeticOperator::Multiply => value_mul(&xa, &xb),
-        ArithmeticOperator::Divide => value_div(&xa, &xb),
+        ArithmeticOperator::Divide => value_div_with_policy(&xa, &xb, ctx.division),
     };
-    // Overflow/division/type failures retain their SPARQL expression-error meaning.
-    result
-        .ok()
-        .map(|result| xsd_to_term(ctx, &result))
-        .transpose()
+    match result {
+        Ok(result) => xsd_to_term(ctx, &result).map(Some),
+        // A quotient the caller's division policy cannot express is a refusal of
+        // the query, not an unbound value: the policy asked for exactness.
+        Err(purrdf_xsd::XsdError::Exact(error)) => Err(EvalError::Numeric(error)),
+        // Division by zero and type failures keep their SPARQL expression-error
+        // meaning.
+        Err(_) => Ok(None),
+    }
 }
 
 /// A unary numeric operator (`+` / `-`) over its evaluated operand: resolve it to an XSD

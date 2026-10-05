@@ -273,6 +273,28 @@ pub fn validate_shape_map(
     Ok(validate_with(schema, data, &resolved, options))
 }
 
+/// [`validate_shape_map`], comparing every value node against the exact numeric
+/// facet bounds parsed with `schema` ([`crate::exact_facets`]).
+///
+/// # Errors
+///
+/// As [`validate_shape_map`].
+pub fn validate_shape_map_exact(
+    schema: &Schema,
+    facets: &crate::exact_facets::ExactFacets,
+    data: &RdfDataset,
+    map_src: &str,
+    base: Option<&str>,
+    options: &ValidationOptions<'_>,
+) -> Result<ResultShapeMap> {
+    let map = parse_shape_map(map_src, base)?;
+    refuse_undeclared_shapes(schema, &map)?;
+    let resolved = resolve_shape_map(&map, data);
+    Ok(crate::exact_facets::validate_exact(
+        schema, facets, data, &resolved, options,
+    ))
+}
+
 /// Refuse a shape map naming a shape `schema` does not declare.
 ///
 /// Checked BEFORE the node selectors are expanded, so the refusal does not

@@ -107,11 +107,12 @@ use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
     OrderExpression, PropertyPathExpression, Variable,
 };
+use purrdf_xsd::exact::DivisionPolicy;
+use purrdf_xsd::numeric::numeric_div_with_policy;
 use purrdf_xsd::{
     BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
 };
 
-use purrdf_xsd::datatype::XSD_DECIMAL;
 use purrdf_xsd::datatype::XSD_INTEGER;
 use purrdf_xsd::datatype::XSD_STRING;
 
@@ -932,7 +933,9 @@ impl ValueClass {
             XsdValue::Integer { .. }
             | XsdValue::Decimal(_)
             | XsdValue::Float(_)
-            | XsdValue::Double(_) => Self::Numeric,
+            | XsdValue::Double(_)
+            | XsdValue::BigInteger { .. }
+            | XsdValue::BigDecimal(_) => Self::Numeric,
             XsdValue::String(_) => Self::Text,
             XsdValue::DateTime(_)
             | XsdValue::Date(_)
@@ -1343,8 +1346,18 @@ pub fn fold_values(
         ValueAggregate::Count => {
             fold_builtin(false, values, CountAccumulator::default, acc_step_one)
         }
-        ValueAggregate::Sum => fold_numeric(false, values, NumericAggregate::Sum),
-        ValueAggregate::Avg => fold_numeric(false, values, NumericAggregate::Avg),
+        ValueAggregate::Sum => fold_numeric(
+            false,
+            values,
+            NumericAggregate::Sum,
+            DivisionPolicy::xsd_default(),
+        ),
+        ValueAggregate::Avg => fold_numeric(
+            false,
+            values,
+            NumericAggregate::Avg,
+            DivisionPolicy::xsd_default(),
+        ),
         ValueAggregate::Min => fold_builtin(false, values, MinAccumulator::default, acc_step_one),
         ValueAggregate::Max => fold_builtin(false, values, MaxAccumulator::default, acc_step_one),
         ValueAggregate::Sample => {
@@ -1770,8 +1783,12 @@ fn eval_aggregate<D: DatasetView + Sync>(
             CountAccumulator::default,
             acc_step_one,
         )?,
-        AggregateFunction::Sum => fold_numeric(sequential, &survivors, NumericAggregate::Sum)?,
-        AggregateFunction::Avg => fold_numeric(sequential, &survivors, NumericAggregate::Avg)?,
+        AggregateFunction::Sum => {
+            fold_numeric(sequential, &survivors, NumericAggregate::Sum, ctx.division)?
+        }
+        AggregateFunction::Avg => {
+            fold_numeric(sequential, &survivors, NumericAggregate::Avg, ctx.division)?
+        }
         AggregateFunction::Min => fold_builtin(
             sequential,
             &survivors,
@@ -2240,6 +2257,11 @@ impl NumericFold {
                         count: 1,
                         datatype: *datatype,
                     },
+                    XsdValue::BigInteger { value, datatype } => Self::Int {
+                        sum: value.to_bigint(),
+                        count: 1,
+                        datatype: *datatype,
+                    },
                     XsdValue::Duration(dur) => Self::Dur {
                         months: i128::from(dur.months()),
                         seconds: XsdValue::Decimal(dur.seconds()),
@@ -2260,6 +2282,12 @@ impl NumericFold {
             } => match xv {
                 XsdValue::Integer { value, .. } => {
                     sum.add_i128(*value);
+                    *count += 1;
+                    *datatype = XsdDatatype::Integer;
+                    true
+                }
+                XsdValue::BigInteger { value, .. } => {
+                    sum.add_assign(&value.to_bigint());
                     *count += 1;
                     *datatype = XsdDatatype::Integer;
                     true
@@ -2353,8 +2381,10 @@ impl NumericFold {
                 ..
             } => {
                 let months = i64::try_from(months).ok()?;
+                // A seconds total past the bounded decimal is past every
+                // representable duration.
                 let XsdValue::Decimal(seconds) = seconds else {
-                    unreachable!("NumericFold::Dur's seconds field is always XsdValue::Decimal");
+                    return None;
                 };
                 let dur = purrdf_xsd::temporal::Duration::new(months, seconds, datatype).ok()?;
                 Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
@@ -2384,29 +2414,30 @@ impl NumericFold {
     /// function stays `Option`-returning only because [`Self::Ok`]'s
     /// `numeric_div` call fails when the quotient's integer part exceeds the
     /// `i128` mantissa (see `purrdf_xsd::numeric::decimal_div_raw`).
-    fn finish_avg(self) -> Option<TermValue> {
+    fn finish_avg(self, division: DivisionPolicy) -> Result<Option<TermValue>, EvalError> {
+        // `AVG` is `SUM ÷ COUNT` under the query's division policy, through the one
+        // quotient `/` computes, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` agree.
+        let mean = |sum: &XsdValue, count: u64| {
+            let count_val = XsdValue::Integer {
+                value: i128::from(count),
+                datatype: XsdDatatype::Integer,
+            };
+            match numeric_div_with_policy(sum, &count_val, division) {
+                Ok(avg) => Ok(Some(crate::expr::xsd_literal_value(&avg))),
+                Err(purrdf_xsd::XsdError::Exact(error)) => Err(EvalError::Numeric(error)),
+                Err(_) => Ok(None),
+            }
+        };
         match self {
-            Self::Empty => Some(TermValue::integer(0)),
-            Self::Int { sum, count, .. } => {
-                Some(purrdf_xsd::bigint_avg_decimal(&sum, count).map_or_else(
-                    || TermValue::Literal {
-                        lexical_form: purrdf_xsd::bigint_avg_decimal_lexical(&sum, count),
-                        datatype: XSD_DECIMAL.to_owned(),
-                        language: None,
-                        direction: None,
-                    },
-                    |avg| crate::expr::xsd_literal_value(&avg),
-                ))
-            }
-            Self::Ok { acc, count } => {
-                let count_val = XsdValue::Integer {
-                    value: i128::from(count),
-                    datatype: XsdDatatype::Integer,
-                };
-                numeric_div(&acc, &count_val)
-                    .ok()
-                    .map(|avg| crate::expr::xsd_literal_value(&avg))
-            }
+            Self::Empty => Ok(Some(TermValue::integer(0))),
+            Self::Int { sum, count, .. } => mean(
+                &XsdValue::from_exact_integer(
+                    purrdf_xsd::exact::Integer::from_bigint(sum),
+                    XsdDatatype::Integer,
+                ),
+                count,
+            ),
+            Self::Ok { acc, count } => mean(&acc, count),
             Self::Dur {
                 months,
                 seconds,
@@ -2428,18 +2459,24 @@ impl NumericFold {
                 // uses — for the identical truncated-to-18-fractional-digit
                 // `Decimal` result plain decimal AVG gets.
                 let divisor = i128::from(count);
-                let mean_months = round_i128_div_to_i64(months, divisor)?;
-                let count_val = XsdValue::Integer {
-                    value: divisor,
-                    datatype: XsdDatatype::Integer,
+                let mean = || {
+                    let mean_months = round_i128_div_to_i64(months, divisor)?;
+                    let count_val = XsdValue::Integer {
+                        value: divisor,
+                        datatype: XsdDatatype::Integer,
+                    };
+                    // A seconds mean past the bounded decimal is past every
+                    // representable duration.
+                    let XsdValue::Decimal(mean_seconds) = numeric_div(&seconds, &count_val).ok()?
+                    else {
+                        return None;
+                    };
+                    let dur =
+                        purrdf_xsd::temporal::Duration::new(mean_months, mean_seconds, datatype)
+                            .ok()?;
+                    Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
                 };
-                let XsdValue::Decimal(mean_seconds) = numeric_div(&seconds, &count_val).ok()?
-                else {
-                    unreachable!("numeric_div(Decimal, Integer) always answers XsdValue::Decimal");
-                };
-                let dur = purrdf_xsd::temporal::Duration::new(mean_months, mean_seconds, datatype)
-                    .ok()?;
-                Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
+                Ok(mean())
             }
         }
     }
@@ -2618,6 +2655,13 @@ fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
     match joining {
         XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f32())),
         XsdValue::Double(_) => Some(XsdValue::Double(sum.to_f64())),
+        // A decimal of any size joins the exact sum exactly.
+        XsdValue::Decimal(_) | XsdValue::BigDecimal(_) | XsdValue::BigInteger { .. } => {
+            Some(XsdValue::from_exact_integer(
+                purrdf_xsd::exact::Integer::from_bigint(sum.clone()),
+                XsdDatatype::Integer,
+            ))
+        }
         _ => None,
     }
 }
@@ -2776,6 +2820,7 @@ fn fold_numeric(
     sequential: bool,
     values: &[TermValue],
     aggregate: NumericAggregate,
+    division: DivisionPolicy,
 ) -> Result<Option<TermValue>, EvalError> {
     let fold = if crate::parallel::should_parallelize(sequential, values.len()) {
         crate::parallel::par_chunk_reduce_init(
@@ -2795,10 +2840,13 @@ fn fold_numeric(
     } else {
         numeric_chain(values)
     };
-    Ok(fold.and_then(|fold| match aggregate {
-        NumericAggregate::Sum => fold.finish_sum(),
-        NumericAggregate::Avg => fold.finish_avg(),
-    }))
+    match fold {
+        None => Ok(None),
+        Some(fold) => match aggregate {
+            NumericAggregate::Sum => Ok(fold.finish_sum()),
+            NumericAggregate::Avg => fold.finish_avg(division),
+        },
+    }
 }
 
 /// The sequential chain itself: every value folded left to right through
@@ -2859,6 +2907,8 @@ impl MagnitudeBound {
                 let seconds = dur.seconds();
                 self.add_parts(seconds.mantissa().unsigned_abs(), seconds.scale());
             }
+            // Past machine words: nothing is proven small, so the rows replay.
+            XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => self.magnitude = u128::MAX,
             _ => {}
         }
     }
@@ -6386,7 +6436,9 @@ mod numeric_chain_tests {
             };
         }
         acc.and_then(|fold| match aggregate {
-            ValueAggregate::Avg => fold.finish_avg(),
+            ValueAggregate::Avg => fold
+                .finish_avg(DivisionPolicy::xsd_default())
+                .expect("the default policy never refuses"),
             _ => fold.finish_sum(),
         })
     }

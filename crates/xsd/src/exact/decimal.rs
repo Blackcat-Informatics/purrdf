@@ -16,9 +16,8 @@ use super::integer::{Integer, forward_by_value};
 use super::rounding::{DivisionPolicy, Rounding};
 use crate::bigint::BigInt;
 use crate::numeric::Decimal as BoundedDecimal;
-use crate::value::XsdValue;
 
-/// The 3.x bounded decimal's largest scale.
+/// The bounded decimal's largest scale.
 const BOUNDED_MAX_SCALE: u32 = 18;
 
 /// Powers of ten that fit `i128`: `10^0` through `10^38`.
@@ -219,7 +218,7 @@ impl Decimal {
         )
     }
 
-    /// The exact value of a 3.x bounded [`crate::numeric::Decimal`].
+    /// The exact value of a bounded [`crate::numeric::Decimal`].
     #[must_use]
     pub fn from_bounded(value: &BoundedDecimal) -> Self {
         Self::new(
@@ -228,7 +227,7 @@ impl Decimal {
         )
     }
 
-    /// The value as a 3.x bounded [`crate::numeric::Decimal`], exactly.
+    /// The value as a bounded [`crate::numeric::Decimal`], exactly.
     ///
     /// # Errors
     ///
@@ -249,27 +248,6 @@ impl Decimal {
         ))?;
         let scale = u8::try_from(self.scale).expect("at most 18");
         Ok(BoundedDecimal::from_parts(mantissa, scale))
-    }
-
-    /// The value an [`XsdValue`] holds on the integer or decimal branch; `None`
-    /// for any other variant (a float or double converts through
-    /// [`Self::from_f64`], deliberately: its value space is a separate branch).
-    #[must_use]
-    pub fn from_xsd(value: &XsdValue) -> Option<Self> {
-        match value {
-            XsdValue::Integer { value, .. } => Some(Self::from_integer(Integer::from_i128(*value))),
-            XsdValue::Decimal(decimal) => Some(Self::from_bounded(decimal)),
-            _ => None,
-        }
-    }
-
-    /// The value as an [`XsdValue::Decimal`], through [`Self::to_bounded`].
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::to_bounded`].
-    pub fn to_xsd(&self) -> Result<XsdValue, ExactError> {
-        self.to_bounded().map(XsdValue::Decimal)
     }
 
     /// The value with its fractional part discarded — the `xs:decimal` to

@@ -198,6 +198,7 @@ units mean nothing outside this build.
 | `exists-definition-answered` | 1 | per-row-definition evaluation of an `EXISTS`/`NOT EXISTS` inner — once per distinct restriction of the row to the inner's correlated variables, never once per outer row |
 | `exists-inner-solutions-consumed` | 1 | row the definition path's inner materialized before its first-witness stop |
 | `property-function-work` | 1 | unit of internal work a property-function relation performed and reported through `PfCursor::take_work` — the unit is the relation's own (a candidate examined, a posting decoded), because the engine cannot see inside host code to define one |
+| `exact-arithmetic-work` | 1 | base-`1e9` limb operation of an `xsd:integer`/`xsd:decimal` `+`, `-`, `*` or `/` whose operands do not both fit machine words, charged with the operation's own cost bound (computed from the operand sizes alone) before the operation runs; machine-word operands charge nothing |
 
 `update-mutated-quad` is the only point outside the query evaluator and the only one
 no algebra node raises. It exists because `CLEAR ALL`, `MOVE`, `COPY`, `ADD`, `LOAD`
@@ -518,7 +519,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `11` |
+| `GOVERNOR_PROFILE_VERSION` | `12` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -535,16 +536,16 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n11\n'
+{ printf 'purrdf-sparql-governors\n12\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
     property-function-invocation property-function-row \
     aggregate-invocation aggregate-accumulation \
     exists-probe-answered exists-definition-answered \
-    exists-inner-solutions-consumed property-function-work
+    exists-inner-solutions-consumed property-function-work exact-arithmetic-work
 } | sha256sum
-# 135209daa53d2d55380f95f1331a1e34f019dbc4af10d8ab4c82d0c0b349c3e8
+# 310a608e0df2200e5f8dd047481a0f7da3e0ac604df20f2e977c89b5b1453ca5
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -675,21 +676,22 @@ increment it. That restraint is what makes the number worth pinning.
 | 8 | `property-function-work` is appended, because v5 priced a host relation by the two quantities the *engine* can see — invocations driven and rows accepted — and for a generator relation neither is where the work is: a nearest-neighbour search examining a million vectors to return five rows charged six units, pricing a million distance computations exactly as it priced a six-row table scan. The count comes from the relation itself through `PfCursor::take_work`, the only party that can see inside its own search, and it is *spent* rather than merely recorded — so over-reporting exhausts the reporter's own caller, and under-reporting (the default, zero) can cost a receipt precision but never costs soundness, because every other ceiling stays in force unchanged. No relation written against v5's seam charges it |
 | 9 | schedule byte-identical; the per-row loops of `FILTER`, `BIND`, `UNFOLD` and every aggregate pass one checkpoint: a trip already latched is observed before the next row, `UNFOLD` admits a row before it ingests it, work is reported to the stop poll exactly once, and a loop forked across threads admits only the rows the remaining fuel covers and commits them in source order, so it trips on the row, spends the fuel and keeps the prefix the sequential loop does. Charge order inside those loops, and where polls fall in forked loops, move |
 | 10 | fuel schedule byte-identical; each scratch arena charges its own retention independently of aggregate buffers/state and child arenas, so an unrelated scratch charge cannot hide later computed values. Concrete identity registration, fresh blank mints and stateful child reservation copies checkpoint scratch growth immediately. Incomplete expression/template/list/SERVICE output is withheld and staged UPDATE publication is aborted on a trip. Scratch consumption and the point at which a scratch ceiling trips can move |
-| **11** | fuel schedule byte-identical; eligible positive operands of ordinary joins receive incoming bindings, replacing independent-relation work with indexed candidate visits and carried rows. OPTIONAL evaluates its positive right operand per driver occurrence, moving node-entry counts and row-charge order; eligible correlated EXISTS/NOT EXISTS uses native restrictions and the first-witness definition path, moving candidate and existence-evidence charges. Carried columns change intermediate-cell widths, and admission forecasts the seeded plan with relation-local join domains. Complete answers keep their scope and bag multiplicity; fuel totals and budget-cut points can move |
+| 11 | fuel schedule byte-identical; eligible positive operands of ordinary joins receive incoming bindings, replacing independent-relation work with indexed candidate visits and carried rows. OPTIONAL evaluates its positive right operand per driver occurrence, moving node-entry counts and row-charge order; eligible correlated EXISTS/NOT EXISTS uses native restrictions and the first-witness definition path, moving candidate and existence-evidence charges. Carried columns change intermediate-cell widths, and admission forecasts the seeded plan with relation-local join domains. Complete answers keep their scope and bag multiplicity; fuel totals and budget-cut points can move |
+| **12** | `exact-arithmetic-work` is appended, because `xsd:integer` and `xsd:decimal` became exact at every size: an operation whose operands do not both fit machine words runs on the arbitrary-precision tower, where one product of two million-digit integers is billions of limb operations. Priced by one `row-expression-evaluation` like any expression, a chain of squarings could run until memory ran out under every fuel ceiling. Each such `+`, `-`, `*` and `/` is now charged its own cost bound, computed from the operand sizes alone, before it runs. Machine-word operands charge nothing, so a query whose numbers fit machine words buys exactly the execution it bought under v11 |
 
 ### 12.1 What a consumer must re-verify when the version moves
 
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `11` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `12` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
    lying and must be rejected rather than reconciled.
 2. **Re-measure every fuel ceiling** under `QueryGovernors::METERED`, against your own
    representative queries. A ceiling sized against the previous version was sized
-   against work this build may no longer do (v3, v11), may now do (v4, v5, v6, v7, v8),
+   against work this build may no longer do (v3, v11), may now do (v4, v5, v6, v7, v8, v12),
    or does in another order (v9, v11). **Re-measure intermediate-cell ceilings too:**
    v11 carries incoming columns and forecasts seeded execution and relation-local join
    domains. **Re-measure scratch ceilings too:** v10 counts
@@ -716,7 +718,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `11` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `12` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

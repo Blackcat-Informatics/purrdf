@@ -649,6 +649,14 @@ fn magnitude_cmp(a: &[u32], b: &[u32]) -> Ordering {
 }
 
 /// `a + b` over base-`1e9` magnitudes (both little-endian, canonical).
+///
+/// `#[inline]`: `SUM` folds one `i128` per row through it, and that loop pays
+/// for a call per row when the arithmetic in `arith` makes it a shared callee.
+#[allow(
+    clippy::inline_always,
+    reason = "`add_assign` folds one value per `SUM` row through it; out of line, every row pays a call"
+)]
+#[inline(always)]
 fn magnitude_add(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = Vec::with_capacity(a.len().max(b.len()) + 1);
     let mut carry: u64 = 0;

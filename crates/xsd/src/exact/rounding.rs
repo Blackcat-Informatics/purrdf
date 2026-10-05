@@ -76,11 +76,10 @@ impl Rounding {
 /// XPath F&O 3.1 §4.2 leaves the precision of a decimal quotient
 /// implementation-defined; this is where the implementation lets its caller
 /// define it. The default, [`DivisionPolicy::xsd_default`], is eighteen
-/// fractional digits truncated toward zero: exactly the quotient the 3.x bounded
+/// fractional digits truncated toward zero: exactly the quotient the bounded
 /// [`crate::numeric::Decimal`] produces wherever its `i128` mantissa holds the
-/// result, so adopting the exact tower as the default representation changes no
-/// quotient that is representable today. A reasoner that needs the exact value
-/// of a non-terminating quotient divides [`crate::exact::Rational`]s instead.
+/// result. A reasoner that needs the exact value of a non-terminating quotient
+/// divides [`crate::exact::Rational`]s instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DivisionPolicy {
@@ -102,7 +101,7 @@ pub enum DivisionPolicy {
 }
 
 impl DivisionPolicy {
-    /// The scale of [`Self::xsd_default`]: eighteen fractional digits, the 3.x
+    /// The scale of [`Self::xsd_default`]: eighteen fractional digits, the bounded
     /// bounded decimal's maximum scale.
     pub const DEFAULT_SCALE: u32 = 18;
 

@@ -24,17 +24,6 @@
 //!
 //! Both are deterministic functions of the operand sizes, so the same query
 //! over the same data charges the same amount on every run and every target.
-//!
-//! # How the evaluator charges it
-//!
-//! The SPARQL governor (`purrdf_core::governor`) meters compute as `Fuel` and
-//! value-constructing allocation as `ScratchBytes`. When the exact tower
-//! becomes the evaluator's numeric representation, each arithmetic or cast
-//! site computes the operation's [`Cost`], charges `work` to `Fuel` and `bytes`
-//! to `ScratchBytes` — refusing with the governor's typed stop before the
-//! operation runs if either ceiling would be crossed — and only then computes.
-//! An inline value's costs are a handful of units, so a query that never leaves
-//! the `i128` range is charged what it is charged today within a constant.
 
 /// The estimated cost of one exact operation; see the module docs for the units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

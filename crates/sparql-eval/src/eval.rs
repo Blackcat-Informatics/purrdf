@@ -688,6 +688,11 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
     /// mutually-recursive functions fail closed rather than overflow the stack.
     pub(crate) udf_depth: u32,
+    /// The precision an `xsd:integer`/`xsd:decimal` quotient is formed at
+    /// ([`purrdf_xsd::exact::DivisionPolicy`]), supplied per query through
+    /// [`QueryOptions::division`](crate::QueryOptions::division) and shared by `/`
+    /// and `AVG` alike, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` are one quotient.
+    pub(crate) division: purrdf_xsd::exact::DivisionPolicy,
     /// The frozen graph a dataset-aware (expression-bodied) user function's body is
     /// evaluated against — the `focusGraph` of SHACL 1.2 SPARQL Extensions §7.3,
     /// supplied per query through
@@ -1031,6 +1036,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             property_functions: &EMPTY_RELATIONS,
             aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
+            division: purrdf_xsd::exact::DivisionPolicy::xsd_default(),
             focus_graph: None,
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
@@ -2242,6 +2248,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // would.
             aggregates: self.aggregates,
             udf_depth: self.udf_depth,
+            division: self.division,
             // A `Copy` borrow of the SAME graph the parent is querying: a worker must
             // evaluate an expression-bodied function against its parent's focus graph.
             focus_graph: self.focus_graph,
@@ -2312,6 +2319,33 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub fn with_call_depth(mut self, depth: u32) -> Self {
         self.udf_depth = depth;
         self
+    }
+
+    /// Set the precision an `xsd:integer`/`xsd:decimal` quotient is formed at — for
+    /// `/` and for `AVG` alike. The default,
+    /// [`DivisionPolicy::xsd_default`](purrdf_xsd::exact::DivisionPolicy::xsd_default),
+    /// is eighteen fractional digits truncated toward zero.
+    #[must_use]
+    pub const fn with_division_policy(
+        mut self,
+        division: purrdf_xsd::exact::DivisionPolicy,
+    ) -> Self {
+        self.division = division;
+        self
+    }
+
+    /// Charge one operation on the arbitrary-precision numeric tower: its limb work
+    /// as [`ChargePoint::ExactArithmeticWork`](crate::governor::ChargePoint::ExactArithmeticWork)
+    /// occurrences against the fuel ceiling, before the operation runs. A zero cost
+    /// (machine-word operands) charges nothing.
+    pub(crate) fn charge_exact_numeric(
+        &self,
+        cost: purrdf_xsd::exact::Cost,
+    ) -> Result<(), TrippedGovernor> {
+        self.charge_occurrences(
+            crate::governor::ChargePoint::ExactArithmeticWork,
+            cost.work(),
+        )
     }
 
     /// Attach a caller-injected property-function registry for this evaluation, so a
@@ -2453,6 +2487,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // registry the calling query sees.
             aggregates: self.aggregates,
             udf_depth: next_depth,
+            division: self.division,
             // Inherited for the same reason as the registries: a function body is
             // evaluated over the graph the calling query is running over.
             focus_graph: self.focus_graph,

@@ -257,6 +257,15 @@ pub enum EvalError {
     /// offered as the complete one.
     Function(String),
 
+    /// An `xsd:integer`/`xsd:decimal` operation the query's numeric configuration
+    /// refuses — a quotient with no finite decimal expansion under
+    /// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact) — with its
+    /// typed reason and XPath F&O error code ([`purrdf_xsd::exact::ExactError::code`]).
+    ///
+    /// A refusal of the query, not an expression error: the caller asked for exact
+    /// answers, and an unbound value in their place would be a silent wrong answer.
+    Numeric(purrdf_xsd::exact::ExactError),
+
     /// An `EXISTS`/`NOT EXISTS` body contains a `BIND`/`(expr AS ?v)` target or
     /// a `VALUES` column that collides with a variable already bound on the
     /// row being filtered — SEP-0007 Part 3's no-rebinding rule, enforced at
@@ -497,6 +506,7 @@ impl EvalError {
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
             Self::StackExhausted { .. } => Some(Self::STACK_EXHAUSTED_CODE),
             Self::HostStackExhausted { .. } => Some(Self::HOST_STACK_EXHAUSTED_CODE),
+            Self::Numeric(_) => Some(Self::NUMERIC_CODE),
         }
     }
 
@@ -582,6 +592,11 @@ impl EvalError {
     /// native caller can size ([`Self::STACK_EXHAUSTED_CODE`]): no lane answers it.
     pub const HOST_STACK_EXHAUSTED_CODE: &'static str = "native-sparql-host-stack-exhausted";
 
+    /// The stable, machine-readable diagnostic code [`Self::Numeric`] maps to at the
+    /// `SparqlEngine` boundary. The XPath F&O code of the particular refusal is in
+    /// the message ([`purrdf_xsd::exact::ExactError::code`]).
+    pub const NUMERIC_CODE: &'static str = "native-sparql-numeric";
+
     /// Construct an [`Self::RelationIncomplete`] naming the relation and quoting its
     /// own reason.
     pub(crate) fn relation_incomplete(iri: impl Into<String>, reason: impl Into<String>) -> Self {
@@ -644,6 +659,7 @@ impl core::fmt::Display for EvalError {
                  filtered: the substitution semantics define no answer for a rebinding"
             ),
             Self::Function(msg) => write!(f, "host function error: {msg}"),
+            Self::Numeric(error) => write!(f, "numeric error {}: {error}", error.code()),
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
             Self::CompositeBound(msg) => write!(
                 f,

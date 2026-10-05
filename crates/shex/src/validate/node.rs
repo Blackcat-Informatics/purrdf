@@ -12,6 +12,7 @@ use crate::ast::{
     IriExclusion, LanguageExclusion, LiteralExclusion, NodeConstraint, NodeKind, NumericLiteral,
     ObjectLiteral, StemValue, ValueSetValue,
 };
+use crate::exact_facets::ExactFacets;
 
 /// The `rdf:langString` datatype IRI (a language-tagged literal's datatype).
 pub(crate) use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
@@ -70,6 +71,7 @@ pub(crate) fn check_node_constraint(
     nc: &NodeConstraint,
     facts: &NodeFacts<'_>,
     patterns: &mut PatternCache,
+    facets: Option<&ExactFacets>,
 ) -> Result<(), String> {
     if let Some(kind) = nc.node_kind {
         check_node_kind(kind, facts)?;
@@ -78,7 +80,7 @@ pub(crate) fn check_node_constraint(
         check_datatype(datatype, facts)?;
     }
     check_string_facets(nc, facts, patterns)?;
-    check_numeric_facets(nc, facts)?;
+    check_numeric_facets(nc, facts, facets)?;
     if let Some(values) = &nc.values {
         check_value_set(values, facts)?;
     }
@@ -241,19 +243,11 @@ fn numeric_value(facts: &NodeFacts<'_>) -> Result<XsdValue, String> {
         .map_err(|e| format!("ill-formed numeric literal {:?}: {e}", facts.lexical))
 }
 
-/// The facet bound as an XSD value (SPARQL numeric promotion applies in
-/// `numeric_cmp`).
-fn facet_value(bound: NumericLiteral) -> XsdValue {
-    match bound {
-        NumericLiteral::Integer(i) => XsdValue::Integer {
-            value: i128::from(i),
-            datatype: XsdDatatype::Integer,
-        },
-        NumericLiteral::Fractional(f) => XsdValue::Double(f),
-    }
-}
-
-fn check_numeric_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<(), String> {
+fn check_numeric_facets(
+    nc: &NodeConstraint,
+    facts: &NodeFacts<'_>,
+    facets: Option<&ExactFacets>,
+) -> Result<(), String> {
     use core::cmp::Ordering;
     let comparisons: [(&str, Option<NumericLiteral>, &[Ordering]); 4] = [
         (
@@ -277,7 +271,10 @@ fn check_numeric_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<()
     let value = numeric_value(facts)?;
     for (name, bound, allowed) in comparisons {
         if let Some(bound) = bound {
-            let facet = facet_value(bound);
+            // The exact bound when the schema was parsed with one
+            // (`crate::exact_facets`); SPARQL numeric promotion applies in
+            // `value_cmp`.
+            let facet = ExactFacets::value_of(facets, bound);
             let Some(ordering) = value_cmp(&value, &facet) else {
                 return Err(format!(
                     "{name} comparison with {} failed",
@@ -322,7 +319,8 @@ fn check_numeric_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<()
 fn decimal_digits(value: &XsdValue) -> Option<(u64, u64)> {
     let canonical = match value {
         XsdValue::Integer { value, .. } => value.unsigned_abs().to_string(),
-        XsdValue::Decimal(d) => d.canonical_lexical(),
+        XsdValue::Decimal(_) | XsdValue::BigDecimal(_) => value.canonical_lexical(),
+        XsdValue::BigInteger { value, .. } => value.abs().canonical_lexical(),
         _ => return None,
     };
     let unsigned = canonical.trim_start_matches('-');
@@ -520,17 +518,17 @@ mod tests {
         let dt = "http://www.w3.org/2001/XMLSchema#double";
         let plus_inf = literal_facts("+INF", dt, None);
         assert!(
-            check_numeric_facets(&nc, &plus_inf).is_err(),
+            check_numeric_facets(&nc, &plus_inf, None).is_err(),
             "+INF must be rejected via the numeric-facet path"
         );
         let inf = literal_facts("INF", dt, None);
         assert!(
-            check_numeric_facets(&nc, &inf).is_ok(),
+            check_numeric_facets(&nc, &inf, None).is_ok(),
             "INF >= 0 must pass the numeric-facet path"
         );
         let one_point_five = literal_facts("1.5", dt, None);
         assert!(
-            check_numeric_facets(&nc, &one_point_five).is_ok(),
+            check_numeric_facets(&nc, &one_point_five, None).is_ok(),
             "1.5 >= 0 must pass the numeric-facet path"
         );
     }

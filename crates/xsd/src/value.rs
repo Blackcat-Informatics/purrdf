@@ -15,6 +15,7 @@
 //! can cache `HashMap<TermId, XsdValue>` keyed by the IR's `TermId`.
 
 use crate::datatype::XsdDatatype;
+use crate::exact;
 use crate::numeric::Decimal;
 use crate::temporal;
 
@@ -23,7 +24,8 @@ use crate::temporal;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum XsdValue {
-    /// `xsd:integer` and all derived integer datatypes — `i128`-bounded.
+    /// `xsd:integer` and all derived integer datatypes, for a value inside
+    /// `i128`. A value outside `i128` is [`Self::BigInteger`].
     ///
     /// The `datatype` field carries the exact XSD derived type (e.g. `xsd:byte`,
     /// `xsd:unsignedLong`) so that `value_cmp` can distinguish types for cross-type
@@ -35,7 +37,8 @@ pub enum XsdValue {
         /// The exact XSD datatype (Integer, Long, Byte, UnsignedLong, etc.).
         datatype: XsdDatatype,
     },
-    /// `xsd:decimal` — exact fixed-point (`i128` mantissa + scale).
+    /// `xsd:decimal` — exact fixed-point (`i128` mantissa + scale ≤ 18). A value
+    /// that needs more digits is [`Self::BigDecimal`].
     Decimal(Decimal),
     /// `xsd:float` — IEEE single-precision.
     Float(f32),
@@ -66,6 +69,27 @@ pub enum XsdValue {
         /// Must be [`XsdDatatype::HexBinary`] or [`XsdDatatype::Base64Binary`].
         datatype: XsdDatatype,
     },
+    /// `xsd:integer` or an unbounded derived integer datatype (`nonNegativeInteger`
+    /// and its relatives) whose value lies outside `i128`, held exactly.
+    ///
+    /// [`parse`] and every arithmetic result produce this variant only for a value
+    /// [`Self::Integer`] cannot hold; [`XsdValue::from_exact_integer`] applies the
+    /// same split. Every operation of this crate accepts either variant for any
+    /// value, so a value built here by hand inside `i128` still computes and
+    /// compares exactly.
+    BigInteger {
+        /// The exact value.
+        value: exact::Integer,
+        /// The exact XSD datatype.
+        datatype: XsdDatatype,
+    },
+    /// `xsd:decimal` whose canonical form needs more than eighteen fractional
+    /// digits or a coefficient outside `i128`, held exactly.
+    ///
+    /// [`parse`] and every arithmetic result produce this variant only for a value
+    /// [`Self::Decimal`] cannot hold; [`XsdValue::from_exact_decimal`] applies the
+    /// same split.
+    BigDecimal(exact::Decimal),
 }
 
 impl XsdValue {
@@ -95,7 +119,8 @@ impl XsdValue {
             Self::Time(_) => XsdDatatype::Time,
             Self::Duration(d) => d.datatype(),
             Self::Gregorian(g) => g.datatype(),
-            Self::Binary { datatype, .. } => *datatype,
+            Self::Binary { datatype, .. } | Self::BigInteger { datatype, .. } => *datatype,
+            Self::BigDecimal(_) => XsdDatatype::Decimal,
         }
     }
 
@@ -106,8 +131,70 @@ impl XsdValue {
     pub const fn is_numeric(&self) -> bool {
         matches!(
             self,
-            Self::Integer { .. } | Self::Decimal(_) | Self::Float(_) | Self::Double(_)
+            Self::Integer { .. }
+                | Self::Decimal(_)
+                | Self::Float(_)
+                | Self::Double(_)
+                | Self::BigInteger { .. }
+                | Self::BigDecimal(_)
         )
+    }
+
+    /// Whether the value is on the exact branch of the numeric tower: an integer
+    /// of any integer-family datatype or a decimal, of any size.
+    #[must_use]
+    pub const fn is_exact_numeric(&self) -> bool {
+        matches!(
+            self,
+            Self::Integer { .. } | Self::Decimal(_) | Self::BigInteger { .. } | Self::BigDecimal(_)
+        )
+    }
+
+    /// The value `value` of integer `datatype`: [`Self::Integer`] inside `i128`,
+    /// [`Self::BigInteger`] outside it.
+    #[must_use]
+    pub fn from_exact_integer(value: exact::Integer, datatype: XsdDatatype) -> Self {
+        match value.as_i128() {
+            Some(value) => Self::Integer { value, datatype },
+            None => Self::BigInteger { value, datatype },
+        }
+    }
+
+    /// The decimal `value`: [`Self::Decimal`] when the bounded decimal holds it,
+    /// [`Self::BigDecimal`] otherwise.
+    #[must_use]
+    pub fn from_exact_decimal(value: exact::Decimal) -> Self {
+        match value.to_bounded() {
+            Ok(bounded) => Self::Decimal(bounded),
+            Err(_) => Self::BigDecimal(value),
+        }
+    }
+
+    /// The exact integer an integer-family value holds, of any size; `None` for
+    /// every other variant.
+    #[must_use]
+    pub fn to_exact_integer(&self) -> Option<exact::Integer> {
+        match self {
+            Self::Integer { value, .. } => Some(exact::Integer::from_i128(*value)),
+            Self::BigInteger { value, .. } => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    /// The exact decimal value an integer-family or decimal value holds, of any
+    /// size; `None` for every other variant (a float or double converts only
+    /// explicitly, through [`exact::Decimal::from_f64`]).
+    #[must_use]
+    pub fn to_exact_decimal(&self) -> Option<exact::Decimal> {
+        match self {
+            Self::Integer { value, .. } => Some(exact::Decimal::from_integer(
+                exact::Integer::from_i128(*value),
+            )),
+            Self::BigInteger { value, .. } => Some(exact::Decimal::from_integer(value.clone())),
+            Self::Decimal(decimal) => Some(exact::Decimal::from_bounded(decimal)),
+            Self::BigDecimal(decimal) => Some(decimal.clone()),
+            _ => None,
+        }
     }
 
     /// The canonical lexical form of this value (XSD canonical mapping).
@@ -126,6 +213,8 @@ impl XsdValue {
         match self {
             Self::Integer { value, .. } => value.to_string(),
             Self::Decimal(d) => d.canonical_lexical(),
+            Self::BigInteger { value, .. } => value.canonical_lexical(),
+            Self::BigDecimal(d) => d.canonical_lexical(),
             Self::Float(f) => crate::numeric::canonical_float(*f),
             Self::Double(d) => crate::numeric::canonical_double(*d),
             Self::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
@@ -187,9 +276,19 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
         | D::NonNegativeInteger
         | D::PositiveInteger
         | D::NonPositiveInteger
-        | D::NegativeInteger => crate::numeric::parse_integer_typed(lexical, datatype)
-            .map(|value| XsdValue::Integer { value, datatype }),
-        D::Decimal => crate::numeric::parse_decimal(lexical).map(XsdValue::Decimal),
+        | D::NegativeInteger => match crate::numeric::parse_integer_typed(lexical, datatype) {
+            Ok(value) => Ok(XsdValue::Integer { value, datatype }),
+            Err(error @ XsdError::OutOfRange { .. }) => parse_big_integer(lexical, datatype, error),
+            Err(error) => Err(error),
+        },
+        D::Decimal => match crate::numeric::parse_decimal(lexical) {
+            Ok(decimal) => Ok(XsdValue::Decimal(decimal)),
+            Err(XsdError::OutOfRange { .. }) => lexical
+                .parse::<exact::Decimal>()
+                .map(XsdValue::from_exact_decimal)
+                .map_err(XsdError::Exact),
+            Err(error) => Err(error),
+        },
         D::Float => crate::numeric::parse_float(lexical).map(XsdValue::Float),
         D::Double => crate::numeric::parse_double(lexical).map(XsdValue::Double),
         D::Boolean => crate::simple::parse_boolean(lexical).map(XsdValue::Boolean),
@@ -209,6 +308,29 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
         D::Base64Binary => {
             crate::binary::parse_base64(lexical).map(|bytes| XsdValue::Binary { bytes, datatype })
         }
+    }
+}
+
+/// The integer-family value of a lexical form the `i128` parse refused with
+/// `bounded_error`: the exact value when it lies outside `i128` and inside
+/// `datatype`'s value space, the original refusal otherwise (a value inside `i128`
+/// was refused for its derived range, and every bounded derived datatype lies
+/// inside `i128`).
+fn parse_big_integer(
+    lexical: &str,
+    datatype: XsdDatatype,
+    bounded_error: XsdError,
+) -> Result<XsdValue, XsdError> {
+    let Ok(value) = lexical.parse::<exact::Integer>() else {
+        return Err(bounded_error);
+    };
+    if value.as_i128().is_some() {
+        return Err(bounded_error);
+    }
+    if datatype.admits_integer(&value) {
+        Ok(XsdValue::BigInteger { value, datatype })
+    } else {
+        Err(bounded_error)
     }
 }
 
@@ -321,6 +443,11 @@ pub enum XsdError {
         /// A short, stable explanation of what is indeterminate and why.
         reason: &'static str,
     },
+    /// An operation of the exact tower refused, with the typed reason and its
+    /// XPath F&O error code ([`exact::ExactError::code`]) — for example a
+    /// quotient with no finite decimal expansion under
+    /// [`exact::DivisionPolicy::Exact`].
+    Exact(exact::ExactError),
 }
 
 impl XsdError {
@@ -361,6 +488,7 @@ impl std::fmt::Display for XsdError {
             }
             Self::TypeMismatch { reason } => write!(f, "type mismatch: {reason}"),
             Self::Indeterminate { reason } => write!(f, "indeterminate: {reason}"),
+            Self::Exact(error) => write!(f, "{error}"),
         }
     }
 }

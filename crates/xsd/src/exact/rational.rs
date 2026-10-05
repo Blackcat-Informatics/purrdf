@@ -272,7 +272,7 @@ impl Rational {
         )
     }
 
-    /// The exact value of a 3.x bounded [`crate::rational::Rational`].
+    /// The exact value of a bounded [`crate::rational::Rational`].
     #[must_use]
     pub fn from_bounded(value: &BoundedRational) -> Self {
         // Already reduced with a positive denominator.
@@ -282,7 +282,7 @@ impl Rational {
         }
     }
 
-    /// The value as a 3.x bounded [`crate::rational::Rational`].
+    /// The value as a bounded [`crate::rational::Rational`].
     ///
     /// # Errors
     ///
@@ -306,7 +306,9 @@ impl Rational {
     /// [`Self::from_f64`]).
     #[must_use]
     pub fn from_xsd(value: &XsdValue) -> Option<Self> {
-        Decimal::from_xsd(value).map(|decimal| Self::from_decimal(&decimal))
+        value
+            .to_exact_decimal()
+            .map(|decimal| Self::from_decimal(&decimal))
     }
 
     // ----- resource governance ---------------------------------------------

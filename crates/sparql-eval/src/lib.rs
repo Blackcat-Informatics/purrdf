@@ -237,6 +237,9 @@ pub use purrdf_core::binding_pattern::BindingPattern;
 // configuration lives -- the engine holds none) without depending on the front-end
 // crate directly.
 pub use purrdf_sparql_algebra::ParserOptions;
+/// The precision policy of an `xsd:integer`/`xsd:decimal` quotient
+/// ([`QueryOptions::division`]), and its rounding directions.
+pub use purrdf_xsd::exact::{DivisionPolicy, Rounding};
 // The property-function seam: the relation trait a host implements, the argument /
 // row / arity types its calls speak in, the registry evaluation resolves a predicate
 // IRI against, and the in-memory reference relation. Re-exported so a host wires a

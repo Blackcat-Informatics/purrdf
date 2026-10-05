@@ -356,21 +356,21 @@ prop_test! {
         };
         let (x, y) = (Decimal::from_str(&a).expect("valid"), Decimal::from_str(&b).expect("valid"));
         if let Ok(sum) = numeric_add(&bx, &by) {
-            prop_assert_eq!(Decimal::from_xsd(&sum).expect("decimal"), &x + &y);
+            prop_assert_eq!(sum.to_exact_decimal().expect("decimal"), &x + &y);
         }
         if let Ok(difference) = numeric_sub(&bx, &by) {
-            prop_assert_eq!(Decimal::from_xsd(&difference).expect("decimal"), &x - &y);
+            prop_assert_eq!(difference.to_exact_decimal().expect("decimal"), &x - &y);
         }
         let product = x.try_mul(&y).expect("small scales");
         if let Ok(bounded) = numeric_mul(&bx, &by)
             && product.scale() <= 18
         {
-            prop_assert_eq!(Decimal::from_xsd(&bounded).expect("decimal"), product);
+            prop_assert_eq!(bounded.to_exact_decimal().expect("decimal"), product);
         }
         if let Ok(bounded) = numeric_div(&bx, &by) {
             let quotient = x.div(&y, DivisionPolicy::default()).expect("nonzero");
             if quotient.to_bounded().is_ok() {
-                prop_assert_eq!(Decimal::from_xsd(&bounded).expect("decimal"), quotient);
+                prop_assert_eq!(bounded.to_exact_decimal().expect("decimal"), quotient);
             }
         }
     }

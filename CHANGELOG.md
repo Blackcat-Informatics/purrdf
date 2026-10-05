@@ -30,8 +30,37 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   infinity is `FOCA0002`. Each operation has a cost method (`add_cost`,
   `mul_cost`, `div_cost`, `pow_cost`, …) that returns an `exact::Cost` from
   the operand sizes in constant time, so a governor can refuse an operation
-  before it allocates. The module documentation describes how the tower
-  becomes the default value representation.
+  before it allocates.
+- **Exact numerics are the default:** `XsdValue` gains `BigInteger { value:
+  exact::Integer, datatype }` and `BigDecimal(exact::Decimal)` for the
+  integer-family and decimal values the bounded `Integer` (`i128`) and
+  `Decimal` (`i128` mantissa, eighteen fractional digits) variants cannot
+  hold. A value either holds keeps its bounded variant, so existing matches
+  and payloads are unchanged, and `XsdValue::from_exact_integer` /
+  `from_exact_decimal` choose the variant. `to_exact_integer`,
+  `to_exact_decimal` and `is_exact_numeric` read either. The numeric
+  operators (`numeric_add`/`sub`/`mul`/`div`, unary minus, `abs`, `ceil`,
+  `floor`, `round`, `numeric_cmp`, `numeric_total_cmp`, `value_cmp`,
+  `value_total_cmp`) compute on the bounded path and continue on the tower
+  where it would overflow. Conversion to `xsd:float`/`xsd:double` rounds
+  once, to nearest. `numeric_cost` gives the `exact::Cost` of an operation.
+  The SPARQL evaluator (tree and VM), SHACL (`sh:minInclusive` and the other
+  range constraints, `sh:in`, `sh:hasValue`, SHACL-SPARQL), OWL 2 DL/RL value
+  identity and data ranges, CDT `=`/`<`, CSVW cell facets and every binding's
+  canonical lexical form use these values.
+- **`DivisionPolicy` for SPARQL decimal division:** `QueryOptions::with_division`
+  and `EvalCtx::with_division_policy` select the scale and rounding of
+  `xsd:decimal` division, or the exact quotient. The default, eighteen digits
+  truncated toward zero, is the quotient PurRDF has always returned. Under
+  `DivisionPolicy::Exact` a non-terminating quotient is the hard error
+  `EvalError::Numeric` (`native-sparql-numeric`, F&O `FOAR0002`). `SUM`,
+  `AVG` and `/` share the policy. The CLI's `purrdf query --division POLICY`
+  takes `exact`, a scale `N`, or `N:ROUNDING`.
+- **ShEx exact facet bounds:** `purrdf_shex::exact_facets` adds
+  `parse_shexc_exact`, `parse_shexj_exact`, `validate_exact`,
+  `validate_shape_map_exact` and `ExactFacets`, which keep the exact value of
+  an `INTEGER`/`DECIMAL` facet bound the `i64`/`f64` `NumericLiteral` loses.
+  `purrdf shex` uses them. The existing parsers and AST are unchanged.
 - **`BigInt` arithmetic:** `purrdf_xsd::bigint::BigInt` gains truncating
   division with a quotient (`div_rem`, `div_rem_pow10`), `pow`, `gcd`, `abs`,
   `signum`, `pow10`, `decimal_digits`, `trailing_decimal_zeros`, `limb_len`,
@@ -131,6 +160,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   implementation that ignores the event. The frozen-dataset replay emits it for
   each named graph, and `DatasetSink` keeps the declarations it receives.
 - **rdf:** `flat_dataset_from_quads_declaring`.
+
+### Changed
+
+- **`xsd:integer` and `xsd:decimal` values past machine words are values, not
+  errors.** `purrdf_xsd::parse` and `parse_by_iri` return
+  `XsdValue::BigInteger` / `XsdValue::BigDecimal` for a well-formed lexical
+  form they used to refuse with `XsdError::OutOfRange`; the bounded
+  integer-derived types (`xsd:long`, `xsd:int`, …) still refuse a value
+  outside their range. Numeric operators return the exact result where they
+  used to return `OutOfRange` (integer overflow) or a rounded decimal product.
+  In SPARQL, an overflowing integer or decimal operation and a cast of a large
+  `xsd:double` to `xsd:integer`/`xsd:decimal` now return the exact value where
+  they used to be an error (unbound). *Migration:* a `match` on `XsdValue`
+  needs arms for the two new variants (the enum is `#[non_exhaustive]`, so
+  existing wildcard arms compile); code that relied on `OutOfRange` to reject
+  large values must check the variant or the magnitude itself.
+- **Governor profile version 12:** the charge schedule adds
+  `exact-arithmetic-work`, charged once per unit of `exact::Cost` work before
+  an arithmetic operation on a value past machine words, so a fuel ceiling
+  refuses a run of repeated squaring before it allocates. Operations on
+  in-range values charge nothing new. `GOVERNOR_PROFILE_VERSION` is 12 and
+  `GOVERNOR_PROFILE_DIGEST` is
+  `310a608e0df2200e5f8dd047481a0f7da3e0ac604df20f2e977c89b5b1453ca5`;
+  consumers that pin either must re-pin.
 
 ### Fixed
 

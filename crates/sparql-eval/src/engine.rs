@@ -3852,6 +3852,16 @@ pub struct QueryOptions<'a> {
     /// with whatever the evaluation fans out to, and a field that made it `!Sync`
     /// would silently narrow every entry that takes one.
     pub load: Option<&'a (dyn GraphResolver + Sync)>,
+    /// The precision an `xsd:integer`/`xsd:decimal` quotient is formed at, for `/`
+    /// and `AVG` alike ([`purrdf_xsd::exact::DivisionPolicy`]).
+    ///
+    /// The default, [`DivisionPolicy::xsd_default`](purrdf_xsd::exact::DivisionPolicy::xsd_default),
+    /// is eighteen fractional digits truncated toward zero — the precision XPath
+    /// F&O 3.1 §4.2 leaves to the implementation, and the one every quotient had
+    /// before this field existed. [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)
+    /// returns every terminating quotient exactly and refuses the query with
+    /// [`crate::EvalError::Numeric`] on one with no finite decimal expansion.
+    pub division: purrdf_xsd::exact::DivisionPolicy,
 }
 
 // The trait-object fields are not `Debug`, so derive cannot apply; they are reported by
@@ -3867,6 +3877,7 @@ impl std::fmt::Debug for QueryOptions<'_> {
             .field("call_depth", &self.call_depth)
             .field("remote", &self.remote.is_some())
             .field("load", &self.load.is_some())
+            .field("division", &self.division)
             .finish()
     }
 }
@@ -3907,6 +3918,7 @@ impl QueryOptions<'_> {
         call_depth: 0,
         remote: None,
         load: None,
+        division: purrdf_xsd::exact::DivisionPolicy::xsd_default(),
     };
 
     /// Configure nothing — identical to [`Self::EMPTY`] and to
@@ -3983,6 +3995,14 @@ impl<'a> QueryOptions<'a> {
         remote: Option<&'a (dyn crate::remote::ServiceResolver + Sync)>,
     ) -> Self {
         self.remote = remote;
+        self
+    }
+
+    /// Set the precision an `xsd:integer`/`xsd:decimal` quotient is formed at (see
+    /// [`Self::division`]).
+    #[must_use]
+    pub const fn with_division(mut self, division: purrdf_xsd::exact::DivisionPolicy) -> Self {
+        self.division = division;
         self
     }
 
@@ -4461,7 +4481,8 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
         .with_user_functions(options.functions)
         .with_property_functions(options.property_functions())
         .with_aggregates(options.aggregates())
-        .with_call_depth(options.call_depth);
+        .with_call_depth(options.call_depth)
+        .with_division_policy(options.division);
     if let Some(graph) = options.focus_graph {
         ctx = ctx.with_focus_graph(graph);
     }
@@ -8505,6 +8526,7 @@ mod tests {
         u32,
         Option<*const ()>,
         Option<*const ()>,
+        purrdf_xsd::exact::DivisionPolicy,
     );
 
     fn query_options_signature<'a>(options: &QueryOptions<'a>) -> QueryOptionsSignature<'a> {
@@ -8517,6 +8539,7 @@ mod tests {
             options.call_depth,
             options.remote.map(|r| std::ptr::from_ref(r).cast::<()>()),
             options.load.map(|l| std::ptr::from_ref(l).cast::<()>()),
+            options.division,
         )
     }
 

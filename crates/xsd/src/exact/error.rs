@@ -33,14 +33,14 @@ impl ExactKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BoundedTarget {
-    /// A Rust `i128` — the 3.x `xsd:integer` value ([`crate::XsdValue::Integer`]).
+    /// A Rust `i128` — the machine-word `xsd:integer` value ([`crate::XsdValue::Integer`]).
     I128,
     /// A Rust `i64`.
     I64,
-    /// The 3.x bounded [`crate::numeric::Decimal`]: an `i128` mantissa with at most
+    /// The bounded [`crate::numeric::Decimal`]: an `i128` mantissa with at most
     /// eighteen fractional digits.
     BoundedDecimal,
-    /// The 3.x bounded [`crate::rational::Rational`]: an `i128` numerator and
+    /// The bounded [`crate::rational::Rational`]: an `i128` numerator and
     /// denominator.
     BoundedRational,
 }

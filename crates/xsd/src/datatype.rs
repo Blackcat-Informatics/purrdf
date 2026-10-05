@@ -374,6 +374,39 @@ impl XsdDatatype {
             _ => return None,
         })
     }
+
+    /// Whether this integer-family datatype's value space holds `value`, of any
+    /// size: `xsd:integer` holds every integer, the four sign-restricted unbounded
+    /// types (`nonNegativeInteger`, `positiveInteger`, `nonPositiveInteger`,
+    /// `negativeInteger`) hold every integer of their sign, and every other
+    /// integer-family type holds exactly its [`Self::integer_range`]. `false` for
+    /// a datatype outside the integer family.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::XsdDatatype;
+    /// use purrdf_xsd::exact::Integer;
+    ///
+    /// let big: Integer = "1".repeat(50).parse()?;
+    /// assert!(XsdDatatype::Integer.admits_integer(&big));
+    /// assert!(XsdDatatype::PositiveInteger.admits_integer(&big));
+    /// assert!(!XsdDatatype::NegativeInteger.admits_integer(&big));
+    /// assert!(!XsdDatatype::Long.admits_integer(&big));
+    /// # Ok::<(), purrdf_xsd::exact::ExactError>(())
+    /// ```
+    #[must_use]
+    pub fn admits_integer(self, value: &crate::exact::Integer) -> bool {
+        match self {
+            Self::Integer => true,
+            Self::NonNegativeInteger => !value.is_negative(),
+            Self::PositiveInteger => value.signum() > 0,
+            Self::NonPositiveInteger => value.signum() <= 0,
+            Self::NegativeInteger => value.is_negative(),
+            _ => match (self.integer_range(), value.as_i128()) {
+                (Some((min, max)), Some(value)) => (min..=max).contains(&value),
+                _ => false,
+            },
+        }
+    }
 }
 
 #[cfg(test)]

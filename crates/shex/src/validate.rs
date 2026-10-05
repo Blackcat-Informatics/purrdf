@@ -48,6 +48,7 @@ use purrdf_lex::json_escape::{JsonEscapes, push_string};
 use purrdf_lex::term_syntax;
 
 use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
+use crate::exact_facets::ExactFacets;
 use crate::semact::{SemActContext, SemActRegistry};
 use crate::statement;
 use matcher::{ArcOptions, Assignment, CNode, Card, Compiled};
@@ -291,6 +292,18 @@ pub fn validate_with(
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
 ) -> ResultShapeMap {
+    validate_with_facets(schema, data, map, options, None)
+}
+
+/// [`validate_with`], reading numeric facet bounds exactly from `facets` where it
+/// holds them ([`crate::exact_facets::validate_exact`]).
+pub(crate) fn validate_with_facets(
+    schema: &Schema,
+    data: &RdfDataset,
+    map: &[(TermValue, ShapeSelector)],
+    options: &ValidationOptions<'_>,
+    facets: Option<&ExactFacets>,
+) -> ResultShapeMap {
     // Resolve whole-declaration EXTERNALs up front so the resolved
     // expressions outlive the engine borrowing them.
     let externals: Vec<(String, ShapeExpr)> = match options.external_resolver {
@@ -328,7 +341,7 @@ pub fn validate_with(
         };
     }
 
-    let mut engine = Engine::new(schema, data, &externals, &options.sem_acts);
+    let mut engine = Engine::new(schema, data, &externals, &options.sem_acts, facets);
     let mut entries = Vec::with_capacity(map.len());
     for (value, selector) in map {
         let outcome = engine.check_association(value, selector);
@@ -377,6 +390,8 @@ struct Engine<'a> {
     /// checked per value node, so without the memo a `PATTERN` over a large
     /// neighbourhood recompiles the same regex once per value.
     patterns: pattern::PatternCache,
+    /// The exact numeric facet bounds parsed with the schema, when supplied.
+    facets: Option<&'a ExactFacets>,
 }
 
 struct PreparedShape<'a> {
@@ -469,6 +484,7 @@ impl<'a> Engine<'a> {
         data: &'a RdfDataset,
         externals: &'a [(String, ShapeExpr)],
         sem_acts: &'a SemActRegistry<'a>,
+        facets: Option<&'a ExactFacets>,
     ) -> Self {
         let mut shape_map: FastMap<&'a str, &'a ShapeExpr> = schema
             .shapes
@@ -514,6 +530,7 @@ impl<'a> Engine<'a> {
             used_assumptions: FastSet::default(),
             detached_in_progress: FastSet::default(),
             patterns: pattern::PatternCache::default(),
+            facets,
         }
     }
 
@@ -568,7 +585,7 @@ impl<'a> Engine<'a> {
                     Focus::Id(id) => facts_of_id(self.data, id),
                     Focus::Detached(value) => facts_of_value(value),
                 };
-                node::check_node_constraint(nc, &facts, &mut self.patterns)
+                node::check_node_constraint(nc, &facts, &mut self.patterns, self.facets)
             }
             ShapeExpr::Shape(shape) => self.match_shape(focus, shape),
             ShapeExpr::External => Err("EXTERNAL shape has no resolved definition".to_owned()),

@@ -167,6 +167,14 @@ name = "path_range"
 harness = false
 
 [[bench]]
+# End-to-end SPARQL numeric evaluation: in-range integer/decimal arithmetic,
+# ORDER BY, SUM/AVG and FILTER on the bounded path, and values past machine words
+# on the arbitrary-precision path, ungoverned and under a fuel ceiling.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "numeric_eval"
+harness = false
+
+[[bench]]
 # Execution-governor cost envelope: the ordinary fast path, the governed carrier,
 # metered receipts through ordered parallel and forced-sequential folds,
 # logarithmic-exponent property-path scaling, and the FILTER / BIND / UNFOLD row

@@ -12,7 +12,6 @@ use super::binary::decompose_f64;
 use super::cost::{self, Cost};
 use super::error::{BoundedTarget, ExactError, ExactKind};
 use crate::bigint::BigInt;
-use crate::value::XsdValue;
 
 /// An `xsd:integer` of any magnitude.
 ///
@@ -169,7 +168,8 @@ impl Integer {
         Self::from_bigint(self.to_bigint().gcd(&other.to_bigint()))
     }
 
-    /// The value as an `i128` (the 3.x `xsd:integer` representation).
+    /// The value as an `i128`, the machine-word `xsd:integer` representation
+    /// ([`crate::XsdValue::Integer`]).
     ///
     /// # Errors
     ///
@@ -234,17 +234,6 @@ impl Integer {
         };
         let value = Self::from_bigint(magnitude);
         Ok(if negative { -value } else { value })
-    }
-
-    /// The `xs:integer` value an [`XsdValue`] holds on the integer branch
-    /// (`xsd:integer` and every derived integer type); `None` for any other
-    /// variant.
-    #[must_use]
-    pub const fn from_xsd(value: &XsdValue) -> Option<Self> {
-        match value {
-            XsdValue::Integer { value, .. } => Some(Self::from_i128(*value)),
-            _ => None,
-        }
     }
 
     // ----- resource governance ---------------------------------------------

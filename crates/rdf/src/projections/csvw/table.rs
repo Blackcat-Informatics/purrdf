@@ -1828,4 +1828,65 @@ mod tests {
         // encodes as two bytes, so `"YW\u{A0}"` is four bytes, one whole quad.
         assert_eq!(base64_octet_length("YW\u{A0}"), Ok(3));
     }
+
+    /// A numeric column's `minimum`/`maximum` and a cell compare by every digit:
+    /// a JSON number keeps its lexeme, and a value past `i128` or past eighteen
+    /// fractional digits is an exact XSD value.
+    #[test]
+    fn numeric_facets_compare_cells_of_any_size_exactly() {
+        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        let config = CsvwConfig::new(
+            "https://example.org/catalog/metadata.json",
+            crate::projections::CsvwContext::new(
+                "http://www.w3.org/ns/csvw",
+                BTreeMap::from([("xsd".to_owned(), XSD.to_owned())]),
+            )
+            .expect("context"),
+            "https://example.org/catalog",
+            crate::projections::CsvwVocabulary::new(
+                "http://www.w3.org/ns/csvw#",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                "http://www.w3.org/2000/01/rdf-schema#",
+                XSD,
+            )
+            .expect("vocabulary"),
+            crate::projections::CsvwMode::Minimal,
+            crate::projections::ProjectionLimits::new(16, 1_000_000, 8_000_000, 16_000_000, 16)
+                .expect("limits"),
+            10_000,
+        )
+        .expect("config");
+        let ten_42 = |plus: u8| format!("1{}{plus}", "0".repeat(41));
+        let number = |lexeme: &str| {
+            purrdf_lex::json::Value::Number(
+                purrdf_lex::json::Number::from_lexeme(lexeme).expect("a JSON number"),
+            )
+        };
+        let column = |base: &str, maximum: purrdf_lex::json::Value| CsvwDatatype {
+            id: None,
+            base: format!("{XSD}{base}"),
+            format: None,
+            length: None,
+            min_length: None,
+            max_length: None,
+            minimum: None,
+            maximum: Some(maximum),
+            min_inclusive: None,
+            max_inclusive: None,
+            min_exclusive: None,
+            max_exclusive: None,
+        };
+        let integer = column("integer", number(&ten_42(1)));
+        assert_eq!(validate_value_facets(&ten_42(1), &integer, &config), Ok(()));
+        assert_eq!(validate_value_facets(&ten_42(0), &integer, &config), Ok(()));
+        let over = validate_value_facets(&ten_42(2), &integer, &config)
+            .expect_err("10^42+2 is past the maximum 10^42+1");
+        assert!(over.contains("exceeds its inclusive upper bound"), "{over}");
+
+        let fine = |last: char| format!("0.{}{last}", "0".repeat(40));
+        let decimal = column("decimal", purrdf_lex::json::Value::String(fine('5')));
+        assert_eq!(validate_value_facets(&fine('5'), &decimal, &config), Ok(()));
+        assert_eq!(validate_value_facets(&fine('4'), &decimal, &config), Ok(()));
+        assert!(validate_value_facets(&fine('6'), &decimal, &config).is_err());
+    }
 }

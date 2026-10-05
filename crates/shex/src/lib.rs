@@ -100,6 +100,7 @@
 
 pub mod ast;
 pub mod error;
+pub mod exact_facets;
 pub mod imports;
 pub mod lexer;
 pub mod parser;
@@ -120,12 +121,13 @@ pub use ast::{
     ShapeLabel, StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
 pub use error::{Result, ShexError};
+pub use exact_facets::{ExactFacets, parse_shexc_exact, parse_shexj_exact, validate_exact};
 pub use imports::{ImportResolver, resolve_imports};
 pub use parser::parse_shexc;
 pub use semact::{SemActContext, SemActExtension, SemActRegistry, TEST_EXTENSION};
 pub use shapemap::{
     NodeSelector, ShapeAssociation, ShapeMap, parse_shape_map, resolve_shape_map,
-    validate_shape_map,
+    validate_shape_map, validate_shape_map_exact,
 };
 pub use shexc::to_shexc;
 pub use shexj::{parse_shexj, to_shexj};

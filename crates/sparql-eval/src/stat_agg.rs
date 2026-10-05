@@ -406,6 +406,8 @@ fn to_f64(v: &XsdValue) -> Option<f64> {
         XsdValue::Decimal(d) => Some(d.to_f64()),
         XsdValue::Float(f) => Some(f64::from(*f)),
         XsdValue::Double(d) => Some(*d),
+        XsdValue::BigInteger { value, .. } => Some(value.to_f64()),
+        XsdValue::BigDecimal(d) => Some(d.to_f64()),
         _ => None,
     }
 }
@@ -423,6 +425,19 @@ fn xsd_floor_index(v: &XsdValue) -> Option<i128> {
         XsdValue::Decimal(d) => Some(d.whole_part()),
         XsdValue::Float(f) => Some(*f as i128),
         XsdValue::Double(d) => Some(*d as i128),
+        // Past `i128` an index is past every slice.
+        XsdValue::BigInteger { value, .. } => Some(if value.is_negative() {
+            i128::MIN
+        } else {
+            i128::MAX
+        }),
+        XsdValue::BigDecimal(d) => Some(d.to_integer_truncated().as_i128().unwrap_or_else(|| {
+            if d.is_negative() {
+                i128::MIN
+            } else {
+                i128::MAX
+            }
+        })),
         _ => None,
     }
 }

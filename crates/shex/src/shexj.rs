@@ -65,6 +65,7 @@
 //! verbatim after an `@`. A *stem* is deliberately exempt: it is a prefix, and
 //! the empty stem is the spec's "any language" wildcard.
 
+use crate::exact_facets::ExactFacets;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag};
 use purrdf_lex::json::{self, Limits, Number, Object, Value};
 use purrdf_xsd::ieee::Binary64Scope;
@@ -116,13 +117,24 @@ const SHEXJ_LIMITS: Limits = Limits {
 /// assert!(err.to_string().contains("iri-relative-no-base"));
 /// ```
 pub fn parse_shexj(input: &str, base: Option<&str>) -> Result<Schema> {
+    parse_shexj_recording(input, base).map(|(schema, _)| schema)
+}
+
+/// [`parse_shexj`], also recording the exact value of every numeric facet bound
+/// written without an exponent ([`crate::exact_facets`]).
+pub(crate) fn parse_shexj_recording(
+    input: &str,
+    base: Option<&str>,
+) -> Result<(Schema, ExactFacets)> {
     let value = json::read_with(input, SHEXJ_LIMITS)
         .map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
     // A numeric facet's value is compared with every datum validated against it: its
     // lexeme becomes a binary64 inside a binary64 scope so the x87 rounds it once, like
     // every other unit.
     let _binary64 = Binary64Scope::enter();
-    Reader::new(base)?.schema(&value)
+    let reader = Reader::new(base)?;
+    let schema = reader.schema(&value)?;
+    Ok((schema, reader.exact.into_inner()))
 }
 
 /// Serialize a [`Schema`] to pretty-printed ShExJ.
@@ -611,6 +623,8 @@ struct Reader {
     /// The base the document's IRI references resolve against — empty when the
     /// caller supplied none, which makes a relative reference a hard failure.
     base: BaseScope,
+    /// The exact values of the numeric facet bounds read so far.
+    exact: std::cell::RefCell<ExactFacets>,
 }
 
 impl Reader {
@@ -624,7 +638,10 @@ impl Reader {
             ),
             None => BaseScope::empty(),
         };
-        Ok(Self { base })
+        Ok(Self {
+            base,
+            exact: std::cell::RefCell::default(),
+        })
     }
 
     /// Resolve one document-relative IRI reference (a `"@type": "@id"` member).
@@ -745,6 +762,26 @@ impl Reader {
         }
     }
 
+    /// A numeric facet's bound, recording the exact value of a JSON number written
+    /// without an exponent.
+    fn numeric_facet(
+        &self,
+        obj: &mut Obj<'_>,
+        key: &'static str,
+    ) -> Result<Option<NumericLiteral>> {
+        let lexeme = match obj.map.get(key) {
+            Some(Value::Number(number)) if !number.lexeme().contains(['e', 'E']) => {
+                Some(number.lexeme().to_owned())
+            }
+            _ => None,
+        };
+        let bound = obj.take_numeric_opt(key)?;
+        if let (Some(bound), Some(lexeme)) = (bound, lexeme) {
+            self.exact.borrow_mut().record(bound, &lexeme);
+        }
+        Ok(bound)
+    }
+
     fn node_constraint(&self, value: &Value) -> Result<NodeConstraint> {
         let mut obj = Obj::typed(value, "NodeConstraint", "NodeConstraint")?;
         let mut nc = NodeConstraint {
@@ -761,10 +798,10 @@ impl Reader {
             maxlength: obj.take_u64_opt("maxlength")?,
             pattern: obj.take_str_opt("pattern")?,
             flags: obj.take_str_opt("flags")?,
-            mininclusive: obj.take_numeric_opt("mininclusive")?,
-            minexclusive: obj.take_numeric_opt("minexclusive")?,
-            maxinclusive: obj.take_numeric_opt("maxinclusive")?,
-            maxexclusive: obj.take_numeric_opt("maxexclusive")?,
+            mininclusive: self.numeric_facet(&mut obj, "mininclusive")?,
+            minexclusive: self.numeric_facet(&mut obj, "minexclusive")?,
+            maxinclusive: self.numeric_facet(&mut obj, "maxinclusive")?,
+            maxexclusive: self.numeric_facet(&mut obj, "maxexclusive")?,
             totaldigits: obj.take_u64_opt("totaldigits")?,
             fractiondigits: obj.take_u64_opt("fractiondigits")?,
             values: None,

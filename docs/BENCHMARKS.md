@@ -81,6 +81,9 @@ simply not narrated here:
   (`IRIREF`, string literals, comments).
 - `crates/sparql-eval/benches/query_eval.rs` — end-to-end SPARQL SELECT
   evaluation over synthetic datasets.
+- `crates/sparql-eval/benches/numeric_eval.rs` — end-to-end SPARQL numeric
+  evaluation: in-range integer and decimal arithmetic, `ORDER BY`, `SUM`/`AVG`
+  and `FILTER`, and values past machine words, ungoverned and governed.
 - `crates/sparql-eval/benches/cost_based_bgp_planner.rs` — regression watch on
   the cost-based BGP join planner; the deterministic win over the retired
   structural heuristic is gated by the `bgp` unit tests (which count real
@@ -224,6 +227,7 @@ here.
 | `crates/rdf/benches/projections.rs` | Graph, tabular, dataset-description, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
+| `crates/sparql-eval/benches/numeric_eval.rs` | End-to-end SPARQL numeric evaluation over 20,000 rows: in-range `xsd:integer`/`xsd:decimal` arithmetic in a `FILTER` and under `SUM`, whole-relation `ORDER BY`, `SUM`/`AVG` and constant comparisons (`numeric_eval_in_range`); a forty-digit column through `×`, `SUM`, `AVG` and `ORDER BY`, and six squarings of a hundred-digit integer ungoverned and under a fuel ceiling (`numeric_eval_exact`). |
 | `crates/sparql-eval/benches/governed_eval.rs` | Governor cost comparisons and fixed-length paths versus explicit triple expansion over 16, 64, and 256 typed-endpoint chains. The linear-path cases prepare outside timing and use a fresh engine per sample, measuring planning plus execution with cold join-order caches; projected answers and their order must agree before sampling. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
 | `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization; nested correlated `FILTER EXISTS` cost by nesting depth. |

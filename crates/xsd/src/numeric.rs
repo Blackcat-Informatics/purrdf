@@ -8,8 +8,54 @@
 use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
+use crate::exact::DivisionPolicy;
 use crate::ieee;
 use crate::value::{XsdError, XsdValue};
+
+mod exact_path;
+
+pub use exact_path::CostOp;
+
+/// The cost of one numeric operation over `a` and `b` when it runs on the exact
+/// tower ([`crate::exact`]), for a governor to charge before the operation
+/// runs; [`crate::exact::Cost::ZERO`] when neither operand is
+/// [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`] (two bounded operands
+/// compute in machine words) or when either is not on the exact branch.
+#[must_use]
+pub fn numeric_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> crate::exact::Cost {
+    if a.is_exact_numeric() && b.is_exact_numeric() && exact_path::involves_big(a, b) {
+        exact_path::cost(a, b, op)
+    } else {
+        crate::exact::Cost::ZERO
+    }
+}
+
+/// The bounded result when it is one, else the exact branch: an operand outside
+/// the bounded variants (which the bounded match refuses as a type mismatch) or a
+/// bounded overflow (`OutOfRange`) recomputes on the tower.
+///
+/// `#[inline]` so an `Ok` from the bounded operator returns in place: per-row
+/// folds (`SUM`) call the operators once per row.
+#[allow(
+    clippy::inline_always,
+    reason = "an `Ok` from the bounded operator must return in place in every caller; per-row folds pay for the call and the result copy otherwise"
+)]
+#[inline(always)]
+fn exact_fallback(
+    bounded: Result<XsdValue, XsdError>,
+    a: &XsdValue,
+    b: &XsdValue,
+    op: exact_path::Op,
+) -> Result<XsdValue, XsdError> {
+    match bounded {
+        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
+            if a.is_exact_numeric() && b.is_exact_numeric() =>
+        {
+            exact_path::binop(a, b, op)
+        }
+        other => other,
+    }
+}
 
 /// An exact decimal: `value = mantissa × 10^(-scale)`, `i128`-backed (scale
 /// bounded so the mantissa stays in `i128`).
@@ -589,6 +635,8 @@ pub fn numeric_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         (Double(_), _) | (_, Double(_)) => num_f64(a)?.partial_cmp(&num_f64(b)?),
         // Else any `float` operand → compare as f32.
         (Float(_), _) | (_, Float(_)) => num_f32(a)?.partial_cmp(&num_f32(b)?),
+        // An integer or decimal past the bounded variants, against another.
+        _ if a.is_exact_numeric() && b.is_exact_numeric() => Some(exact_path::cmp(a, b)),
         // At least one operand is non-numeric.
         _ => None,
     }
@@ -698,6 +746,16 @@ pub fn numeric_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         }
         (Float(x), Dec(y)) => exact_vs_ieee(y, f64::from(*x)).map(Ordering::reverse),
         (Double(x), Dec(y)) => exact_vs_ieee(y, *x).map(Ordering::reverse),
+        // ── An integer or decimal past the bounded variants ──────────────────
+        _ if a.is_exact_numeric() && b.is_exact_numeric() => Some(exact_path::cmp(a, b)),
+        (_, Float(y)) if a.is_exact_numeric() => exact_path::cmp_ieee(a, f64::from(*y)),
+        (_, Double(y)) if a.is_exact_numeric() => exact_path::cmp_ieee(a, *y),
+        (Float(x), _) if b.is_exact_numeric() => {
+            exact_path::cmp_ieee(b, f64::from(*x)).map(Ordering::reverse)
+        }
+        (Double(x), _) if b.is_exact_numeric() => {
+            exact_path::cmp_ieee(b, *x).map(Ordering::reverse)
+        }
         // At least one operand is non-numeric.
         _ => None,
     }
@@ -873,6 +931,7 @@ fn num_f64(v: &XsdValue) -> Option<f64> {
         XsdValue::Decimal(d) => d.to_f64(),
         XsdValue::Float(f) => f64::from(*f),
         XsdValue::Double(d) => *d,
+        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => exact_path::to_f64(v),
         _ => return None,
     })
 }
@@ -891,6 +950,7 @@ fn num_f32(v: &XsdValue) -> Option<f32> {
         // double → float narrowing: required by the numeric tower when a float operand
         // forces promotion of the other operand down (SPARQL §17.3).
         XsdValue::Double(d) => *d as f32,
+        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => exact_path::to_f32(v),
         _ => return None,
     })
 }
@@ -986,6 +1046,11 @@ pub(crate) fn integer_to_decimal(value: i128) -> Decimal {
 /// # Ok::<(), purrdf_xsd::XsdError>(())
 /// ```
 pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    exact_fallback(numeric_add_bounded(a, b), a, b, exact_path::Op::Add)
+}
+
+/// [`numeric_add`] over the bounded variants only.
+fn numeric_add_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
         // Both double OR either double → f64
@@ -1041,6 +1106,11 @@ fn decimal_add(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
 /// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
 /// operand is not numeric.
 pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    exact_fallback(numeric_sub_bounded(a, b), a, b, exact_path::Op::Sub)
+}
+
+/// [`numeric_sub`] over the bounded variants only.
+fn numeric_sub_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
@@ -1097,6 +1167,11 @@ fn decimal_sub(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
 /// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
 /// operand is not numeric.
 pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    exact_fallback(numeric_mul_bounded(a, b), a, b, exact_path::Op::Mul)
+}
+
+/// [`numeric_mul`] over the bounded variants only.
+fn numeric_mul_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
@@ -1130,6 +1205,15 @@ pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 }
 
 fn decimal_mul(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
+    // A product past eighteen fractional digits is exact only on the tower; the
+    // refusal sends it there (`exact_fallback`).
+    if u32::from(a.scale()) + u32::from(b.scale()) > u32::from(MAX_DECIMAL_SCALE) {
+        return Err(XsdError::OutOfRange {
+            datatype: XsdDatatype::Decimal,
+            lexical: String::new(),
+            reason: "decimal product scale exceeds 18",
+        });
+    }
     decimal_mul_raw(a, b).map(XsdValue::Decimal)
 }
 
@@ -1195,6 +1279,62 @@ pub(crate) fn decimal_mul_raw(a: &Decimal, b: &Decimal) -> Result<Decimal, XsdEr
 /// # Ok::<(), purrdf_xsd::XsdError>(())
 /// ```
 pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    numeric_div_with_policy(a, b, DivisionPolicy::xsd_default())
+}
+
+/// [`numeric_div`] with a caller-chosen precision for exact-branch quotients
+/// ([`DivisionPolicy`]); `float`/`double` operands divide in IEEE arithmetic as
+/// before.
+///
+/// Under [`DivisionPolicy::xsd_default`] — eighteen fractional digits, truncated
+/// toward zero — the quotient of two bounded operands is the bounded quotient
+/// whenever that holds the result at eighteen digits, and the same quotient
+/// computed on the tower otherwise; [`numeric_div`] is this function at that
+/// policy. Under any other policy every exact-branch quotient is computed on the
+/// tower.
+///
+/// # Errors
+///
+/// `Err(DivisionByZero)` for a zero exact-branch divisor;
+/// `Err(Exact(NonTerminating))` under [`DivisionPolicy::Exact`] for a quotient
+/// with no finite decimal expansion; `Err(TypeMismatch)` for a non-numeric
+/// operand.
+///
+/// ```rust
+/// use purrdf_xsd::exact::DivisionPolicy;
+/// use purrdf_xsd::numeric::numeric_div_with_policy;
+/// use purrdf_xsd::{XsdDatatype, parse};
+///
+/// let one = parse("1", XsdDatatype::Integer)?;
+/// let eight = parse("8", XsdDatatype::Integer)?;
+/// let three = parse("3", XsdDatatype::Integer)?;
+/// let exact = DivisionPolicy::Exact;
+/// assert_eq!(numeric_div_with_policy(&one, &eight, exact)?.canonical_lexical(), "0.125");
+/// assert!(numeric_div_with_policy(&one, &three, exact).is_err());
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+pub fn numeric_div_with_policy(
+    a: &XsdValue,
+    b: &XsdValue,
+    policy: DivisionPolicy,
+) -> Result<XsdValue, XsdError> {
+    let exact_pair = a.is_exact_numeric() && b.is_exact_numeric();
+    if exact_pair && (policy != DivisionPolicy::xsd_default() || exact_path::involves_big(a, b)) {
+        return exact_path::div(a, b, policy);
+    }
+    match numeric_div_bounded(a, b) {
+        // The bounded quotient keeps eighteen digits only while its mantissa fits;
+        // a coarser one is recomputed exactly at the policy's eighteen digits.
+        Ok(XsdValue::Decimal(quotient)) if exact_pair && quotient.scale() != MAX_DECIMAL_SCALE => {
+            exact_path::div(a, b, policy)
+        }
+        Err(XsdError::OutOfRange { .. }) if exact_pair => exact_path::div(a, b, policy),
+        other => other,
+    }
+}
+
+/// [`numeric_div`] over the bounded variants only.
+fn numeric_div_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
@@ -1435,6 +1575,18 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_unary_minus(a: &XsdValue) -> Result<XsdValue, XsdError> {
+    match numeric_unary_minus_bounded(a) {
+        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
+            if a.is_exact_numeric() =>
+        {
+            Ok(exact_path::neg(a))
+        }
+        other => other,
+    }
+}
+
+/// [`numeric_unary_minus`] over the bounded variants only.
+fn numeric_unary_minus_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         XsdValue::Integer { value, datatype } => value
             .checked_neg()
@@ -1478,7 +1630,9 @@ pub fn numeric_unary_plus(a: &XsdValue) -> Result<XsdValue, XsdError> {
         XsdValue::Integer { .. }
         | XsdValue::Decimal(_)
         | XsdValue::Float(_)
-        | XsdValue::Double(_) => Ok(a.clone()),
+        | XsdValue::Double(_)
+        | XsdValue::BigInteger { .. }
+        | XsdValue::BigDecimal(_) => Ok(a.clone()),
         _ => Err(XsdError::TypeMismatch {
             reason: "unary plus applied to non-numeric value",
         }),
@@ -1491,6 +1645,18 @@ pub fn numeric_unary_plus(a: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_abs(a: &XsdValue) -> Result<XsdValue, XsdError> {
+    match numeric_abs_bounded(a) {
+        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
+            if a.is_exact_numeric() =>
+        {
+            Ok(exact_path::abs(a))
+        }
+        other => other,
+    }
+}
+
+/// [`numeric_abs`] over the bounded variants only.
+fn numeric_abs_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         XsdValue::Integer { value, datatype } => value
             .checked_abs()
@@ -1526,6 +1692,21 @@ pub fn numeric_abs(a: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_ceil(a: &XsdValue) -> Result<XsdValue, XsdError> {
+    match numeric_ceil_bounded(a) {
+        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
+            if a.is_exact_numeric() =>
+        {
+            Ok(exact_path::round_to_integer(
+                a,
+                crate::exact::Rounding::Ceiling,
+            ))
+        }
+        other => other,
+    }
+}
+
+/// [`numeric_ceil`] over the bounded variants only.
+fn numeric_ceil_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         // Integer is already an integer; ceiling is identity.
         XsdValue::Integer { .. } => Ok(a.clone()),
@@ -1558,6 +1739,21 @@ pub fn numeric_ceil(a: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_floor(a: &XsdValue) -> Result<XsdValue, XsdError> {
+    match numeric_floor_bounded(a) {
+        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
+            if a.is_exact_numeric() =>
+        {
+            Ok(exact_path::round_to_integer(
+                a,
+                crate::exact::Rounding::Floor,
+            ))
+        }
+        other => other,
+    }
+}
+
+/// [`numeric_floor`] over the bounded variants only.
+fn numeric_floor_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         // Integer is already an integer; floor is identity.
         XsdValue::Integer { .. } => Ok(a.clone()),
@@ -1592,6 +1788,21 @@ pub fn numeric_floor(a: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
+    match numeric_round_bounded(a) {
+        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
+            if a.is_exact_numeric() =>
+        {
+            Ok(exact_path::round_to_integer(
+                a,
+                crate::exact::Rounding::HalfCeiling,
+            ))
+        }
+        other => other,
+    }
+}
+
+/// [`numeric_round`] over the bounded variants only.
+fn numeric_round_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         // Integer is already integral; round is identity.
         XsdValue::Integer { .. } => Ok(a.clone()),
@@ -2432,13 +2643,15 @@ mod tests {
 
     #[test]
     fn add_integer_overflow() {
-        // i128::MAX + 1 must be OutOfRange, never wrap.
+        // i128::MAX + 1 is the exact integer past i128, never a wrap or a refusal.
         let max = int_val(i128::MAX);
         let one = int_val(1);
-        assert!(matches!(
-            numeric_add(&max, &one),
-            Err(XsdError::OutOfRange { .. })
-        ));
+        let sum = numeric_add(&max, &one).expect("exact");
+        assert!(matches!(sum, XsdValue::BigInteger { .. }));
+        assert_eq!(
+            sum.canonical_lexical(),
+            "170141183460469231731687303715884105728"
+        );
     }
 
     // -- integer division returns Decimal (SPARQL §17.4 / XPath op:numeric-divide) --
@@ -2580,19 +2793,30 @@ mod tests {
     /// to a wrong sum without them); the neighbouring `1e19 + 1e-18` (mantissa
     /// `1e37`) still fits and must still add exactly — for `-` too.
     #[test]
-    fn decimal_alignment_overflow_is_out_of_range_and_its_neighbour_adds() {
+    fn decimal_alignment_overflow_is_exact_and_its_neighbour_adds() {
         let tiny = dec_val("0.000000000000000001");
         let huge = dec_val("1000000000000000000000000000000");
-        for result in [
-            numeric_add(&huge, &tiny),
-            numeric_add(&tiny, &huge),
-            numeric_sub(&huge, &tiny),
-            numeric_add(&int_val(10i128.pow(30)), &tiny),
+        for (result, expected) in [
+            (
+                numeric_add(&huge, &tiny),
+                "1000000000000000000000000000000.000000000000000001",
+            ),
+            (
+                numeric_add(&tiny, &huge),
+                "1000000000000000000000000000000.000000000000000001",
+            ),
+            (
+                numeric_sub(&huge, &tiny),
+                "999999999999999999999999999999.999999999999999999",
+            ),
+            (
+                numeric_add(&int_val(10i128.pow(30)), &tiny),
+                "1000000000000000000000000000000.000000000000000001",
+            ),
         ] {
-            assert!(
-                matches!(result, Err(XsdError::OutOfRange { .. })),
-                "expected OutOfRange, got {result:?}"
-            );
+            let result = result.expect("exact");
+            assert!(matches!(result, XsdValue::BigDecimal(_)), "{result:?}");
+            assert_eq!(result.canonical_lexical(), expected);
         }
         let fits = dec_val("10000000000000000000");
         assert_eq!(
@@ -3072,22 +3296,31 @@ mod tests {
     /// Hold `numeric_div` on two decimals to the oracle: the same value, or the
     /// typed overflow when no representable quotient exists.
     fn assert_decimal_quotient(dividend: Decimal, divisor: Decimal) {
-        let got = numeric_div(&XsdValue::Decimal(dividend), &XsdValue::Decimal(divisor));
-        match decimal_quotient_oracle(dividend, divisor) {
-            Some((mantissa, scale)) => {
-                let Ok(XsdValue::Decimal(quotient)) = got else {
-                    panic!("{dividend:?} / {divisor:?}: {got:?}, expected {mantissa}e-{scale}");
-                };
-                assert_eq!(
-                    quotient.cmp_exact(&Decimal::from_parts(mantissa, scale)),
-                    Ordering::Equal,
-                    "{dividend:?} / {divisor:?} = {quotient:?}, expected {mantissa}e-{scale}"
-                );
-            }
-            None => assert!(
-                matches!(got, Err(XsdError::OutOfRange { .. })),
-                "{dividend:?} / {divisor:?} overflows, got {got:?}"
-            ),
+        use purrdf_testkit::exact::{Direction, Rational as Oracle};
+        let got = numeric_div(&XsdValue::Decimal(dividend), &XsdValue::Decimal(divisor))
+            .unwrap_or_else(|error| panic!("{dividend:?} / {divisor:?}: {error}"));
+        // The quotient at eighteen digits, truncated — from the oracle, at any size.
+        let exact = Oracle::from_decimal(dividend.mantissa(), u32::from(dividend.scale()))
+            .div(&Oracle::from_decimal(
+                divisor.mantissa(),
+                u32::from(divisor.scale()),
+            ))
+            .expect("a nonzero divisor");
+        let expected = exact.round_to_scale(18, Direction::TowardZero);
+        let value = Oracle::parse(&got.canonical_lexical()).expect("a numeral");
+        assert!(
+            value.value_eq(&expected),
+            "{dividend:?} / {divisor:?} = {got:?}"
+        );
+        // Wherever the bounded decimal holds the eighteen digits, it is the answer.
+        if let Some((mantissa, 18)) = decimal_quotient_oracle(dividend, divisor) {
+            let XsdValue::Decimal(quotient) = got else {
+                panic!("{dividend:?} / {divisor:?}: {got:?}, expected bounded {mantissa}e-18");
+            };
+            assert_eq!(
+                quotient.cmp_exact(&Decimal::from_parts(mantissa, 18)),
+                Ordering::Equal
+            );
         }
     }
 
@@ -3171,21 +3404,24 @@ mod tests {
     }
 
     #[test]
-    fn decimal_negation_and_abs_of_the_smallest_mantissa_are_typed_overflows() {
+    fn decimal_negation_and_abs_of_the_smallest_mantissa_are_exact() {
         let min = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 0));
-        assert!(matches!(
-            numeric_unary_minus(&min),
-            Err(XsdError::OutOfRange { .. })
-        ));
-        assert!(matches!(
-            numeric_abs(&min),
-            Err(XsdError::OutOfRange { .. })
-        ));
+        let two_pow_127 = "170141183460469231731687303715884105728";
+        assert_eq!(
+            numeric_unary_minus(&min)
+                .expect("exact")
+                .canonical_lexical(),
+            two_pow_127
+        );
+        assert_eq!(
+            numeric_abs(&min).expect("exact").canonical_lexical(),
+            two_pow_127
+        );
         let scaled = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 18));
-        assert!(matches!(
-            numeric_abs(&scaled),
-            Err(XsdError::OutOfRange { .. })
-        ));
+        assert_eq!(
+            numeric_abs(&scaled).expect("exact").canonical_lexical(),
+            "170141183460469231731.687303715884105728"
+        );
         // One above it negates and takes its absolute value.
         let next = XsdValue::Decimal(Decimal::from_parts(i128::MIN + 1, 0));
         let Ok(XsdValue::Decimal(abs)) = numeric_abs(&next) else {

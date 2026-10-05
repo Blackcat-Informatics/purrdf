@@ -2,15 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The arbitrary-precision numeric tower: exact `xsd:integer`, `xsd:decimal` and
-//! `owl:rational` values of any size, beside the bounded 3.x representations.
+//! `owl:rational` values of any size, beside the machine-word representations.
 //!
-//! The crate's default numeric value space is bounded — [`crate::XsdValue::Integer`]
-//! holds an `i128` and [`crate::numeric::Decimal`] an `i128` coefficient with at
-//! most eighteen fractional digits — and a value outside those bounds is a typed
-//! error. This module is the unbounded tower that removes the bounds, available
-//! now as standalone types so reasoned mathematics (exact combinatorics,
-//! partition functions, exact quotients) can compute on it today, and so the
-//! switch of the default representation is a small, separate step.
+//! [`crate::XsdValue`] holds an integer or decimal that fits machine words in
+//! its bounded variants and every other one on this tower
+//! ([`crate::XsdValue::BigInteger`], [`crate::XsdValue::BigDecimal`]); the
+//! types here are also usable on their own for exact reasoned mathematics
+//! (combinatorics, partition functions, exact quotients).
 //!
 //! | Type | Value space | Arithmetic |
 //! |---|---|---|
@@ -32,7 +30,7 @@
 //! assert_eq!((&a + &b).canonical_lexical(), "0.0000000000000000000000000000000000000001");
 //!
 //! // Division under a stated precision policy; the default matches the bounded
-//! // 3.x quotient (18 digits, truncated).
+//! // machine-word quotient (18 digits, truncated).
 //! let third = Decimal::ONE.div(&Decimal::from(3), DivisionPolicy::default())?;
 //! assert_eq!(third.canonical_lexical(), "0.333333333333333333");
 //! let rounded = Decimal::from(2).div(&Decimal::from(3), DivisionPolicy::scale(5, Rounding::HalfEven))?;
@@ -74,9 +72,9 @@
 //! stated [`Rounding`] direction; [`DivisionPolicy::Exact`] returns the exact
 //! expansion or refuses a non-terminating quotient with
 //! [`ExactError::NonTerminating`]. The default, [`DivisionPolicy::xsd_default`],
-//! is eighteen digits truncated toward zero — the quotient the bounded 3.x
-//! decimal produces — so switching representations changes no quotient that is
-//! representable today.
+//! is eighteen digits truncated toward zero — the quotient the bounded
+//! [`crate::numeric::Decimal`] produces wherever its `i128` coefficient holds the
+//! result.
 //!
 //! # Why an exact rational type
 //!
@@ -92,31 +90,6 @@
 //! exactly this one. The cost is a gcd per operation, which the cost methods
 //! charge.
 //!
-//! # The v4.0 switch
-//!
-//! The default representation changes in one step that replaces types rather
-//! than behaviour, because this module already carries the semantics:
-//!
-//! | 3.x (bounded, today) | v4.0 |
-//! |---|---|
-//! | `XsdValue::Integer { value: i128, .. }` | `XsdValue::Integer { value: exact::Integer, .. }` |
-//! | `XsdValue::Decimal(numeric::Decimal)` | `XsdValue::Decimal(exact::Decimal)` |
-//! | `numeric::Decimal` (`i128`, scale ≤ 18) | removed; `exact::Decimal` takes the name |
-//! | `rational::Rational` (`i128` pair) | removed; `exact::Rational` takes the name |
-//! | out-of-range parse or result → `XsdError::OutOfRange` | an exact value |
-//! | decimal quotient: 18 digits, truncated | [`DivisionPolicy`] on the evaluator, default unchanged |
-//! | `BigInt` accumulator for `SUM`/`AVG` | the integer itself |
-//!
-//! What a v4.0 caller sees: integer and decimal literals of any length parse;
-//! arithmetic that overflowed with `err:FOAR0002` returns the exact value;
-//! `numeric::Decimal::mantissa()`/`scale()` become [`Decimal::unscaled`] and
-//! [`Decimal::scale`]; `i128` integer values are read with
-//! [`Integer::to_i128`] (or [`Integer::as_i128`]), which is fallible. Each
-//! arithmetic and cast site of the SPARQL evaluator charges the operation's
-//! [`Cost`] to its governor first (see [`cost`]). Code that adopts these types
-//! in 3.x — through [`Integer::from_xsd`], [`Decimal::from_xsd`],
-//! [`Decimal::to_xsd`] and the bounded conversions — needs no change at the
-//! switch beyond the type names.
 
 pub mod cost;
 

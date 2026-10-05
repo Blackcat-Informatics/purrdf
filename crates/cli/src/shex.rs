@@ -166,9 +166,9 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use purrdf::shex::{
-    ResultShapeMap, Schema, SemAct, Shape, ShapeExpr, ShexError, TripleExpr, TripleExprGroup,
-    ValidationOptions, check_structure, parse_shape_map, parse_shexc, parse_shexj, resolve_imports,
-    validate_shape_map,
+    ExactFacets, ResultShapeMap, Schema, SemAct, Shape, ShapeExpr, ShexError, TripleExpr,
+    TripleExprGroup, ValidationOptions, check_structure, parse_shape_map, parse_shexc_exact,
+    parse_shexj_exact, resolve_imports, validate_shape_map_exact,
 };
 use purrdf_rdf::JsonLdSerializeOptions;
 
@@ -236,8 +236,9 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     let data = source::load_dataset(options.data, data_format, options.base)?;
 
     let schema_base = schema_base(options.schema)?;
-    let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
-    let schema = fold_imports(schema, &import_pairs, options)?;
+    let (schema, mut facets) =
+        read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
+    let schema = fold_imports(schema, &import_pairs, options, &mut facets)?;
     // Structure BEFORE the unavailable-semantics survey: a schema with a dangling reference
     // is malformed outright, and reporting an `EXTERNAL` inside it would describe a shape
     // that may not even be reachable.
@@ -254,8 +255,9 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     })?;
     refuse_unavailable_semantics(&schema, options.schema)?;
 
-    let result = validate_shape_map(
+    let result = validate_shape_map_exact(
         &schema,
+        &facets,
         &data,
         options.map,
         options.base,
@@ -408,12 +410,12 @@ fn read_schema(
     path: &str,
     explicit: Option<CliShexFormat>,
     base: Option<&str>,
-) -> Result<Schema, CliError> {
+) -> Result<(Schema, ExactFacets), CliError> {
     let syntax = resolve_schema_format(explicit, path, "--schema", SyntaxOverride::SchemaFrom)?;
     let text = source::read_text(path, "--schema")?;
     match syntax {
-        CliShexFormat::Shexc => parse_shexc(&text, base),
-        CliShexFormat::Shexj => parse_shexj(&text, base),
+        CliShexFormat::Shexc => parse_shexc_exact(&text, base),
+        CliShexFormat::Shexj => parse_shexj_exact(&text, base),
     }
     .map_err(|error| CliError::Runtime(format!("--schema {path}: {error}")))
 }
@@ -481,8 +483,14 @@ fn fold_imports(
     schema: Schema,
     pairs: &[ImportPair<'_>],
     options: &ShexOptions<'_>,
+    facets: &mut ExactFacets,
 ) -> Result<Schema, CliError> {
     let table = read_import_table(pairs)?;
+    for (iri, _, imported) in &table {
+        facets
+            .merge(imported)
+            .map_err(|error| CliError::Runtime(format!("--import {iri}: {error}")))?;
+    }
     let requested: RefCell<BTreeSet<String>> = RefCell::new(BTreeSet::new());
 
     let resolved = {
@@ -490,8 +498,8 @@ fn fold_imports(
             requested.borrow_mut().insert(iri.to_owned());
             table
                 .iter()
-                .find(|(pair_iri, _)| pair_iri == iri)
-                .map(|(_, schema)| schema.clone())
+                .find(|(pair_iri, _, _)| pair_iri == iri)
+                .map(|(_, schema, _)| schema.clone())
                 // Never rendered: the CLI replaces the whole error below with one that names
                 // the flag the operator has to write.
                 .ok_or_else(|| ShexError::shexj("no --import pair resolves this IRI"))
@@ -565,19 +573,21 @@ fn resolve_import_pairs<'a>(options: &ShexOptions<'a>) -> Result<Vec<ImportPair<
 /// Every argument-level decision was already made by [`resolve_import_pairs`], so what remains
 /// here is I/O and parsing: nothing in this function refuses a command line, and every failure
 /// it can report is a property of a document (exit 1).
-fn read_import_table(pairs: &[ImportPair<'_>]) -> Result<Vec<(String, Schema)>, CliError> {
-    let mut table: Vec<(String, Schema)> = Vec::with_capacity(pairs.len());
+fn read_import_table(
+    pairs: &[ImportPair<'_>],
+) -> Result<Vec<(String, Schema, ExactFacets)>, CliError> {
+    let mut table: Vec<(String, Schema, ExactFacets)> = Vec::with_capacity(pairs.len());
     for pair in pairs {
         // Parsed with the import IRI as its base, which is the per-document base resolution
         // `purrdf_shex::resolve_imports` documents its injection boundary as satisfying.
         let what = format!("--import {}", pair.iri);
         let text = source::read_text(pair.path, &what)?;
-        let schema = match pair.syntax {
-            CliShexFormat::Shexc => parse_shexc(&text, Some(pair.iri)),
-            CliShexFormat::Shexj => parse_shexj(&text, Some(pair.iri)),
+        let (schema, facets) = match pair.syntax {
+            CliShexFormat::Shexc => parse_shexc_exact(&text, Some(pair.iri)),
+            CliShexFormat::Shexj => parse_shexj_exact(&text, Some(pair.iri)),
         }
         .map_err(|error| CliError::Runtime(format!("{what} {}: {error}", pair.path)))?;
-        table.push((pair.iri.to_owned(), schema));
+        table.push((pair.iri.to_owned(), schema, facets));
     }
     Ok(table)
 }

@@ -250,6 +250,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             aggregate_namespace,
             provenance_namespace,
             path_relation,
+            division,
             query,
         } => query::run(
             &query::QueryOptions {
@@ -277,6 +278,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     .as_ref()
                     .map(|(prefix, iri)| (prefix.as_str(), iri.as_str())),
                 path_relations: path_relation,
+                division: division.unwrap_or_default(),
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),

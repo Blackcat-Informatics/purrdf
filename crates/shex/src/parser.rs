@@ -25,6 +25,7 @@
 //! absolute terms of the data it is validating, so it can only ever produce a
 //! wrong verdict.
 
+use crate::exact_facets::ExactFacets;
 use purrdf_core::FastMap;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 
@@ -76,6 +77,15 @@ const MAX_DEPTH: usize = 96;
 /// assert!(err.to_string().contains("iri-relative-no-base"));
 /// ```
 pub fn parse_shexc(input: &str, base: Option<&str>) -> Result<Schema> {
+    parse_shexc_recording(input, base).map(|(schema, _)| schema)
+}
+
+/// [`parse_shexc`], also recording the exact value of every `INTEGER`/`DECIMAL`
+/// numeric facet bound ([`crate::exact_facets`]).
+pub(crate) fn parse_shexc_recording(
+    input: &str,
+    base: Option<&str>,
+) -> Result<(Schema, ExactFacets)> {
     let tokens = tokenize(input)?;
     let scope = match base {
         Some(iri) => BaseScope::rooted(
@@ -91,8 +101,10 @@ pub fn parse_shexc(input: &str, base: Option<&str>) -> Result<Schema> {
         prefixes: FastMap::default(),
         base: scope,
         depth: 0,
+        exact: ExactFacets::default(),
     };
-    parser.parse_schema()
+    let schema = parser.parse_schema()?;
+    Ok((schema, parser.exact))
 }
 
 struct Parser<'a> {
@@ -106,6 +118,8 @@ struct Parser<'a> {
     prefixes: FastMap<String, String>,
     base: BaseScope,
     depth: usize,
+    /// The exact values of the numeric facet bounds read so far.
+    exact: ExactFacets,
 }
 
 /// A parsed shape atom plus whether an enclosing `AND` chain may splice its
@@ -684,8 +698,12 @@ impl Parser<'_> {
                 )));
             }
         };
+        let exact_syntax = matches!(self.peek(), Some(Token::Integer(_) | Token::Decimal(_)));
         let value = numeric_from_lexical(&lexical)
             .ok_or_else(|| self.err(format!("numeric facet value {lexical} out of range")))?;
+        if exact_syntax {
+            self.exact.record(value, &lexical);
+        }
         self.pos += 1;
         Ok(value)
     }
