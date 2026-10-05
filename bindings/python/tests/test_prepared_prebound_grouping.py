@@ -42,8 +42,10 @@ def _store() -> purrdf.Store:
 
 def _rows(query: str) -> list[tuple]:
     prepared = _store().prepare(query, parameters=["this"])
+    solutions = prepared.run(this=purrdf.NamedNode(f"{EX}a"))
+    width = len(solutions.variables)
     return sorted(
-        (tuple(row) for row in prepared.run(this=purrdf.NamedNode(f"{EX}a"))),
+        (tuple(row[i] for i in range(width)) for row in solutions),
         key=repr,
     )
 

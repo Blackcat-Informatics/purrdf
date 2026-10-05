@@ -128,10 +128,6 @@ fn integer(value: u32) -> TermValue {
     }
 }
 
-fn iri(local: &str) -> TermValue {
-    TermValue::Iri(format!("{EX}{local}"))
-}
-
 #[test]
 fn a_projected_pre_bound_variable_survives_an_implicit_group() {
     assert_every_lane(
@@ -164,8 +160,14 @@ fn a_pre_bound_variable_survives_an_explicit_group_by_another_key() {
     assert_every_lane(
         &format!("SELECT $this ?o WHERE {{ $this <{EX}p> ?o }} GROUP BY ?o"),
         &[
-            vec![cell("this", a()), cell("o", iri("o1"))],
-            vec![cell("this", a()), cell("o", iri("o2"))],
+            vec![
+                cell("this", a()),
+                cell("o", TermValue::Iri(format!("{EX}o1"))),
+            ],
+            vec![
+                cell("this", a()),
+                cell("o", TermValue::Iri(format!("{EX}o2"))),
+            ],
         ],
     );
     assert_every_lane(
@@ -173,8 +175,14 @@ fn a_pre_bound_variable_survives_an_explicit_group_by_another_key() {
             "SELECT ?o (BOUND($this) AS ?r) WHERE {{ $this <{EX}p> ?o }} GROUP BY ?o HAVING (BOUND($this))"
         ),
         &[
-            vec![cell("o", iri("o1")), cell("r", boolean(true))],
-            vec![cell("o", iri("o2")), cell("r", boolean(true))],
+            vec![
+                cell("o", TermValue::Iri(format!("{EX}o1"))),
+                cell("r", boolean(true)),
+            ],
+            vec![
+                cell("o", TermValue::Iri(format!("{EX}o2"))),
+                cell("r", boolean(true)),
+            ],
         ],
     );
 }
