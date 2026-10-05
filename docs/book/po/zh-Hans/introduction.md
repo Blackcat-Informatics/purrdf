@@ -104,9 +104,9 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
 | 向量相似度 | pgvector | [嵌入最近邻](sparql/embedding-knn.md)：在 PURREMB 嵌入空间上的精确 top-k，binary64 且累加顺序固定。 | 由调用方提供的 `KnnGuard` 限定的精确扫描，三种度量，没有近似索引；PurRDF 不计算嵌入——向量来自由调用方填充的 PURREMB 工件，该工件由 PurRDF 自身写出（`EmbeddingBuilder`、`EmbeddingStreamWriter`；仅限 Rust）并以失败即关闭（fail-closed）的方式打开。 |
 
 三者在每个目标上都是其输入的纯函数——定点数、精确有理数，或固定顺序的 binary64，
-外加规范的并列判定——而这一声称是被执行而非被论证的：文本与 k 近邻的确定性测试在
-原生与 `wasm32-unknown-unknown` 上运行同一份测试体，`make geo-determinism` 则逐字节
-比较两个目标。它们是 Rust 宿主上的扩展点：宿主在自己的 IRI 之下注册一个索引或一个空间，
+外加规范的并列判定。数值与序列化的预期结果由原生 Rust 测试固定。
+`make wasm` 为 `wasm32-unknown-unknown` 构建三个 crate；WASM 测试只运行实际
+分派、SIMD 内核与宿主接口。它们是 Rust 宿主上的扩展点：宿主在自己的 IRI 之下注册一个索引或一个空间，
 而该宿主本身也可以编译到 wasm32。已发布的 npm 包与 Python wheel 尚未暴露这三种关系。
 
 ## 第一天就值得知道的两条设计规则

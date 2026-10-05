@@ -109,8 +109,10 @@ target, the build and the dispatch path (SSE2, AVX2+FMA or AVX-512F on x86-64, c
 at run time; NEON on aarch64; `simd128` or scalar on wasm, as built), and the resolved
 handle's evidence says so in words. Each path compiles the body once, out of line, so
 every caller on one path gets the same bits for the same pair. The exact entry points
-never run it, and it never stands in for them; `knn_wasm_reassociated` executes it on
-both wasm32 builds and holds each result to the summation error bound of the exact one.
+never run it, and it never stands in for them. The focused
+`knn_wasm_reassociated` comparison executes the simd128 kernel only on the
+`+simd128` build and holds its result to the summation error bound of the exact
+one. Its separate path-selection assertion runs on both wasm32 builds.
 
 ### The relation is generic over the arithmetic
 
@@ -150,28 +152,21 @@ and its control `exact_relation_names_exact_arithmetic` pin the declaration, and
 `fusion_trailer_names_reassociated_kernel` in `purrdf-retrieval` fuses both producers
 over one space, with the exact one as the control row.
 
-### The cross-target claim is executed, not argued
+### Native arithmetic pins and focused WASM kernels
 
-Everything above is a reason to *expect* agreement between x86-64 and
-`wasm32-unknown-unknown`. Two runs on one target cannot check it: they cannot tell a
-kernel that is target-independent from one that is merely self-consistent wherever it
-was last compiled. `make wasm` has the same limit in the other direction — it proves
-the release crates *build* for wasm32, never that they *answer* the same way there.
+The arithmetic contract applies across targets. The numeric pins below execute
+natively; `make wasm` checks that the release crates build for wasm32. Compilation
+alone does not establish numeric agreement on a second target.
 
-So `crates/sparql-eval/tests/knn_wasm_determinism.rs` is a `harness = false` target on
-the shared test runner (`purrdf_testkit::harness`), whose named cases run natively and
-on wasm32 alike. They run real SPARQL kNN queries over real PURREMB artifacts whose components are
-deliberately *not* exactly representable in binary64 — every product, every partial sum
-and both norms round — and assert five pinned `xsd:double` lexicals each, in order. One
-fixture is six-dimensional, which reaches only the exact fold's sequential tail; the
-other is seventy-dimensional, which fills all sixteen lanes and the 64-element bound
-checkpoint and leaves a six-element tail, asked under cosine and under squared
-Euclidean. `cargo test` executes them on the host; `make wasm-test` compiles them to
-wasm32 twice — on the baseline target and with `+simd128`, where the lanes become
-`f64x2` operations — and runs both in Node through `scripts/wasm-test-runner.sh`, the
-cargo runner that generates each test binary's bindings with the wasm-bindgen CLI the
-wasm lane already installs, at the one pinned version. CI's `wasm-exec` job runs that lane. A target that computes a different last bit renders a different lexical
-and fails there, rather than surfacing later as an unexplained reordering.
+`crates/sparql-eval/tests/knn_wasm_determinism.rs` pins the exact numeric
+expectations in native Rust. Real SPARQL queries reach PURREMB artifacts whose
+components are not exactly representable in binary64, and assert five literal
+`xsd:double` lexicals in order. The six-dimensional fixture reaches the
+sequential tail; the seventy-dimensional fixture exercises all sixteen lanes,
+the 64-element bound checkpoint and a six-element tail under cosine and squared
+Euclidean. `make wasm-test` instead selects actual WASM path admission and the
+direct simd128 kernel comparison from `knn_wasm_reassociated`; general arithmetic
+and query semantics stay native.
 
 ### The limit of the claim, stated
 
