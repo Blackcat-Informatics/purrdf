@@ -94,7 +94,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	cargo clippy --workspace --all-targets --locked -- -D warnings
 	cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
 	cargo check --workspace --lib --tests --locked
-	python3 scripts/check-no-features.py
+	cargo run -q --locked -p helper-census -- --no-features
 	python3 scripts/check-toolchain-pin.py
 	python3 scripts/check-toolchain-pin.py --self-test
 	python3 scripts/check-gate-parity.py --self-test
@@ -106,8 +106,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-iri-resolver-singleton.py
 	python3 scripts/check-serializer-rewinds.py --self-test
 	python3 scripts/check-serializer-rewinds.py
-	python3 scripts/check-python-binding-tests.py --self-test
-	python3 scripts/check-python-binding-tests.py
+	cargo run -q --locked -p helper-census -- --python-binding-tests
 	python3 scripts/check-terminal-predicates.py --self-test
 	python3 scripts/check-terminal-predicates.py
 	python3 scripts/check-thread-locals.py --self-test
@@ -439,7 +438,7 @@ bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NO
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py
 
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
-	python3 scripts/check-python-binding-tests.py
+	cargo run -q --locked -p helper-census -- --python-binding-tests
 	cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
 
 miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
@@ -484,8 +483,8 @@ serializer-rewind-hygiene: ## Prove no serializer takes back output it already p
 	python3 scripts/check-serializer-rewinds.py
 
 python-binding-hygiene: ## Prove no Rust test module hides in the PyO3 extension crate (it would never compile or run).
-	python3 scripts/check-python-binding-tests.py --self-test
-	python3 scripts/check-python-binding-tests.py
+	cargo run -q --locked -p helper-census -- --self-test
+	cargo run -q --locked -p helper-census -- --python-binding-tests
 
 terminal-hygiene: ## Prove no scanner decides a token boundary with a Unicode property.
 	python3 scripts/check-terminal-predicates.py --self-test
