@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use purrdf_gts::mmr::{Proof, prove, root, verify_proof};
+use purrdf_gts::mmr::{MmrPeaks, Proof, prove, root, verify_proof};
 use purrdf_gts::replication::{heads_json, inventory};
 
 fn vector(relative: &str) -> PathBuf {
@@ -28,6 +28,16 @@ fn the_mmr_proof_vector_is_what_this_implementation_proves() {
     let frozen = Proof::from_json(&text).expect("the vector parses");
     verify_proof(&frozen).expect("the frozen proof verifies");
     let ids = frame_ids();
+    let mut frontier = MmrPeaks::default();
+    for frame_id in &ids {
+        frontier.push(frame_id).expect("frozen frame fits");
+    }
+    assert_eq!(frontier.root(), frozen.root, "the frozen incremental root");
+    assert_eq!(
+        MmrPeaks::from_parts(frozen.count as u64, frozen.peaks.clone()),
+        Ok(frontier),
+        "the frozen proof's frontier restores"
+    );
     assert_eq!(
         root(&ids),
         frozen.root,
