@@ -49,7 +49,7 @@ mod env;
 mod io;
 mod mutable;
 mod prepared;
-mod presentation;
+pub(crate) mod presentation;
 mod quad_store;
 mod query;
 mod results;

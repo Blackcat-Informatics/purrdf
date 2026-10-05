@@ -199,7 +199,11 @@ impl PyStore {
     /// `parameters` names the variables `run` will bind, without the `?`/`$` sigil.
     /// Each is pre-bound exactly as a `substitutions` entry is on
     /// [`query`](Self::query), so a parameter stays projectable and reaches inside
-    /// `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s by ordinary correlation.
+    /// `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s by ordinary correlation. A
+    /// parameter the query never mentions could bind nothing, so it raises `ValueError`
+    /// naming it (`message_id` `sparql-prepared-parameter-unmentioned`) — see
+    /// `purrdf_sparql_eval::PreparedExecution::check_parameters_mentioned` for what
+    /// counts as a mention.
     ///
     /// What is prepared here is the PLAN, not the data: the returned object holds a
     /// reference to THIS store and re-reads its current contents on every

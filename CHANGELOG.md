@@ -58,6 +58,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   below `purrdf-core` can build presentations. `purrdf_core::diagnostic` and the
   `purrdf_core` crate root re-export the same types, so existing paths and
   matches keep compiling.
+- **Premise-IRI check:** `purrdf_validate::check_premise_iris` checks that
+  every premise IRI is an absolute IRI, using the workspace IRI parser. A
+  refusal is a `PremiseIriError`. It names the IRI and has a typed
+  `presentation()` (`premise-iri-not-absolute`) whose `detail` is the IRI
+  parser's own `iri-*` condition. A relative reference has the detail
+  `iri-not-absolute-by-grammar.absent`; the empty string has `iri-empty`.
+- **SPARQL query census and prepared parameters:**
+  `purrdf_sparql_algebra::Query::for_each_variable` visits every variable a
+  query mentions, including `CONSTRUCT` template slots and `DESCRIBE` targets.
+  `PreparedExecution::check_parameters_mentioned` refuses declared parameters
+  the query never mentions and names them, with presentation
+  `sparql-prepared-parameter-unmentioned`. `prepare_execution` itself still
+  admits such a parameter, because SHACL-SPARQL declares `$this` for
+  constraints that may not read it.
 
 - **core:** `loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED`, a runtime loss code. The
   loss registry and `generated/transcode-loss-matrix.json` list it for every
@@ -92,6 +106,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **rdf:** `flat_dataset_from_quads_declaring`.
 
 ### Fixed
+
+- **Premise IRIs:** every entailment service that takes premise IRIs now
+  refuses one that is not an absolute IRI, such as `"::bad"`, `"lib"` or `""`,
+  and names it. Before, it was accepted silently and could never match an
+  `owl:imports` object. This applies to the shared `purrdf_validate` boundary
+  (`premise_import_map` and the string services), the C ABI, WebAssembly, and
+  Python's `purrdf.entail` functions and `Store.query_entailment_governed`. The
+  premise IRIs are checked before the import table. On Python the
+  `ValueError` carries `message_id` `premise-iri-not-absolute` and the typed
+  `presentation`.
+- **Python `Store.prepare`:** a declared parameter that the query never
+  mentions, such as `parameters=["zz"]`, raises `ValueError` naming it, with
+  `message_id` `sparql-prepared-parameter-unmentioned`. Before, it was
+  accepted and bound nothing. A declared parameter that the query uses still
+  prepares and runs. Mentions in filters, `EXISTS`, `CONSTRUCT` templates and
+  `DESCRIBE` targets all count.
 
 - **core:** `MutableDataset::snapshot_view_with_limits` no longer refuses a
   snapshot because of terms whose rows were all removed. Its check before the
