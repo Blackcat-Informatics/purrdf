@@ -527,7 +527,7 @@ def _suite_sparql() -> SuiteResult:
         detail = f"{passed} pass · {xfail} xfail (ledgered)"
         return SuiteResult(
             "SPARQL 1.1/1.2 evaluation (full corpus)",
-            "W3C sparql11 + sparql12 + first-party",
+            "W3C sparql10 + sparql11 + sparql12 + first-party",
             passed=passed, xskip=xfail, failed=failed + unexpected,
             detail=detail,
             ok=(rc == 0 and cargo_failed == 0 and failed == 0 and unexpected == 0),
@@ -535,7 +535,7 @@ def _suite_sparql() -> SuiteResult:
         )
     return _no_scoreboard(
         "SPARQL 1.1/1.2 evaluation (full corpus)",
-        "W3C sparql11 + sparql12 + first-party",
+        "W3C sparql10 + sparql11 + sparql12 + first-party",
         "per-manifest `[<manifest>] N passed, N xfail, N unexpected-pass, "
         "N failed, N unmodeled`",
         cmd,

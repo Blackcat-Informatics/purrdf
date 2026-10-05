@@ -16,7 +16,7 @@
 //!
 //! `xfail::lookup` refuses the second at run time, but only for a case it is
 //! asked about. This target closes both over the WHOLE live suite by loading
-//! every `suite/**/manifest.ttl` and matching the ledger against the complete set
+//! every discovered suite leaf and matching the ledger against the complete set
 //! of case IRIs. It uses the ordinary libtest harness, because
 //! `tests/sparql_conformance.rs` is `harness = false` and its `fn main` hands
 //! only the discovered manifests to its runner, so it would never call a
@@ -51,7 +51,7 @@ fn all_live_case_iris() -> BTreeSet<String> {
     iris
 }
 
-/// Every `manifest.ttl` under `suite/`, exactly the set the `sparql_conformance`
+/// Every leaf under `suite/`, exactly the set the `sparql_conformance`
 /// target runs as cases (both discover through the same function).
 fn live_manifests() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite");

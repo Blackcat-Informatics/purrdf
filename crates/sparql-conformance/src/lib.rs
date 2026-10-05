@@ -8,7 +8,7 @@
 //! [`purrdf_sparql_eval`] engine, and diffs the result
 //! against the expected SPARQL Results (SRX/SRJ) or canonical N-Quads. The
 //! `harness = false` test target `tests/sparql_conformance.rs` runs one case per
-//! `manifest.ttl` that [`paths::suite_manifests`] discovers under `suite/`; each
+//! leaf manifest that [`paths::suite_manifests`] discovers under `suite/`; each
 //! loops its entries via [`run_manifest`].
 //!
 //! Expected failures are recorded in [`xfail`] — never skipped — and the

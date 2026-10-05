@@ -4,7 +4,7 @@
 //! Path helpers for the conformance harness, and discovery of the manifests a
 //! suite directory holds.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -24,12 +24,19 @@ pub fn resolve(manifest_dir: &Path, relative: &str) -> PathBuf {
     manifest_dir.join(relative)
 }
 
-/// The file name [`suite_manifests`] discovers: exactly this name, at any depth.
+/// The ordinary leaf file name [`suite_manifests`] discovers, at any depth.
+/// It also discovers the W3C data-r2 leaf name `extended-manifest.ttl`.
 ///
 /// A manifest that aggregates others with `mf:include` must be named something
 /// else (the vendored SEP-0009 corpus uses `manifest-all.ttl`), or discovery
 /// would find it beside the manifests it includes and run their cases twice.
 pub const SUITE_MANIFEST_NAME: &str = "manifest.ttl";
+
+/// Every supported leaf spelling; the loader uses this same rule to refuse
+/// auto-discovered aggregators that would execute their children twice.
+pub(crate) fn is_suite_manifest_name(name: &OsStr) -> bool {
+    name == SUITE_MANIFEST_NAME || name == "extended-manifest.ttl"
+}
 
 /// One manifest found by [`suite_manifests`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,7 +129,8 @@ impl std::error::Error for DiscoveryError {
     }
 }
 
-/// Every file named [`SUITE_MANIFEST_NAME`] at any depth below `root`.
+/// Every file named [`SUITE_MANIFEST_NAME`] or `extended-manifest.ttl` at any
+/// depth below `root`. Only exact spellings match.
 ///
 /// Directories are descended into whatever their name; a symbolic link is
 /// followed, so a linked directory is walked and a linked file is matched.
@@ -185,7 +193,7 @@ fn walk(
             prefix.push(name);
             walk(&path, prefix, found)?;
             prefix.pop();
-        } else if file_type.is_file() && name == SUITE_MANIFEST_NAME {
+        } else if file_type.is_file() && is_suite_manifest_name(&name) {
             let components = prefix
                 .iter()
                 .chain(std::iter::once(&name))

@@ -72,3 +72,83 @@ fn a_missing_or_malformed_freeze_registry_is_refused() {
         assert!(!loaded_receipt(&script, "fixture").status.success());
     }
 }
+
+#[test]
+fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
+    use purrdf_sparql_conformance::{manifest, paths};
+    const GROUPS: &[(&str, usize)] = &[
+        ("algebra", 14),
+        ("ask", 4),
+        ("basic", 27),
+        ("bnode-coreference", 1),
+        ("boolean-effective-value", 7),
+        ("bound", 1),
+        ("cast", 7),
+        ("construct", 5),
+        ("dataset", 12),
+        ("distinct", 11),
+        ("expr-builtin", 25),
+        ("expr-equals", 15),
+        ("expr-ops", 18),
+        ("graph", 17),
+        ("i18n", 5),
+        ("open-world", 18),
+        ("optional", 7),
+        ("optional-filter", 5),
+        ("reduced", 2),
+        ("regex", 21),
+        ("solution-seq", 13),
+        ("sort", 14),
+        ("syntax-sparql1", 81),
+        ("syntax-sparql2", 53),
+        ("syntax-sparql3", 51),
+        ("syntax-sparql4", 12),
+        ("syntax-sparql5", 2),
+        ("triple-match", 4),
+        ("type-promotion", 30),
+    ];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql10");
+    let discovered = paths::suite_manifests(&root).expect("complete leaf discovery");
+    let mut expected_leaves: BTreeSet<_> = GROUPS
+        .iter()
+        .map(|(group, _)| format!("{group}/manifest.ttl"))
+        .collect();
+    expected_leaves.insert("sort/extended-manifest.ttl".to_owned());
+    assert_eq!(
+        discovered
+            .iter()
+            .map(|leaf| leaf.relative.clone())
+            .collect::<BTreeSet<_>>(),
+        expected_leaves
+    );
+    assert_eq!(discovered.len(), 30);
+    let mut declared = BTreeSet::new();
+    for &(group, count) in GROUPS {
+        let leaf = root.join(group).join("manifest.ttl");
+        let cases = manifest::load(&leaf).unwrap_or_else(|error| panic!("{group}: {error}"));
+        assert_eq!(cases.len(), count, "pinned {group} case count");
+        for case in cases {
+            assert_ne!(case.kind, manifest::TestKind::Unknown, "{}", case.iri);
+            assert!(
+                declared.insert(case.iri),
+                "a case is executed by two leaves"
+            );
+        }
+    }
+    assert_eq!(declared.len(), 482);
+    let closure = manifest::load(&root.join("manifest-all.ttl")).expect("pinned root closure");
+    assert_eq!(closure.len(), 482);
+    assert_eq!(
+        closure
+            .into_iter()
+            .map(|case| case.iri)
+            .collect::<BTreeSet<_>>(),
+        declared
+    );
+    let extended =
+        manifest::load(&root.join("sort/extended-manifest.ttl")).expect("extended sort leaf");
+    assert_eq!(extended.len(), 1);
+    assert!(extended[0].iri.ends_with("#dawg-sort-11"));
+    assert!(declared.insert(extended[0].iri.clone()));
+    assert_eq!(declared.len(), 483);
+}

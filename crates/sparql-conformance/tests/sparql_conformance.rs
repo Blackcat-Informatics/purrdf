@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! One case per `manifest.ttl` under `suite/`, named
+//! One case per discovered leaf manifest under `suite/`, named
 //! `run_manifest_case::<path below suite/>`. Each runs all of its manifest's
 //! cases (honoring the xfail registry) and prints a tally; a non-xfail failure
 //! or a stale-xfail unexpected-pass fails the case.
@@ -50,7 +50,7 @@ fn main() -> ExitCode {
     };
     if manifests.is_empty() {
         eprintln!(
-            "error: no {SUITE_MANIFEST_NAME} was found under {}; an empty run would report \
+            "error: no {SUITE_MANIFEST_NAME} or extended-manifest.ttl was found under {}; an empty run would report \
              success without exercising anything",
             root.display()
         );

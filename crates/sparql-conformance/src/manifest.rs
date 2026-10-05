@@ -236,7 +236,7 @@ const MAX_MANIFESTS_PER_CLOSURE: usize = 512;
 /// further manifests), or both. This loader accepts all three shapes, with one
 /// rule that keeps discovery and aggregation from colliding:
 ///
-/// > **A manifest whose file name is `manifest.ttl` may not declare `mf:include`.**
+/// > **A manifest whose file name discovery matches may not declare `mf:include`.**
 ///
 /// `tests/sparql_conformance.rs` runs one case per file named `manifest.ttl` below
 /// `suite/` ([`crate::paths::suite_manifests`]). If an aggregator were itself named
@@ -653,15 +653,22 @@ fn load_includes(
         return Ok(Vec::new());
     }
 
-    if manifest_path.file_name().and_then(|n| n.to_str()) == Some("manifest.ttl") {
+    if manifest_path
+        .file_name()
+        .is_some_and(paths::is_suite_manifest_name)
+    {
         return Err(format!(
-            "{}: a manifest named 'manifest.ttl' may not declare mf:include. \
-             crates/sparql-conformance/tests/sparql_conformance.rs runs every \
-             'manifest.ttl' below suite/ as a case, so an aggregator with that name would be discovered ALONGSIDE the \
-             'manifest.ttl' files it includes and every one of their cases would run twice, \
+            "{}: a manifest named '{}' may not declare mf:include. \
+             crates/sparql-conformance/tests/sparql_conformance.rs runs every discovered \
+             leaf below suite/ as a case, so an aggregator with that name would be discovered ALONGSIDE the \
+             leaf files it includes and every one of their cases would run twice, \
              silently doubling the pass tally. Name an aggregator something discovery does \
              not match (the vendored SEP-0009 corpus uses 'manifest-all.ttl')",
-            manifest_path.display()
+            manifest_path.display(),
+            manifest_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("matched UTF-8 leaf name")
         ));
     }
 

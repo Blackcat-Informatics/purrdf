@@ -189,20 +189,21 @@ fn an_aggregator_over_an_empty_group_is_refused_and_names_the_child() {
     );
 }
 
-/// An aggregator may not be named `manifest.ttl`: `sparql_conformance.rs` runs
-/// every `manifest.ttl` below `suite/` as a case, so such a file would be run alongside the
-/// `manifest.ttl` files it includes and every included case would run twice.
+/// An aggregator may not use either auto-discovered leaf name: the runner would
+/// execute it alongside its children and count every included case twice.
 #[test]
 fn an_aggregator_named_manifest_ttl_is_refused() {
-    let error = refusal("aggregator-named-manifest/manifest.ttl");
-    assert!(
-        error.contains("may not declare mf:include"),
-        "the refusal must say what it caught, got: {error}"
-    );
-    assert!(
-        error.contains("twice"),
-        "the refusal must state the double-count consequence, got: {error}"
-    );
+    for name in ["manifest.ttl", "extended-manifest.ttl"] {
+        let error = refusal(&format!("aggregator-named-manifest/{name}"));
+        assert!(
+            error.contains("may not declare mf:include"),
+            "the refusal must say what it caught, got: {error}"
+        );
+        assert!(
+            error.contains("twice"),
+            "the refusal must state the double-count consequence, got: {error}"
+        );
+    }
 }
 
 /// The real corpus this whole chunk exists for: `vectors/sparql-cdt/manifest-all.ttl`
