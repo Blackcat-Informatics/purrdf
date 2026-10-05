@@ -2369,9 +2369,8 @@ impl NumericFold {
     /// before (unchanged `numeric_div` call, unchanged truncated-decimal
     /// result). One that no longer fits `i128` divides through
     /// [`purrdf_xsd::bigint_avg_decimal`] instead — an exact `BigInt`-scaled
-    /// division by the (always-small) folded row count, mirroring
-    /// `numeric_div`'s own truncated-to-18-fractional-digit `Decimal` result
-    /// bit for bit. That helper itself answers `None` when the resulting
+    /// division by the (always-small) folded row count, truncated to 18
+    /// fractional digits. That helper itself answers `None` when the resulting
     /// MANTISSA does not fit `i128` — `xsd:decimal`'s `Decimal` representation
     /// is deliberately `i128`-mantissa-bounded (this crate's documented design,
     /// unmoved by this fold) — but THIS finish does not stop there: it falls
@@ -2383,8 +2382,8 @@ impl NumericFold {
     /// the quotient happens to still fit `i128` after scaling, but always. This
     /// makes the `Self::Int` arm infallible; unlike [`Self::finish_sum`] this
     /// function stays `Option`-returning only because [`Self::Ok`]'s
-    /// `numeric_div` call can still fail (a `decimal`-tier intermediate
-    /// overflow — see `purrdf_xsd::numeric::decimal_div_raw`).
+    /// `numeric_div` call fails when the quotient's integer part exceeds the
+    /// `i128` mantissa (see `purrdf_xsd::numeric::decimal_div_raw`).
     fn finish_avg(self) -> Option<TermValue> {
         match self {
             Self::Empty => Some(TermValue::integer(0)),

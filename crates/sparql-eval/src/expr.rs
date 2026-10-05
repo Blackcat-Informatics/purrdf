@@ -4310,28 +4310,27 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
     ))
 }
 
-/// Evaluate an XSD constructor cast: parse the source literal's lexical form against
-/// the `target` datatype (an IRI source casts to `xsd:string`), returning the
-/// target-typed literal in canonical form, or `None` on a type/lexical error.
+/// Evaluate an XSD constructor cast (SPARQL 1.1 §17.5, applying the casting rules of
+/// XPath and XQuery Functions and Operators 3.1 §19), returning the target-typed
+/// literal in canonical form, or `None` on a type/lexical error.
 ///
-/// Numeric→numeric casts are value-space, not lexical-space (SPARQL 1.1 §17.1 / the
-/// XPath casting rules): `xsd:decimal("5.355e1"^^xsd:double)` is the decimal value
-/// `53.55`, NOT a re-parse of the scientific-notation lexical (which is not a valid
-/// `xsd:decimal` lexical). Calendar→calendar casts preserve the parsed value's
-/// components and timezone through [`purrdf_xsd::temporal::cast_calendar`]. The
-/// direct lexical parse handles string constructors and other same-representation
-/// casts; when it fails, a numeric-or-boolean source is
-/// cast by VALUE through [`cast_numeric_value`] (this also covers `xsd:boolean` as
-/// EITHER the source or the target of a numeric cast, per XPath's boolean/numeric
-/// casting rules).
+/// A source with a numeric or `xsd:boolean` VALUE (a well-typed literal of a numeric
+/// datatype or of `xsd:boolean`) is cast BY VALUE when the target is numeric,
+/// `xsd:boolean` or `xsd:string` ([`cast_numeric_value`],
+/// [`numeric_or_bool_to_xpath_string`]): `xsd:double("0.1"^^xsd:float)` is the double
+/// value of the float `0.1`, which is `0.100000001490116119384765625`, NOT the double
+/// nearest the digits `0.1`; `xsd:integer("16777217"^^xsd:float)` is `16777216`; and
+/// `xsd:decimal("5.355e1"^^xsd:double)` is the decimal nearest the double's value,
+/// although the scientific-notation lexical is not an `xsd:decimal` lexical.
+/// Calendar→calendar casts preserve the parsed value's components and timezone through
+/// [`purrdf_xsd::temporal::cast_calendar`]; a calendar target refuses any other
+/// non-string source.
 ///
-/// `xsd:string(x)` is handled BEFORE the generic lexical-copy path: casting a
-/// `boolean`/numeric source to `xsd:string` is a VALUE-space operation with its own
-/// XPath-mandated string form ([`numeric_or_bool_to_xpath_string`]) that is generally
-/// NOT the source's own lexical form (e.g. `xsd:string("0"^^xsd:boolean)` is
-/// `"false"`, not `"0"`) — only a source with no numeric/boolean value (a plain
-/// string, an already-`xsd:string` literal, an unrecognized datatype, …) falls back to
-/// copying its lexical form verbatim.
+/// Every other source is read lexically: a string (or an IRI, cast to `xsd:string`)
+/// is parsed against the target under the XSD 1.0 operand rules, and a literal with
+/// no value in the numeric/boolean domain (an ill-typed or non-numeric literal) keeps
+/// its lexical constructor behaviour — its lexical form is copied for `xsd:string`
+/// and parsed against any other target.
 fn eval_xsd_cast<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     target: XsdDatatype,
@@ -4340,25 +4339,32 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     let Some(source) = source else {
         return Ok(None);
     };
-    if target == XsdDatatype::String {
-        if let TermValue::Iri(iri) = source {
-            return Ok(Some(string_term(ctx, iri)?));
-        }
-        if let Some(s) = xsd_of(source)
-            .as_ref()
-            .and_then(numeric_or_bool_to_xpath_string)
-        {
-            return Ok(Some(string_term(ctx, &s)?));
-        }
-    }
     let (lexical, source_datatype) = match source {
         TermValue::Literal {
             lexical_form,
             datatype,
             ..
-        } => (lexical_form.clone(), XsdDatatype::from_iri(datatype)),
+        } => (lexical_form, XsdDatatype::from_iri(datatype)),
+        TermValue::Iri(iri) if target == XsdDatatype::String => {
+            return Ok(Some(string_term(ctx, iri)?));
+        }
         _ => return Ok(None),
     };
+    if let Some(value) = xsd_of(source).filter(is_numeric_or_boolean) {
+        if target == XsdDatatype::String {
+            let Some(text) = numeric_or_bool_to_xpath_string(&value) else {
+                return Ok(None);
+            };
+            return Ok(Some(string_term(ctx, &text)?));
+        }
+        if target.is_numeric() || target == XsdDatatype::Boolean {
+            // A failed cast is an expression error; failed interning is operational.
+            return match cast_numeric_value(&value, target) {
+                Some(cast) => Ok(Some(xsd_to_term(ctx, &cast)?)),
+                None => Ok(None),
+            };
+        }
+    }
     // Calendar constructors cast a parsed source value, never its spelling.
     // Parsing the declared source first also refuses ill-typed calendar literals.
     if target.is_calendar() {
@@ -4366,7 +4372,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
             return Ok(None);
         };
         if source_datatype.is_calendar() {
-            let Some(value) = parse_xsd10(&lexical, source_datatype)
+            let Some(value) = parse_xsd10(lexical, source_datatype)
                 .ok()
                 .and_then(|value| {
                     purrdf_xsd::temporal::cast_calendar(&value, target)
@@ -4385,168 +4391,217 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         }
     }
     // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
-    if let Ok(value) = parse_xsd10(&lexical, target) {
-        return Ok(Some(xsd_to_term(ctx, &value)?));
+    match parse_xsd10(lexical, target) {
+        Ok(value) => Ok(Some(xsd_to_term(ctx, &value)?)),
+        Err(_) => Ok(None),
     }
-    // A failed cast is an expression error; failed interning is operational.
-    let Some(value) = xsd_of(source).and_then(|value| cast_numeric_value(&value, target)) else {
-        return Ok(None);
-    };
-    Ok(Some(xsd_to_term(ctx, &value)?))
+}
+
+/// Whether `value` lies in the domain [`cast_numeric_value`] casts by value: a number
+/// of any numeric datatype, or a boolean.
+const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
+    matches!(
+        value,
+        XsdValue::Integer { .. }
+            | XsdValue::Decimal(_)
+            | XsdValue::Float(_)
+            | XsdValue::Double(_)
+            | XsdValue::Boolean(_)
+    )
 }
 
 /// Cast a numeric-or-boolean [`XsdValue`] to a numeric-or-`xsd:boolean` `target`
-/// datatype **by value** (the SPARQL §17.1 / XPath casting rules): the source's value
-/// is re-expressed in the target's value space. Returns `None` when the source has no
-/// numeric value, the target is not numeric/boolean, or the value is out of the
-/// target's range (e.g. a non-integral double cast to integer truncates toward zero,
-/// as XPath `xs:integer` mandates).
+/// datatype **by value**, per XPath and XQuery Functions and Operators 3.1 §19.1.2:
 ///
-/// `xsd:boolean` participates on BOTH sides: a boolean source is `1.0`/`0.0` for a
-/// numeric target, and a numeric target of `xsd:boolean` is XPath's numeric effective
-/// boolean value (zero or `NaN` → `false`, else `true`) — the same rule SPARQL's own
-/// effective boolean value uses for numerics ([`effective_boolean_value`]).
+/// - to `xsd:double`/`xsd:float`: a float widens exactly; a double narrows by one
+///   round-to-nearest-even (overflowing to an infinity, underflowing to a signed
+///   zero); an integer or decimal is rounded once, straight to the target precision;
+///   a boolean is `1` or `0`.
+///
+///   **Deliberate deviation:** F&O 3.1 §19.1.2.1 words the double-to-float narrowing
+///   as truncating the binary mantissa. This cast rounds to nearest, ties to even
+///   (the IEEE 754 conversion) instead, because: the result is within half an ulp
+///   and unbiased, where truncation is up to a whole ulp off and always toward zero;
+///   it is XSD 1.1's `floatingPointRound`, which the lexical path and the
+///   decimal/integer-to-float casts already use, so a double and the same number
+///   written as a string cast to the same float; it agrees with common SPARQL and
+///   XPath engines; and the F&O text is defective in the float subnormal band,
+///   where it flushes every value below the smallest normal exponent to zero.
+///   The values separating the rules: `1.0000000894069671630859375` gives
+///   `1.0000001E0` (truncation `1.0E0`), and `3.4028235677973366e38`, halfway
+///   between the largest float and 2^128, gives `INF` (truncation the largest
+///   float).
+/// - to `xsd:decimal`: an integer or decimal is exact; a float or double is the
+///   decimal closest to its binary value ([`purrdf_xsd::Decimal::from_f64_closest`]),
+///   and `NaN`, the infinities and magnitudes past the decimal range are errors.
+/// - to `xsd:integer` and its derived types: the value with its fractional part
+///   discarded, an error for `NaN`, the infinities, and values outside `i128` or the
+///   target's own range (`xsd:byte` of `128.5` is an error).
+/// - to `xsd:boolean`: XPath's numeric effective boolean value (zero or `NaN` is
+///   `false`, everything else `true`) — the same rule SPARQL's own effective boolean
+///   value uses for numerics ([`effective_boolean_value`]).
+///
+/// Returns `None` when the source has no numeric/boolean value, the target is not
+/// numeric/boolean, or the cast is an error.
+///
+/// Every rounding above is proven against an exact rational oracle (integer arithmetic
+/// on the source's exact value, never a float) over seeded draws and the hard cases —
+/// ties, their neighbours, the subnormal band, the largest finite values and the `i128`
+/// extremes — in `cast_rounding_tests`.
 fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
-    use purrdf_xsd::parse as xsd_parse;
-    // The source's value as a correctly rounded `f64` — exact for booleans, floats
-    // and doubles, one rounding for an integer or decimal.
-    let as_f64 = match source {
-        XsdValue::Integer { value, .. } => *value as f64,
-        XsdValue::Decimal(d) => d.to_f64(),
-        XsdValue::Float(f) => f64::from(*f),
-        XsdValue::Double(d) => *d,
-        XsdValue::Boolean(b) => f64::from(u8::from(*b)),
-        _ => return None,
-    };
     match target {
-        XsdDatatype::Double => Some(XsdValue::Double(as_f64)),
-        // An exact source (integer, decimal) is rounded ONCE, straight to single
-        // precision: narrowing `as_f64` would round twice and can land one ulp off
-        // the correctly rounded `xs:float` XPath casting requires. A double source
-        // is narrowed by its own single rounding; float and boolean are exact.
+        XsdDatatype::Double => Some(XsdValue::Double(match source {
+            // Rust's integer-to-float conversion rounds to nearest, ties to even.
+            XsdValue::Integer { value, .. } => *value as f64,
+            XsdValue::Decimal(d) => d.to_f64(),
+            XsdValue::Float(f) => f64::from(*f),
+            XsdValue::Double(d) => *d,
+            XsdValue::Boolean(b) => f64::from(u8::from(*b)),
+            _ => return None,
+        })),
+        // An exact source is rounded ONCE, straight to single precision: going
+        // through `f64` first would round twice and can land one ulp off the
+        // correctly rounded value.
         XsdDatatype::Float => Some(XsdValue::Float(match source {
             XsdValue::Integer { value, .. } => *value as f32,
             XsdValue::Decimal(d) => d.to_f32(),
-            _ => as_f64 as f32,
+            XsdValue::Float(f) => *f,
+            XsdValue::Double(d) => *d as f32,
+            XsdValue::Boolean(b) => f32::from(u8::from(*b)),
+            _ => return None,
         })),
-        // Zero or NaN is false; every other numeric value (including negatives and
-        // subnormals) is true — XPath's numeric-to-boolean casting rule.
-        XsdDatatype::Boolean => Some(XsdValue::Boolean(as_f64 != 0.0 && !as_f64.is_nan())),
-        XsdDatatype::Decimal => {
-            // A non-finite double has no decimal value (a SPARQL expression error).
-            if !as_f64.is_finite() {
+        XsdDatatype::Boolean => Some(XsdValue::Boolean(match source {
+            XsdValue::Integer { value, .. } => *value != 0,
+            XsdValue::Decimal(d) => !d.is_zero(),
+            XsdValue::Float(f) => *f != 0.0 && !f.is_nan(),
+            XsdValue::Double(d) => *d != 0.0 && !d.is_nan(),
+            XsdValue::Boolean(b) => *b,
+            _ => return None,
+        })),
+        XsdDatatype::Decimal => Some(XsdValue::Decimal(match source {
+            XsdValue::Integer { value, .. } => purrdf_xsd::Decimal::from_integer(*value),
+            XsdValue::Decimal(d) => *d,
+            XsdValue::Float(f) => purrdf_xsd::Decimal::from_f64_closest(f64::from(*f))?,
+            XsdValue::Double(d) => purrdf_xsd::Decimal::from_f64_closest(*d)?,
+            XsdValue::Boolean(b) => purrdf_xsd::Decimal::from_integer(i128::from(*b)),
+            _ => return None,
+        })),
+        target if target.is_integer_family() => {
+            let value = match source {
+                XsdValue::Integer { value, .. } => *value,
+                // Exact truncation: through `f64` a decimal's integer part would
+                // round past 2^53 (`12345678901234567.5` would become `…568`).
+                XsdValue::Decimal(d) => d.whole_part(),
+                XsdValue::Float(f) => truncate_to_i128(f64::from(*f))?,
+                XsdValue::Double(d) => truncate_to_i128(*d)?,
+                XsdValue::Boolean(b) => i128::from(*b),
+                _ => return None,
+            };
+            if let Some((min, max)) = target.integer_range()
+                && !(min..=max).contains(&value)
+            {
                 return None;
             }
-            // Re-express the value as a plain (exponent-free) decimal lexical the
-            // decimal parser accepts, bounded to the 18-digit scale it allows.
-            xsd_parse(&format_plain_decimal(as_f64), XsdDatatype::Decimal).ok()
-        }
-        // An integer target truncates toward zero (XPath `xs:integer(double)`), within
-        // the i128 range the integer value space supports.
-        XsdDatatype::Integer
-        | XsdDatatype::Long
-        | XsdDatatype::Int
-        | XsdDatatype::Short
-        | XsdDatatype::Byte
-        | XsdDatatype::UnsignedLong
-        | XsdDatatype::UnsignedInt
-        | XsdDatatype::UnsignedShort
-        | XsdDatatype::UnsignedByte
-        | XsdDatatype::NonNegativeInteger
-        | XsdDatatype::PositiveInteger
-        | XsdDatatype::NonPositiveInteger
-        | XsdDatatype::NegativeInteger => {
-            // An exact source truncates exactly: routing a decimal through `f64`
-            // first would round its integer part whenever it exceeds 2^53
-            // (`12345678901234567.5` would become `12345678901234568`).
-            let integral = match source {
-                XsdValue::Integer { value, .. } => value.to_string(),
-                XsdValue::Decimal(d) => d.whole_part().to_string(),
-                _ => {
-                    let truncated = as_f64.trunc();
-                    if !truncated.is_finite() {
-                        return None;
-                    }
-                    format!("{truncated:.0}")
-                }
-            };
-            // Re-parse the integral lexical against the exact integer target so its
-            // range constraints (e.g. `nonNegativeInteger >= 0`) are enforced.
-            xsd_parse(&integral, target).ok()
+            Some(XsdValue::Integer {
+                value,
+                datatype: target,
+            })
         }
         _ => None,
     }
 }
 
-/// The XPath F&O §19 "Casting to `xs:string`" string form of a boolean or numeric
+/// `value` with its fractional part discarded, or `None` for `NaN`, an infinity, or a
+/// result outside `i128` (`err:FOCA0002`/`err:FOCA0003`). The bounds are exact powers
+/// of two, so the comparison is exact and the final conversion never saturates.
+fn truncate_to_i128(value: f64) -> Option<i128> {
+    const LIMIT: f64 = 170_141_183_460_469_231_731_687_303_715_884_105_728.0; // 2^127
+    let truncated = value.trunc();
+    // `NaN` fails both comparisons; `-2^127` is `i128::MIN` itself.
+    if (-LIMIT..LIMIT).contains(&truncated) {
+        Some(truncated as i128)
+    } else {
+        None
+    }
+}
+
+/// The XPath F&O 3.1 §19.1.1 "Casting to `xs:string`" form of a boolean or numeric
 /// value — DISTINCT from the value's XSD canonical **literal** lexical mapping (which
 /// [`XsdValue::canonical_lexical`] provides for writing an actual `xsd:double`/
-/// `xsd:float` term). Returns `None` for a non-numeric, non-boolean value (the caller
-/// then falls back to copying the source's own lexical form).
+/// `xsd:float` term). Returns `None` for a non-numeric, non-boolean value.
 ///
 /// - `xsd:boolean` → `"true"`/`"false"`.
-/// - `xsd:integer` (and derived) → the plain decimal digits (no fractional part ever).
-/// - `xsd:decimal` → its XSD 1.1 canonical lexical form directly: an integer-valued
-///   decimal already has no decimal point there (`1.0` → `"1"`), so the cast-to-string
-///   and the literal serialization share ONE decimal-formatting path.
-/// - `xsd:float`/`xsd:double` → [`xpath_double_to_xpath_string`] (plain decimal
-///   notation in the "ordinary" magnitude range, scientific outside it).
+/// - `xsd:integer` (and derived) → the plain decimal digits (no decimal point ever).
+/// - `xsd:decimal` → its XSD 1.1 canonical lexical form: an integer-valued decimal has
+///   no decimal point there (`1.0` → `"1"`), as the cast-to-string rule requires.
+/// - `xsd:float`/`xsd:double` → [`xpath_float_to_string`]/[`xpath_double_to_string`].
 fn numeric_or_bool_to_xpath_string(value: &XsdValue) -> Option<String> {
     match value {
         XsdValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_owned()),
         XsdValue::Integer { value, .. } => Some(value.to_string()),
         XsdValue::Decimal(d) => Some(d.canonical_lexical()),
-        XsdValue::Float(f) => Some(xpath_double_to_xpath_string(f64::from(*f))),
-        XsdValue::Double(d) => Some(xpath_double_to_xpath_string(*d)),
+        XsdValue::Float(f) => Some(xpath_float_to_string(*f)),
+        XsdValue::Double(d) => Some(xpath_double_to_string(*d)),
         _ => None,
     }
 }
 
-/// XPath F&O's number→`xs:string` casting algorithm for `xs:float`/`xs:double`: values
-/// with an absolute magnitude in `[0.000001, 100000000)` are written in plain
-/// (non-exponential) decimal notation; every other finite value uses scientific
-/// notation (`mantissa Eexponent`, no padding). This is intentionally NOT the XSD
-/// canonical literal mapping ([`purrdf_xsd::numeric::canonical_double`]), which always
-/// uses mandatory exponential notation — this is the distinct, narrower rule XPath
-/// specifies for the STRING VALUE of a numeric cast.
-fn xpath_double_to_xpath_string(value: f64) -> String {
+/// The cast-to-string special values (XPath F&O 3.1 §19.1.1): `"NaN"`, `"INF"`,
+/// `"-INF"`, and `"0"`/`"-0"` for the signed zeros.
+fn xpath_special_string(value: f64) -> Option<&'static str> {
     if value.is_nan() {
-        return "NaN".to_owned();
-    }
-    if value.is_infinite() {
-        return if value > 0.0 { "INF" } else { "-INF" }.to_owned();
-    }
-    if value == 0.0 {
-        return if value.is_sign_negative() { "-0" } else { "0" }.to_owned();
-    }
-    let abs = value.abs();
-    if (1e-6..1e8).contains(&abs) {
-        format_plain_decimal(value)
+        Some("NaN")
+    } else if value.is_infinite() {
+        Some(if value > 0.0 { "INF" } else { "-INF" })
+    } else if value == 0.0 {
+        Some(if value.is_sign_negative() { "-0" } else { "0" })
     } else {
-        // Scientific notation, without the XSD-canonical mandatory ".0" mantissa pad
-        // this cast rule doesn't require.
-        let raw = format!("{value:e}");
-        let (mantissa, exp) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
-        format!("{mantissa}E{exp}")
+        None
     }
 }
 
-/// Format a finite `f64` as a plain, exponent-free decimal lexical with at most 18
-/// fractional digits (the `xsd:decimal` scale bound), trimming trailing fractional
-/// zeros. Used by the numeric value-space cast into `xsd:decimal`.
-fn format_plain_decimal(value: f64) -> String {
-    // `{:.18}` never emits scientific notation and caps the fraction at the decimal
-    // scale bound; trim trailing zeros (and a bare trailing point) for a clean lexical.
-    let raw = format!("{value:.18}");
-    let trimmed = if raw.contains('.') {
-        raw.trim_end_matches('0').trim_end_matches('.')
+/// Whether a finite, non-zero value's magnitude lies in `[0.000001, 1000000)`, the
+/// range XPath writes in plain decimal notation. The double written `1e-6` is a
+/// little BELOW one millionth (`9.99999999999999954748e-7`), so the lower bound is
+/// "greater than that double": no float or double lies strictly between it and one
+/// millionth.
+fn in_plain_notation_range(value: f64) -> bool {
+    let magnitude = value.abs();
+    magnitude > 1e-6 && magnitude < 1e6
+}
+
+/// XPath's `xs:double` → `xs:string` cast (F&O 3.1 §19.1.1): the special values as
+/// [`xpath_special_string`]; a magnitude in `[0.000001, 1000000)` in plain decimal
+/// notation, with no decimal point for an integral value (`"0.1"`, `"123456.5"`,
+/// `"100"`); every other value in scientific notation whose mantissa has exactly one
+/// non-zero digit before its point and at least one after it (`"1.0E7"`,
+/// `"1.25E-7"`). Both forms carry the shortest digit string that reads back as the
+/// same double.
+fn xpath_double_to_string(value: f64) -> String {
+    if let Some(special) = xpath_special_string(value) {
+        return special.to_owned();
+    }
+    if in_plain_notation_range(value) {
+        // `Display` writes the shortest round-tripping digits, never an exponent.
+        value.to_string()
     } else {
-        raw.as_str()
-    };
-    if trimmed.is_empty() || trimmed == "-" {
-        "0".to_owned()
+        purrdf_xsd::numeric::canonical_double(value)
+    }
+}
+
+/// XPath's `xs:float` → `xs:string` cast: [`xpath_double_to_string`]'s rule at SINGLE
+/// precision — the shortest digit string that reads back as the same float, so the
+/// float `0.1` is `"0.1"`, not the `"0.10000000149011612"` its widened double would
+/// give.
+fn xpath_float_to_string(value: f32) -> String {
+    let wide = f64::from(value);
+    if let Some(special) = xpath_special_string(wide) {
+        return special.to_owned();
+    }
+    if in_plain_notation_range(wide) {
+        value.to_string()
     } else {
-        trimmed.to_owned()
+        purrdf_xsd::numeric::canonical_float(value)
     }
 }
 
@@ -5636,6 +5691,9 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
     );
     (uuid, bytes)
 }
+
+#[cfg(test)]
+mod cast_rounding_tests;
 
 #[cfg(test)]
 mod tests {
