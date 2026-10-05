@@ -69,10 +69,6 @@ fn data() -> Arc<RdfDataset> {
     parse_turtle_to_dataset(DATA, None).expect("the fixture parses")
 }
 
-fn focus() -> TermValue {
-    TermValue::Iri(format!("{EX}a"))
-}
-
 fn node(value: &TermValue) -> String {
     term_value_to_native(value).to_string()
 }
@@ -263,7 +259,7 @@ fn sh_sparql(query: &str) -> Answer {
 }
 
 fn engine_bindings(row: &Row) -> Vec<(String, TermValue)> {
-    std::iter::once(("this".to_owned(), focus()))
+    std::iter::once(("this".to_owned(), TermValue::Iri(format!("{EX}a"))))
         .chain(
             row.engine_binds
                 .iter()
@@ -347,7 +343,7 @@ fn node_expr(row: &Row) -> Answer {
     let root = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(format!(
         "{EX}E"
     )));
-    let focus = term_value_to_native(&focus());
+    let focus = term_value_to_native(&TermValue::Iri(format!("{EX}a")));
     let scope: Vec<(String, Term)> = row
         .node_scope
         .iter()

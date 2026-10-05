@@ -81,7 +81,7 @@ def _values(query: str) -> set:
     """The ``?value`` column of ``query`` run with ``$this`` bound to ``ex:a``."""
     prepared = _store().prepare(query, parameters=["this"])
     solutions = prepared.run(this=purrdf.NamedNode(f"{EX}a"))
-    column = list(solutions.variables).index("value")
+    column = [variable.value for variable in solutions.variables].index("value")
     return {row[column] for row in solutions if row[column] is not None}
 
 
