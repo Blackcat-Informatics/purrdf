@@ -41,6 +41,7 @@ use pyo3::types::PyDict;
 
 use super::PyStore;
 use super::env::extension_env;
+use super::presentation;
 use super::query::{RelationSpec, build_relations, materialize_results};
 use super::term::{extract_term, rdf_term_to_value};
 use crate::RdfDataset;
@@ -188,7 +189,7 @@ impl GraphDerivedRelations {
                 &borrowed,
                 purrdf_sparql_eval::QueryOptions::new().with_env(&env),
             )
-            .map_err(|e| PyValueError::new_err(format!("query preparation failed: {e}")))?;
+            .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
         Ok((execution, env))
     }
 }
@@ -377,7 +378,7 @@ impl PyPreparedQuery {
                 .execute(&mut self.execution, &*dataset, options, |outcome| {
                     materialize_interned(&outcome)
                 })
-                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
+                .map_err(|e| presentation::value_error(format!("query evaluation error: {e}"), &e))
         })?;
         materialize_results(py, result)
     }
@@ -466,7 +467,7 @@ pub(super) fn prepare(
             &borrowed,
             purrdf_sparql_eval::QueryOptions::new().with_env(&env),
         )
-        .map_err(|e| PyValueError::new_err(format!("query preparation failed: {e}")))?;
+        .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
     Ok(PyPreparedQuery {
         execution,
         store,

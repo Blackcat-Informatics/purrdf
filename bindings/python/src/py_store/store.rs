@@ -23,6 +23,7 @@ use pyo3::types::{PyBytes, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
+use super::presentation;
 use super::quad_store::PyQuadStore;
 use super::query::{
     EngineConfig, build_engine, build_relations, collect_relations, engine_parser_options,
@@ -266,72 +267,74 @@ impl PyStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
     ) -> PyResult<super::prepared::PyPreparedQuery> {
-        let py = slf.py();
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        // Carried forward to the returned object for `run` to rebuild an engine
-        // under (see [`super::prepared::PyPreparedQuery`]) — `config` below moves
-        // `standpoint_predicates` into the engine this call admits the plan with, so
-        // the value itself has to be cloned before that move.
-        let standpoint_for_run = standpoint_predicates.clone();
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let parameters = parameters.unwrap_or_default();
-        // Read off `config` BEFORE `build_engine` consumes it, exactly as `query`
-        // does: the namespace declarations are parse configuration, they belong to
-        // the extension environment rather than to the engine, and the environment
-        // this call admits the plan against is the one every later `run` evaluates
-        // under — so it is derived once, here, and carried.
-        let parser_options = engine_parser_options(&config);
-        // The relations whose ROWS come out of the store's own graph, kept as their
-        // SOURCE configuration for `run` to re-derive from the dataset it answers
-        // over. `None` when the caller registered none of them, which is the common
-        // case and rebuilds nothing. See `super::prepared::GraphDerivedRelations` for
-        // why a table read out of a graph cannot be built once and kept on a handle
-        // that re-reads its store every run.
-        let graph_derived = super::prepared::GraphDerivedRelations::for_specs(
-            &specs,
-            query,
-            &parameters,
-            &parser_options,
-            aggregate_namespace.as_ref(),
-        );
-        // A cheap owning handle to THIS store, taken under the GIL, for `run` to
-        // re-read on every call (see `Self::prepare`'s doc comment and
-        // `super::prepared::PyPreparedQuery::store`) — distinct from `guard` below,
-        // which only borrows `inner` for the ADMISSION-TIME freeze this call itself
-        // needs (building the relation registry and parsing/admitting the plan
-        // against a snapshot of what the store holds right now).
-        let store_handle: Py<Self> = slf.clone().unbind();
-        let guard = slf.as_super().borrow();
-        let inner = &guard.inner;
-        // Snapshot + engine build + admission run detached (GIL released), exactly as
-        // `query` does: this does the same freeze, registry build and parse/admit
-        // work `query` does on every call, just once instead of per run.
-        let result = py.detach(move || {
-            let dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates =
-                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
-            let engine = build_engine(config);
-            super::prepared::prepare(
-                store_handle,
-                &engine,
+        presentation::settled(move || {
+            let py = slf.py();
+            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            // Carried forward to the returned object for `run` to rebuild an engine
+            // under (see [`super::prepared::PyPreparedQuery`]) — `config` below moves
+            // `standpoint_predicates` into the engine this call admits the plan with, so
+            // the value itself has to be cloned before that move.
+            let standpoint_for_run = standpoint_predicates.clone();
+            let config = EngineConfig {
+                extension_namespaces,
+                property_fn_namespaces,
+                standpoint_predicates,
+            };
+            let parameters = parameters.unwrap_or_default();
+            // Read off `config` BEFORE `build_engine` consumes it, exactly as `query`
+            // does: the namespace declarations are parse configuration, they belong to
+            // the extension environment rather than to the engine, and the environment
+            // this call admits the plan against is the one every later `run` evaluates
+            // under — so it is derived once, here, and carried.
+            let parser_options = engine_parser_options(&config);
+            // The relations whose ROWS come out of the store's own graph, kept as their
+            // SOURCE configuration for `run` to re-derive from the dataset it answers
+            // over. `None` when the caller registered none of them, which is the common
+            // case and rebuilds nothing. See `super::prepared::GraphDerivedRelations` for
+            // why a table read out of a graph cannot be built once and kept on a handle
+            // that re-reads its store every run.
+            let graph_derived = super::prepared::GraphDerivedRelations::for_specs(
+                &specs,
                 query,
                 &parameters,
-                parser_options,
-                registry.as_ref(),
-                aggregates.as_ref(),
-                standpoint_for_run,
-                graph_derived,
-            )
-        });
-        drop(guard);
-        result
+                &parser_options,
+                aggregate_namespace.as_ref(),
+            );
+            // A cheap owning handle to THIS store, taken under the GIL, for `run` to
+            // re-read on every call (see `Self::prepare`'s doc comment and
+            // `super::prepared::PyPreparedQuery::store`) — distinct from `guard` below,
+            // which only borrows `inner` for the ADMISSION-TIME freeze this call itself
+            // needs (building the relation registry and parsing/admitting the plan
+            // against a snapshot of what the store holds right now).
+            let store_handle: Py<Self> = slf.clone().unbind();
+            let guard = slf.as_super().borrow();
+            let inner = &guard.inner;
+            // Snapshot + engine build + admission run detached (GIL released), exactly as
+            // `query` does: this does the same freeze, registry build and parse/admit
+            // work `query` does on every call, just once instead of per run.
+            let result = py.detach(move || {
+                let dataset = inner
+                    .freeze()
+                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+                let registry = build_relations(specs, &dataset)?;
+                let aggregates =
+                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+                let engine = build_engine(config);
+                super::prepared::prepare(
+                    store_handle,
+                    &engine,
+                    query,
+                    &parameters,
+                    parser_options,
+                    registry.as_ref(),
+                    aggregates.as_ref(),
+                    standpoint_for_run,
+                    graph_derived,
+                )
+            });
+            drop(guard);
+            result
+        })
     }
 
     /// Dump the whole store (or one graph, via `from_graph`) in `format`. When `output` (a file-like
