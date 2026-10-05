@@ -92,10 +92,13 @@ pub use imports::{
     ResolvedShapesGraph, ShapesImportError, ShapesImports, UnanchoredNote, resolve_shapes_imports,
 };
 pub use json_schema::{
-    Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
-    SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
-    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
-    SchemaSurfaceMode, ValueVocab, ValueVocabProjection, compile_schema, compile_with_value_vocab,
+    Namespaces, SchemaClassExpressionAxiom, SchemaClassExpressionCoverage,
+    SchemaClassExpressionReport, SchemaClassPropertyCoverage, SchemaCompilation,
+    SchemaCompilationInput, SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest,
+    SchemaCoveragePrecision, SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus,
+    SchemaExpressionComponent, SchemaExpressionOutcome, SchemaPropertyCoverage, SchemaSurfaceMode,
+    ValueVocab, ValueVocabProjection, compile_schema, compile_schema_with_class_expressions,
+    compile_with_value_vocab,
 };
 pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic,

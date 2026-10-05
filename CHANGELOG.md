@@ -58,6 +58,39 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   below `purrdf-core` can build presentations. `purrdf_core::diagnostic` and the
   `purrdf_core` crate root re-export the same types, so existing paths and
   matches keep compiling.
+- **Anonymous OWL class expressions in developer schemas:** the
+  ontology-complete schema surface no longer refuses an `rdfs:subClassOf` or
+  `owl:equivalentClass` whose object (or subject) is a blank node. Restrictions
+  (`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:hasSelf`,
+  and the unqualified and qualified cardinalities over `owl:onClass` or
+  `owl:onDataRange`) and the boolean forms (`owl:unionOf`,
+  `owl:intersectionOf`, `owl:complementOf`, `owl:oneOf`) are recorded with
+  their source axiom and inherited by subclasses. Data ranges
+  (`owl:onDatatype`/`owl:withRestrictions`, `owl:datatypeComplementOf`, a
+  literal `owl:oneOf`) are read as fillers and ranges. `[ owl:inverseOf p ]`
+  is accepted wherever a property expression may stand, including in
+  `rdfs:subPropertyOf`, `owl:equivalentProperty` and `owl:inverseOf`. The JSON
+  Schema and OpenAPI carriers, and the LinkML, TypeScript, GraphQL and
+  Pydantic emitters that read them, carry what a schema can state:
+  `owl:allValuesFrom` as a value constraint, existentials and minimums as
+  required properties with `contains`/`minContains`, maximums as
+  `maxItems`/`maxContains`, datatype facets through the SHACL value compiler,
+  an `owl:oneOf` of individuals as an `@id` enumeration, the complement of a
+  named class as an `@type` exclusion, and a union of restrictions as `anyOf`.
+  Coverage rows these closed-world readings touch are marked
+  `representation_approximation`. The new
+  `SchemaCompileRequest::class_expression_report` and
+  `compile_schema_with_class_expressions` return a class-expression manifest
+  (`SchemaClassExpressionReport`). It lists every such axiom once, with each
+  component's `SchemaExpressionOutcome` (projected, approximated,
+  unrepresented or excluded) and reason on every class that carries it, so
+  nothing is dropped silently. Typed refusals remain only for malformed
+  input: a restriction without `owl:onProperty`, conflicting or non-integer
+  cardinalities, an ill-formed or cyclic RDF list, or an expression that
+  contains itself. Schemas and coverage reports for ontologies with only IRI
+  objects are byte-identical. Every schema cache key changes once, because
+  the policy salt moves to `owl-rdfs-fragment-v2`: axioms with a blank-node
+  subject, which the surface used to skip, now reach the manifest.
 
 ### Fixed
 

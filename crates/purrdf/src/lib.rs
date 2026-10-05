@@ -35,7 +35,9 @@
 //! [`Namespaces`], [`StatementMetadataVocab`]) and unified behind a single
 //! [`OntologyProfile`] a downstream builds once (see [`profile`]). The explicit
 //! ontology-aware developer-schema contract ([`SchemaCompileRequest`],
-//! [`SchemaSurfaceMode`], and [`compile_schema`]) is also available at the root.
+//! [`SchemaSurfaceMode`], [`compile_schema`], and the anonymous
+//! class-expression manifest of [`compile_schema_with_class_expressions`]) is
+//! also available at the root.
 //!
 //! # Example
 //!
@@ -150,10 +152,12 @@ pub mod columnar {
 // A consumer parameterizes an emitter without reaching into a sub-crate.
 pub use purrdf_rdf::native_codecs::jsonld::StatementMetadataVocab;
 pub use purrdf_shapes::json_schema::{
-    Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
-    SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
-    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
-    SchemaSurfaceMode, compile_schema,
+    Namespaces, SchemaClassExpressionAxiom, SchemaClassExpressionCoverage,
+    SchemaClassExpressionReport, SchemaClassPropertyCoverage, SchemaCompilation,
+    SchemaCompilationInput, SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest,
+    SchemaCoveragePrecision, SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus,
+    SchemaExpressionComponent, SchemaExpressionOutcome, SchemaPropertyCoverage, SchemaSurfaceMode,
+    compile_schema, compile_schema_with_class_expressions,
 };
 pub use purrdf_slice::SliceVocab;
 
@@ -714,6 +718,12 @@ mod tests {
         assert!(matches!(mode, SchemaSurfaceMode::OntologyComplete));
         let _: Option<SchemaCoverageReport> = None;
         let _: Option<SchemaCompilationKey> = None;
+        let _: fn(
+            &SchemaCompileRequest<'_>,
+        )
+            -> Result<(SchemaCompilation, SchemaClassExpressionReport), SchemaCompileError> =
+            compile_schema_with_class_expressions;
+        let _: Option<SchemaExpressionOutcome> = None;
     }
 
     #[test]

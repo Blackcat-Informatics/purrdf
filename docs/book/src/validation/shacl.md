@@ -769,7 +769,50 @@ and inverse properties exchange domain and range. Strongly connected cycles
 are condensed deterministically. Multiple ranges remain conjunctive in emitted
 JSON Schema; union and intersection expressions map to `anyOf` and `allOf`.
 
-Direct SHACL remains authoritative. Ontology-only fields are optional;
+Anonymous class expressions are part of the theory. A restriction
+(`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:hasSelf`, and
+the unqualified and qualified cardinalities over `owl:onClass` or
+`owl:onDataRange`) or a boolean form (`owl:unionOf`, `owl:intersectionOf`,
+`owl:complementOf`, `owl:oneOf`) that a named class is `rdfs:subClassOf` or
+`owl:equivalentClass` to is recorded with its source axiom and inherited by
+every subclass. The property it names joins the catalog. Data ranges built with
+`owl:onDatatype` and `owl:withRestrictions`, `owl:datatypeComplementOf`, or a
+literal `owl:oneOf` are read as fillers and ranges, and `[ owl:inverseOf p ]` is
+read wherever a property expression may stand. Each named member of a union a
+class is equivalent to becomes its subclass, and an existential restriction
+places a class within the restricted property's domain.
+
+What a developer schema can state is projected onto the class definition.
+`owl:allValuesFrom` holds every value to the filler, as a range does. An
+existential, `owl:hasValue` or a minimum makes the property required, with
+`contains` and `minContains` where the filler narrows the values. A maximum
+becomes `maxItems`, or `maxContains` over a qualifier whose value schema is
+exact. A datatype restriction's numeric, temporal, length and pattern facets
+are compiled by the SHACL value-constraint compiler, with the XSD pattern
+anchored. An `owl:oneOf` of named individuals restricts `@id`, the complement
+of a named class excludes it from `@type`, and a union of restrictions becomes
+`anyOf` over the members' property constraints. Requiring a value and counting
+distinct terms read open-world axioms closed-world, so the coverage rows they
+touch are representation approximations.
+
+What no schema keyword states is reported, never dropped: `owl:hasSelf`, a
+restriction on an inverse or on several properties, a maximum over a class
+qualifier, the complement of an anonymous expression, a union with a named
+member the class does not already entail, the sufficient-condition direction of
+`owl:equivalentClass`, and a general class inclusion with an anonymous
+subclass. `SchemaCompileRequest::class_expression_report` and
+`compile_schema_with_class_expressions` return the class-expression manifest:
+every such axiom once, with each component's outcome (projected, approximated,
+unrepresented or excluded) and reason on every class that carries it. The class
+definition names its unrepresented components in `$comment`. Only malformed
+input is refused: a restriction without `owl:onProperty`, a conflicting or
+non-integer cardinality, a qualified cardinality without its qualifier, an
+expression that contains itself, a data range where a class is required, or a
+filler that contradicts the property's kind. One request expands at most
+1,048,576 expression nodes.
+
+Direct SHACL remains authoritative. Ontology-only fields are optional unless a
+class restriction requires them;
 `owl:FunctionalProperty` gives a scalar representation with approximation
 provenance, while inverse functionality does not. Closed shapes reject
 unshaped fields unless they are directly present or ignored. Classes without a

@@ -30,6 +30,10 @@ struct Fixture {
 enum Density {
     Sparse,
     Dense,
+    /// Domainless properties plus four anonymous superclass expressions per class:
+    /// an existential, a universal, a maximum cardinality and a disjunction of
+    /// two minimums, each over the class's own properties.
+    Restricted,
 }
 
 fn fixture(
@@ -55,6 +59,22 @@ fn fixture(
     for class in 0..classes {
         let _ = writeln!(ontology_turtle, "ex:Class{class:04} a owl:Class .");
     }
+    if matches!(density, Density::Restricted) {
+        for class in 0..classes {
+            let first = class % properties;
+            let second = (class + 1) % properties;
+            let _ = writeln!(
+                ontology_turtle,
+                "ex:Class{class:04} rdfs:subClassOf \
+                 [ a owl:Restriction ; owl:onProperty ex:property{first:04} ; owl:someValuesFrom xsd:string ] , \
+                 [ a owl:Restriction ; owl:onProperty ex:property{second:04} ; owl:allValuesFrom xsd:string ] , \
+                 [ a owl:Restriction ; owl:onProperty ex:property{first:04} ; owl:maxCardinality 2 ] , \
+                 [ a owl:Class ; owl:unionOf ( \
+                     [ a owl:Restriction ; owl:onProperty ex:property{first:04} ; owl:minCardinality 1 ] \
+                     [ a owl:Restriction ; owl:onProperty ex:property{second:04} ; owl:minCardinality 1 ] ) ] ."
+            );
+        }
+    }
     for property in 0..properties {
         match density {
             Density::Sparse => {
@@ -64,7 +84,7 @@ fn fixture(
                     "ex:property{property:04} a owl:DatatypeProperty ; rdfs:domain ex:Class{domain:04} ; rdfs:range xsd:string ."
                 );
             }
-            Density::Dense => {
+            Density::Dense | Density::Restricted => {
                 let _ = writeln!(
                     ontology_turtle,
                     "ex:property{property:04} a owl:DatatypeProperty ; rdfs:range xsd:string ."
@@ -93,6 +113,7 @@ fn bench_schema_surface(c: &mut Bench) {
     let shaped = fixture(128, 128, Density::Sparse, true);
     let sparse = fixture(256, 256, Density::Sparse, false);
     let dense = fixture(128, 256, Density::Dense, false);
+    let restricted = fixture(128, 256, Density::Restricted, false);
     let mut group = c.benchmark_group("shacl_schema_surface");
     group.sample_size(10);
 
@@ -129,6 +150,20 @@ fn bench_schema_surface(c: &mut Bench) {
             black_box(compile_schema(&request).expect("dense ontology compilation"));
         });
     });
+    group.bench_function(
+        "ontology_restricted_128_classes_256_properties",
+        |bencher| {
+            bencher.iter(|| {
+                let request = SchemaCompileRequest::new(
+                    &restricted.shapes,
+                    &restricted.namespaces,
+                    restricted.ontology.as_ref(),
+                    SchemaSurfaceMode::OntologyComplete,
+                );
+                black_box(compile_schema(&request).expect("restricted ontology compilation"));
+            });
+        },
+    );
     group.finish();
 }
 

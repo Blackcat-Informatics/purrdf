@@ -369,19 +369,78 @@ The supported schema theory is deliberately finite:
   intersection ranges become `allOf`, and contradictory object/datatype
   declarations fail with `SchemaCompileError`;
 - direct SHACL constraints remain authoritative. Unshaped ontology properties
-  are optional, `owl:FunctionalProperty` is represented as a scalar and marked
+  are optional unless a class restriction requires them (below),
+  `owl:FunctionalProperty` is represented as a scalar and marked
   as a representation approximation, and `owl:InverseFunctionalProperty` never
   implies scalar cardinality. An active `sh:closed` shape excludes an unshaped
   property unless the shape or its ignored-properties list admits it;
 - an ontology class without a target shape receives an open carrier definition.
   It is never made closed merely because PurRDF synthesized it.
 
+Anonymous class expressions are part of the theory:
+
+- a restriction (`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`,
+  `owl:hasSelf`, and the unqualified and qualified cardinalities over
+  `owl:onClass` or `owl:onDataRange`) or a boolean form (`owl:unionOf`,
+  `owl:intersectionOf`, `owl:complementOf`, `owl:oneOf`) that a named class is
+  `rdfs:subClassOf` or `owl:equivalentClass` to is recorded with its source
+  axiom and inherited by every subclass. The property it names joins the
+  catalog, and the named classes in it are admitted as classes;
+- data ranges built with `owl:onDatatype` and `owl:withRestrictions`,
+  `owl:datatypeComplementOf`, or a literal `owl:oneOf` are read as fillers and
+  ranges, and `[ owl:inverseOf p ]` is read wherever a property expression may
+  stand, `rdfs:subPropertyOf`, `owl:equivalentProperty` and `owl:inverseOf`
+  included;
+- each named member of a union a class is equivalent to becomes its subclass,
+  an existential restriction places a class within the restricted property's
+  domain, and a domain that is itself an anonymous expression matches the
+  classes asserted to be its subclasses.
+
+What a developer schema can state is projected onto the class's definition,
+and from there into every language emitter:
+
+| OWL component | JSON Schema projection |
+|---|---|
+| `owl:allValuesFrom F` | every value meets `F`'s value schema, as `rdfs:range` does |
+| `owl:someValuesFrom F`, `owl:hasValue v` | required; one value meets `F` or is `v` (`contains`) |
+| `owl:minCardinality n` (qualified: over `Q`) | required; `minItems n` (`contains Q`, `minContains n`) |
+| `owl:maxCardinality n` (qualified: over an exact `Q`) | `maxItems n` (`contains Q`, `maxContains n`); `0` forbids the property |
+| `owl:cardinality n` | both of the above |
+| datatype restriction | the base datatype and its numeric, temporal, length and pattern facets, through the SHACL value compiler (an XSD pattern anchored) |
+| `owl:datatypeComplementOf D` | a literal that is not `D` |
+| `owl:oneOf` of individuals or literals | an `enum` of their projections; on a class, an `@id` enumeration |
+| `owl:complementOf C` (named) | `@type` excludes `C` |
+| `owl:unionOf` of restrictions | `anyOf` over the members' property constraints |
+
+Requiring a value and counting distinct terms are closed-world and
+unique-name readings of open-world axioms, so each coverage row they touch is
+marked `representation_approximation`. Direct SHACL property shapes stay
+authoritative over restrictions on the same property.
+
+What no schema keyword states is reported, never dropped: `owl:hasSelf`, a
+restriction on an inverse property or on several properties, a maximum over a
+class qualifier (counting needs the class membership of referenced nodes), the
+complement of an anonymous expression, a union with a named member that the
+class does not already entail, the sufficient-condition direction of
+`owl:equivalentClass`, and a general class inclusion whose subclass expression
+is anonymous. `SchemaCompileRequest::class_expression_report` and
+`compile_schema_with_class_expressions` return `SchemaClassExpressionReport`:
+every such axiom once, with each component's `SchemaExpressionOutcome`
+(`projected`, `approximated`, `unrepresented` or `excluded`) and reason on
+every class that carries it. A class definition also names its unrepresented
+components in its `$comment`.
+
 This is schema projection, not ABox entailment or unrestricted OWL reasoning.
 Property chains and axioms outside the fragment do not drive fields. Malformed
-union/intersection RDF lists, namespace/key collisions, incompatible property
-kinds or ranges, and fixed limit breaches fail with typed errors. The fixed
-ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or coverage
-cells, and OWL expression depth 64.
+RDF lists, namespace/key collisions, incompatible property kinds or ranges, and
+fixed limit breaches fail with typed errors, as does a structurally malformed
+class expression: a restriction without `owl:onProperty`, conflicting or
+non-integer cardinalities, a qualified cardinality without its qualifier, an
+expression that contains itself, a data range where a class expression is
+required, or a filler that contradicts the restricted property's kind. The
+fixed ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or
+coverage cells, OWL expression depth 64, and 1,048,576 expanded expression
+nodes per request.
 
 Every catalogued property appears exactly once in `SchemaCoverageReport`, with
 sorted class decisions, inclusion/exclusion reasons, precision, and source
