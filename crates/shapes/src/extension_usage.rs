@@ -199,7 +199,12 @@ pub(crate) trait SparqlSink {
     /// One SPARQL-based node expression's query (`sh:select` / `sh:sparqlExpr`), which
     /// runs with `$this` pre-bound to the focus node. Delivered to [`Self::record`]
     /// unless a sink asks for these texts apart.
-    fn select_expression(&mut self, site: String, text: &str) {
+    fn select_expression(
+        &mut self,
+        site: String,
+        text: &str,
+        _purpose: crate::profile::QueryPurpose,
+    ) {
         self.record(site, text);
     }
 }
@@ -245,26 +250,40 @@ pub(crate) fn walk_reachable(shapes: &Shapes, sink: &mut dyn SparqlSink) {
 /// `sh:SPARQLFunction` body's are ([`crate::prebinding::check_function_body`], with
 /// `this` as the pre-bound variable), `SERVICE` included. An expression nothing reaches
 /// never executes and is not judged.
-pub(crate) fn reachable_select_expression_violation(shapes: &Shapes) -> Option<(String, String)> {
-    #[derive(Default)]
+pub(crate) fn reachable_select_expression_violation(
+    shapes: &Shapes,
+    profile: crate::profile::ShaclProfile,
+) -> Option<(String, crate::shapes::QueryRefusal)> {
     struct Selects {
-        first: Option<(String, String)>,
+        profile: crate::profile::ShaclProfile,
+        first: Option<(String, crate::shapes::QueryRefusal)>,
     }
     impl SparqlSink for Selects {
         fn record(&mut self, _site: String, _text: &str) {}
-        fn select_expression(&mut self, site: String, text: &str) {
+        fn select_expression(
+            &mut self,
+            site: String,
+            text: &str,
+            purpose: crate::profile::QueryPurpose,
+        ) {
             if self.first.is_some() {
                 return;
             }
             // Every text reached here parsed when the shapes graph loaded.
             if let Ok(query) = SparqlParser::new().parse_query(text)
-                && let Err(violation) = crate::prebinding::check_function_body(&query, &["this"])
+                && let Err(violation) =
+                    crate::shapes::audit_query(self.profile, purpose, &query, &[], || {
+                        crate::prebinding::check_function_body(&query, &["this"])
+                    })
             {
                 self.first = Some((site, violation));
             }
         }
     }
-    let mut sink = Selects::default();
+    let mut sink = Selects {
+        profile,
+        first: None,
+    };
     walk_reachable(shapes, &mut sink);
     sink.first
 }
@@ -572,7 +591,12 @@ fn walk_constraints(
 fn walk_node_expr(expr: &NodeExpr, owner: &str, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     match expr {
         NodeExpr::Select { query, key, .. } => {
-            sink.select_expression(format!("{key} node expression on {owner}"), query);
+            let purpose = if *key == "sh:sparqlExpr" {
+                crate::profile::QueryPurpose::ScalarExpression
+            } else {
+                crate::profile::QueryPurpose::SelectExpression
+            };
+            sink.select_expression(format!("{key} node expression on {owner}"), query, purpose);
         }
         // Every call kind carries its arguments as node expressions, and a `sh:select`
         // can sit inside any of them. The three arms are spelled out rather than

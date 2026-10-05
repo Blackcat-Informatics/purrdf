@@ -1113,7 +1113,12 @@ pub(crate) fn validate_shape_with_evidence_at<'a>(
     plan: ShapePlan<'a>,
     capture: &'a crate::report::ReportCapture<'a>,
 ) -> Result<Vec<ResultRecord>, String> {
-    let local_capture = crate::report::ReportCapture::new(capture.shapes, capture.profile);
+    let local_capture = crate::report::ReportCapture::with_sources(
+        capture.shapes,
+        capture.profile,
+        capture.sources,
+    );
+    let query_scope = crate::query_law::enter(capture.profile, capture.sources);
     let memo = ConformanceMemo::default();
     let run = ReportRun {
         shape: &plan.shape().id,
@@ -1133,6 +1138,13 @@ pub(crate) fn validate_shape_with_evidence_at<'a>(
     let mut sink = CollectEvidence::default();
     let outcome = walk_shape(context, focus, &mut sink);
     if outcome.is_err() {
+        if let Some(refusal) = query_scope
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.take_failure())
+        {
+            local_capture.refuse(refusal);
+        }
         capture.record_focus_failure(store.core_view(), focus, local_capture.take_failure());
     }
     outcome?;
@@ -3602,17 +3614,21 @@ fn eval_constraint<'a, S: ResultSink>(
             annotations,
         } => {
             let sev = source.severity_over(csev.as_ref());
-            let declared = context
+            let occurrence = context
                 .capture
-                .map(|capture| {
-                    capture.component_messages(source.site(), &constraint, source.messages)
-                })
+                .map(|capture| capture.component_occurrence(source.site(), &constraint))
                 .transpose()?;
             let msg = if context
                 .capture
                 .is_some_and(|capture| capture.profile != crate::profile::ShaclProfile::LEGACY)
             {
-                declared.expect("rich component messages admitted")
+                context
+                    .capture
+                    .expect("dated report capture")
+                    .component_messages(
+                        occurrence.expect("rich component occurrence admitted"),
+                        source.messages,
+                    )
             } else {
                 source.messages_over(cmsg)
             };
@@ -3630,6 +3646,18 @@ fn eval_constraint<'a, S: ResultSink>(
                 .then(|| focus_node.id())
                 .flatten();
             let mint_prefix = context.report_run.map(ReportRun::mint_prefix).transpose()?;
+            let purpose = match validator {
+                ComponentValidator::Ask { .. } => crate::profile::QueryPurpose::AskValidator,
+                ComponentValidator::Select { .. } => crate::profile::QueryPurpose::SelectValidator,
+            };
+            let query_law = crate::query_law::current();
+            let invocation = if let Some(occurrence) = occurrence {
+                crate::query_law::Invocation::with_declarations(purpose, &occurrence.parameters)
+            } else if let Some(law) = &query_law {
+                law.component_invocation(source.site(), &constraint, purpose)?
+            } else {
+                crate::query_law::Invocation::with_bindings(purpose, bindings)
+            };
             let produced = match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
                     dataset,
@@ -3646,6 +3674,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     annotations,
                     shapes_graph_iri,
                     Some(source_shape),
+                    invocation,
                 ),
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
                     dataset,
@@ -3661,6 +3690,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     annotations,
                     shapes_graph_iri,
                     Some(source_shape),
+                    invocation,
                     context
                         .capture
                         .map(|capture| crate::sparql::SparqlReportContext {

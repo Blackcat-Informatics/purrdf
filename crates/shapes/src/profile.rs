@@ -10,6 +10,7 @@
 
 use std::fmt;
 
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_sparql_algebra::Query;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -105,6 +106,53 @@ impl ShaclProfile {
         }
     }
 
+    /// The native XPath law required by this exact SHACL bundle.
+    ///
+    /// The compatibility law has no implicit native selection. The returned type
+    /// is the compiler's own law identity, rather than a separate SHACL regex
+    /// profile that could drift from it.
+    #[must_use]
+    pub const fn xpath_profile(self) -> Option<Profile> {
+        match self.0 {
+            Identity::Legacy => None,
+            Identity::Recommendation => Some(Profile::Xpath20),
+            Identity::WorkingDraft => Some(Profile::Xpath31),
+        }
+    }
+
+    /// Resolve the bundle's native XPath request and admit a caller override.
+    ///
+    /// A dated bundle selects its required law with [`Limits::default`] unless
+    /// the caller supplies finite limits for that same law. Every supplied limit,
+    /// including zero, is preserved. The compatibility law passes the explicit
+    /// request through unchanged and selects no native law when it is absent.
+    ///
+    /// This resolves configuration only. The native compiler and every reused
+    /// program still admit the current source, program and storage requirements,
+    /// and each execution receives fresh runtime budgets.
+    ///
+    /// # Errors
+    ///
+    /// [`XPathProfileConflict`] when an override would replace the XPath law
+    /// required by the selected dated bundle.
+    pub fn resolve_xpath(
+        self,
+        selection: Option<(Profile, Limits)>,
+    ) -> Result<Option<(Profile, Limits)>, XPathProfileConflict> {
+        let Some(required) = self.xpath_profile() else {
+            return Ok(selection);
+        };
+        match selection {
+            Some((requested, _)) if requested != required => Err(XPathProfileConflict {
+                profile: self,
+                required,
+                requested,
+            }),
+            Some(selection) => Ok(Some(selection)),
+            None => Ok(Some((required, Limits::default()))),
+        }
+    }
+
     /// Audit a parsed query for its actual SHACL purpose.
     ///
     /// `parameters` contains the names, without `?`/`$`, of declared pre-bound
@@ -127,7 +175,7 @@ impl ShaclProfile {
         query: &Query,
         parameters: &[&str],
     ) -> Result<(), AdmissionRefusal> {
-        crate::prebinding::admit(self, purpose, query, parameters)
+        crate::prebinding::admit(self, purpose, query, parameters.iter().copied())
     }
 }
 
@@ -159,6 +207,52 @@ impl fmt::Display for UnsupportedProfile {
 
 impl std::error::Error for UnsupportedProfile {}
 
+/// An explicit regex override incompatible with the selected dated SHACL law.
+///
+/// Changing finite limits within the required law is compatible. This error
+/// identifies a semantic-law conflict before parsing or execution can substitute
+/// another law or fall back to compatibility behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct XPathProfileConflict {
+    profile: ShaclProfile,
+    required: Profile,
+    requested: Profile,
+}
+
+impl XPathProfileConflict {
+    /// The dated SHACL bundle requiring this regex law.
+    #[must_use]
+    pub const fn profile(self) -> ShaclProfile {
+        self.profile
+    }
+
+    /// The native XPath law required by that bundle.
+    #[must_use]
+    pub const fn required(self) -> Profile {
+        self.required
+    }
+
+    /// The incompatible native XPath law supplied by the caller.
+    #[must_use]
+    pub const fn requested(self) -> Profile {
+        self.requested
+    }
+}
+
+impl fmt::Display for XPathProfileConflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} requires {}, but the regex override requests {}",
+            self.profile,
+            self.required.name(),
+            self.requested.name()
+        )
+    }
+}
+
+impl std::error::Error for XPathProfileConflict {}
+
 /// The role determining a query's pre-bound variables and permitted query form.
 ///
 /// AF rules, functions and targets, and draft node expressions retain their own
@@ -175,6 +269,11 @@ pub enum QueryPurpose {
     AskValidator,
     /// An AF CONSTRUCT rule, with the focus node bound to `$this`.
     ConstructRule,
+    /// A global CONSTRUCT rule, with only its template parameters pre-bound.
+    ///
+    /// SHACL 1.2 Inference Rules executes a global SPARQL rule without the
+    /// initial focus-node binding used by a shape rule.
+    GlobalConstructRule,
     /// An AF SELECT or ASK function body, with its parameters pre-bound.
     Function,
     /// An AF SELECT target type, with its parameters pre-bound.
@@ -199,13 +298,18 @@ impl QueryPurpose {
             | Self::SelectExpression
             | Self::ScalarExpression => matches!(query, Query::Select { .. }),
             Self::AskValidator | Self::AskTarget => matches!(query, Query::Ask { .. }),
-            Self::ConstructRule => matches!(query, Query::Construct { .. }),
+            Self::ConstructRule | Self::GlobalConstructRule => {
+                matches!(query, Query::Construct { .. })
+            }
             Self::Function => matches!(query, Query::Select { .. } | Query::Ask { .. }),
         }
     }
 
     pub(crate) const fn binds_this(self) -> bool {
-        !matches!(self, Self::Function | Self::TargetType | Self::SelectTarget)
+        !matches!(
+            self,
+            Self::Function | Self::TargetType | Self::SelectTarget | Self::GlobalConstructRule
+        )
     }
 
     pub(crate) const fn binds_shape_context(self) -> bool {

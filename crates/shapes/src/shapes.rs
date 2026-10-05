@@ -33,6 +33,8 @@ use parser::annotations::Annotated;
 pub(crate) mod link;
 mod parser;
 
+pub(crate) use parser::admission::{QueryRefusal, audit_query};
+
 pub(crate) use parser::node_expr::boolean_value as parser_boolean;
 pub(crate) use parser::shacl_instance::ShaclInstances;
 pub(crate) mod prefixes;
@@ -930,6 +932,65 @@ impl Shapes {
             .expect("source occurrences warmed"))
     }
 
+    /// Admit restored occurrence evidence under the requested declaration law.
+    /// The source graph and its complete original parse configuration are part of
+    /// reuse; a compatibility or other-law cache cannot confer dated admission.
+    pub(crate) fn report_sources_with_profile(
+        &self,
+        profile: crate::profile::ShaclProfile,
+    ) -> Result<Arc<ConstraintSources>, crate::report::CompleteValidationError> {
+        if profile == crate::profile::ShaclProfile::LEGACY {
+            self.report_sources()
+                .map_err(crate::report::CompleteValidationError::Shapes)?;
+            return Ok(Arc::clone(
+                self.sparql_sources
+                    .get()
+                    .expect("source occurrences warmed"),
+            ));
+        }
+        if let Some(sources) = self.sparql_sources.get()
+            && sources.admission.as_ref().is_some_and(|admission| {
+                admission.profile == profile
+                    && Arc::ptr_eq(&admission.dataset, &self.shapes_dataset)
+                    && admission.provenance.base() == self.parse_provenance.base()
+                    && admission.provenance.doc_prefixes() == self.parse_provenance.doc_prefixes()
+                    && admission.provenance.box_role_vocab()
+                        == self.parse_provenance.box_role_vocab()
+                    && admission.provenance.shapes_graph() == self.parse_provenance.shapes_graph()
+                    && admission.provenance.included_graphs()
+                        == self.parse_provenance.included_graphs()
+            })
+        {
+            return Ok(Arc::clone(sources));
+        }
+        let mut parser = Parser::new(
+            self.shapes_dataset.as_ref(),
+            self.parse_provenance.base().map(ToOwned::to_owned),
+            self.parse_provenance.doc_prefixes(),
+            self.parse_provenance.box_role_vocab().cloned(),
+            Arc::clone(&self.shapes_dataset),
+            self.parse_provenance.shapes_graph().map(ToOwned::to_owned),
+            profile,
+        );
+        if let Err(message) = parser.prepare_with_expressions(&[], Preparation::SourceOccurrences) {
+            return Err(match parser.admission_refusal.borrow_mut().take() {
+                Some(refusal) => {
+                    crate::report::CompleteValidationError::Admission(Box::new(refusal))
+                }
+                None => crate::report::CompleteValidationError::Shapes(parser.load_error(message)),
+            });
+        }
+        let mut sources = std::mem::take(parser.sparql_sources.get_mut());
+        sources.admission = Some(SourceAdmission {
+            profile,
+            dataset: Arc::clone(&self.shapes_dataset),
+            provenance: self.parse_provenance.clone(),
+        });
+        let sources = Arc::new(sources);
+        let _ = self.sparql_sources.set(Arc::clone(&sources));
+        Ok(sources)
+    }
+
     /// Every mandatory diagnostic of this shapes graph — one per shape with an empty
     /// `sh:in` or `sh:xone` list, ordered by rule id and then shape — which every
     /// validation, rules and entailment run reports beside its outcome. See
@@ -1022,6 +1083,41 @@ pub(crate) struct ComponentOccurrence {
     pub(crate) definition: Constraint,
     pub(crate) validator_messages: Vec<Literal>,
     pub(crate) component_messages: Vec<Literal>,
+    /// Every declared parameter, including optional values absent in this use.
+    pub(crate) parameters: Vec<String>,
+}
+
+/// A recognized target declaration at its exact position in one parsed shape.
+/// The closed public target enum cannot carry whether the source is a plain
+/// target or a parameterized target type, so that source law stays here.
+#[derive(Debug, Clone)]
+pub(crate) struct TargetOccurrence {
+    pub(crate) source_target: Term,
+    pub(crate) purpose: crate::profile::QueryPurpose,
+    pub(crate) parameters: Vec<String>,
+    pub(crate) select: String,
+    pub(crate) ask: Option<String>,
+    pub(crate) substitutions: Vec<(String, Term)>,
+}
+
+/// The original rule occurrence and its complete template parameter set.
+/// The public rule model retains supplied values; absent optional declarations
+/// remain potential pre-bindings of this source occurrence.
+#[derive(Debug, Clone)]
+pub(crate) struct RuleOccurrence {
+    pub(crate) purpose: crate::profile::QueryPurpose,
+    pub(crate) parameters: Vec<String>,
+    pub(crate) construct: String,
+    pub(crate) substitutions: Vec<(String, Term)>,
+}
+
+/// Direct borrowed-key lookup for global and linked uses of one rule node.
+/// Keeping the optional owner in separate slots avoids cloning RDF terms on
+/// every execution just to construct a composite map key.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RuleOccurrences {
+    pub(crate) global: Option<RuleOccurrence>,
+    pub(crate) linked: FastMap<Term, RuleOccurrence>,
 }
 
 #[derive(Debug, Clone)]
@@ -1032,7 +1128,20 @@ pub(crate) enum ConstraintOccurrence {
 
 /// Fixed-key, direct parser-slot lookup; repeated visits to a shared inline
 /// shape record the same occurrence without growing the metadata.
-pub(crate) type ConstraintSources = FastMap<Term, FastMap<(bool, usize), ConstraintOccurrence>>;
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ConstraintSources {
+    pub(crate) constraints: FastMap<Term, FastMap<(bool, usize), ConstraintOccurrence>>,
+    pub(crate) targets: FastMap<Term, FastMap<usize, TargetOccurrence>>,
+    pub(crate) rules: FastMap<Term, RuleOccurrences>,
+    admission: Option<SourceAdmission>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceAdmission {
+    profile: crate::profile::ShaclProfile,
+    dataset: Arc<RdfDataset>,
+    provenance: ParseProvenance,
+}
 
 // ── Public entry point ─────────────────────────────────────────────────────────
 
@@ -1104,7 +1213,15 @@ impl LinkedDeclarations {
 /// The linker's own refusal, exactly as a parse of `dataset` would report it.
 #[doc(hidden)]
 pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarations, String> {
-    let parser = Parser::new(dataset.as_ref(), None, &[], None, Arc::clone(dataset), None);
+    let parser = Parser::new(
+        dataset.as_ref(),
+        None,
+        &[],
+        None,
+        Arc::clone(dataset),
+        None,
+        crate::profile::ShaclProfile::LEGACY,
+    );
     let registry = ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?;
     let linked = parser.discover_custom_functions()?;
     let mut registered_components: Vec<String> = registry.components.keys().cloned().collect();
@@ -1140,6 +1257,7 @@ pub(crate) fn alternative_validators(
         None,
         Arc::clone(dataset),
         None,
+        crate::profile::ShaclProfile::LEGACY,
     );
     Ok(ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?.alternatives)
 }
@@ -1303,6 +1421,7 @@ pub(crate) fn from_resolved_dataset_with_unexecuted(
         box_role_vocab,
         Arc::clone(dataset),
         shapes_graph,
+        crate::profile::ShaclProfile::LEGACY,
     );
     let shapes = parser.parse()?;
     let mut unexecuted = parser.unexecuted.take();
@@ -1356,6 +1475,7 @@ pub fn from_dataset_with_node_expressions(
         None,
         Arc::clone(&resolved.dataset),
         shapes_graph,
+        crate::profile::ShaclProfile::LEGACY,
     );
     let (mut shapes, expressions) = parser
         .parse_with_expressions(roots)
@@ -1367,6 +1487,15 @@ pub fn from_dataset_with_node_expressions(
 }
 
 // ── Internal parser ────────────────────────────────────────────────────────────
+
+/// Ordinary construction links the model once. Restored source admission uses
+/// the same declaration and occurrence parser without rebuilding that model's
+/// already prepared class/index and node-expression linkage.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Preparation {
+    LinkedModel,
+    SourceOccurrences,
+}
 
 /// A parse currently on the parser's stack.
 ///
@@ -1386,6 +1515,10 @@ pub(crate) enum InFlight {
 
 pub(crate) struct Parser<'s> {
     data: &'s RdfDataset,
+    /// One immutable policy and declaration applicability law for this parse.
+    profile: crate::profile::ShaclProfile,
+    /// An actual dated refusal, never inferred from an error's display text.
+    admission_refusal: std::cell::RefCell<Option<crate::profile::AdmissionRefusal>>,
     /// The first SHACL-JS refusal a check raised, so the parse's entry point can
     /// return it typed ([`ShapesError::ShaclJs`]) rather than as a message. Checks
     /// return their refusal as a `String` like every other load error; one that
@@ -1405,7 +1538,8 @@ pub(crate) struct Parser<'s> {
     /// has one, by IRI. Filled by `check_sparql_function_declarations`; a call a shape
     /// reaches refuses the load, and the rest are unexecuted (see
     /// `Parser::refuse_reached_calls`).
-    pub(crate) function_prebinding: std::cell::RefCell<std::collections::BTreeMap<String, String>>,
+    pub(crate) function_prebinding:
+        std::cell::RefCell<std::collections::BTreeMap<String, QueryRefusal>>,
     /// The pre-binding violations of queries nothing executes, filled at the end of a
     /// successful parse; `lint` reports them.
     unexecuted: std::cell::RefCell<Vec<crate::error::PrebindingViolation>>,
@@ -1571,9 +1705,12 @@ impl<'s> Parser<'s> {
         box_role_vocab: Option<BoxRoleVocab>,
         shapes_dataset: Arc<RdfDataset>,
         shapes_graph: Option<String>,
+        profile: crate::profile::ShaclProfile,
     ) -> Self {
         Self {
             data,
+            profile,
+            admission_refusal: std::cell::RefCell::default(),
             shacl_js: std::cell::RefCell::new(None),
             ill_formed: std::cell::RefCell::new(None),
             prebinding_refusal: std::cell::RefCell::new(None),
@@ -1655,6 +1792,14 @@ impl<'s> Parser<'s> {
     fn parse_with_expressions(
         &mut self,
         roots: &[Term],
+    ) -> Result<(Shapes, Vec<NodeExpr>), String> {
+        self.prepare_with_expressions(roots, Preparation::LinkedModel)
+    }
+
+    fn prepare_with_expressions(
+        &mut self,
+        roots: &[Term],
+        preparation: Preparation,
     ) -> Result<(Shapes, Vec<NodeExpr>), String> {
         self.check_builtin_cardinalities()?;
 
@@ -1778,7 +1923,7 @@ impl<'s> Parser<'s> {
         // any shape reaches it, and the refusal names every one (SHACL 1.2 Core,
         // "Handling of Ill-formed Shapes Graphs").
         self.component_registry =
-            ComponentRegistry::parse_collecting(self.data, &self.prefix_resolver)?;
+            ComponentRegistry::parse_collecting(self.data, &self.prefix_resolver, self.profile)?;
         let mut ill_formed = std::mem::take(&mut self.component_registry.ill_formed);
         ill_formed.extend(self.check_sparql_function_declarations());
         ill_formed.extend(self.check_message_uniqueness());
@@ -1792,6 +1937,7 @@ impl<'s> Parser<'s> {
         // is parsed: an unknown or refused term, or an ill-typed parameter
         // value, is a load error rather than a silent no-op.
         self.check_well_formed()?;
+        self.refuse_rec_declarations()?;
 
         // SHACL-AF parameterized target types are parsed up-front so that
         // `sh:target` blank nodes can be instantiated during shape target parsing.
@@ -1846,21 +1992,42 @@ impl<'s> Parser<'s> {
         // `sh:nodeByExpression` resolution table (§7.2), register the
         // expression-bodied functions — and PROVE the sharing topology, which is
         // the part no downstream test could observe. See `shapes::link`.
-        let declarations: Vec<Arc<crate::expression::CustomFunction>> =
-            custom_fns.iter().map(Arc::clone).collect();
-        link::link_shapes(
-            &node_shapes,
-            &self.node_shape_index,
-            &declarations,
-            &self.native_list_fns,
-            bodies,
-            &mut functions,
-        )
-        .map_err(|error| error.to_string())?;
-        link::link_global_rules(&rules.global_rules, &self.node_shape_index)
+        if preparation == Preparation::LinkedModel {
+            let declarations: Vec<Arc<crate::expression::CustomFunction>> =
+                custom_fns.iter().map(Arc::clone).collect();
+            link::link_shapes(
+                &node_shapes,
+                &self.node_shape_index,
+                &declarations,
+                &self.native_list_fns,
+                bodies,
+                &mut functions,
+            )
             .map_err(|error| error.to_string())?;
+            link::link_global_rules(&rules.global_rules, &self.node_shape_index)
+                .map_err(|error| error.to_string())?;
 
-        self.check_node_by_expression_constants()?;
+            self.check_node_by_expression_constants()?;
+        }
+
+        let provenance = ParseProvenance::new(
+            self.base.clone(),
+            self.prefix_resolver.document().to_vec(),
+            self.box_role_vocab.clone(),
+            self.shapes_graph.clone(),
+        );
+        let sources = if preparation == Preparation::LinkedModel {
+            if self.profile != crate::profile::ShaclProfile::LEGACY {
+                self.sparql_sources.get_mut().admission = Some(SourceAdmission {
+                    profile: self.profile,
+                    dataset: Arc::clone(&self.shapes_dataset),
+                    provenance: provenance.clone(),
+                });
+            }
+            OnceLock::from(Arc::new(std::mem::take(self.sparql_sources.get_mut())))
+        } else {
+            OnceLock::new()
+        };
 
         let shapes = Shapes {
             node_shapes,
@@ -1876,30 +2043,21 @@ impl<'s> Parser<'s> {
                 .collect(),
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
-            sparql_sources: OnceLock::from(Arc::new(std::mem::take(self.sparql_sources.get_mut()))),
+            sparql_sources: sources,
             // Recorded HERE, at the only site that has all four values in hand,
             // so the identity a `Shapes` reports is the one its parse used. The
             // prefix map goes out in the parser's own order — the fact, not a
             // normalization of it.
-            parse_provenance: ParseProvenance::new(
-                self.base.clone(),
-                self.prefix_resolver.document().to_vec(),
-                self.box_role_vocab.clone(),
-                self.shapes_graph.clone(),
-            ),
+            parse_provenance: provenance,
             mandatory_diagnostics: crate::lint::mandatory_diagnostics(&self.shapes_dataset),
         };
         self.refuse_javascript_calls(&shapes)?;
         self.refuse_reached_calls(&shapes)?;
         if let Some((site, violation)) =
-            crate::extension_usage::reachable_select_expression_violation(&shapes)
+            crate::extension_usage::reachable_select_expression_violation(&shapes, self.profile)
+            && violation.requires_parse_failure()
         {
-            return Err(
-                self.refuse_prebinding(crate::error::PrebindingViolation::new(
-                    format!("the {site}"),
-                    violation,
-                )),
-            );
+            return Err(self.refuse_query(format!("the {site}"), violation));
         }
         self.record_unexecuted();
         Ok((shapes, expressions))
@@ -1938,16 +2096,16 @@ impl<'s> Parser<'s> {
         ))
     }
 
-    /// Refuse a shapes graph in which something a shape reaches calls a
-    /// `sh:SPARQLFunction` whose body violates a pre-binding restriction — a node
-    /// expression or a SPARQL text a shape reaches, directly or through another
-    /// function's body. SHACL Advanced Features, "SPARQL-based Functions": "When the
-    /// function is executed, the SPARQL processor needs to pre-bind variables based on
-    /// the provided arguments", and SHACL 1.2 SPARQL Extensions, Appendix A, requires a
-    /// failure for such a query "executed with pre-bound variables". A function nothing
-    /// reachable calls never executes: it is recorded as unexecuted by
-    /// [`Self::record_unexecuted`].
+    /// Preserve compatibility admission of syntactically reachable function
+    /// bodies. Named dated laws audit an AF body only at its actual invocation:
+    /// short-circuited calls and unbound mandatory arguments do not execute it.
     fn refuse_reached_calls(&self, shapes: &Shapes) -> Result<(), String> {
+        if self.profile != crate::profile::ShaclProfile::LEGACY {
+            // AF functions execute only when a supplied argument tuple actually
+            // reaches the body. Dated execution audits that invocation, including
+            // calls that syntactic reachability alone cannot distinguish.
+            return Ok(());
+        }
         let violating: std::collections::BTreeSet<String> =
             self.function_prebinding.borrow().keys().cloned().collect();
         if violating.is_empty() {
@@ -1962,22 +2120,21 @@ impl<'s> Parser<'s> {
             .borrow()
             .get(&function)
             .cloned()
-            .unwrap_or_default();
-        Err(
-            self.refuse_prebinding(crate::error::PrebindingViolation::new(
-                format!("the sh:SPARQLFunction <{function}>, which {site} calls"),
-                message,
-            )),
-        )
+            .expect("reachable violating function has its checked refusal");
+        Err(self.refuse_query(
+            format!("the sh:SPARQLFunction <{function}>, which {site} calls"),
+            message,
+        ))
     }
 
-    /// Record, for `lint`, the pre-binding violation of every query the shapes graph
-    /// declares that nothing executes. Runs at the end of a parse that refused nothing,
-    /// so every violating query a use would have executed has already refused the load:
-    /// what is left is a validator of a built-in component (the native implementation
-    /// supersedes it), a validator of a custom component no parsed use selects, and a
-    /// `sh:SPARQLFunction` nothing reachable calls.
+    /// Record compatibility lints for declarations whose bodies no parsed use
+    /// executes. Dated restrictions have their own applicability: REC Core
+    /// declarations already passed graph-wide admission; execution-qualified
+    /// bodies are not violations merely because they were declared.
     fn record_unexecuted(&self) {
+        if self.profile != crate::profile::ShaclProfile::LEGACY {
+            return;
+        }
         let mut unexecuted = self.unexecuted.borrow_mut();
         unexecuted.extend(
             self.component_registry
@@ -1998,7 +2155,7 @@ impl<'s> Parser<'s> {
                             "{}, which no use of the component selects",
                             validator.declaration(iri)
                         ),
-                        message.clone(),
+                        message.to_string(),
                     ));
                 }
             }
@@ -2006,7 +2163,7 @@ impl<'s> Parser<'s> {
         for (iri, message) in self.function_prebinding.borrow().iter() {
             unexecuted.push(crate::error::PrebindingViolation::new(
                 format!("the sh:SPARQLFunction <{iri}>, which nothing calls"),
-                message.clone(),
+                message.to_string(),
             ));
         }
         // A violating target type an instance executed has already refused the load, so
@@ -2015,7 +2172,7 @@ impl<'s> Parser<'s> {
             if let Some(message) = &target_type.prebinding {
                 unexecuted.push(crate::error::PrebindingViolation::new(
                     format!("the sh:SPARQLTargetType <{iri}>, which no shape instantiates"),
-                    message.clone(),
+                    message.to_string(),
                 ));
             }
         }
@@ -2473,12 +2630,17 @@ impl<'s> Parser<'s> {
                         // The target's query pre-binds nothing, so Appendix A's MUSTs
                         // have no variable to guard; its SERVICE sentence applies to
                         // every SHACL-SPARQL query, and this one executes.
-                        if let Err(e) = crate::prebinding::check_no_service(&query) {
-                            return Err(self.refuse_prebinding(
-                                crate::error::PrebindingViolation::new(
-                                    format!("the sh:SPARQLTarget {t_node} of shape {id}"),
-                                    e,
-                                ),
+                        if let Err(refusal) = audit_query(
+                            self.profile,
+                            crate::profile::QueryPurpose::SelectTarget,
+                            &query,
+                            &[],
+                            || crate::prebinding::check_no_service(&query),
+                        ) && refusal.requires_parse_failure()
+                        {
+                            return Err(self.refuse_query(
+                                format!("the sh:SPARQLTarget {t_node} of shape {id}"),
+                                refusal,
                             ));
                         }
                     }
@@ -2495,6 +2657,22 @@ impl<'s> Parser<'s> {
                 }
 
                 let ask = self.parse_sparql_target_ask(id, &t_node, &header)?;
+                self.sparql_sources
+                    .borrow_mut()
+                    .targets
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(
+                        targets.len(),
+                        TargetOccurrence {
+                            source_target: t_node,
+                            purpose: crate::profile::QueryPurpose::SelectTarget,
+                            parameters: Vec::new(),
+                            select: select.clone(),
+                            ask: ask.clone(),
+                            substitutions: Vec::new(),
+                        },
+                    );
                 targets.push(Target::Sparql {
                     select,
                     ask,
@@ -2601,15 +2779,13 @@ impl<'s> Parser<'s> {
             // This instance executes the target type's query with its parameters
             // pre-bound, so a pre-binding violation of that query refuses the load here
             // (SHACL 1.2 SPARQL Extensions, Appendix A).
-            if let Some(message) = prebinding {
-                return Err(
-                    self.refuse_prebinding(crate::error::PrebindingViolation::new(
-                        format!(
-                            "the sh:SPARQLTargetType <{type_iri}>, which shape {id} instantiates"
-                        ),
-                        message,
-                    )),
-                );
+            if let Some(message) = prebinding
+                && message.requires_parse_failure()
+            {
+                return Err(self.refuse_query(
+                    format!("the sh:SPARQLTargetType <{type_iri}>, which shape {id} instantiates"),
+                    message,
+                ));
             }
 
             // Build the query with prefixes from the shape, the target instance,
@@ -2633,6 +2809,26 @@ impl<'s> Parser<'s> {
                 }
             }
 
+            self.sparql_sources
+                .borrow_mut()
+                .targets
+                .entry(id.clone())
+                .or_default()
+                .insert(
+                    targets.len(),
+                    TargetOccurrence {
+                        source_target: t_node,
+                        purpose: crate::profile::QueryPurpose::TargetType,
+                        parameters: target_type
+                            .params
+                            .iter()
+                            .map(|param| param.var.clone())
+                            .collect(),
+                        select: select.clone(),
+                        ask: None,
+                        substitutions: substitutions.clone(),
+                    },
+                );
             targets.push(Target::Sparql {
                 select,
                 ask: None,
@@ -2668,15 +2864,21 @@ impl<'s> Parser<'s> {
         let ask = format!("{header}{}", literal.value());
         match purrdf_sparql_algebra::SparqlParser::new().parse_query(&ask) {
             Ok(query @ purrdf_sparql_algebra::Query::Ask { .. }) => {
-                if let Err(e) = crate::prebinding::check_ask(&query, &["this"])
-                    .and_then(|()| crate::prebinding::check_no_service(&query))
+                if let Err(refusal) = audit_query(
+                    self.profile,
+                    crate::profile::QueryPurpose::AskTarget,
+                    &query,
+                    &[],
+                    || {
+                        crate::prebinding::check_ask(&query, &["this"])
+                            .and_then(|()| crate::prebinding::check_no_service(&query))
+                    },
+                ) && refusal.requires_parse_failure()
                 {
-                    return Err(
-                        self.refuse_prebinding(crate::error::PrebindingViolation::new(
-                            format!("the sh:ask of the sh:SPARQLTarget {t_node} of shape {id}"),
-                            e,
-                        )),
-                    );
+                    return Err(self.refuse_query(
+                        format!("the sh:ask of the sh:SPARQLTarget {t_node} of shape {id}"),
+                        refusal,
+                    ));
                 }
                 Ok(Some(ask))
             }
@@ -4562,6 +4764,7 @@ mod tests {
             None,
             Arc::clone(&dataset),
             None,
+            crate::profile::ShaclProfile::LEGACY,
         );
         let root = Term::NamedNode(NamedNode::from("http://example.org/ns#root"));
         let expr_obj = parser

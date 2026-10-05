@@ -21,7 +21,7 @@ fn check(profile: ShaclProfile, text: &str) -> Result<(), purrdf_shapes::Admissi
 fn role_query(purpose: QueryPurpose, body: &str) -> Query {
     let text = match purpose {
         QueryPurpose::AskValidator | QueryPurpose::AskTarget => format!("ASK {{ {body} }}"),
-        QueryPurpose::ConstructRule => {
+        QueryPurpose::ConstructRule | QueryPurpose::GlobalConstructRule => {
             format!("CONSTRUCT {{ $this <http://example.org/p> ?v }} WHERE {{ {body} }}")
         }
         _ => format!("SELECT $this WHERE {{ {body} }}"),
@@ -130,6 +130,7 @@ fn every_role_refuses_service_and_admits_a_local_graph() {
         QueryPurpose::SelectValidator,
         QueryPurpose::AskValidator,
         QueryPurpose::ConstructRule,
+        QueryPurpose::GlobalConstructRule,
         QueryPurpose::Function,
         QueryPurpose::TargetType,
         QueryPurpose::SelectTarget,

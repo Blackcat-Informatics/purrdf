@@ -94,6 +94,70 @@ impl std::fmt::Display for SourceConstraintRefusal {
 
 impl std::error::Error for SourceConstraintRefusal {}
 
+/// A dated query execution lacks the declaration evidence required by its
+/// actual source role. Query text or supplied values cannot establish that role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuerySourceRefusal {
+    profile: crate::profile::ShaclProfile,
+    purpose: Option<crate::profile::QueryPurpose>,
+    source: Term,
+    index: Option<usize>,
+}
+
+impl QuerySourceRefusal {
+    pub(crate) const fn new(
+        profile: crate::profile::ShaclProfile,
+        purpose: Option<crate::profile::QueryPurpose>,
+        source: Term,
+        index: Option<usize>,
+    ) -> Self {
+        Self {
+            profile,
+            purpose,
+            source,
+            index,
+        }
+    }
+
+    /// The law requiring original declaration evidence.
+    #[must_use]
+    pub const fn profile(&self) -> crate::profile::ShaclProfile {
+        self.profile
+    }
+
+    /// The known execution role. `None` means the missing declaration is the
+    /// only authority distinguishing roles of the closed public model variant.
+    #[must_use]
+    pub const fn purpose(&self) -> Option<crate::profile::QueryPurpose> {
+        self.purpose
+    }
+
+    /// The authored declaration when known, or the shape, rule or expression
+    /// containing an occurrence whose declaration evidence is absent.
+    #[must_use]
+    pub const fn source(&self) -> &Term {
+        &self.source
+    }
+
+    /// Its parser-slot ordinal when the source role has one.
+    #[must_use]
+    pub const fn index(&self) -> Option<usize> {
+        self.index
+    }
+}
+
+impl std::fmt::Display for QuerySourceRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{:?} on {} has no matching declaration evidence under {}",
+            self.purpose, self.source, self.profile
+        )
+    }
+}
+
+impl std::error::Error for QuerySourceRefusal {}
+
 /// A query solution explicitly declared validation failure, rather than a
 /// constraint violation. The producing constraint and focus remain available.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,12 +386,16 @@ pub enum CompleteValidationError {
     Shapes(crate::error::ShapesError),
     /// An evaluated constraint no longer matches its original source occurrence.
     SourceConstraint(SourceConstraintRefusal),
+    /// A dated execution cannot establish its original query role or parameters.
+    QuerySource(Box<QuerySourceRefusal>),
     /// The source context could not be admitted for this operation.
     SourceContext(String),
     /// A SPARQL solution explicitly declared failure.
     Semantic(Box<SemanticFailure>),
     /// An execution governor stopped the operation before a complete verdict.
     Resource(Box<ResourceRefusal>),
+    /// A dated query law refused the actual declaration or invocation.
+    Admission(Box<crate::profile::AdmissionRefusal>),
     /// Execution failed independently of a semantic result.
     Execution(String),
 }
@@ -337,8 +405,10 @@ impl std::fmt::Display for CompleteValidationError {
         match self {
             Self::Shapes(error) => error.fmt(formatter),
             Self::SourceConstraint(error) => error.fmt(formatter),
+            Self::QuerySource(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
             Self::Resource(error) => error.fmt(formatter),
+            Self::Admission(error) => error.fmt(formatter),
             Self::SourceContext(message) | Self::Execution(message) => formatter.write_str(message),
         }
     }
@@ -349,8 +419,10 @@ impl std::error::Error for CompleteValidationError {
         match self {
             Self::Shapes(error) => Some(error),
             Self::SourceConstraint(error) => Some(error),
+            Self::QuerySource(error) => Some(error.as_ref()),
             Self::Semantic(error) => Some(error.as_ref()),
             Self::Resource(error) => Some(error.as_ref()),
+            Self::Admission(error) => Some(error.as_ref()),
             Self::SourceContext(_) | Self::Execution(_) => None,
         }
     }
@@ -373,7 +445,9 @@ impl ReportFailure {
     pub(crate) fn into_public(self) -> CompleteValidationError {
         match self {
             Self::SourceConstraint(error) => CompleteValidationError::SourceConstraint(error),
+            Self::QuerySource(error) => CompleteValidationError::QuerySource(Box::new(error)),
             Self::Semantic(error) => CompleteValidationError::Semantic(Box::new(error)),
+            Self::Admission(error) => CompleteValidationError::Admission(Box::new(error)),
         }
     }
 }
@@ -706,7 +780,9 @@ fn complete_record_sort_key(record: &ResultRecord) -> CompleteRecordSortKey {
 #[derive(Debug)]
 pub(crate) enum ReportFailure {
     SourceConstraint(SourceConstraintRefusal),
+    QuerySource(QuerySourceRefusal),
     Semantic(SemanticFailure),
+    Admission(crate::profile::AdmissionRefusal),
 }
 
 /// Failure of one root focus traversal. A missing typed payload records an
@@ -721,6 +797,9 @@ struct CapturedFailure {
 pub(crate) struct ReportCapture<'a> {
     pub(crate) shapes: &'a crate::shapes::Shapes,
     pub(crate) profile: crate::profile::ShaclProfile,
+    /// The occurrence context admitted for this request, which may differ from
+    /// an older law already occupying the shape's compatibility cache.
+    pub(crate) sources: Option<&'a Arc<crate::shapes::ConstraintSources>>,
     failure: std::sync::Mutex<Option<CapturedFailure>>,
 }
 
@@ -732,14 +811,89 @@ pub(crate) struct ConstraintSite<'a> {
     pub(crate) index: Option<usize>,
 }
 
+/// Validate a component declaration against its exact parser slot. Reporting
+/// and execution admission share this one correspondence check.
+pub(crate) fn admit_component_occurrence<'a>(
+    sources: Option<&'a crate::shapes::ConstraintSources>,
+    site: ConstraintSite<'_>,
+    constraint: &crate::plan::PlannedConstraint<'_>,
+) -> Option<&'a crate::shapes::ComponentOccurrence> {
+    use crate::plan::PlannedConstraint;
+    use crate::shapes::{ComponentValidator, Constraint, ConstraintOccurrence};
+    let PlannedConstraint::Component {
+        component,
+        source_shape,
+        bindings,
+        validator,
+        messages,
+        severity,
+        annotations,
+    } = constraint
+    else {
+        unreachable!("component messages requested for a component");
+    };
+    site.index
+        .and_then(|index| {
+            let source = sources?
+                .constraints
+                .get(site.shape)?
+                .get(&(site.property, index))?;
+            let ConstraintOccurrence::Component(source) = source else {
+                return None;
+            };
+            Some(source)
+        })
+        .filter(|source| {
+            let Constraint::Component {
+                component: recorded_component,
+                source_shape: recorded_shape,
+                bindings: recorded_bindings,
+                validator: recorded_validator,
+                messages: recorded_messages,
+                severity: recorded_severity,
+                annotations: recorded_annotations,
+            } = &source.definition
+            else {
+                return false;
+            };
+            let same_query = match (recorded_validator, *validator) {
+                (ComponentValidator::Ask { ask: left }, ComponentValidator::Ask { ask: right }) => {
+                    left == right
+                }
+                (
+                    ComponentValidator::Select { select: left },
+                    ComponentValidator::Select { select: right },
+                ) => left == right,
+                _ => false,
+            };
+            recorded_component == *component
+                && recorded_shape == *source_shape
+                && recorded_bindings == *bindings
+                && same_query
+                && recorded_messages == *messages
+                && recorded_severity == *severity
+                && recorded_annotations == *annotations
+        })
+}
+
 impl<'a> ReportCapture<'a> {
-    pub(crate) const fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         shapes: &'a crate::shapes::Shapes,
         profile: crate::profile::ShaclProfile,
+    ) -> Self {
+        Self::with_sources(shapes, profile, shapes.sparql_sources.get())
+    }
+
+    pub(crate) const fn with_sources(
+        shapes: &'a crate::shapes::Shapes,
+        profile: crate::profile::ShaclProfile,
+        sources: Option<&'a Arc<crate::shapes::ConstraintSources>>,
     ) -> Self {
         Self {
             shapes,
             profile,
+            sources,
             failure: std::sync::Mutex::new(None),
         }
     }
@@ -775,10 +929,12 @@ impl<'a> ReportCapture<'a> {
         }
     }
 
-    fn refuse(&self, failure: ReportFailure) -> String {
+    pub(crate) fn refuse(&self, failure: ReportFailure) -> String {
         let message = match &failure {
             ReportFailure::SourceConstraint(failure) => failure.to_string(),
+            ReportFailure::QuerySource(failure) => failure.to_string(),
             ReportFailure::Semantic(failure) => failure.to_string(),
+            ReportFailure::Admission(failure) => failure.to_string(),
         };
         self.failure
             .lock()
@@ -811,9 +967,8 @@ impl<'a> ReportCapture<'a> {
             .index
             .and_then(|index| {
                 let source = self
-                    .shapes
-                    .sparql_sources
-                    .get()?
+                    .sources?
+                    .constraints
                     .get(site.shape)?
                     .get(&(site.property, index))?;
                 let crate::shapes::ConstraintOccurrence::Sparql(source) = source else {
@@ -840,81 +995,29 @@ impl<'a> ReportCapture<'a> {
         }))
     }
 
+    /// Admit the complete declaration at this actual component parser slot.
+    pub(crate) fn component_occurrence(
+        &self,
+        site: ConstraintSite<'_>,
+        constraint: &crate::plan::PlannedConstraint<'_>,
+    ) -> Result<&'a crate::shapes::ComponentOccurrence, String> {
+        admit_component_occurrence(self.sources.map(Arc::as_ref), site, constraint)
+            .ok_or_else(|| self.refuse_source(site))
+    }
+
     /// Ordered declaration messages of this actual custom-component occurrence.
     pub(crate) fn component_messages<'b>(
         &'b self,
-        site: ConstraintSite<'_>,
-        constraint: &crate::plan::PlannedConstraint<'_>,
+        occurrence: &'b crate::shapes::ComponentOccurrence,
         fallback: &'b [Literal],
-    ) -> Result<&'b [Literal], String> {
-        use crate::plan::PlannedConstraint;
-        use crate::shapes::{ComponentValidator, Constraint, ConstraintOccurrence};
-        let PlannedConstraint::Component {
-            component,
-            source_shape,
-            bindings,
-            validator,
-            messages,
-            severity,
-            annotations,
-        } = constraint
-        else {
-            unreachable!("component messages requested for a component");
-        };
-        let occurrence = site
-            .index
-            .and_then(|index| {
-                let source = self
-                    .shapes
-                    .sparql_sources
-                    .get()?
-                    .get(site.shape)?
-                    .get(&(site.property, index))?;
-                let ConstraintOccurrence::Component(source) = source else {
-                    return None;
-                };
-                Some(source)
-            })
-            .filter(|source| {
-                let Constraint::Component {
-                    component: recorded_component,
-                    source_shape: recorded_shape,
-                    bindings: recorded_bindings,
-                    validator: recorded_validator,
-                    messages: recorded_messages,
-                    severity: recorded_severity,
-                    annotations: recorded_annotations,
-                } = &source.definition
-                else {
-                    return false;
-                };
-                let same_query = match (recorded_validator, *validator) {
-                    (
-                        ComponentValidator::Ask { ask: left },
-                        ComponentValidator::Ask { ask: right },
-                    ) => left == right,
-                    (
-                        ComponentValidator::Select { select: left },
-                        ComponentValidator::Select { select: right },
-                    ) => left == right,
-                    _ => false,
-                };
-                recorded_component == *component
-                    && recorded_shape == *source_shape
-                    && recorded_bindings == *bindings
-                    && same_query
-                    && recorded_messages == *messages
-                    && recorded_severity == *severity
-                    && recorded_annotations == *annotations
-            })
-            .ok_or_else(|| self.refuse_source(site))?;
+    ) -> &'b [Literal] {
         let declared = [
             &occurrence.validator_messages,
             &occurrence.component_messages,
         ]
         .into_iter()
         .find(|messages| !messages.is_empty());
-        Ok(declared.map_or_else(
+        declared.map_or_else(
             || {
                 if self.profile == crate::profile::ShaclProfile::WD_20260918 {
                     fallback
@@ -923,7 +1026,7 @@ impl<'a> ReportCapture<'a> {
                 }
             },
             Vec::as_slice,
-        ))
+        )
     }
 
     pub(crate) fn semantic_failure(

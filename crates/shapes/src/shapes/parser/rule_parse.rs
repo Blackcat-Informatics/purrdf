@@ -393,16 +393,12 @@ impl Parser<'_> {
     /// `sh:deactivated`.
     fn parse_rule(&mut self, shape: Option<&Term>, rule_node: &Term) -> Result<Rule, String> {
         let kind = self.rule_kind(rule_node)?;
-        let parameter_paths: Vec<String> = match &kind {
-            RuleKind::Template(template) => self
-                .template_parameters(template)?
-                .into_iter()
-                .map(|(path, _, _)| path)
-                .collect(),
+        let declared_parameters = match &kind {
+            RuleKind::Template(template) => self.template_parameters(template)?,
             RuleKind::Triple | RuleKind::Sparql => Vec::new(),
         };
         let mut allowed: Vec<&str> = RULE_TERMS.to_vec();
-        allowed.extend(parameter_paths.iter().map(String::as_str));
+        allowed.extend(declared_parameters.iter().map(|(path, _, _)| path.as_str()));
         self.check_census(rule_node, "rule", &allowed)?;
         if self.first_object_of(rule_node, sh::RULE).is_some() {
             return Err(format!(
@@ -445,21 +441,52 @@ impl Parser<'_> {
                     self.construct_of(rule_node)?
                 );
                 check_construct(
+                    self,
                     rule_node,
                     &construct,
                     if prebound_this { &["this"] } else { &[] },
+                    prebound_this,
                 )?;
                 RuleBody::Sparql {
                     construct,
                     parameters: Vec::new(),
                 }
             }
-            RuleKind::Template(template) => {
-                self.parse_template_instance(rule_node, &template, prebound_this)?
-            }
+            RuleKind::Template(template) => self.parse_template_instance(
+                rule_node,
+                &template,
+                &declared_parameters,
+                prebound_this,
+            )?,
         };
         let expected_predicates = self.expected_predicates_of(rule_node)?;
         let processors = self.processors_of(rule_node)?;
+        if let RuleBody::Sparql {
+            construct,
+            parameters,
+        } = &body
+        {
+            let occurrence = crate::shapes::RuleOccurrence {
+                purpose: if prebound_this {
+                    crate::profile::QueryPurpose::ConstructRule
+                } else {
+                    crate::profile::QueryPurpose::GlobalConstructRule
+                },
+                parameters: declared_parameters
+                    .into_iter()
+                    .map(|(_, variable, _)| variable)
+                    .collect(),
+                construct: construct.clone(),
+                substitutions: parameters.clone(),
+            };
+            let mut sources = self.sparql_sources.borrow_mut();
+            let uses = sources.rules.entry(rule_node.clone()).or_default();
+            if let Some(shape) = shape {
+                uses.linked.insert(shape.clone(), occurrence);
+            } else {
+                uses.global = Some(occurrence);
+            }
+        }
         Ok(Rule {
             id: rule_node.clone(),
             body,
@@ -735,6 +762,7 @@ impl Parser<'_> {
         &self,
         rule_node: &Term,
         template: &Term,
+        declared_parameters: &[(String, String, bool)],
         prebound_this: bool,
     ) -> Result<RuleBody, String> {
         if !matches!(template, Term::NamedNode(_)) {
@@ -749,10 +777,10 @@ impl Parser<'_> {
             self.construct_of(template)?
         );
         let mut parameters: Vec<(String, Term)> = Vec::new();
-        for (path, variable, optional) in self.template_parameters(template)? {
-            let values = self.objects_of(rule_node, &path);
+        for (path, variable, optional) in declared_parameters {
+            let values = self.objects_of(rule_node, path);
             match values.as_slice() {
-                [] if optional => {}
+                [] if *optional => {}
                 [] => {
                     return Err(format!(
                         "rule {rule_node} is an instance of SPARQL rule template {template} but \
@@ -761,7 +789,7 @@ impl Parser<'_> {
                          that are not declared as sh:optional true have no value in R\""
                     ));
                 }
-                [value] => parameters.push((variable, value.clone())),
+                [value] => parameters.push((variable.clone(), value.clone())),
                 _ => {
                     return Err(format!(
                         "rule {rule_node} has {} values for the parameter <{path}> of SPARQL \
@@ -776,8 +804,16 @@ impl Parser<'_> {
         if prebound_this {
             prebound.push("this");
         }
-        prebound.extend(parameters.iter().map(|(name, _)| name.as_str()));
-        check_construct(rule_node, &construct, &prebound)?;
+        if self.profile == crate::profile::ShaclProfile::LEGACY {
+            prebound.extend(parameters.iter().map(|(name, _)| name.as_str()));
+        } else {
+            prebound.extend(
+                declared_parameters
+                    .iter()
+                    .map(|(_, variable, _)| variable.as_str()),
+            );
+        }
+        check_construct(self, rule_node, &construct, &prebound, prebound_this)?;
         Ok(RuleBody::Sparql {
             construct,
             parameters,

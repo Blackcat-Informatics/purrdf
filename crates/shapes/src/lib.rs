@@ -60,6 +60,7 @@ pub mod product_fixture;
 pub mod profile;
 pub mod provenance;
 pub mod pydantic;
+mod query_law;
 pub mod report;
 pub(crate) mod result_annotations;
 pub mod rules;
@@ -105,6 +106,7 @@ pub use linkml::{
 };
 pub use profile::{
     AdmissionReason, AdmissionRefusal, QueryPurpose, ShaclProfile, UnsupportedProfile,
+    XPathProfileConflict,
 };
 pub use pydantic::{
     PYDANTIC_DIALECT, PydanticClassConfig, PydanticConfig, PydanticError, PydanticModuleConfig,

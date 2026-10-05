@@ -162,11 +162,11 @@ pub(crate) fn check_construct(query: &Query, prebound: &[&str]) -> Result<(), St
 }
 
 /// Build the actual purpose's potential bindings, then apply one dated policy.
-pub(crate) fn admit(
+pub(crate) fn admit<'a>(
     profile: ShaclProfile,
     purpose: QueryPurpose,
     query: &Query,
-    parameters: &[&str],
+    parameters: impl ExactSizeIterator<Item = &'a str>,
 ) -> Result<(), AdmissionRefusal> {
     if !purpose.accepts(query) {
         return Err(AdmissionRefusal::new(
@@ -183,7 +183,7 @@ pub(crate) fn admit(
     if purpose == QueryPurpose::AskValidator {
         prebound.push("value");
     }
-    prebound.extend_from_slice(parameters);
+    prebound.extend(parameters);
     let required_projection = prebound.len();
     if profile == ShaclProfile::REC_20170720 && purpose.binds_shape_context() {
         prebound.extend(["shapesGraph", "currentShape"]);

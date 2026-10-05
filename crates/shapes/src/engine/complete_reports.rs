@@ -47,9 +47,9 @@ fn restored_occurrence_cache_reuses_authenticated_source_and_warm_clone_identity
     assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
     let rebuilt = shapes.report_sources().unwrap();
     let parsed = prepared.shapes().report_sources().unwrap();
-    assert_eq!(rebuilt.len(), parsed.len());
-    for (shape, slots) in parsed {
-        let restored_slots = &rebuilt[shape];
+    assert_eq!(rebuilt.constraints.len(), parsed.constraints.len());
+    for (shape, slots) in &parsed.constraints {
+        let restored_slots = &rebuilt.constraints[shape];
         assert_eq!(slots.len(), restored_slots.len());
         for (slot, occurrence) in slots {
             let crate::shapes::ConstraintOccurrence::Sparql(original) = occurrence else {

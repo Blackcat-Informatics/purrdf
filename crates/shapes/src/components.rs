@@ -27,7 +27,7 @@ use crate::model::{rdf, sh, xsd};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
 use crate::shapes::prefixes::PrefixResolver;
-use crate::shapes::{ComponentValidator, Path, ShaclInstances};
+use crate::shapes::{ComponentValidator, Path, QueryRefusal, ShaclInstances, audit_query};
 use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_prebinding_view};
 use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 use crate::validator_alternatives::{AlternativeValidator, ValidatorLanguage};
@@ -60,11 +60,11 @@ pub(crate) struct Validator {
     /// or `sh:validator`).
     pub attachment: &'static str,
     /// The pre-binding restriction its query violates, when it violates one. A
-    /// violation is not a syntax error of the declaration: SHACL 1.2 SPARQL Extensions,
-    /// Appendix A requires a failure only for a query "executed with pre-bound
-    /// variables", so it is refused where a shape selects the validator (see
-    /// `Parser::parse_constraints`) and listed by `lint` otherwise.
-    pub prebinding: Option<String>,
+    /// violation is not a query syntax error. REC20170720 Appendix A requires
+    /// graph-wide refusal, including unused declarations; WD20260918 limits the
+    /// restriction to execution with pre-bound variables. The parser applies
+    /// that applicability rule separately from this purpose-specific audit.
+    pub prebinding: Option<QueryRefusal>,
 }
 
 impl Validator {
@@ -136,9 +136,12 @@ pub(crate) struct ComponentRegistry {
     /// [`crate::error::IllFormedShapesGraph`]).
     pub ill_formed: Vec<IllFormedDeclaration>,
     /// The pre-binding violations of the validators declared for built-in components.
-    /// The native implementation supersedes every such validator, so none of them ever
-    /// executes and none refuses anything: `lint` lists them as unexecuted.
+    /// Native implementations supersede these validators. Compatibility lints
+    /// report them as unexecuted; REC admission also checks their declarations.
     pub alternative_prebinding: Vec<PrebindingViolation>,
+    /// The canonical first REC20170720 declaration refusal, including native
+    /// alternatives. Other laws leave this empty and judge actual execution.
+    pub rec_declaration_refusal: Option<(String, crate::profile::AdmissionRefusal)>,
 }
 
 impl ComponentRegistry {
@@ -155,7 +158,8 @@ impl ComponentRegistry {
     /// [`Self::parse`]). A validator query that violates a pre-binding restriction is
     /// NOT ill-formed: the violation is recorded on the validator
     /// ([`Validator::prebinding`]) or, for a built-in's, in
-    /// [`Self::alternative_prebinding`], and judged where the query would execute.
+    /// [`Self::alternative_prebinding`]. The REC law records its graph-wide refusal
+    /// in [`Self::rec_declaration_refusal`]; other laws judge actual execution.
     ///
     /// # Errors
     ///
@@ -172,6 +176,7 @@ impl ComponentRegistry {
     pub(crate) fn parse_collecting(
         data: &RdfDataset,
         prefixes: &PrefixResolver,
+        profile: crate::profile::ShaclProfile,
     ) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
@@ -180,6 +185,7 @@ impl ComponentRegistry {
         let mut builtin_alternatives: Vec<AlternativeValidator> = Vec::new();
         let mut ill_formed: Vec<IllFormedDeclaration> = Vec::new();
         let mut alternative_prebinding: Vec<PrebindingViolation> = Vec::new();
+        let mut rec_declaration_refusal = None;
 
         for (subject, _pred, object) in
             native_quads(data, None, Some(&rdf_type), None, GraphFilter::AnyGraph)
@@ -216,8 +222,9 @@ impl ComponentRegistry {
                 // signature pre-binds. The syntax rules hold whether or not anything
                 // runs the validator, so a violation is collected like a custom
                 // component's. A pre-binding violation is not a syntax violation, and
-                // an alternative never executes, so it is recorded for `lint` and
-                // refuses nothing. The parse resolves no function, so a query calling
+                // an alternative never executes. REC20170720 nevertheless requires
+                // graph-wide refusal; other laws record the violation for `lint`.
+                // The parse resolves no function, so a query calling
                 // a function this engine does not have is well-formed and loads.
                 let param_names: Vec<String> = row
                     .params
@@ -233,7 +240,7 @@ impl ComponentRegistry {
                         Ok(kind) => {
                             match parse_validator(
                                 data,
-                                prefixes,
+                                (prefixes, profile),
                                 &component_term,
                                 &validator,
                                 attachment,
@@ -242,12 +249,19 @@ impl ComponentRegistry {
                             ) {
                                 Ok(parsed) => {
                                     if let Some(message) = parsed.prebinding {
+                                        if profile == crate::profile::ShaclProfile::REC_20170720 {
+                                            retain_rec_declaration_refusal(
+                                                &mut rec_declaration_refusal,
+                                                declaration.clone(),
+                                                &message,
+                                            );
+                                        }
                                         alternative_prebinding.push(PrebindingViolation::new(
                                             format!(
                                                 "{declaration}, which never executes: the \
                                                  native implementation supersedes it"
                                             ),
-                                            message,
+                                            message.to_string(),
                                         ));
                                     }
                                 }
@@ -283,6 +297,7 @@ impl ComponentRegistry {
         let mut registry = Self {
             alternatives: builtin_alternatives,
             alternative_prebinding,
+            rec_declaration_refusal,
             ..Self::default()
         };
         for component_iri in component_iris {
@@ -294,7 +309,24 @@ impl ComponentRegistry {
                 &component_iri,
                 &mut instances,
                 &mut ill_formed,
+                profile,
             )?;
+            if profile == crate::profile::ShaclProfile::REC_20170720 {
+                for validator in component
+                    .node_validators
+                    .iter()
+                    .chain(&component.property_validators)
+                    .chain(&component.validators)
+                {
+                    if let Some(refusal) = &validator.prebinding {
+                        retain_rec_declaration_refusal(
+                            &mut registry.rec_declaration_refusal,
+                            validator.declaration(&component_iri),
+                            refusal,
+                        );
+                    }
+                }
+            }
             for param in &component.parameters {
                 registry
                     .by_parameter_path
@@ -358,11 +390,28 @@ impl ComponentRegistry {
     /// [`Self::parse_collecting`]'s own, and every syntax-rule violation, as the
     /// rendered [`crate::error::IllFormedShapesGraph`].
     pub(crate) fn parse(data: &RdfDataset, prefixes: &PrefixResolver) -> Result<Self, String> {
-        let registry = Self::parse_collecting(data, prefixes)?;
+        let registry =
+            Self::parse_collecting(data, prefixes, crate::profile::ShaclProfile::LEGACY)?;
         match crate::error::IllFormedShapesGraph::from_violations(registry.ill_formed.clone()) {
             Some(refusal) => Err(refusal.to_string()),
             None => Ok(registry),
         }
+    }
+}
+
+/// Retain a REC declaration failure in canonical declaration order, rather than
+/// the dataset's acquisition order. Query syntax failures are collected elsewhere.
+fn retain_rec_declaration_refusal(
+    first: &mut Option<(String, crate::profile::AdmissionRefusal)>,
+    declaration: String,
+    refusal: &QueryRefusal,
+) {
+    if let QueryRefusal::Dated(refusal) = refusal
+        && first
+            .as_ref()
+            .is_none_or(|(current, _)| declaration < *current)
+    {
+        *first = Some((declaration, refusal.clone()));
     }
 }
 
@@ -444,6 +493,7 @@ pub(crate) fn eval_ask_validator<
     annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
+    invocation: crate::query_law::Invocation<'_>,
 ) -> Result<Vec<ValidationResult>, String> {
     let ComponentValidator::Ask { ask } = validator else {
         return Err("expected ASK validator, got SELECT".to_owned());
@@ -593,8 +643,9 @@ pub(crate) fn eval_ask_validator<
                 for v in value_nodes {
                     // The one varying slot, written on every pass.
                     execution.bind(VALUE_SLOT, v.to_term_value())?;
-                    if !crate::sparql::run_bound_ask_with_shacl_prebinding_view(dataset, execution)?
-                    {
+                    if !crate::sparql::run_bound_ask_with_shacl_prebinding_view(
+                        dataset, execution, invocation,
+                    )? {
                         report(v, &mut results);
                     }
                 }
@@ -604,7 +655,7 @@ pub(crate) fn eval_ask_validator<
     } else {
         for v in value_nodes {
             subs[VALUE_SLOT].value = v.to_term_value();
-            if !run_ask_with_shacl_prebinding_view(dataset, ask, &subs)? {
+            if !run_ask_with_shacl_prebinding_view(dataset, ask, &subs, invocation)? {
                 report(v, &mut results);
             }
         }
@@ -636,6 +687,7 @@ pub(crate) fn eval_select_validator<
     annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
+    invocation: crate::query_law::Invocation<'_>,
     report: Option<crate::sparql::SparqlReportContext<'_>>,
 ) -> Result<Vec<ValidationResult>, String> {
     let ComponentValidator::Select { select } = validator else {
@@ -773,6 +825,7 @@ pub(crate) fn eval_select_validator<
             &query,
             &names,
             report.and_then(|report| report.bnode_mint_prefix),
+            invocation,
             |execution| {
                 crate::sparql::bind_focus(execution, 0, dataset, focus, focus_id)?;
                 let mut slot = 1;
@@ -808,6 +861,7 @@ pub(crate) fn eval_select_validator<
         &query,
         &subs,
         report.and_then(|report| report.bnode_mint_prefix),
+        invocation,
         project,
     )
 }
@@ -964,13 +1018,14 @@ fn is_reserved_parameter_name(name: &str) -> bool {
 /// one: it is returned on the parsed validator ([`Validator::prebinding`]).
 fn parse_validator(
     data: &RdfDataset,
-    prefixes: &PrefixResolver,
+    context: (&PrefixResolver, crate::profile::ShaclProfile),
     component: &Term,
     validator: &Term,
     attachment: &'static str,
     param_names: &[String],
     kind: ValidatorKind,
 ) -> Result<Validator, Violation> {
+    let (prefixes, profile) = context;
     let component_iri = match component {
         Term::NamedNode(n) => n.as_str(),
         _ => return Err((None, format!("component {component} is not a named node"))),
@@ -1067,15 +1122,24 @@ fn parse_validator(
         prebound.push("value");
     }
     prebound.extend(param_names.iter().map(String::as_str));
-    let prebinding_result = match kind {
-        ValidatorKind::Ask => crate::prebinding::check_ask(&query, &prebound),
-        ValidatorKind::Select => crate::prebinding::check_select(&query, &prebound),
+    let (purpose, standard_bindings) = match kind {
+        ValidatorKind::Ask => (crate::profile::QueryPurpose::AskValidator, 2),
+        ValidatorKind::Select => (crate::profile::QueryPurpose::SelectValidator, 1),
     };
-    let prebinding = prebinding_result.err().map(|e| {
-        format!(
-            "component {component_iri} validator {validator} violates pre-binding restrictions: \
-             {e}"
-        )
+    let prebinding = audit_query(profile, purpose, &query, &prebound[standard_bindings..], || {
+        match kind {
+            ValidatorKind::Ask => crate::prebinding::check_ask(&query, &prebound),
+            ValidatorKind::Select => crate::prebinding::check_select(&query, &prebound),
+        }
+    })
+    .err()
+    .map(|error| {
+        error.legacy_context(|message| {
+            format!(
+                "component {component_iri} validator {validator} violates pre-binding restrictions: \
+                 {message}"
+            )
+        })
     });
 
     let messages = declared_messages(data, validator).map_err(|message| (None, message))?;
@@ -1105,6 +1169,7 @@ fn parse_component(
     component_iri: &str,
     instances: &mut ShaclInstances<'_>,
     ill_formed: &mut Vec<IllFormedDeclaration>,
+    profile: crate::profile::ShaclProfile,
 ) -> Result<Component, String> {
     let component_declaration = format!("the constraint component <{component_iri}>");
     let param_nodes: Vec<Term> = objects_of(data, component, sh::PARAMETER_PROPERTY);
@@ -1162,7 +1227,7 @@ fn parse_component(
         };
         match parse_validator(
             data,
-            prefixes,
+            (prefixes, profile),
             component,
             &node,
             attachment,

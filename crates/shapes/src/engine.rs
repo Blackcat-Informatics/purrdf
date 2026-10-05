@@ -411,7 +411,7 @@ impl PreparedTargets {
         classes: &ClassCatalog,
     ) -> Result<Self, String> {
         let mut prepared = Self::default();
-        for target in &shape.targets {
+        for (index, target) in shape.targets.iter().enumerate() {
             match target {
                 Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
                     // `None` = the data graph names no such class, so the target
@@ -431,14 +431,8 @@ impl PreparedTargets {
                     }
                 }
                 Target::Node(term) => prepared.insert_explicit(data.core_view(), term.clone()),
-                Target::Sparql {
-                    select,
-                    ask,
-                    substitutions,
-                } => {
-                    let candidates =
-                        crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
-                            .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))?;
+                Target::Sparql { select, ask, .. } => {
+                    let candidates = source_sparql_target(data, &shape.id, index, target)?;
                     match ask {
                         // SHACL-AF §3.1: the SELECT's results are what a whole validation
                         // enumerates; a candidate is a target node when the ASK says so,
@@ -699,6 +693,38 @@ fn target_ask(data: &ShaclData, ask: &str, focus: &FocusNode) -> Result<bool, St
     let term = focus.to_term(data.core_view());
     crate::sparql::eval_target_ask_view(data.sparql_view(), ask, &term)
         .map_err(|error| format!("sh:target SPARQLTarget sh:ask failed: {error}"))
+}
+
+/// The source occurrence, rather than supplied substitutions, distinguishes a
+/// plain target from a target type and preserves absent optional declarations.
+fn source_sparql_target(
+    data: &ShaclData,
+    shape: &Term,
+    index: usize,
+    target: &Target,
+) -> Result<Vec<Term>, String> {
+    let Target::Sparql {
+        select,
+        substitutions,
+        ..
+    } = target
+    else {
+        unreachable!("only a SPARQL target reaches its query executor")
+    };
+    let query_law = crate::query_law::current();
+    let invocation = match &query_law {
+        Some(law) => law.target_invocation(shape, index, target)?,
+        None => crate::query_law::Invocation::without_parameters(
+            crate::profile::QueryPurpose::SelectTarget,
+        ),
+    };
+    crate::sparql::eval_target_with_invocation_view(
+        data.sparql_view(),
+        select,
+        substitutions,
+        invocation,
+    )
+    .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))
 }
 
 /// The DUAL of [`PreparedTargets`]: which shapes claim a node, rather than which
@@ -1146,7 +1172,7 @@ pub(crate) fn resolve_focus_nodes(
     let mut seen_foreign: FastSet<Term> = FastSet::default();
     let mut nodes: Vec<FocusNode> = Vec::new();
 
-    for target in targets {
+    for (index, target) in targets.iter().enumerate() {
         let ids = match target {
             Target::Class(class_iri) => {
                 Some(instances_of_class(data, class_iri, binding, classes)?)
@@ -1180,12 +1206,7 @@ pub(crate) fn resolve_focus_nodes(
             Target::Node(term) => vec![term.clone()],
             // SELECT-form is enforced at shape-load; residual evaluation failures
             // remain hard validation errors.
-            Target::Sparql {
-                select,
-                substitutions,
-                ..
-            } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
-                .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
+            Target::Sparql { .. } => source_sparql_target(data, shape, index, target)?,
             Target::NodeExpression(expr) => crate::target_eval::node_expression_targets(
                 data,
                 shape,
@@ -1527,7 +1548,7 @@ impl CompletePreparedValidator {
 
     /// Apply a report mapping law to already-admitted evaluation. Full dated
     /// request admission and XPath selection belong to the request boundary.
-    fn validate_report_with_focus_filter<F>(
+    pub(crate) fn validate_report_with_focus_filter<F>(
         &self,
         profile: crate::profile::ShaclProfile,
         include_focus: F,
@@ -1553,12 +1574,26 @@ impl CompletePreparedValidator {
         >,
     ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
     {
-        let capture = crate::report::ReportCapture::new(&self.validator.shapes, profile);
+        let sources = self.validator.shapes.report_sources_with_profile(profile)?;
+        let capture = crate::report::ReportCapture::with_sources(
+            &self.validator.shapes,
+            profile,
+            Some(&sources),
+        );
+        let query_scope = crate::query_law::enter(profile, Some(&sources));
         let outcome = evaluate(&capture);
         if let Some(state) = crate::sparql::current_governors()
             && let Some(error) = crate::report::CompleteValidationError::resource(&state)
         {
             return Err(error);
+        }
+        if outcome.is_err()
+            && let Some(failure) = query_scope
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.take_failure())
+        {
+            capture.refuse(failure);
         }
         let records = outcome.map_err(|error| {
             capture

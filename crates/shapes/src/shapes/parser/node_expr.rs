@@ -483,55 +483,7 @@ impl Parser<'_> {
         let mut sparql_cnodes: Vec<Term> = self.objects_of(id, sh::SPARQL);
         crate::term::sort_terms_canonical(&mut sparql_cnodes);
         for c_node in sparql_cnodes {
-            // sh:select is required.
-            let raw_select = self
-                .first_object_of(&c_node, sh::SELECT)
-                .and_then(|t| match t {
-                    Term::Literal(lit) => Some(lit.value().to_owned()),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "sh:sparql constraint on shape {id} is missing a sh:select string literal"
-                    )
-                })?;
-            // SHACL-AF sh:prefixes may be declared on the shape or the sh:sparql node.
-            let select = format!("{}{raw_select}", self.prefix_header(&[id, &c_node])?);
-
-            // Parse-time query validation via the native parser (hard-fail on
-            // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
-            // DESCRIBE parse but cannot bind ?this and would panic at eval — reject
-            // at the boundary.
-            match SparqlParser::new().parse_query(&select) {
-                Ok(query @ Query::Select { .. }) => {
-                    // The query runs with $this pre-bound to each focus node;
-                    // the pre-binding restrictions of SHACL 1.2 SPARQL
-                    // Extensions, Appendix A (no
-                    // MINUS / SERVICE / VALUES, no `AS $this`, subqueries must
-                    // project $this) reject it as a hard failure at load.
-                    // Typed ([`crate::error::ShapesError::Prebinding`]) like every other
-                    // executed query's violation: this constraint executes wherever the
-                    // shape does.
-                    if let Err(e) = crate::prebinding::check_select(&query, &["this"]) {
-                        return Err(self.refuse_prebinding(
-                            crate::error::PrebindingViolation::new(
-                                format!("sh:sparql constraint {c_node} on shape {id}"),
-                                e,
-                            ),
-                        ));
-                    }
-                }
-                Ok(_) => {
-                    return Err(format!(
-                        "sh:sparql constraint on shape {id} must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid SHACL-SPARQL)"
-                    ));
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "sh:sparql constraint on shape {id} has an unparsable sh:select query: {e}"
-                    ));
-                }
-            }
+            let select = self.sparql_constraint_query(id, &c_node)?;
 
             // Optional per-constraint sh:message / sh:severity overrides.
             let messages = self.messages_of(&c_node)?;
@@ -551,6 +503,7 @@ impl Parser<'_> {
             if !matches!(annotated, Annotated::Deactivated) {
                 self.sparql_sources
                     .borrow_mut()
+                    .constraints
                     .entry(id.clone())
                     .or_default()
                     .insert(
@@ -705,6 +658,7 @@ impl Parser<'_> {
             triples: Vec<(String, Term)>,
             validator_messages: Vec<Literal>,
             component_messages: Vec<Literal>,
+            parameters: Vec<String>,
         }
         let mut usages = Vec::new();
         let mut inert: Vec<(String, Term)> = Vec::new();
@@ -751,28 +705,24 @@ impl Parser<'_> {
                 }
                 continue;
             };
-            // The selected validator is the query this use executes, with `$this`, the
-            // parameters and (for ASK) `$value` pre-bound: a pre-binding violation in it
-            // is the failure SHACL 1.2 SPARQL Extensions, Appendix A requires ("MUST
-            // report a failure when it is operating on a shapes graph that contains
-            // SHACL-SPARQL queries ... that are executed with pre-bound variables and
-            // violate any of these MUST restrictions"). A violating validator no use
-            // selects never executes and does not refuse; `lint` lists it.
-            if let Some(message) = &validator.prebinding {
-                return Err(
-                    self.refuse_prebinding(crate::error::PrebindingViolation::new(
-                        format!(
-                            "{}, which shape {id} executes on a {} shape",
-                            validator.declaration(component.id.as_str()),
-                            if is_property_shape {
-                                "property"
-                            } else {
-                                "node"
-                            },
-                        ),
-                        message.clone(),
-                    )),
-                );
+            // REC component declarations were admitted graph-wide. Compatibility
+            // keeps its selected-validator boundary; the draft checks actual
+            // execution, so deactivation and empty focus/value sets do not trip it.
+            if let Some(message) = &validator.prebinding
+                && message.requires_parse_failure()
+            {
+                return Err(self.refuse_query(
+                    format!(
+                        "{}, which shape {id} executes on a {} shape",
+                        validator.declaration(component.id.as_str()),
+                        if is_property_shape {
+                            "property"
+                        } else {
+                            "node"
+                        },
+                    ),
+                    message.clone(),
+                ));
             }
 
             for bindings in instances {
@@ -811,6 +761,11 @@ impl Parser<'_> {
                     triples,
                     validator_messages: validator.messages.clone(),
                     component_messages: component.messages.clone(),
+                    parameters: component
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.name.clone())
+                        .collect(),
                 });
             }
         }
@@ -822,6 +777,7 @@ impl Parser<'_> {
             triples,
             validator_messages,
             component_messages,
+            parameters,
         } in usages
         {
             let triples: Vec<(&str, &Term)> = triples
@@ -832,6 +788,7 @@ impl Parser<'_> {
             if !matches!(annotated, Annotated::Deactivated) {
                 self.sparql_sources
                     .borrow_mut()
+                    .constraints
                     .entry(id.clone())
                     .or_default()
                     .insert(
@@ -841,6 +798,7 @@ impl Parser<'_> {
                                 definition: constraint.clone(),
                                 validator_messages,
                                 component_messages,
+                                parameters,
                             },
                         ),
                     );
