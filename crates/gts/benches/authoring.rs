@@ -26,7 +26,9 @@
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
 use purrdf_ed25519::SigningKey;
 use purrdf_lex::cbor::Value;
-use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
+use purrdf_testkit::bench::{
+    BatchSize, Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box,
+};
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::compact::{CompactionParams, DictPlan, DictStrategy, compact_streamable};
@@ -229,6 +231,122 @@ fn bench_mmr_root(c: &mut Bench) {
             black_box(root);
         });
     });
+    group.finish();
+}
+
+/// Matched schedules publish once at count zero and after each appended id.
+fn incremental_publications(frame_ids: &[Vec<u8>]) -> Vec<u8> {
+    let mut frontier = mmr::MmrPeaks::default();
+    let mut published = black_box(frontier.root());
+    for frame_id in frame_ids {
+        frontier
+            .push(black_box(frame_id))
+            .expect("benchmark count fits");
+        published = black_box(frontier.root());
+    }
+    published
+}
+
+/// The batch control rehashes the same prefixes on the same publication schedule.
+fn batch_publications(frame_ids: &[Vec<u8>]) -> Vec<u8> {
+    let mut published = black_box(mmr::root(&[]));
+    for count in 1..=frame_ids.len() {
+        published = black_box(mmr::root(black_box(&frame_ids[..count])));
+    }
+    published
+}
+
+/// Append carry boundaries, roots from retained peaks and complete tail publication.
+fn bench_mmr_incremental(c: &mut Bench) {
+    let frame_ids: Vec<Vec<u8>> = (0..=MMR_FRAME_IDS)
+        .map(|index| seeded_payload(32, index))
+        .collect();
+    let mut group = c.benchmark_group("gts_mmr_incremental");
+    group.throughput(Throughput::Elements(1));
+    for count in [0, 31, 32, 1023, 1024, 4095, 4096] {
+        let mut frontier = mmr::MmrPeaks::default();
+        for frame_id in &frame_ids[..count] {
+            frontier.push(frame_id).expect("fixture count fits");
+        }
+        let window = CurrentThreadWindow::open();
+        let root = frontier.root();
+        let root_alloc = window.close();
+        assert_eq!(root, mmr::root(&frame_ids[..count]));
+        let mut appended = frontier.clone();
+        let window = CurrentThreadWindow::open();
+        appended.push(&frame_ids[count]).expect("one append fits");
+        let append_alloc = window.close();
+        assert_eq!(appended.root(), mmr::root(&frame_ids[..=count]));
+        println!(
+            "[gts_mmr_incremental] count={count} peaks={} append_allocations={} append_bytes={} root_allocations={} root_bytes={}",
+            frontier.peaks().len(),
+            append_alloc.allocations,
+            append_alloc.requested_bytes,
+            root_alloc.allocations,
+            root_alloc.requested_bytes
+        );
+        group.bench_with_input(
+            BenchmarkId::new("append", count),
+            &frontier,
+            |bencher, state| {
+                // Each iteration starts from the same count. Clone/setup and state
+                // destruction are outside the timed region; only push is measured.
+                bencher.iter_batched_ref(
+                    || state.clone(),
+                    |state| {
+                        state
+                            .push(black_box(&frame_ids[count]))
+                            .expect("append fits");
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("root_from_peaks", count),
+            &frontier,
+            |bencher, state| {
+                bencher.iter(|| black_box(state).root());
+            },
+        );
+    }
+    for count in [64, 1024] {
+        let ids = &frame_ids[..count];
+        let window = CurrentThreadWindow::open();
+        let incremental = incremental_publications(ids);
+        let incremental_alloc = window.close();
+        let window = CurrentThreadWindow::open();
+        let batch = batch_publications(ids);
+        let batch_alloc = window.close();
+        assert_eq!(
+            incremental, batch,
+            "identical tail and publication schedule"
+        );
+        assert_eq!(incremental, mmr::root(ids));
+        println!(
+            "[gts_mmr_incremental] tail={count} publications={} incremental_allocations={} incremental_bytes={} batch_allocations={} batch_bytes={}",
+            count + 1,
+            incremental_alloc.allocations,
+            incremental_alloc.requested_bytes,
+            batch_alloc.allocations,
+            batch_alloc.requested_bytes
+        );
+        group.throughput(Throughput::Elements((count + 1) as u64));
+        group.bench_with_input(
+            BenchmarkId::new("incremental_publications", count),
+            &ids,
+            |bencher, ids| {
+                bencher.iter(|| incremental_publications(black_box(ids)));
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("batch_publications", count),
+            &ids,
+            |bencher, ids| {
+                bencher.iter(|| batch_publications(black_box(ids)));
+            },
+        );
+    }
     group.finish();
 }
 
@@ -659,6 +777,7 @@ bench_group!(
     bench_snapshot_authoring,
     bench_canonical_authoring,
     bench_mmr_root,
+    bench_mmr_incremental,
     bench_verify,
     bench_dict_compaction,
     bench_reader_scaling,
