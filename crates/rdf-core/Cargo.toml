@@ -102,6 +102,10 @@ purrdf-testkit = { workspace = true }
 name = "segmented"
 harness = false
 
+[[test]]
+name = "dataset_state_digest"
+harness = false
+
 [[bench]]
 # IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
 # iteration + allocated-bytes/count/peak reporting. Satisfies the RFC gate
