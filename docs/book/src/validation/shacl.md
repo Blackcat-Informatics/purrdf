@@ -512,8 +512,8 @@ when a shape reaches such a `sh:select` node expression. A function's or target
 type's parameters are its pre-bound variables. A node expression's are `$this`
 and every name its context binds: `$value` inside `sh:expression`, a custom
 function's arguments inside its body and a free evaluation's scope names. Each is
-held to the same rule as `$this`, and a node expression's query that breaks it is
-refused when the shapes graph loads, wherever the expression sits. This is stricter than the engine's own lanes:
+held to the same rule as `$this`, and a node expression's query that breaks it
+fails the load when a shape reaches the expression. This is stricter than the engine's own lanes:
 a prepared execution or a request's substitutions answer `VALUES` and `MINUS` over
 a pre-bound name by join semantics (see
 [Pre-bound variables](../sparql/querying.md#pre-bound-variables)). A validator of a built-in component never runs, and neither does a
