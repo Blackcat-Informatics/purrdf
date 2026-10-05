@@ -656,7 +656,7 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     // op:numeric-equal)` (and the `greater-than` twin), every one of which is false
     // for a NaN operand (XPath F&O §4.3), so `NaN <= NaN` is false, not `true`.
     if ta == tb {
-        let kept = keep(Ordering::Equal) && !xsd_of_term(ctx, ta)?.as_ref().is_some_and(is_xsd_nan);
+        let kept = keep(Ordering::Equal) && !term_is_nan(ctx, ta)?;
         return Ok(Some(intern_boolean(ctx, kept)?));
     }
     // Value-space comparison over borrowed term views (no owned TermValue
@@ -717,7 +717,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     // except NaN: `=` on numerics is `op:numeric-equal`, which is false for a NaN
     // operand even where `sameTerm` is true (SPARQL 1.2 §17.4.2.2).
     if ta == tb {
-        let equal = !xsd_of_term(ctx, ta)?.as_ref().is_some_and(is_xsd_nan);
+        let equal = !term_is_nan(ctx, ta)?;
         return Ok(Some(intern_boolean(ctx, equal)?));
     }
     // Distinct `SolutionTerm`s are distinct RDF terms BY CONSTRUCTION: the dataset
@@ -853,6 +853,20 @@ fn is_xsd_nan(x: &XsdValue) -> bool {
 /// `op:numeric-equal`, `op:numeric-less-than`, `op:numeric-greater-than`), which the
 /// SPARQL operator mapping (§17.3) applies to `=`, `<`, `>`, `<=`, `>=` and — through
 /// `fn:not(op:numeric-equal)` — makes `!=` `true`.
+/// Whether `term` is a NaN of `xsd:double` or `xsd:float`.
+///
+/// Out of line on purpose. Its caller is reached from the expression evaluator, which
+/// recurses once per nested `EXISTS`; an inlined copy would carry an `XsdValue`
+/// temporary in every level's frame, for a question the identical-term shortcut asks
+/// once.
+#[inline(never)]
+fn term_is_nan<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Result<bool, EvalError> {
+    Ok(xsd_of_term(ctx, term)?.as_ref().is_some_and(is_xsd_nan))
+}
+
 fn is_numeric_nan_pair(ax: &XsdValue, bx: &XsdValue) -> bool {
     ax.is_numeric() && bx.is_numeric() && (is_xsd_nan(ax) || is_xsd_nan(bx))
 }
@@ -4461,6 +4475,7 @@ enum ValueCast {
 ///   only its own component (months, or seconds).
 /// * `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes.
 /// * A value casts to its own datatype unchanged; every other pair is refused.
+#[inline(never)] // Out of the evaluator's frame; see `term_is_nan`.
 fn cast_duration_or_binary(source: &TermValue, target: XsdDatatype) -> ValueCast {
     value_cast(source, target).map_or(ValueCast::NotApplicable, ValueCast::Cast)
 }
@@ -4553,6 +4568,7 @@ fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue
 /// every row, and the caller copies the lexical form of a source it has no XPath
 /// string form for). An IRI source is admitted here and refused by the caller's
 /// literal match for every other target (the table's `IRI` row).
+#[inline(never)] // Out of the evaluator's frame; see `term_is_nan`.
 fn cast_source_admitted(source: &TermValue, target: XsdDatatype) -> bool {
     let TermValue::Literal {
         datatype, language, ..
