@@ -3071,3 +3071,106 @@ fn the_cli_reads_the_sha3_hyphen_as_part_of_the_name() {
         "STRLEN(SHA3-256(?m)) - 4 must be 64 - 4; got:\n{body}"
     );
 }
+
+/// A refused query or update reports the parser's condition in the same bytes
+/// whatever renders it: one case per parse-failure kind (lexical, syntax,
+/// unsupported construct, IRI, CDT arity), each pinned to the exact line on
+/// stderr, with exit 1 and nothing on stdout. Values that look like template text
+/// (a quoted IRI, a non-ASCII scalar) render verbatim. A valid neighbour of each
+/// failing shape still runs.
+#[test]
+fn parse_refusals_render_each_condition_in_its_exact_words() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA_TTL);
+    let relative_no_base = "iri-relative-no-base: relative IRI reference \"relative\" cannot \
+         be resolved: no base IRI is in scope; add a base to the document (`@base`/`BASE` in \
+         Turtle-family syntaxes, `xml:base` in RDF/XML) or pass a base IRI to the API";
+    let query_cases = [
+        (
+            "SELECT * WHERE { ?s ?p \"unterminated }".to_owned(),
+            "SPARQL lex error at byte 23: unterminated string literal".to_owned(),
+        ),
+        (
+            "SELECT * WHERE { ?s ?p ?o } \u{a4}".to_owned(),
+            "SPARQL lex error at byte 28: unexpected character '\u{a4}'".to_owned(),
+        ),
+        (
+            "ASK {".to_owned(),
+            "SPARQL syntax error at byte 5: expected an RDF term, found None".to_owned(),
+        ),
+        (
+            "SELECT * WHERE { _:b ?p ?o OPTIONAL { _:b ?q ?v } }".to_owned(),
+            "SPARQL syntax error at byte 38: blank node label _:b is used in two different \
+             basic graph patterns; a blank node label is scoped to the one basic graph \
+             pattern it appears in"
+                .to_owned(),
+        ),
+        (
+            "ASK {} ORDER BY ?x".to_owned(),
+            "unsupported SPARQL construct: solution modifiers on ASK is outside the SPARQL \
+             1.2 query language this processor implements"
+                .to_owned(),
+        ),
+        (
+            "SELECT * WHERE { <relative> ?p ?o }".to_owned(),
+            format!("invalid IRI \"relative\" in term position: {relative_no_base}"),
+        ),
+        (
+            "SELECT (<http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map>(\"key\") AS ?m) WHERE {}"
+                .to_owned(),
+            "SPARQL syntax error at byte 57: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map> \
+             takes an even number of arguments (key/value pairs), not 1"
+                .to_owned(),
+        ),
+        (
+            "SELECT (<http://w3id.org/awslabs/neptune/SPARQL-CDTs/put>(1) AS ?m) WHERE {}"
+                .to_owned(),
+            "SPARQL syntax error at byte 57: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/put> \
+             takes 2 to 3 arguments, not 1"
+                .to_owned(),
+        ),
+    ];
+    for (query, english) in &query_cases {
+        let out = run(&["query", "--data", &data, "--results-format", "json", query]);
+        assert_eq!(out.status.code(), Some(1), "{query}: {}", stderr(&out));
+        assert!(
+            out.stdout.is_empty(),
+            "{query}: a refusal writes no results"
+        );
+        assert_eq!(
+            stderr(&out),
+            format!("purrdf: error native-sparql-query-parse: {english}\n"),
+            "{query}"
+        );
+    }
+    let update_cases = [
+        (
+            "DELETE WHERE {",
+            "SPARQL syntax error at byte 14: expected an RDF term, found None".to_owned(),
+        ),
+        (
+            "INSERT DATA { <relative> <http://example.org/p> 1 }",
+            format!("invalid IRI \"relative\" in term position: {relative_no_base}"),
+        ),
+    ];
+    for (update, english) in &update_cases {
+        let out = run(&["update", "--data", &data, "--to", "nquads", update]);
+        assert_eq!(out.status.code(), Some(1), "{update}: {}", stderr(&out));
+        assert_eq!(
+            stderr(&out),
+            format!("purrdf: error native-sparql-update-parse: {english}\n"),
+            "{update}"
+        );
+    }
+    // Valid neighbours of the refused shapes still run.
+    for query in [
+        "SELECT * WHERE { ?s ?p \"Alice\" }",
+        "ASK {}",
+        "SELECT * WHERE { _:b ?p ?o OPTIONAL { ?o ?q ?v } }",
+        "SELECT * WHERE { <http://example.org/alice> ?p ?o }",
+        "SELECT (<http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map>(\"k\", 1) AS ?m) WHERE {}",
+    ] {
+        let out = run(&["query", "--data", &data, "--results-format", "json", query]);
+        assert!(out.status.success(), "{query}: {}", stderr(&out));
+    }
+}

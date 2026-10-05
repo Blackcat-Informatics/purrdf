@@ -857,6 +857,8 @@ function jobFailure(job, signal) {
       break;
   }
   error.code = code;
+  const presentation = job.errorPresentation;
+  if (presentation !== undefined) error.presentation = JSON.parse(presentation);
   error.evidence = evidence;
   return error;
 }
