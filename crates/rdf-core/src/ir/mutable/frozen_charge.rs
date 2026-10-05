@@ -5,28 +5,48 @@
 //! before the freeze allocates it.
 //!
 //! [`super::MutableDataset::append_delta`] interns, into a fresh builder, every
-//! term of every live added row and every declared graph name. The
-//! builder dedups terms by value and stores a literal's datatype and each triple
-//! component as terms of their own. This walk mirrors that interning without
-//! materialising a value: each distinct term is keyed by its borrowed parts and
-//! by the keys of the terms below it, so a term is hashed in time proportional
-//! to its own parts, however deep its nesting.
+//! term of every live added row and every declared graph name. This walk mirrors
+//! that interning term for term, without materialising a value, and must agree
+//! with [`RdfDatasetBuilder`](crate::ir::RdfDatasetBuilder) on every rule that
+//! decides whether two values are one interned term and what it stores:
+//!
+//! - an IRI is stored as written, and a blank node as its `(label, scope)` pair;
+//! - a literal's datatype is a term of its own, and a language tag names the
+//!   datatype whatever the explicit one says
+//!   ([`RdfLiteral::language_datatype_iri`](crate::RdfLiteral::language_datatype_iri));
+//! - a language tag is keyed and stored folded
+//!   ([`interned_language`](crate::ir::term::interned_language), the builder's own
+//!   fold);
+//! - a composite (`cdt:List` / `cdt:Map`) literal interns every blank node its
+//!   lexical form embeds
+//!   ([`cdt_embedded_blanks`](crate::cdt_blank::cdt_embedded_blanks), the
+//!   builder's own extraction);
+//! - a triple term is identified by its interned components, each a term of its
+//!   own.
+//!
+//! Each distinct term is keyed by its borrowed parts and by the indices of the
+//! terms below it, so a term is hashed in time proportional to its own parts,
+//! however deep its nesting, and the walk keeps its own work list rather than
+//! the call stack.
+
+use std::borrow::Cow;
 
 use crate::RdfTextDirection;
 use crate::hash::FastMap;
+use crate::ir::term::interned_language;
 use crate::ir::{BlankScope, RdfDataset, TermId, TermRef, TermValue};
 
-/// One distinct term of the frozen delta.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// One distinct term of the frozen delta, keyed as the builder dedups it.
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum Key<'a> {
     /// A term the base already holds: the delta builder interns its value again.
     Base(TermId),
     Iri(&'a str),
-    Blank(&'a str, BlankScope),
+    Blank(Cow<'a, str>, BlankScope),
     Literal {
         lexical: &'a str,
         datatype: u32,
-        language: Option<&'a str>,
+        language: Option<Cow<'a, str>>,
         direction: Option<RdfTextDirection>,
     },
     Triple(u32, u32, u32),
@@ -68,7 +88,27 @@ impl<'a> FrozenTerms<'a> {
         })
     }
 
-    /// Charge a base term and, below it, its datatype or triple components.
+    /// Charge the blank nodes a composite literal's lexical form embeds, exactly as
+    /// the builder interns them alongside the literal.
+    fn embedded_blanks(&mut self, lexical: &str, datatype: &str) {
+        for (label, scope) in crate::cdt_blank::cdt_embedded_blanks(lexical, datatype) {
+            self.blank(Cow::Owned(label), scope);
+        }
+    }
+
+    /// Charge a blank node the base may or may not hold.
+    fn blank(&mut self, label: Cow<'a, str>, scope: BlankScope) -> u32 {
+        match self.base.term_id_by_blank(&label, scope) {
+            Some(id) => self.base_term(id),
+            None => {
+                let text = label.len();
+                self.charge(Key::Blank(label, scope), text)
+            }
+        }
+    }
+
+    /// Charge a base term and, below it, its datatype, embedded blanks or triple
+    /// components.
     pub(super) fn base_term(&mut self, id: TermId) -> u32 {
         let base = self.base;
         let mut pending = vec![id];
@@ -86,6 +126,19 @@ impl<'a> FrozenTerms<'a> {
                     ..
                 } => {
                     pending.push(datatype);
+                    if let TermRef::Iri(datatype) = base.resolve(datatype) {
+                        for (label, scope) in
+                            crate::cdt_blank::cdt_embedded_blanks(lexical, datatype)
+                        {
+                            match base.term_id_by_blank(&label, scope) {
+                                Some(blank) => pending.push(blank),
+                                None => {
+                                    let text = label.len();
+                                    self.charge(Key::Blank(Cow::Owned(label), scope), text);
+                                }
+                            }
+                        }
+                    }
                     lexical.len() + language.map_or(0, str::len)
                 }
                 TermRef::Triple { s, p, o } => {
@@ -106,8 +159,9 @@ impl<'a> FrozenTerms<'a> {
         }
     }
 
-    /// Charge a term value and everything below it, bottom up over a work list.
-    pub(super) fn value(&mut self, value: &'a TermValue) {
+    /// Charge a term value and everything below it, bottom up over a work list;
+    /// the index of the value's own term.
+    pub(super) fn value(&mut self, value: &'a TermValue) -> u32 {
         // Each entry is a term and whether its components are already charged; a
         // charged term leaves its `(index, base id)` on `done`.
         let mut pending: Vec<(&'a TermValue, bool)> = vec![(value, false)];
@@ -136,45 +190,47 @@ impl<'a> FrozenTerms<'a> {
                     (self.iri(iri), id)
                 }
                 TermValue::Blank { label, scope } => {
-                    match self.base.term_id_by_blank(label, *scope) {
-                        Some(id) => (self.base_term(id), Some(id)),
-                        None => (self.charge(Key::Blank(label, *scope), label.len()), None),
-                    }
+                    let id = self.base.term_id_by_blank(label, *scope);
+                    (self.blank(Cow::Borrowed(label), *scope), id)
                 }
                 TermValue::Literal {
                     lexical_form,
                     datatype,
                     language,
                     direction,
-                } => match self.base.term_id_by_literal(
-                    lexical_form,
-                    datatype,
-                    language.as_deref(),
-                    *direction,
-                ) {
-                    Some(id) => (self.base_term(id), Some(id)),
-                    None => {
-                        // A language tag names the datatype whatever the explicit one
-                        // says, exactly as the builder interns it.
-                        let datatype = if language.is_some() {
-                            crate::RdfLiteral::language_datatype_iri(*direction)
-                        } else {
-                            datatype.as_str()
-                        };
-                        let datatype = self.iri(datatype);
-                        let text = lexical_form.len() + language.as_ref().map_or(0, String::len);
-                        let key = Key::Literal {
-                            lexical: lexical_form,
-                            datatype,
-                            language: language.as_deref(),
-                            direction: *direction,
-                        };
-                        (self.charge(key, text), None)
+                } => {
+                    let language = language.as_deref().map(interned_language);
+                    match self.base.term_id_by_literal(
+                        lexical_form,
+                        datatype,
+                        language.as_deref(),
+                        *direction,
+                    ) {
+                        Some(id) => (self.base_term(id), Some(id)),
+                        None => {
+                            let datatype = if language.is_some() {
+                                crate::RdfLiteral::language_datatype_iri(*direction)
+                            } else {
+                                datatype.as_str()
+                            };
+                            let datatype_index = self.iri(datatype);
+                            self.embedded_blanks(lexical_form, datatype);
+                            let text =
+                                lexical_form.len() + language.as_ref().map_or(0, |l| l.len());
+                            let key = Key::Literal {
+                                lexical: lexical_form,
+                                datatype: datatype_index,
+                                language,
+                                direction: *direction,
+                            };
+                            (self.charge(key, text), None)
+                        }
                     }
-                },
+                }
             };
             done.push(charged);
         }
         debug_assert_eq!(done.len(), 1, "exactly the value is left charged");
+        done.pop().expect("the value was charged").0
     }
 }

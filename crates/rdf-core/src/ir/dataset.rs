@@ -1396,10 +1396,8 @@ impl RdfDataset {
         } else {
             datatype
         };
-        let lowered = language
-            .filter(|tag| !purrdf_iri::langtag::is_identity_folded(tag))
-            .map(purrdf_iri::langtag::identity_fold);
-        let language = lowered.as_deref().or(language);
+        let language = language.map(super::term::interned_language);
+        let language = language.as_deref();
 
         let datatype_id = self.term_id_by_iri(datatype)?;
         let hash = crate::hash::hash_literal_for_interner(

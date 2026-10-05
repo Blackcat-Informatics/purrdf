@@ -226,6 +226,18 @@ pub(crate) struct StrRange {
     pub len: u32,
 }
 
+/// A language tag as the term interner keys and stores it: folded by
+/// [`purrdf_iri::langtag::identity_fold`], borrowed when the tag is already folded.
+/// The builder, the frozen lookup and the snapshot charge all key literals through
+/// this one function, so their notions of "the same literal" cannot drift.
+pub(crate) fn interned_language(tag: &str) -> std::borrow::Cow<'_, str> {
+    if purrdf_iri::langtag::is_identity_folded(tag) {
+        std::borrow::Cow::Borrowed(tag)
+    } else {
+        std::borrow::Cow::Owned(purrdf_iri::langtag::identity_fold(tag))
+    }
+}
+
 /// Append `s` to `arena` and return the range it occupies: the one writer of the
 /// term arenas [`arena_str`] reads.
 ///

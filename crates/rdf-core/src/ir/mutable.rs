@@ -862,24 +862,42 @@ impl MutableDataset {
         let mut stats = super::view_accounting::ViewStats::default();
         stats.retain(&self.base);
         stats.retained_sources += 1;
-        let (terms, payload) = self.frozen_delta_charge();
-        stats.retained_terms = stats.retained_terms.saturating_add(terms);
-        stats.retained_rows = stats.retained_rows.saturating_add(self.added.len());
-        stats.retained_payload_bytes = stats.retained_payload_bytes.saturating_add(payload);
+        let charge = self.frozen_delta_charge();
+        stats.retained_terms = stats.retained_terms.saturating_add(charge.terms);
+        stats.retained_rows = stats.retained_rows.saturating_add(charge.rows);
+        stats.retained_payload_bytes = stats
+            .retained_payload_bytes
+            .saturating_add(charge.payload_bytes);
         // The construction charge `DeltaDatasetView::new` makes for the same delta.
-        stats.auxiliary_bytes = terms
+        stats.auxiliary_bytes = charge
+            .terms
             .saturating_mul(DeltaDatasetView::AUXILIARY_BYTES_PER_DELTA_TERM)
             .saturating_add(
                 self.suppressed
                     .len()
-                    .saturating_add(self.added.len())
+                    .saturating_add(charge.rows)
                     .saturating_mul(4 * size_of::<super::QuadIds>()),
             );
         limits.check(&stats)?;
         let mut builder = self.base.rebuild_builder();
         self.append_delta(&mut builder);
         let delta = builder.freeze()?;
-        // A later view-retention refusal does not undo a completed native freeze.
+        debug_assert_eq!(
+            (
+                delta.term_count(),
+                delta.rdf_row_count(),
+                delta.rdf_payload_bytes()
+            ),
+            (charge.terms, charge.rows, charge.payload_bytes),
+            "the pre-freeze charge is exactly what the frozen delta retains"
+        );
+        // `DeltaDatasetView::new` below checks the same limits once more, over stats
+        // it computes from the frozen base and delta: sources, the base's share, and
+        // the delta's terms, rows and payload are the values charged above (the
+        // assertion pins the delta's), and its auxiliary charge is the same formula
+        // over the same counts. Every quantity is equal, so a snapshot admitted above
+        // is admitted there and its refusal is unreachable; the `?` keeps the view's
+        // own constructor total rather than trusting this caller.
         self.work.add(super::view_accounting::ViewWork {
             copied_terms: delta.term_count(),
             copied_rows: delta.rdf_row_count(),
@@ -915,38 +933,53 @@ impl MutableDataset {
         Ok(view)
     }
 
-    /// The distinct terms and the payload bytes the frozen delta of a snapshot will
-    /// retain, counted before [`Self::append_delta`] builds it, so a retention limit
-    /// refuses an oversized delta before the freeze allocates it.
+    /// What the frozen delta of a snapshot will retain — its distinct terms, its
+    /// distinct rows and its payload bytes — counted before [`Self::append_delta`]
+    /// builds it, so a retention limit refuses an oversized delta before the freeze
+    /// allocates it.
     ///
-    /// Only what the freeze interns is charged: the terms of the live added rows —
-    /// with each literal's datatype and each triple component, as the builder stores
-    /// them; an `rdf:reifies` declaration becomes a reifier row, and the builder
-    /// interns its predicate all the same — and every declared graph name. A delta value whose rows
-    /// were all removed stays in the delta interner but is never frozen, so it is not
-    /// charged. The payload is the frozen delta's arena text, term records, row
-    /// records and named-graph entries. Each charge is one the frozen delta carries,
-    /// so this check never refuses a snapshot the post-freeze check would admit.
-    fn frozen_delta_charge(&self) -> (usize, usize) {
+    /// Only what the freeze interns is charged: the terms of the live added rows and
+    /// every declared graph name, walked by [`frozen_charge::FrozenTerms`] under the
+    /// builder's own identity rules (see that module). A delta value whose rows were
+    /// all removed stays in the delta interner but is never frozen, so it is not
+    /// charged. Rows are counted as the builder stores them: each table keeps one
+    /// row per distinct tuple of interned ids, so two added rows whose objects fold
+    /// to one literal are one row. The payload is the frozen delta's arena text,
+    /// term records, row records and named-graph entries.
+    ///
+    /// The charge is exact, not an estimate: it equals what
+    /// [`RdfDataset::term_count`], [`RdfDataset::rdf_row_count`] and
+    /// [`RdfDataset::rdf_payload_bytes`] report for the frozen delta, which
+    /// [`Self::snapshot_view_with_limits`] asserts in debug builds.
+    fn frozen_delta_charge(&self) -> FrozenDeltaCharge {
         let mut terms = frozen_charge::FrozenTerms::new(&self.base);
+        let mut delta_index: FastMap<DeltaTermId, u32> = FastMap::default();
         let mut graphs: FastSet<MutTermId> = FastSet::default();
+        let mut rows: FastSet<(bool, u32, u32, u32, Option<u32>)> = FastSet::default();
         let mut row_bytes = 0_usize;
         // Counting only: the visiting order of `added` is never observed.
         for key in &self.added {
+            let mut index = |id: MutTermId| match id {
+                MutTermId::Base(id) => terms.base_term(id),
+                MutTermId::Delta(id) => *delta_index
+                    .entry(id)
+                    .or_insert_with(|| terms.value(self.delta.value(id))),
+            };
             let declaration = self.is_reifier_declaration(key);
-            row_bytes = row_bytes.saturating_add(if declaration {
-                size_of::<super::dataset::ReifierRow>()
-            } else {
-                size_of::<super::dataset::QuadRow>().min(size_of::<super::dataset::AnnotationRow>())
-            });
-            let components = [Some(key.s), Some(key.p), Some(key.o), key.g];
-            for id in components.into_iter().flatten() {
-                match id {
-                    MutTermId::Base(id) => {
-                        terms.base_term(id);
-                    }
-                    MutTermId::Delta(id) => terms.value(self.delta.value(id)),
-                }
+            let row = (
+                declaration,
+                index(key.s),
+                index(key.p),
+                index(key.o),
+                key.g.map(&mut index),
+            );
+            if rows.insert(row) {
+                row_bytes = row_bytes.saturating_add(if declaration {
+                    size_of::<super::dataset::ReifierRow>()
+                } else {
+                    size_of::<super::dataset::QuadRow>()
+                        .min(size_of::<super::dataset::AnnotationRow>())
+                });
             }
             if let Some(graph) = key.g {
                 graphs.insert(graph);
@@ -968,7 +1001,11 @@ impl MutableDataset {
             )
             .saturating_add(row_bytes)
             .saturating_add(graph_entries.saturating_mul(size_of::<TermId>()));
-        (terms.terms(), payload)
+        FrozenDeltaCharge {
+            terms: terms.terms(),
+            rows: rows.len(),
+            payload_bytes: payload,
+        }
     }
 
     /// Whether an added row is an `rdf:reifies` declaration — a triple-term object
@@ -1061,6 +1098,14 @@ impl MutableDataset {
             builder.declare_named_graph(id);
         }
     }
+}
+
+/// What a snapshot's frozen delta retains, counted before the freeze (see
+/// [`MutableDataset::frozen_delta_charge`]).
+struct FrozenDeltaCharge {
+    terms: usize,
+    rows: usize,
+    payload_bytes: usize,
 }
 
 /// Enforce the IR-boundary absoluteness invariant over every IRI a [`TermValue`]

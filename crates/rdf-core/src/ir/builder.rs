@@ -22,7 +22,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use hashbrown::HashTable;
-use purrdf_iri::{IriError, langtag};
+use purrdf_iri::IriError;
 
 use crate::blank_label::LabelAlphabet;
 use crate::{
@@ -689,7 +689,7 @@ impl RdfDatasetBuilder {
     /// the `xsd:string` default are applied here, so both entry points expand the
     /// datatype the same way rather than each spelling the rule.
     ///
-    /// The language tag is folded for the key ([`langtag::identity_fold`]) ONLY when
+    /// The language tag is folded for the key ([`purrdf_iri::langtag::identity_fold`]) ONLY when
     /// it is not already its own fold. BCP 47 tags are case-insensitive and ingress
     /// normalizes them, so the common case is a tag that is already folded and a
     /// fold whose output is a copy of its input. The LOOKUP path
@@ -728,13 +728,11 @@ impl RdfDatasetBuilder {
             self.intern_blank(&label, scope);
         }
 
-        let lowered = language
-            .filter(|tag| !langtag::is_identity_folded(tag))
-            .map(langtag::identity_fold);
+        let language = language.map(super::term::interned_language);
         self.interner.intern(TermLookup::Literal {
             lexical,
             datatype: datatype_id,
-            language: lowered.as_deref().or(language),
+            language: language.as_deref(),
             direction,
         })
     }

@@ -948,6 +948,129 @@ fn a_removed_rows_terms_are_not_charged_to_the_snapshot() {
     assert_exact_snapshot_limits(build);
 }
 
+/// A language-tagged literal spelled with the tag exactly as given — not folded,
+/// as a caller holding a raw `TermValue` may spell it.
+fn tagged(lexical: &str, tag: &str) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lexical.into(),
+        datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".into(),
+        language: Some(tag.into()),
+        direction: None,
+    }
+}
+
+#[test]
+fn composite_literals_are_charged_with_the_blanks_they_embed() {
+    // Delta-held: the freeze interns `_:fresh1` and `_:fresh2` beside the literal.
+    let empty = RdfDatasetBuilder::new().freeze().unwrap();
+    let delta_held = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(
+                    iri("s"),
+                    iri("p"),
+                    TermValue::typed_literal("[_:fresh1, _:fresh2]", LIST),
+                ))
+                .unwrap()
+        );
+        mutable
+    };
+    assert_eq!(
+        delta_held().snapshot_view().unwrap().stats().retained_terms,
+        6
+    );
+    assert_exact_snapshot_limits(delta_held);
+
+    // Base-held: a row that names a base composite literal re-interns it, its
+    // datatype and both embedded blanks; a map embeds blanks in keys and values.
+    let mut b = RdfDatasetBuilder::new();
+    let list = b.intern_literal(RdfLiteral::typed("[_:b1, _:b2]", LIST));
+    let map = b.intern_literal(RdfLiteral::typed("{_:k : _:v}", MAP));
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri(P);
+    b.push_quad(s, p, list, None);
+    b.push_quad(s, p, map, None);
+    let base = b.freeze().unwrap();
+    let base_held = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        for literal in [
+            TermValue::typed_literal("[_:b1, _:b2]", LIST),
+            TermValue::typed_literal("{_:k : _:v}", MAP),
+        ] {
+            assert!(
+                mutable
+                    .insert(QuadValues::triple(iri("t"), iri("q"), literal))
+                    .unwrap()
+            );
+        }
+        mutable
+    };
+    assert_exact_snapshot_limits(base_held);
+}
+
+#[test]
+fn language_tags_are_charged_folded_as_the_freeze_interns_them() {
+    // "x"@EN and "x"@en are one frozen literal: the snapshot retains `a`, `b`, `c`,
+    // the literal and `rdf:langString`.
+    let empty = RdfDatasetBuilder::new().freeze().unwrap();
+    let distinct_rows = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("a"), iri("b"), tagged("x", "EN")))
+                .unwrap()
+        );
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("a"), iri("c"), tagged("x", "en")))
+                .unwrap()
+        );
+        mutable
+    };
+    assert_eq!(
+        distinct_rows()
+            .snapshot_view()
+            .unwrap()
+            .stats()
+            .retained_terms,
+        5
+    );
+    assert_exact_snapshot_limits(distinct_rows);
+
+    // Two added rows that differ only in the tag's case are one frozen row.
+    let one_row = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        for tag in ["EN", "en", "En"] {
+            assert!(
+                mutable
+                    .insert(QuadValues::triple(iri("a"), iri("b"), tagged("x", tag)))
+                    .unwrap()
+            );
+        }
+        mutable
+    };
+    assert_eq!(one_row().snapshot_view().unwrap().quads().count(), 1);
+    assert_exact_snapshot_limits(one_row);
+
+    // A mixed-case tag that folds to a literal the base holds is that base term.
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/a");
+    let p = b.intern_iri("http://example.org/b");
+    let o = b.intern_literal(RdfLiteral::language_tagged("x", "en"));
+    b.push_quad(s, p, o, None);
+    let base = b.freeze().unwrap();
+    assert_exact_snapshot_limits(|| {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("z"), iri("b"), tagged("x", "EN")))
+                .unwrap()
+        );
+        mutable
+    });
+}
+
 #[test]
 fn every_term_shape_is_charged_as_the_freeze_interns_it() {
     // Over a base with literals, triple terms, a reifier and an annotation: rows
