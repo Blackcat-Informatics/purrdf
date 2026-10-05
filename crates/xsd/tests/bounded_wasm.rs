@@ -135,7 +135,7 @@ fn decimal_arithmetic_answers_the_same() -> Result<(), Failed> {
         digest = fold(digest, &answer(numeric_mul(&a, &b)));
         digest = fold(digest, &answer(numeric_div(&a, &b)));
     }
-    check("decimal arithmetic", digest, 0x505e_0f59_1476_88a9)
+    check("decimal arithmetic", digest, 0xc375_4236_653a_a410)
 }
 
 /// The mean of exact running totals of any size and scale.

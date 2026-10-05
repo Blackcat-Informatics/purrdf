@@ -205,6 +205,10 @@ impl DataRangeTable {
 pub(crate) enum LiteralValue {
     /// The literal denotes this XSD value.
     Value(XsdValue),
+    /// The literal is an `xsd:integer`/`xsd:decimal` past `purrdf_xsd`'s bounded
+    /// representation: a well-typed value whose IDENTITY is decided exactly (no
+    /// arithmetic needed), though no [`purrdf_xsd::range::DataRange`] can name it.
+    Wide(purrdf_xsd::DecimalDigits),
     /// The literal is language-tagged, so its value is the `(lexical form, language,
     /// direction)` identity the term already carries. Nondirectional tags use
     /// `rdf:langString`, directional tags use `rdf:dirLangString`. The IR lowercases
@@ -238,8 +242,12 @@ pub(crate) fn literal_value(literal: &TermValue) -> Option<LiteralValue> {
     let Some(kind) = XsdDatatype::from_iri(datatype) else {
         return Some(LiteralValue::Unmodelled);
     };
-    Some(match purrdf_xsd::parse(lexical_form, kind) {
-        Ok(value) => LiteralValue::Value(value),
+    Some(match purrdf_xsd::LiteralValue::parse(lexical_form, kind) {
+        Ok(purrdf_xsd::LiteralValue::Bounded(value)) => LiteralValue::Value(value),
+        Ok(exact) => match exact.unbounded() {
+            Some(digits) => LiteralValue::Wide(digits.clone()),
+            None => LiteralValue::Unmodelled,
+        },
         // A lexical form the datatype's own lexical space rejects is ill-typed. One that is
         // merely beyond this crate's representable domain is NOT: the ontology is
         // well-formed and the value simply cannot be examined here.
@@ -294,6 +302,10 @@ pub(crate) fn literal_classes_until<E>(
         any_unmodelled: false,
     };
     let mut buckets: Vec<(&'static str, Vec<(XsdValue, u32)>)> = Vec::new();
+    // Values past the bounded representation: never equal to a bounded value (which
+    // the representation would then hold), and equal to each other exactly when their
+    // normalized digits are.
+    let mut wide: Vec<(&purrdf_xsd::DecimalDigits, u32)> = Vec::new();
     let mut next_class = 0u32;
     for (term, value) in literals {
         poll()?;
@@ -332,6 +344,23 @@ pub(crate) fn literal_classes_until<E>(
                 if existing.is_none() {
                     next_class += 1;
                 }
+                out.class_of.insert(*term, class);
+            }
+            LiteralValue::Wide(digits) => {
+                let mut existing = None;
+                for (candidate, class) in &wide {
+                    poll()?;
+                    if *candidate == digits {
+                        existing = Some(*class);
+                        break;
+                    }
+                }
+                let class = existing.unwrap_or_else(|| {
+                    let class = next_class;
+                    wide.push((digits, class));
+                    next_class += 1;
+                    class
+                });
                 out.class_of.insert(*term, class);
             }
             LiteralValue::TermIdentified => {

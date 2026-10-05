@@ -507,6 +507,7 @@ pub fn integer_argument(term: &CdtTerm) -> Option<i128> {
     match crate::literal::parse_literal(&literal.lexical, &literal.datatype) {
         LiteralValue::Xsd(XsdValue::Integer { value, .. }) => Some(value),
         LiteralValue::Xsd(_)
+        | LiteralValue::XsdUnbounded(_)
         | LiteralValue::Cdt(_)
         | LiteralValue::IllTyped { .. }
         | LiteralValue::Opaque => None,

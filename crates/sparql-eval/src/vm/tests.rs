@@ -185,11 +185,11 @@ impl Walker {
             }
             Expression::UnaryPlus(a) => {
                 let ta = self.term(a, row, schema, ctx)?;
-                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::numeric_unary_plus).unwrap())
+                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::literal_unary_plus).unwrap())
             }
             Expression::UnaryMinus(a) => {
                 let ta = self.term(a, row, schema, ctx)?;
-                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::value_unary_minus).unwrap())
+                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::literal_unary_minus).unwrap())
             }
             Expression::FunctionCall(function, args) => {
                 self.function(function, args, row, schema, ctx)

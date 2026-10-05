@@ -51,6 +51,10 @@ pub enum LiteralValue {
     Xsd(XsdValue),
     /// The datatype is a SEP-0009 composite and the lexical form parsed.
     Cdt(CdtValue),
+    /// An `xsd:integer`/`xsd:decimal` literal past `purrdf_xsd`'s bounded
+    /// representation: a well-typed number, held exactly
+    /// ([`purrdf_xsd::LiteralValue::Unbounded`]), so it compares and equals exactly.
+    XsdUnbounded(purrdf_xsd::LiteralValue),
     /// The datatype is one PurRDF models, but the lexical form is not in its
     /// lexical space. The typed diagnostic is available from
     /// [`purrdf_xsd::parse_by_iri`] / [`crate::parse_cdt_by_iri`], which return the
@@ -110,8 +114,9 @@ pub fn parse_literal(lexical: &str, datatype: &str) -> LiteralValue {
             Err(_) => ill_typed(),
         };
     }
-    match purrdf_xsd::parse_by_iri(lexical, datatype) {
-        Ok(Some(value)) => LiteralValue::Xsd(value),
+    match purrdf_xsd::LiteralValue::parse_by_iri(lexical, datatype) {
+        Ok(Some(purrdf_xsd::LiteralValue::Bounded(value))) => LiteralValue::Xsd(value),
+        Ok(Some(exact)) => LiteralValue::XsdUnbounded(exact),
         Ok(None) => LiteralValue::Opaque,
         Err(_) => ill_typed(),
     }

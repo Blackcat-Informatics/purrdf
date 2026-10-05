@@ -116,15 +116,22 @@
 //! * an arithmetic result whose integer part exceeds the bounds is
 //!   `err:FOAR0002` ([`ErrorCode::Foar0002`]);
 //! * an `xsd:integer` lexical form past `i128` is `err:FOCA0003`, an `xsd:decimal`
-//!   one past the mantissa `err:FOCA0001`, and one with more than eighteen fractional
-//!   digits `err:FOCA0006` ([`parse`]).
+//!   one past the mantissa `err:FOCA0001`, and one with more than eighteen
+//!   significant fractional digits `err:FOCA0006` ([`parse`]); trailing fractional
+//!   zeros are spelling, not precision, and never refuse a value the representation
+//!   holds.
+//!
+//! Every error's message ends with its code, and [`XsdError::presentation`] gives it
+//! typed.
 //!
 //! **A literal past the bounds is still a value.** Its lexical form round-trips
-//! untouched (the IR keeps literals lexical-verbatim), and the operations that need
-//! no arithmetic are exact for an `xsd:integer`/`xsd:decimal` literal of any length
-//! and scale: ordering, value equality and the conversions to `xsd:float`/`xsd:double`
-//! ([`DecimalDigits`], [`LiteralValue`], [`literal_cmp`], [`literal_equal`],
-//! [`literal_total_cmp`]). Only arithmetic over it is refused, with the error above.
+//! untouched (the IR keeps literals lexical-verbatim), ordering, value equality and
+//! the conversions to `xsd:float`/`xsd:double` are exact for an
+//! `xsd:integer`/`xsd:decimal` literal of any length and scale ([`DecimalDigits`],
+//! [`LiteralValue`], [`literal_cmp`], [`literal_equal`], [`literal_total_cmp`]), and
+//! arithmetic over it is computed exactly and answers whenever the bounded value space
+//! holds the result ([`literal_add`], [`literal_sub`], [`literal_mul`],
+//! [`literal_div`] and the unary functions), `err:FOAR0002` otherwise.
 //!
 //! [`bigint::BigInt`] is not a value space either: it exists so a caller
 //! ACCUMULATING many bounded values (SPARQL `SUM`/`AVG` over a group) can keep the
@@ -232,7 +239,9 @@ pub use bigint::BigInt;
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
 pub use datatype::{XSD_NS, XsdDatatype};
 pub use decimal_digits::{
-    DecimalDigits, LiteralValue, literal_cmp, literal_equal, literal_total_cmp,
+    DecimalDigits, LiteralValue, literal_abs, literal_add, literal_ceil, literal_cmp, literal_div,
+    literal_equal, literal_floor, literal_mul, literal_round, literal_sub, literal_total_cmp,
+    literal_unary_minus, literal_unary_plus,
 };
 #[allow(deprecated)]
 pub use numeric::bigint_avg_decimal_lexical;

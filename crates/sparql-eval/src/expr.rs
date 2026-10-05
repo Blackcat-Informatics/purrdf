@@ -43,8 +43,8 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_xsd::{
     DecimalDigits, LiteralValue, XsdDatatype, XsdValue, effective_boolean_value, literal_cmp,
-    literal_equal, numeric_abs, numeric_ceil, numeric_floor, numeric_round, parse_by_iri,
-    parse_xsd10, value_add, value_cmp, value_div, value_equal, value_mul, value_sub,
+    literal_equal, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div, value_equal,
+    value_mul, value_sub,
 };
 use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
 
@@ -4101,10 +4101,10 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- numeric math functions (ABS/CEIL/FLOOR/ROUND) ----------------
         // All four are strict in one numeric argument; type errors → Ok(None).
-        Function::Abs => unary_numeric_fn(ctx, vals, numeric_abs),
-        Function::Ceil => unary_numeric_fn(ctx, vals, numeric_ceil),
-        Function::Floor => unary_numeric_fn(ctx, vals, numeric_floor),
-        Function::Round => unary_numeric_fn(ctx, vals, numeric_round),
+        Function::Abs => unary_numeric_fn(ctx, vals, purrdf_xsd::literal_abs),
+        Function::Ceil => unary_numeric_fn(ctx, vals, purrdf_xsd::literal_ceil),
+        Function::Floor => unary_numeric_fn(ctx, vals, purrdf_xsd::literal_floor),
+        Function::Round => unary_numeric_fn(ctx, vals, purrdf_xsd::literal_round),
 
         // ---- ENCODE_FOR_URI -----------------------------------------------
         Function::EncodeForUri => match string_arg(vals, 0) {
@@ -5637,18 +5637,28 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     ta: SolutionTerm<D::Id>,
     tb: SolutionTerm<D::Id>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (xa, xb) = match (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) {
-        (Some(xa), Some(xb)) => (xa, xb),
-        (xa, xb) => match promote_unbounded(ctx, ta, xa, tb, xb)? {
-            Some(pair) => pair,
-            None => return Ok(None),
+    let result = match (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) {
+        (Some(xa), Some(xb)) => match op {
+            ArithmeticOperator::Add => value_add(&xa, &xb),
+            ArithmeticOperator::Subtract => value_sub(&xa, &xb),
+            ArithmeticOperator::Multiply => value_mul(&xa, &xb),
+            ArithmeticOperator::Divide => value_div(&xa, &xb),
         },
-    };
-    let result = match op {
-        ArithmeticOperator::Add => value_add(&xa, &xb),
-        ArithmeticOperator::Subtract => value_sub(&xa, &xb),
-        ArithmeticOperator::Multiply => value_mul(&xa, &xb),
-        ArithmeticOperator::Divide => value_div(&xa, &xb),
+        // An `xsd:integer`/`xsd:decimal` operand past the bounded representation: the
+        // exact result where the bounded value space holds it (`SUM / COUNT` over a
+        // total past the bounds is `AVG`), the IEEE one against a float or double,
+        // a typed F&O error otherwise — never a silent answer.
+        (xa, xb) => {
+            let Some((a, b)) = unbounded_pair(ctx, ta, xa, tb, xb)? else {
+                return Ok(None);
+            };
+            match op {
+                ArithmeticOperator::Add => purrdf_xsd::literal_add(&a, &b),
+                ArithmeticOperator::Subtract => purrdf_xsd::literal_sub(&a, &b),
+                ArithmeticOperator::Multiply => purrdf_xsd::literal_mul(&a, &b),
+                ArithmeticOperator::Divide => purrdf_xsd::literal_div(&a, &b),
+            }
+        }
     };
     // Overflow/division/type failures retain their SPARQL expression-error meaning.
     result
@@ -5657,43 +5667,22 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
         .transpose()
 }
 
-/// The operands of an arithmetic step where one is a numeric literal past the bounded
-/// representation: when the other is an `xsd:float`/`xsd:double`, the numeric tower
-/// promotes the exact one to that type — a correctly rounded conversion that needs no
-/// bounded exact representation — and the step proceeds in IEEE arithmetic. Any other
-/// pairing is exact arithmetic over an operand outside the bounded value space, a
-/// typed error (`err:FOCA0003`/`err:FOCA0001`) and so `None`.
-fn promote_unbounded<D: DatasetView + Sync>(
-    ctx: &EvalCtx<'_, D>,
-    ta: SolutionTerm<D::Id>,
-    xa: Option<XsdValue>,
-    tb: SolutionTerm<D::Id>,
-    xb: Option<XsdValue>,
-) -> Result<Option<(XsdValue, XsdValue)>, EvalError> {
-    let ieee = |x: &XsdValue| matches!(x, XsdValue::Float(_) | XsdValue::Double(_));
-    Ok(match (xa, xb) {
-        (Some(xa), None) if ieee(&xa) => unbounded_of_term(ctx, tb)?
-            .and_then(|b| b.promoted(xa.datatype()))
-            .map(|xb| (xa, xb)),
-        (None, Some(xb)) if ieee(&xb) => unbounded_of_term(ctx, ta)?
-            .and_then(|a| a.promoted(xb.datatype()))
-            .map(|xa| (xa, xb)),
-        _ => None,
-    })
-}
-
 /// A unary numeric operator (`+` / `-`) over its evaluated operand: resolve it to an XSD
 /// value, call `op`, and return `None` on any error.
 pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     operand: Option<SolutionTerm<D::Id>>,
-    op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
+    op: impl Fn(&LiteralValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let Some(operand) = operand else {
         return Ok(None);
     };
-    let Some(xa) = xsd_of_term(ctx, operand)? else {
-        return Ok(None);
+    let xa = match xsd_of_term(ctx, operand)? {
+        Some(xa) => LiteralValue::Bounded(xa),
+        None => match unbounded_of_term(ctx, operand)? {
+            Some(wide) => wide,
+            None => return Ok(None),
+        },
     };
     op(&xa)
         .ok()
@@ -5706,9 +5695,9 @@ pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
 fn unary_numeric_fn<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-    op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
+    op: impl Fn(&LiteralValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some(xa) = arg(vals, 0).and_then(xsd_of) else {
+    let Some(xa) = arg(vals, 0).and_then(literal_value_of) else {
         return Ok(None);
     };
     match op(&xa) {

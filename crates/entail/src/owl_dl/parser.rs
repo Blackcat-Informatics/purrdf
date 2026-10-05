@@ -1253,6 +1253,13 @@ pub(crate) fn register_literals(
         let range = match value {
             LiteralValue::Value(value) => DataRange::OneOf(vec![value.clone()]),
             LiteralValue::IllTyped => DataRange::OneOf(Vec::new()),
+            // A value past the bounded representation has an exact identity (its
+            // class) but no range any `DataRange` can name, so its typing is left
+            // to the boundary below rather than guessed.
+            LiteralValue::Wide(_) => {
+                boundaries.insert(Construct::DataRange);
+                continue;
+            }
             LiteralValue::TermIdentified | LiteralValue::Unmodelled => continue,
         };
         let id = ranges.intern(range);

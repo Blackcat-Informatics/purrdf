@@ -149,23 +149,27 @@ and XQuery Functions and Operators 3.1 allows:
   nearest decimal.
 
 Every other limit is an error, so the expression is unbound. An integer or
-decimal result whose integer part is too large is `err:FOAR0002`. An integer
-literal past 2^127 used in arithmetic is `err:FOCA0003`, a decimal literal that
-is too large is `err:FOCA0001`, and one with more than 18 significant
-fractional digits is `err:FOCA0006`. A trailing zero is not significant:
-`"0.10000000000000000000"^^xsd:decimal` is the value `0.1`. The Rust API names
-the code of each error through `purrdf_xsd::XsdError::code`. The negation and
-the absolute value of a derived integer type are `xsd:integer`, so
+decimal result whose integer part is too large is `err:FOAR0002`. A cast of a
+value the target cannot hold is refused too: to `xsd:integer`, `err:FOCA0003`;
+to `xsd:decimal`, `err:FOCA0001` when the integer part is too large and
+`err:FOCA0006` when more than 18 fractional digits are significant. A trailing
+zero is not significant: `"0.10000000000000000000"^^xsd:decimal` is the value
+`0.1`, and `"170141183460469231731687303715884105727.0"^^xsd:decimal + 0` is
+`170141183460469231731687303715884105727`. The Rust API names the code of each
+error through `purrdf_xsd::XsdError::code`, and the message of every error
+`purrdf_xsd` reports ends with it, for example `(err:FORG0001)`. The negation
+and the absolute value of a derived integer type are `xsd:integer`, so
 `-("5"^^xsd:unsignedByte)` is `-5` typed `xsd:integer`.
 
 ### Literals past the limits
 
-A literal past the limits keeps its lexical form, and it is still a number. The
-operations that need no arithmetic are exact for an `xsd:integer` or
-`xsd:decimal` literal of any length: the comparison operators, `=`, `!=`, `IN`,
-`ORDER BY`, `MIN`, `MAX`, `isNumeric`, the effective boolean value, and casts to
-`xsd:double`, `xsd:float`, `xsd:boolean` and `xsd:string`. A cast to an integer
-or decimal type succeeds when the value fits the type.
+A literal past the limits keeps its lexical form, and it is still a number.
+Comparison is exact for an `xsd:integer` or `xsd:decimal` literal of any
+length: the comparison operators, `=`, `!=`, `IN`, `ORDER BY`, `MIN`, `MAX`,
+`isNumeric`, the effective boolean value, and the elements of a `cdt:List`.
+Casts to `xsd:double`, `xsd:float`, `xsd:boolean` and `xsd:string` are exact
+too, and a cast to an integer or decimal type succeeds when the value fits the
+type.
 
 ```sparql
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -175,26 +179,27 @@ SELECT ?big WHERE {
 }
 ```
 
-This query binds `?big`. Arithmetic over such a literal is an error, unless the
-other operand is an `xsd:float` or `xsd:double`. Then the literal is first
-converted to that type, rounded once to the nearest value. SHACL range
-constraints, CSVW datatype facets and the OWL 2 RL datatype rules compare
-numbers the same exact way, and ShEx accepts and compares a node's value past
-the limits exactly.
+This query binds `?big`. Arithmetic over such a literal is computed exactly,
+and the result follows the limits above. When the result fits, it answers, so
+`?big - ?big` is `0` and `?big / ?big` is `1`. When it does not fit, it is
+`err:FOAR0002`, so `?big + 1` is unbound. Against an `xsd:float` or
+`xsd:double` operand, the literal is first converted to that type, rounded once
+to the nearest value. SHACL range constraints, ShEx numeric facets, CSVW
+datatype facets and the OWL 2 RL and OWL 2 DL value identity compare numbers the
+same exact way. ShEx compares a facet against its bound exactly as written, so
+`MININCLUSIVE 100000000000000000001` and `MAXEXCLUSIVE 0.30000000000000001`
+keep every digit.
 
 ### `SUM` and `AVG`
 
-`SUM` and `AVG` add their values exactly, however large the running total
-grows. An integer `SUM` is exact at any size, so its result can be a literal
-past the limits. A decimal `SUM` is limited once, at the end: it is truncated
-where it has more digits than the representation keeps, and it is an error when
-its integer part is too large. `AVG` is `SUM` divided by `COUNT`, under the
-division rule above. When only the running total passed the limits, `AVG` divides
-the exact total, so it still answers whenever the mean fits. The average of the
+`SUM` adds its values exactly, however large the total grows, and returns the
+exact total, which can be a literal past the limits. `AVG` is `SUM` divided by
+`COUNT`, under the division rule above, on every group. The average of the
 integers `170141183460469231731687303715884105727` and
 `170141183460469231731687303715884105726` is
-`"170141183460469231731687303715884105726"^^xsd:decimal`. `AVG` never returns a
-literal outside the decimal limits.
+`"170141183460469231731687303715884105726"^^xsd:decimal`, and so is their `SUM`
+divided by their `COUNT`. `AVG` never returns a literal outside the decimal
+limits.
 
 ## Numeric casts
 

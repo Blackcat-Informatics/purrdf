@@ -469,7 +469,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(helpers::unary_numeric_term(
                         ctx,
                         operand,
-                        purrdf_xsd::numeric_unary_plus,
+                        purrdf_xsd::literal_unary_plus,
                     )?));
                 }
                 Op::UnaryMinus => {
@@ -477,7 +477,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(helpers::unary_numeric_term(
                         ctx,
                         operand,
-                        purrdf_xsd::value_unary_minus,
+                        purrdf_xsd::literal_unary_minus,
                     )?));
                 }
                 Op::Exists(site) => {

@@ -751,3 +751,365 @@ fn unbounded_vs_bounded(
         _ => None,
     }
 }
+
+// ── Arithmetic over operands past the bounds ─────────────────────────────────
+
+/// An exact `xsd:integer`/`xsd:decimal` operand of any size: `mantissa / 10^scale`,
+/// and whether it is an integer-family value (whose results stay `xsd:integer`).
+struct Exact {
+    mantissa: BigInt,
+    scale: u32,
+    integer: bool,
+}
+
+impl Exact {
+    /// The exact operand `value` denotes; `None` for every value outside the exact
+    /// branch of the numeric tower.
+    fn of(value: &LiteralValue) -> Option<Self> {
+        match value {
+            LiteralValue::Bounded(XsdValue::Integer { value, .. }) => Some(Self {
+                mantissa: BigInt::from_i128(*value),
+                scale: 0,
+                integer: true,
+            }),
+            LiteralValue::Bounded(XsdValue::Decimal(d)) => Some(Self {
+                mantissa: BigInt::from_i128(d.mantissa()),
+                scale: u32::from(d.scale()),
+                integer: false,
+            }),
+            LiteralValue::Unbounded { digits, datatype } => Some(Self {
+                mantissa: BigInt::from_digits(&digits.canonical_lexical().replace('.', ""))?,
+                scale: u32::try_from(digits.fraction_digits()).ok()?,
+                integer: datatype.is_integer_family(),
+            }),
+            LiteralValue::Bounded(_) => None,
+        }
+    }
+
+    /// `self.mantissa` at `scale ≥ self.scale`.
+    fn at_scale(&self, scale: u32) -> BigInt {
+        self.mantissa.mul_pow10(scale - self.scale)
+    }
+
+    /// The bounded result: an `xsd:integer` when `integer` and it fits `i128`, an
+    /// `xsd:decimal` under the precision rule otherwise; an integer part past the
+    /// bounds is `err:FOAR0002`.
+    fn bounded(mantissa: &BigInt, scale: u32, integer: bool) -> Result<XsdValue, XsdError> {
+        if integer && scale == 0 {
+            return mantissa.to_i128().map_or_else(
+                || {
+                    Err(XsdError::OutOfRange {
+                        datatype: XsdDatatype::Integer,
+                        lexical: String::new(),
+                        reason: crate::value::reason::INTEGER_OVERFLOW,
+                    })
+                },
+                |value| {
+                    Ok(XsdValue::Integer {
+                        value,
+                        datatype: XsdDatatype::Integer,
+                    })
+                },
+            );
+        }
+        crate::numeric::decimal_mean(mantissa, scale, 1).map(XsdValue::Decimal)
+    }
+}
+
+/// `⌊numerator / denominator⌋` for a non-negative `numerator` and a positive
+/// `denominator`, by schoolbook long division over the numerator's decimal digits.
+fn quotient(numerator: &BigInt, denominator: &BigInt) -> BigInt {
+    let mut digits = String::new();
+    let mut remainder = BigInt::zero();
+    let negated = denominator.negated();
+    for digit in numerator.to_decimal_string().bytes() {
+        remainder = remainder.mul_small(10);
+        remainder.add_assign(&BigInt::from_i128(i128::from(digit - b'0')));
+        let mut q = b'0';
+        while remainder >= *denominator {
+            remainder.add_assign(&negated);
+            q += 1;
+        }
+        digits.push(char::from(q));
+    }
+    BigInt::from_digits(&digits).unwrap_or_else(BigInt::zero)
+}
+
+/// The arithmetic the four operators share once an operand lies past the bounded
+/// representation: the IEEE promotion when the other operand is an `xsd:float` or
+/// `xsd:double`, otherwise the exact result projected into the bounded value space
+/// (`exact`), every refusal typed.
+fn mixed_arithmetic(
+    a: &LiteralValue,
+    b: &LiteralValue,
+    bounded: fn(&XsdValue, &XsdValue) -> Result<XsdValue, XsdError>,
+    exact: fn(&Exact, &Exact) -> Result<XsdValue, XsdError>,
+) -> Result<XsdValue, XsdError> {
+    if let (LiteralValue::Bounded(x), LiteralValue::Bounded(y)) = (a, b) {
+        return bounded(x, y);
+    }
+    let ieee = |value: &LiteralValue| {
+        matches!(
+            value,
+            LiteralValue::Bounded(XsdValue::Float(_) | XsdValue::Double(_))
+        )
+    };
+    let promote = |value: &LiteralValue, target: &LiteralValue| {
+        value
+            .promoted(target.datatype())
+            .ok_or(XsdError::TypeMismatch {
+                reason: "non-numeric operand",
+            })
+    };
+    if ieee(b) {
+        return bounded(
+            &promote(a, b)?,
+            b.bounded().expect("an IEEE operand is bounded"),
+        );
+    }
+    if ieee(a) {
+        return bounded(
+            a.bounded().expect("an IEEE operand is bounded"),
+            &promote(b, a)?,
+        );
+    }
+    match (Exact::of(a), Exact::of(b)) {
+        (Some(x), Some(y)) => exact(&x, &y),
+        _ => Err(XsdError::TypeMismatch {
+            reason: "non-numeric operand",
+        }),
+    }
+}
+
+/// `op:numeric-add` over two literal values of any size ([`LiteralValue`]): exactly
+/// [`crate::value_add`] for two bounded values (temporal operands included); with an
+/// `xsd:integer`/`xsd:decimal` operand past the bounds, the IEEE sum against an
+/// `xsd:float`/`xsd:double`, otherwise the exact sum when the bounded value space
+/// holds it — truncated toward zero at the finest scale that holds a decimal one, the
+/// precision rule of the crate docs' *Numeric limits* — and `err:FOAR0002` when its
+/// integer part does not fit.
+///
+/// # Errors
+///
+/// As above, and [`XsdError::TypeMismatch`] for a non-numeric operand.
+///
+/// ```rust
+/// use purrdf_xsd::{LiteralValue, XsdDatatype, literal_sub};
+///
+/// let big = LiteralValue::parse("100000000000000000000000000000000000000001", XsdDatatype::Integer)?;
+/// let less = LiteralValue::parse("100000000000000000000000000000000000000000", XsdDatatype::Integer)?;
+/// assert_eq!(literal_sub(&big, &less)?.canonical_lexical(), "1");
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+pub fn literal_add(a: &LiteralValue, b: &LiteralValue) -> Result<XsdValue, XsdError> {
+    mixed_arithmetic(a, b, crate::ops::value_add, |x, y| {
+        let scale = x.scale.max(y.scale);
+        let mut sum = x.at_scale(scale);
+        sum.add_assign(&y.at_scale(scale));
+        Exact::bounded(&sum, scale, x.integer && y.integer)
+    })
+}
+
+/// `op:numeric-subtract` over two literal values of any size, as [`literal_add`].
+///
+/// # Errors
+///
+/// As [`literal_add`].
+pub fn literal_sub(a: &LiteralValue, b: &LiteralValue) -> Result<XsdValue, XsdError> {
+    mixed_arithmetic(a, b, crate::ops::value_sub, |x, y| {
+        let scale = x.scale.max(y.scale);
+        let mut difference = x.at_scale(scale);
+        difference.add_assign(&y.at_scale(scale).negated());
+        Exact::bounded(&difference, scale, x.integer && y.integer)
+    })
+}
+
+/// `op:numeric-multiply` over two literal values of any size, as [`literal_add`].
+///
+/// # Errors
+///
+/// As [`literal_add`].
+pub fn literal_mul(a: &LiteralValue, b: &LiteralValue) -> Result<XsdValue, XsdError> {
+    mixed_arithmetic(a, b, crate::ops::value_mul, |x, y| {
+        Exact::bounded(
+            &x.mantissa.mul(&y.mantissa),
+            x.scale + y.scale,
+            x.integer && y.integer,
+        )
+    })
+}
+
+/// `op:numeric-divide` over two literal values of any size: exactly
+/// [`crate::value_div`] for two bounded values; with an `xsd:integer`/`xsd:decimal`
+/// operand past the bounds, the exact quotient as one `xsd:decimal` under the
+/// division precision rule — truncated toward zero at the finest scale ≤ 18 whose
+/// mantissa fits, which is how `SUM(?v) / COUNT(?v)` over a total past the bounds
+/// equals `AVG(?v)` — `err:FOAR0001` for a zero divisor and `err:FOAR0002` when the
+/// quotient's integer part does not fit.
+///
+/// # Errors
+///
+/// As above, and [`XsdError::TypeMismatch`] for a non-numeric operand.
+///
+/// ```rust
+/// use purrdf_xsd::{LiteralValue, XsdDatatype, literal_div};
+///
+/// // (i128::MAX + i128::MAX - 1) / 2 is MAX - 0.5, which truncates to MAX - 1.
+/// let total = LiteralValue::parse("340282366920938463463374607431768211453", XsdDatatype::Integer)?;
+/// let two = LiteralValue::parse("2", XsdDatatype::Integer)?;
+/// assert_eq!(
+///     literal_div(&total, &two)?.canonical_lexical(),
+///     (i128::MAX - 1).to_string()
+/// );
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+pub fn literal_div(a: &LiteralValue, b: &LiteralValue) -> Result<XsdValue, XsdError> {
+    mixed_arithmetic(a, b, crate::ops::value_div, |x, y| {
+        if y.mantissa.is_zero() {
+            return Err(XsdError::DivisionByZero {
+                datatype: if x.integer && y.integer {
+                    XsdDatatype::Integer
+                } else {
+                    XsdDatatype::Decimal
+                },
+            });
+        }
+        // trunc(x / y × 10^18) = trunc(|xm| × 10^(ys + 18) / (|ym| × 10^xs)), signed.
+        let target = u32::from(crate::numeric::MAX_DECIMAL_SCALE);
+        let negative = x.mantissa.is_negative() != y.mantissa.is_negative();
+        let magnitude = |value: &BigInt| {
+            if value.is_negative() {
+                value.negated()
+            } else {
+                value.clone()
+            }
+        };
+        let numerator = magnitude(&x.mantissa).mul_pow10(y.scale + target);
+        let denominator = magnitude(&y.mantissa).mul_pow10(x.scale);
+        let scaled = quotient(&numerator, &denominator);
+        let scaled = if negative { scaled.negated() } else { scaled };
+        crate::numeric::decimal_mean(&scaled, target, 1).map(XsdValue::Decimal)
+    })
+}
+
+/// One of the unary numeric functions over a literal value of any size: `bounded`
+/// for a bounded value; for an `xsd:integer`/`xsd:decimal` value past the bounds,
+/// `exact` maps the exact `(mantissa, scale)` to the exact result, which is projected
+/// into the bounded value space with the operand's type (`xsd:integer` for the
+/// integer family) or refused, `err:FOAR0002`.
+fn unary(
+    a: &LiteralValue,
+    bounded: fn(&XsdValue) -> Result<XsdValue, XsdError>,
+    exact: fn(&BigInt, u32) -> (BigInt, u32),
+) -> Result<XsdValue, XsdError> {
+    match a {
+        LiteralValue::Bounded(value) => bounded(value),
+        unbounded => {
+            let x = Exact::of(unbounded).ok_or(XsdError::TypeMismatch {
+                reason: "non-numeric operand",
+            })?;
+            let (mantissa, scale) = exact(&x.mantissa, x.scale);
+            Exact::bounded(&mantissa, scale, x.integer)
+        }
+    }
+}
+
+/// `⌊mantissa / 10^scale⌋`, as a scale-0 mantissa.
+fn floor_div_pow10(mantissa: &BigInt, scale: u32) -> BigInt {
+    let unit = BigInt::from_i128(1).mul_pow10(scale);
+    if mantissa.is_negative() {
+        // ⌊−n / d⌋ = −⌈n / d⌉ = −⌊(n + d − 1) / d⌋.
+        let mut shifted = mantissa.negated();
+        shifted.add_assign(&unit);
+        shifted.add_assign(&BigInt::from_i128(-1));
+        quotient(&shifted, &unit).negated()
+    } else {
+        quotient(mantissa, &unit)
+    }
+}
+
+/// `op:numeric-unary-minus` over a literal value of any size ([`literal_add`]'s
+/// rules: exact, or typed).
+///
+/// # Errors
+///
+/// `err:FOAR0002` when the negation lies past the bounds; [`XsdError::TypeMismatch`]
+/// for a non-numeric operand.
+pub fn literal_unary_minus(a: &LiteralValue) -> Result<XsdValue, XsdError> {
+    unary(a, crate::ops::value_unary_minus, |m, s| (m.negated(), s))
+}
+
+/// `op:numeric-unary-plus` over a literal value of any size (the value itself, when
+/// the bounded value space holds it).
+///
+/// # Errors
+///
+/// As [`literal_unary_minus`].
+pub fn literal_unary_plus(a: &LiteralValue) -> Result<XsdValue, XsdError> {
+    unary(a, crate::numeric::numeric_unary_plus, |m, s| (m.clone(), s))
+}
+
+/// `fn:abs` over a literal value of any size.
+///
+/// # Errors
+///
+/// As [`literal_unary_minus`].
+pub fn literal_abs(a: &LiteralValue) -> Result<XsdValue, XsdError> {
+    unary(a, crate::numeric::numeric_abs, |m, s| {
+        (
+            if m.is_negative() {
+                m.negated()
+            } else {
+                m.clone()
+            },
+            s,
+        )
+    })
+}
+
+/// `fn:floor` over a literal value of any size: exact, so a decimal past eighteen
+/// fractional digits floors to the integer the bounded value space holds.
+///
+/// # Errors
+///
+/// As [`literal_unary_minus`].
+pub fn literal_floor(a: &LiteralValue) -> Result<XsdValue, XsdError> {
+    unary(a, crate::numeric::numeric_floor, |m, s| {
+        (floor_div_pow10(m, s), 0)
+    })
+}
+
+/// `fn:ceiling` over a literal value of any size, as [`literal_floor`].
+///
+/// # Errors
+///
+/// As [`literal_unary_minus`].
+pub fn literal_ceil(a: &LiteralValue) -> Result<XsdValue, XsdError> {
+    unary(a, crate::numeric::numeric_ceil, |m, s| {
+        (floor_div_pow10(&m.negated(), s).negated(), 0)
+    })
+}
+
+/// `fn:round` over a literal value of any size (half toward positive infinity,
+/// `⌊x + ½⌋`), as [`literal_floor`].
+///
+/// # Errors
+///
+/// As [`literal_unary_minus`].
+pub fn literal_round(a: &LiteralValue) -> Result<XsdValue, XsdError> {
+    unary(a, crate::numeric::numeric_round, |m, s| {
+        // ⌊(2m + 10^s) / (2 · 10^s)⌋.
+        let mut doubled = m.mul_small(2);
+        doubled.add_assign(&BigInt::from_i128(1).mul_pow10(s));
+        let unit = BigInt::from_i128(2).mul_pow10(s);
+        let floored = if doubled.is_negative() {
+            let mut shifted = doubled.negated();
+            shifted.add_assign(&unit);
+            shifted.add_assign(&BigInt::from_i128(-1));
+            quotient(&shifted, &unit).negated()
+        } else {
+            quotient(&doubled, &unit)
+        };
+        (floored, 0)
+    })
+}

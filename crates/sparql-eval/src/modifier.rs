@@ -112,6 +112,7 @@ use purrdf_xsd::{
     parse_by_iri,
 };
 
+use purrdf_xsd::datatype::XSD_DECIMAL;
 use purrdf_xsd::datatype::XSD_INTEGER;
 use purrdf_xsd::datatype::XSD_STRING;
 
@@ -2405,9 +2406,10 @@ impl NumericFold {
     }
 
     /// `SUM`'s finish: empty group → `0^^xsd:integer` (SPARQL §18.5.1);
-    /// otherwise the running total — exact for a pure-integer group (whatever
-    /// its magnitude, via [`BigInt::to_decimal_string`] when it no longer fits
-    /// `i128`), the `decimal`/`float`/`double`-tower total, or (PurRDF
+    /// otherwise the running total — exact for an integer or decimal group,
+    /// whatever its magnitude (via [`BigInt::to_decimal_string`] /
+    /// [`BigInt::to_decimal_lexical`] when it no longer fits the bounded
+    /// representation), the `float`/`double` total, or (PurRDF
     /// extension) the group's duration total, rendered through the same
     /// [`crate::expr::xsd_literal_value`] [`Self::Ok`] uses. A duration-typed
     /// group is never `Self::Empty` at finish: [`Self::step_xsd`] only creates
@@ -2416,9 +2418,8 @@ impl NumericFold {
     /// SPARQL's `SUM(empty) = 0` requires regardless of the group's would-be
     /// type.
     ///
-    /// Returns `None` — poisoning to SPARQL unbound — in two cases: a
-    /// [`Self::Dec`] total whose integer part exceeds the bounded decimal
-    /// (`err:FOAR0002`), and [`Self::Dur`]'s raw `(months, seconds)` total failing
+    /// Returns `None` — poisoning to SPARQL unbound — in exactly one case:
+    /// [`Self::Dur`]'s raw `(months, seconds)` total failing
     /// [`purrdf_xsd::temporal::Duration::new`]'s validation (mixed-sign
     /// components, or a months total that no longer fits `i64`) — see that
     /// variant's own doc for why this single, order-independent check is
@@ -2430,13 +2431,16 @@ impl NumericFold {
         match self {
             Self::Empty => Some(TermValue::integer(0)),
             Self::Int { sum, datatype, .. } => Some(int_sum_value(&sum, datatype)),
-            // The exact total, projected once: unchanged where the bounded
-            // decimal holds it, truncated at the finest scale that does where
-            // only precision is lost, refused (`err:FOAR0002`) where the integer
-            // part overflows.
-            Self::Dec { sum, scale, .. } => purrdf_xsd::decimal_mean(&sum.to_big(), scale, 1)
-                .ok()
-                .map(|total| crate::expr::xsd_literal_value(&XsdValue::Decimal(total))),
+            // The exact total, at any size, as its canonical `xsd:decimal` form — as
+            // an integer `SUM` is. Past the bounded representation it is still a
+            // number every comparison reads exactly and every operator either
+            // computes exactly (`SUM / COUNT` is `AVG`) or refuses with a typed error.
+            Self::Dec { sum, scale, .. } => Some(TermValue::Literal {
+                lexical_form: sum.to_big().to_decimal_lexical(scale),
+                datatype: XSD_DECIMAL.to_owned(),
+                language: None,
+                direction: None,
+            }),
             Self::Ok { acc, .. } => Some(crate::expr::xsd_literal_value(&acc)),
             Self::Dur {
                 months,
@@ -2458,16 +2462,14 @@ impl NumericFold {
     /// total divided by the folded count.
     ///
     /// An exact total — [`Self::Int`] or [`Self::Dec`], of any magnitude —
-    /// answers ONE representable `xsd:decimal` under `numeric_div`'s precision
-    /// rule (truncated toward zero at the finest scale ≤ 18 whose mantissa
-    /// fits): `SUM / COUNT` wherever `SUM` answers, so the two always agree, and
-    /// the exact mean (`purrdf_xsd::decimal_mean`) where only the total
-    /// overflowed the bounds — `AVG` answers rather than over-refusing whenever
-    /// the mean is representable. An integer `SUM` is exact at any size, so for
-    /// [`Self::Int`] the two rules coincide. It never emits a numeral outside the
-    /// decimal value space: a mean whose integer part exceeds the bounds is
-    /// refused (`err:FOAR0002`, unbound). [`Self::Ok`] divides its IEEE total
-    /// through `numeric_div`.
+    /// answers ONE representable `xsd:decimal`: the exact mean truncated toward
+    /// zero at the finest scale ≤ 18 whose mantissa fits
+    /// (`purrdf_xsd::decimal_mean`), `numeric_div`'s precision rule. `SUM` is the
+    /// exact total at any size, and `/` divides a total past the bounds exactly
+    /// under the same rule (`purrdf_xsd::literal_div`), so `AVG` is `SUM / COUNT`
+    /// on every group. It never emits a numeral outside the decimal value space:
+    /// a mean whose integer part exceeds the bounds is refused (`err:FOAR0002`,
+    /// unbound). [`Self::Ok`] divides its IEEE total through `numeric_div`.
     fn finish_avg(self) -> Option<TermValue> {
         match self {
             Self::Empty => Some(TermValue::integer(0)),
@@ -2480,21 +2482,9 @@ impl NumericFold {
             // so the two always agree. Where `SUM` itself overflows, the exact total
             // still yields the mean whenever the mean is representable.
             Self::Dec { sum, scale, count } => {
-                let sum = sum.to_big();
-                let mean = match purrdf_xsd::decimal_mean(&sum, scale, 1) {
-                    Ok(total) => numeric_div(
-                        &XsdValue::Decimal(total),
-                        &XsdValue::Integer {
-                            value: i128::from(count),
-                            datatype: XsdDatatype::Integer,
-                        },
-                    )
-                    .ok(),
-                    Err(_) => purrdf_xsd::decimal_mean(&sum, scale, count)
-                        .ok()
-                        .map(XsdValue::Decimal),
-                };
-                mean.map(|avg| crate::expr::xsd_literal_value(&avg))
+                purrdf_xsd::decimal_mean(&sum.to_big(), scale, count)
+                    .ok()
+                    .map(|avg| crate::expr::xsd_literal_value(&XsdValue::Decimal(avg)))
             }
             Self::Ok { acc, count } => {
                 let count_val = XsdValue::Integer {
@@ -4635,10 +4625,9 @@ mod tests {
     }
 
     /// Once a pure-integer running sum has escaped `i128`, a `decimal` value
-    /// joining the group continues the EXACT decimal total — so the group's
-    /// answer is decided by its total alone: `2 × i128::MAX + 0.5` has an
-    /// integer part past the bounded decimal (`err:FOAR0002`, unbound), while the
-    /// neighbouring group whose total comes back inside the bounds answers.
+    /// joining the group continues the EXACT decimal total: `2 × i128::MAX + 0.5`
+    /// answers exactly, past the bounds, as the neighbouring group whose total
+    /// comes back inside them does.
     #[test]
     fn sum_overflow_then_decimal_answers_by_its_total() {
         use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
@@ -4646,7 +4635,11 @@ mod tests {
         let min_plus_one = (-i128::MAX).to_string();
         let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.5", XDEC)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
-        assert_eq!(result, None, "the total's integer part overflows");
+        assert_eq!(
+            result.as_deref(),
+            Some("340282366920938463463374607431768211454.5"),
+            "the exact total, past the bounds"
+        );
         let ds = numeric_fold_dataset(&[
             ("a", &max, XINT),
             ("b", &max, XINT),
@@ -4656,8 +4649,8 @@ mod tests {
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
         assert_eq!(
             result.as_deref(),
-            Some(max.as_str()),
-            "MAX + 0.5 truncates toward zero at the finest scale that holds it"
+            Some(format!("{max}.5").as_str()),
+            "MAX + 0.5, exactly"
         );
     }
 
@@ -6757,8 +6750,8 @@ mod numeric_chain_tests {
     /// A decimal group whose running total overflows the `i128` mantissa at a
     /// prefix — `1e38 + 1e38` — while its exact total `1e38` does not. The exact
     /// tier sums in arbitrary precision, so neither the chain nor any chunking
-    /// refuses it: sequential and parallel both answer the exact total, and a
-    /// group whose TOTAL overflows is refused by both.
+    /// refuses it: sequential and parallel both answer the exact total, a group
+    /// whose total lies past the bounds included.
     #[test]
     fn a_decimal_running_overflow_is_not_a_refusal_sequentially_or_in_parallel() {
         const ROWS: usize = 2048;
@@ -6779,13 +6772,15 @@ mod numeric_chain_tests {
             sequential(ValueAggregate::Avg, &group)
         );
 
-        // The neighbour whose exact total itself overflows is refused, both ways.
+        // The neighbour whose exact total itself lies past the bounds answers that
+        // exact total, both ways.
         let mut overflowing = group.clone();
         overflowing[chunk_size + 1] = lit(big, XDEC);
-        assert_eq!(sequential(ValueAggregate::Sum, &overflowing), None);
+        let past = Some(lit("300000000000000000000000000000000000000", XDEC));
+        assert_eq!(sequential(ValueAggregate::Sum, &overflowing), past);
         assert_eq!(
             fold_values(ValueAggregate::Sum, &overflowing).expect("fold"),
-            None
+            past
         );
     }
 

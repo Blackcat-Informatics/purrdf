@@ -181,17 +181,27 @@ fn integer_avg_agrees_with_sum_over_count() {
     assert_eq!(avg, quotient);
 }
 
-/// A decimal `SUM` whose exact total leaves the bounded value space is a typed
-/// overflow (unbound), never a literal the engine could not read back; one that stays
-/// inside answers exactly even though a running prefix overflowed.
+/// A decimal `SUM` is the exact total at any size, as an integer `SUM` is: past the
+/// bounds it is a literal every comparison reads exactly and `SUM / COUNT` divides
+/// into `AVG`; a total that comes back inside answers exactly even though a running
+/// prefix overflowed.
 #[test]
-fn decimal_sum_overflows_only_on_its_total() {
+fn decimal_sum_is_the_exact_total() {
     let rows = run(&format!(
-        "SELECT (SUM(?v) AS ?s) WHERE {{ VALUES ?v {{ {} {} }} }}",
+        "SELECT (SUM(?v) AS ?s) (SUM(?v) / COUNT(?v) AS ?q) (AVG(?v) AS ?a) \
+         WHERE {{ VALUES ?v {{ {} {} }} }}",
         dec(MAX),
         dec("1")
     ));
-    assert_eq!(cell(rows[0][0].as_ref()), None);
+    assert_eq!(
+        cell(rows[0][0].as_ref()),
+        decimal_answer("170141183460469231731687303715884105728")
+    );
+    assert_eq!(cell(rows[0][1].as_ref()), cell(rows[0][2].as_ref()));
+    assert_eq!(
+        cell(rows[0][2].as_ref()),
+        decimal_answer("85070591730234615865843651857942052864")
+    );
     let rows = run(&format!(
         "SELECT (SUM(?v) AS ?s) WHERE {{ VALUES ?v {{ {} {} {} }} }}",
         dec(MAX),
@@ -480,11 +490,108 @@ fn arithmetic_overflow_is_an_error_beside_answers_that_fit() {
         Some((MAX.to_owned(), format!("{XSD}integer")))
     );
     assert_eq!(select(&format!("ABS({})", int(MIN))), None);
-    // An operand outside the bounded value space is a typed error for exact
-    // arithmetic, whatever the result would be.
-    assert_eq!(select(&format!("{} - {}", int(BIG), int(BIG))), None);
+    // An operand past the bounded representation computes exactly: the result
+    // answers where the bounded value space holds it, and is a typed overflow
+    // (unbound) where it does not.
+    let integer = |lexical: &str| Some((lexical.to_owned(), format!("{XSD}integer")));
+    assert_eq!(
+        select(&format!("{} - {}", int(BIG), int(BIG))),
+        integer("0")
+    );
+    assert_eq!(
+        select(&format!("{} - {}", int(BIG), int(BIG_1))),
+        integer("1")
+    );
+    assert_eq!(select(&format!("{} + 1", int(BIG))), None);
+    assert_eq!(select(&format!("{} * 0", int(BIG))), integer("0"));
+    assert_eq!(select(&format!("{} * 2", int(BIG))), None);
+    assert_eq!(
+        select(&format!("{} / {}", int(BIG), int(BIG))),
+        decimal_answer("1")
+    );
+    assert_eq!(select(&format!("{} / 0", int(BIG))), None);
     assert_eq!(select(&format!("ABS({})", int(BIG))), None);
+    assert_eq!(select(&format!("-({})", int(BIG))), None);
     assert_eq!(select(&format!("ROUND({})", int(BIG))), None);
+    // A decimal past eighteen fractional digits rounds into the bounds.
+    let fine = dec("0.50000000000000000001");
+    assert_eq!(select(&format!("ROUND({fine})")), decimal_answer("1"));
+    assert_eq!(select(&format!("FLOOR({fine})")), decimal_answer("0"));
+    assert_eq!(select(&format!("CEIL({fine})")), decimal_answer("1"));
+    assert_eq!(
+        select(&format!("ROUND({})", dec("-0.50000000000000000001"))),
+        decimal_answer("-1")
+    );
+    assert_eq!(
+        select(&format!("FLOOR({})", dec("-0.00000000000000000001"))),
+        decimal_answer("-1")
+    );
+    assert_eq!(select(&format!("{fine} + 0")), decimal_answer("0.5"));
+}
+
+/// A decimal written with trailing fractional zeros is the value without them: the
+/// spelling's scale never refuses a value the representation holds.
+#[test]
+fn trailing_fractional_zeros_never_refuse_a_representable_value() {
+    let max_point_zero = dec(&format!("{MAX}.0"));
+    for expression in [
+        format!("{max_point_zero} + 0"),
+        format!("{max_point_zero} * 1"),
+        format!("ABS({max_point_zero})"),
+    ] {
+        assert_eq!(select(&expression), decimal_answer(MAX), "{expression}");
+    }
+    assert_eq!(
+        select(&format!("{max_point_zero} - 1")),
+        decimal_answer(MAX_1)
+    );
+    assert_eq!(
+        select(&format!("-({max_point_zero})")),
+        decimal_answer(MIN_1)
+    );
+    assert_eq!(
+        select(&format!(
+            "{} + 0",
+            dec("17014118346046923173168730371588410572.70")
+        )),
+        decimal_answer("17014118346046923173168730371588410572.7")
+    );
+    assert_eq!(
+        select(&format!(
+            "{} + 0",
+            dec("100000000000000000000000000000000000000.0")
+        )),
+        decimal_answer("100000000000000000000000000000000000000")
+    );
+    // A significant fractional digit past what the mantissa holds truncates (the
+    // precision rule); an integer part past the bounds overflows.
+    assert_eq!(
+        select(&format!("{} + 0", dec(&format!("{MAX}.5")))),
+        decimal_answer(MAX)
+    );
+    assert_eq!(
+        select(&format!(
+            "{} + 0",
+            dec("170141183460469231731687303715884105728.0")
+        )),
+        None
+    );
+}
+
+/// `AVG` is `SUM / COUNT` on every group, a total past `i128` included.
+#[test]
+fn avg_is_sum_over_count_past_i128() {
+    for values in [
+        [int(MAX), int(MAX_1)],
+        [int(MIN), int(MIN_1)],
+        [int(MAX), int(MAX)],
+    ] {
+        let (avg, quotient) = avg_and_quotient(&values);
+        assert!(avg.is_some(), "{values:?}");
+        assert_eq!(avg, quotient, "{values:?}");
+    }
+    let (avg, _) = avg_and_quotient(&[int(MAX), int(MAX_1)]);
+    assert_eq!(avg, decimal_answer(MAX_1));
 }
 
 /// Decimal arithmetic keeps every digit the value space holds and truncates the rest
@@ -558,10 +665,9 @@ fn fold_operand() -> impl Strategy<Value = String> {
 prop_test! {
     #![prop_config(Config::with_cases(512))]
 
-    /// `AVG` is one representable `xsd:decimal` under `numeric_div`'s precision
-    /// rule — `SUM / COUNT` wherever `SUM` answers, the exact mean where only a
-    /// decimal total overflowed, unbound when the mean itself overflows — and so
-    /// equals `SUM / COUNT` wherever `SUM` is a bounded value.
+    /// `SUM` is the exact total, and `AVG` is one representable `xsd:decimal`: the
+    /// exact mean under `numeric_div`'s precision rule, unbound when the mean itself
+    /// overflows — equal to `SUM / COUNT` on every group.
     #[test]
     fn avg_and_sum_match_the_exact_oracle(
         values in prop::collection::vec(fold_operand(), 1..10),
@@ -584,44 +690,60 @@ prop_test! {
             .iter()
             .fold(Rational::from_i128(0), |acc, v| acc.add(&Rational::parse(v).expect("numeral")));
         let count = Rational::from_i128(values.len() as i128);
-        let all_integers = values.iter().all(|v| !v.contains('.'));
-        // `AVG` is `SUM / COUNT` under the precision rule: the bounded `SUM` (exact
-        // for integers, truncated where a decimal total holds more digits than the
-        // representation retains) divided by the count — or, where a decimal `SUM`
-        // overflows, the exact mean.
-        let want_avg = match rule(&exact_sum) {
-            Some(bounded_sum) if !all_integers => {
-                rule(&Rational::parse(&bounded_sum).expect("a numeral").div(&count))
-            }
-            _ => rule(&exact_sum.div(&count)),
-        };
         prop_assert_eq!(
             avg.as_ref().map(|(lexical, _)| lexical.clone()),
-            want_avg,
+            rule(&exact_sum.div(&count)),
             "AVG of {:?}", values
         );
         if let Some((_, datatype)) = &avg {
             prop_assert_eq!(datatype.as_str(), format!("{XSD}decimal"));
         }
-        if all_integers {
-            // An integer SUM is exact at any size.
-            let (lexical, _) = sum.clone().expect("an integer SUM always answers");
-            prop_assert!(
-                Rational::parse(&lexical).expect("a numeral").value_eq(&exact_sum)
-            );
-        } else {
-            prop_assert_eq!(
-                sum.as_ref().map(|(lexical, _)| lexical.clone()),
-                rule(&exact_sum),
-                "SUM of {:?}", values
-            );
-        }
-        // Wherever SUM is a bounded value, AVG = SUM / COUNT.
-        let bounded_sum = sum.as_ref().is_some_and(|(lexical, datatype)| {
-            purrdf_xsd::parse_by_iri(lexical, datatype).is_ok()
-        });
-        if bounded_sum {
-            prop_assert_eq!(avg, quotient, "AVG vs SUM/COUNT of {:?}", values);
-        }
+        let (lexical, _) = sum.expect("SUM always answers");
+        prop_assert!(
+            Rational::parse(&lexical).expect("a numeral").value_eq(&exact_sum),
+            "SUM of {:?}", values
+        );
+        // AVG = SUM / COUNT on every group, a SUM past i128 included.
+        prop_assert_eq!(avg, quotient, "AVG vs SUM/COUNT of {:?}", values);
     }
+}
+
+// ── composite values (SEP-0009) ──────────────────────────────────────────────────
+
+/// A `cdt:List` literal.
+fn list(elements: &str) -> String {
+    format!("\"[{elements}]\"^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/List>")
+}
+
+/// A list element past the bounded representation is a number inside a composite
+/// too: element-wise `=` and `<` compare it exactly.
+#[test]
+fn composite_elements_past_the_bounds_compare_exactly() {
+    let one = "100000000000000000000000000000000000000001";
+    let two = "100000000000000000000000000000000000000002";
+    assert_eq!(
+        select(&format!("{} = {}", list(one), list(&format!("{one}.0")))),
+        boolean_answer(true)
+    );
+    assert_eq!(
+        select(&format!("{} = {}", list(one), list(two))),
+        boolean_answer(false)
+    );
+    assert_eq!(
+        select(&format!("{} < {}", list(one), list(two))),
+        boolean_answer(true)
+    );
+    assert_eq!(
+        select(&format!("{} < {}", list(two), list(one))),
+        boolean_answer(false)
+    );
+    // Neighbour: an ill-typed element is still an error.
+    assert_eq!(
+        select(&format!(
+            "{} = {}",
+            list("\\\"x\\\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+            list("1")
+        )),
+        None
+    );
 }

@@ -70,6 +70,7 @@ pub(crate) fn check_node_constraint(
     nc: &NodeConstraint,
     facts: &NodeFacts<'_>,
     patterns: &mut PatternCache,
+    exact: Option<&[Option<LiteralValue>; 4]>,
 ) -> Result<(), String> {
     if let Some(kind) = nc.node_kind {
         check_node_kind(kind, facts)?;
@@ -78,7 +79,7 @@ pub(crate) fn check_node_constraint(
         check_datatype(datatype, facts)?;
     }
     check_string_facets(nc, facts, patterns)?;
-    check_numeric_facets(nc, facts)?;
+    check_numeric_facets(nc, facts, exact)?;
     if let Some(values) = &nc.values {
         check_value_set(values, facts)?;
     }
@@ -257,7 +258,14 @@ fn facet_value(bound: NumericLiteral) -> XsdValue {
     }
 }
 
-fn check_numeric_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<(), String> {
+/// The numeric facets, compared in the XSD value space against `exact` — the
+/// bounds as written, from an [`crate::ExactSchema`] — or, without it, against the
+/// AST's `i64`/`f64` values.
+fn check_numeric_facets(
+    nc: &NodeConstraint,
+    facts: &NodeFacts<'_>,
+    exact: Option<&[Option<LiteralValue>; 4]>,
+) -> Result<(), String> {
     use core::cmp::Ordering;
     let comparisons: [(&str, Option<NumericLiteral>, &[Ordering]); 4] = [
         (
@@ -279,9 +287,12 @@ fn check_numeric_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<()
         return Ok(());
     }
     let value = numeric_value(facts)?;
-    for (name, bound, allowed) in comparisons {
+    for (index, (name, bound, allowed)) in comparisons.into_iter().enumerate() {
         if let Some(bound) = bound {
-            let facet = LiteralValue::Bounded(facet_value(bound));
+            let facet = match exact.and_then(|exact| exact[index].clone()) {
+                Some(exact) => exact,
+                None => LiteralValue::Bounded(facet_value(bound)),
+            };
             let Some(ordering) = literal_cmp(&value, &facet) else {
                 return Err(format!(
                     "{name} comparison with {} failed",
@@ -527,23 +538,25 @@ mod tests {
             maxinclusive: Some(NumericLiteral::Integer(bound)),
             ..NodeConstraint::default()
         };
-        assert!(check_numeric_facets(&min(0), &literal_facts(big, INTEGER, None)).is_ok());
-        assert!(check_numeric_facets(&max(0), &literal_facts(big, INTEGER, None)).is_err());
-        assert!(check_numeric_facets(&max(0), &literal_facts(&negative, INTEGER, None)).is_ok());
+        assert!(check_numeric_facets(&min(0), &literal_facts(big, INTEGER, None), None).is_ok());
+        assert!(check_numeric_facets(&max(0), &literal_facts(big, INTEGER, None), None).is_err());
+        assert!(
+            check_numeric_facets(&max(0), &literal_facts(&negative, INTEGER, None), None).is_ok()
+        );
         let digits = NodeConstraint {
             totaldigits: Some(42),
             fractiondigits: Some(20),
             ..NodeConstraint::default()
         };
-        assert!(check_numeric_facets(&digits, &literal_facts(big, INTEGER, None)).is_ok());
-        assert!(check_numeric_facets(&digits, &literal_facts(fine, DECIMAL, None)).is_ok());
+        assert!(check_numeric_facets(&digits, &literal_facts(big, INTEGER, None), None).is_ok());
+        assert!(check_numeric_facets(&digits, &literal_facts(fine, DECIMAL, None), None).is_ok());
         let tight = NodeConstraint {
             totaldigits: Some(41),
             fractiondigits: Some(19),
             ..NodeConstraint::default()
         };
-        assert!(check_numeric_facets(&tight, &literal_facts(big, INTEGER, None)).is_err());
-        assert!(check_numeric_facets(&tight, &literal_facts(fine, DECIMAL, None)).is_err());
+        assert!(check_numeric_facets(&tight, &literal_facts(big, INTEGER, None), None).is_err());
+        assert!(check_numeric_facets(&tight, &literal_facts(fine, DECIMAL, None), None).is_err());
     }
 
     #[test]
@@ -576,17 +589,17 @@ mod tests {
         let dt = "http://www.w3.org/2001/XMLSchema#double";
         let plus_inf = literal_facts("+INF", dt, None);
         assert!(
-            check_numeric_facets(&nc, &plus_inf).is_err(),
+            check_numeric_facets(&nc, &plus_inf, None).is_err(),
             "+INF must be rejected via the numeric-facet path"
         );
         let inf = literal_facts("INF", dt, None);
         assert!(
-            check_numeric_facets(&nc, &inf).is_ok(),
+            check_numeric_facets(&nc, &inf, None).is_ok(),
             "INF >= 0 must pass the numeric-facet path"
         );
         let one_point_five = literal_facts("1.5", dt, None);
         assert!(
-            check_numeric_facets(&nc, &one_point_five).is_ok(),
+            check_numeric_facets(&nc, &one_point_five, None).is_ok(),
             "1.5 >= 0 must pass the numeric-facet path"
         );
     }

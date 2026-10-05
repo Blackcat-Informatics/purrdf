@@ -438,41 +438,40 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
     {
         return Err(XsdError::invalid(dt, s, "non-digit character"));
     }
-    // Trailing fractional zeros change the spelling, not the value: `0.1` written with
-    // nineteen fractional digits is still `0.1`, which the representation holds, so
-    // only significant digits past the eighteenth are a precision limit.
-    let frac_str = if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
-        let significant = frac_str.trim_end_matches('0');
-        &frac_str[..significant.len().max(usize::from(MAX_DECIMAL_SCALE))]
-    } else {
-        frac_str
-    };
-    if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
-        return Err(XsdError::OutOfRange {
+    // The value as written, at the scale written, when the representation holds it;
+    // otherwise the same value with its trailing fractional zeros dropped. A trailing
+    // zero changes the spelling, never the value, so `"…727.0"` (one past the mantissa
+    // at scale 1) and `0.1` written with nineteen fractional digits are both values
+    // the representation holds; only a significant digit past the eighteenth
+    // (`err:FOCA0006`) or an integer part past the mantissa (`err:FOCA0001`) is not.
+    decimal_at_scale(neg, int_str, frac_str)
+        .or_else(|| decimal_at_scale(neg, int_str, frac_str.trim_end_matches('0')))
+        .ok_or_else(|| XsdError::OutOfRange {
             datatype: dt,
             lexical: s.to_string(),
-            reason: reason::DECIMAL_TOO_PRECISE,
-        });
-    }
+            reason: if frac_str.trim_end_matches('0').len() > usize::from(MAX_DECIMAL_SCALE) {
+                reason::DECIMAL_TOO_PRECISE
+            } else {
+                reason::DECIMAL_TOO_LARGE
+            },
+        })
+}
 
+/// The decimal `±int_str.frac_str` at exactly `frac_str.len()` fractional digits, when
+/// that scale is at most 18 and the mantissa fits `i128` (the magnitude is read
+/// unsigned so that `i128::MIN`'s, one past `i128::MAX`, is a mantissa like any other).
+fn decimal_at_scale(negative: bool, int_str: &str, frac_str: &str) -> Option<Decimal> {
+    let scale = u8::try_from(frac_str.len())
+        .ok()
+        .filter(|&scale| scale <= MAX_DECIMAL_SCALE)?;
     let digits = format!("{int_str}{frac_str}");
-    let digits_trimmed = digits.trim_start_matches('0');
-    let out_of_range = || XsdError::OutOfRange {
-        datatype: dt,
-        lexical: s.to_string(),
-        reason: reason::DECIMAL_TOO_LARGE,
-    };
-    // The magnitude is read unsigned so that `i128::MIN`, whose magnitude is one past
-    // `i128::MAX`, is a mantissa like any other (it is the value `xsd:decimal` of the
-    // integer `i128::MIN` holds, and its canonical lexical must read back).
-    let magnitude = if digits_trimmed.is_empty() {
-        0u128
+    let digits = digits.trim_start_matches('0');
+    let magnitude = if digits.is_empty() {
+        0
     } else {
-        digits_trimmed.parse::<u128>().map_err(|_| out_of_range())?
+        digits.parse::<u128>().ok()?
     };
-    let mantissa = signed(neg, magnitude).ok_or_else(out_of_range)?;
-    // `frac_str.len() <= MAX_DECIMAL_SCALE <= u8::MAX`, so the cast cannot truncate.
-    Ok(Decimal::from_parts(mantissa, frac_str.len() as u8))
+    Some(Decimal::from_parts(signed(negative, magnitude)?, scale))
 }
 
 /// `xsd:double`: XSD numeric float lexical, or `INF`/`+INF`/`-INF`/`NaN`.

@@ -14,6 +14,8 @@
 //! partial `value_cmp` free fn). It implements only `Clone`/`Debug`, so a consumer
 //! can cache `HashMap<TermId, XsdValue>` keyed by the IR's `TermId`.
 
+use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation};
+
 use crate::datatype::XsdDatatype;
 use crate::numeric::Decimal;
 use crate::temporal;
@@ -466,33 +468,98 @@ pub(crate) mod reason {
     }
 }
 
-impl std::fmt::Display for XsdError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+impl XsdError {
+    /// The failure as a typed [`DiagnosticPresentation`]: a stable message identity per
+    /// condition (`xsd-invalid-lexical`, `xsd-out-of-range`, `xsd-division-by-zero`,
+    /// `xsd-type-mismatch`, `xsd-indeterminate`), the error's fields as typed text
+    /// arguments, the XPath F&O code ([`Self::code`]) as the `code` argument when it
+    /// has one, and English identical to this error's [`Display`](std::fmt::Display)
+    /// rendering. A host reads the condition and its F&O code without parsing English.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::{XsdDatatype, parse};
+    ///
+    /// let error = parse("100000000000000000000000000000000000000000", XsdDatatype::Integer)
+    ///     .unwrap_err();
+    /// let presentation = error.presentation();
+    /// assert_eq!(presentation.message_id(), "xsd-out-of-range");
+    /// assert!(presentation.english().ends_with("(err:FOCA0003)"));
+    /// assert_eq!(presentation.english(), error.to_string());
+    /// ```
+    #[must_use]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "these templates are interpreted and contract-checked by DiagnosticPresentation"
+    )]
+    pub fn presentation(&self) -> DiagnosticPresentation {
+        use purrdf_lex::diagnostic::DiagnosticValue::Text;
+        let parameter =
+            |name: &str, value: &str| DiagnosticParameter::new(name, Text(value.to_owned()));
+        let (identity, template, mut parameters) = match self {
             Self::InvalidLexical {
                 datatype,
                 lexical,
                 reason,
-            } => write!(
-                f,
-                "invalid lexical form {lexical:?} for <{}>: {reason}",
-                datatype.iri()
+            } => (
+                "xsd-invalid-lexical",
+                "invalid lexical form {lexical:?} for <{datatype}>: {reason}",
+                vec![
+                    parameter("lexical", lexical),
+                    parameter("datatype", datatype.iri()),
+                    parameter("reason", reason),
+                ],
             ),
             Self::OutOfRange {
                 datatype,
                 lexical,
                 reason,
-            } => write!(
-                f,
-                "lexical form {lexical:?} is out of representable range for <{}>: {reason}",
-                datatype.iri()
+            } => (
+                "xsd-out-of-range",
+                "lexical form {lexical:?} is out of representable range for <{datatype}>: {reason}",
+                vec![
+                    parameter("lexical", lexical),
+                    parameter("datatype", datatype.iri()),
+                    parameter("reason", reason),
+                ],
             ),
-            Self::DivisionByZero { datatype } => {
-                write!(f, "division by zero for <{}>", datatype.iri())
+            Self::DivisionByZero { datatype } => (
+                "xsd-division-by-zero",
+                "division by zero for <{datatype}>",
+                vec![parameter("datatype", datatype.iri())],
+            ),
+            Self::TypeMismatch { reason } => (
+                "xsd-type-mismatch",
+                "type mismatch: {reason}",
+                vec![parameter("reason", reason)],
+            ),
+            Self::Indeterminate { reason } => (
+                "xsd-indeterminate",
+                "indeterminate: {reason}",
+                vec![parameter("reason", reason)],
+            ),
+        };
+        let template = match self.code() {
+            Some(code) => {
+                parameters.push(parameter("code", code.qname()));
+                format!("{template} ({{code}})")
             }
-            Self::TypeMismatch { reason } => write!(f, "type mismatch: {reason}"),
-            Self::Indeterminate { reason } => write!(f, "indeterminate: {reason}"),
-        }
+            None => template.to_owned(),
+        };
+        // Validation judges only the identity, the template and the parameter names,
+        // which are literals fixed per arm; field values are spliced in and never re-read
+        // as template text. `every_error_presents_its_code` constructs every arm.
+        DiagnosticPresentation::new(identity, &template, parameters)
+            .expect("XSD templates and typed argument sets agree")
+    }
+}
+
+impl std::fmt::Display for XsdError {
+    /// The condition, then its XPath F&O code in parentheses when it has one —
+    /// `lexical form "…" is out of representable range for <…>: integer magnitude
+    /// exceeds i128 (err:FOCA0003)` — so every surface that reports the error names the
+    /// code; [`Self::presentation`] gives the same text typed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.presentation().english())
     }
 }
 

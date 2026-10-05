@@ -2572,6 +2572,7 @@ fn parse_facet_value(
     LiteralValue::parse(&lexical, datatype).map_err(|error| {
         ProjectionError::integrity(format!("invalid CSVW datatype facet: {error}"))
             .at_path(resource)
+            .with_presentation(error.presentation())
     })
 }
 

@@ -451,3 +451,50 @@ prop_test! {
         }
     }
 }
+
+/// Every error kind presents its condition and, where F&O names one, its code — in
+/// the typed presentation and in the `Display` text every surface reports.
+#[test]
+fn every_error_presents_its_code() {
+    use purrdf_xsd::XsdError;
+    for (error, identity, code) in [
+        (
+            parse("x", D::Integer).unwrap_err(),
+            "xsd-invalid-lexical",
+            Some("err:FORG0001"),
+        ),
+        (
+            parse("100000000000000000000000000000000000000000", D::Integer).unwrap_err(),
+            "xsd-out-of-range",
+            Some("err:FOCA0003"),
+        ),
+        (
+            XsdError::DivisionByZero {
+                datatype: D::Decimal,
+            },
+            "xsd-division-by-zero",
+            Some("err:FOAR0001"),
+        ),
+        (
+            XsdError::TypeMismatch { reason: "a reason" },
+            "xsd-type-mismatch",
+            Some("err:XPTY0004"),
+        ),
+        (
+            XsdError::Indeterminate { reason: "a reason" },
+            "xsd-indeterminate",
+            None,
+        ),
+    ] {
+        let presentation = error.presentation();
+        assert_eq!(presentation.message_id(), identity);
+        assert_eq!(presentation.english(), error.to_string());
+        match code {
+            Some(code) => {
+                assert!(error.to_string().ends_with(&format!("({code})")), "{error}");
+                assert!(presentation.parameters().iter().any(|p| p.name() == "code"));
+            }
+            None => assert!(!presentation.parameters().iter().any(|p| p.name() == "code")),
+        }
+    }
+}

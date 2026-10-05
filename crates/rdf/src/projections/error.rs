@@ -44,6 +44,9 @@ pub struct ProjectionError {
     kind: ProjectionErrorKind,
     message: String,
     path: Option<String>,
+    /// The typed condition behind the failure, when one is known: an XSD value
+    /// failure's `xsd-*` presentation, with its XPath F&O `code`.
+    presentation: Option<Box<purrdf_core::DiagnosticPresentation>>,
 }
 
 impl ProjectionError {
@@ -56,7 +59,18 @@ impl ProjectionError {
             kind,
             message: message.into(),
             path: None,
+            presentation: None,
         }
+    }
+
+    /// Attach the typed condition behind this failure.
+    #[must_use]
+    pub(crate) fn with_presentation(
+        mut self,
+        presentation: purrdf_core::DiagnosticPresentation,
+    ) -> Self {
+        self.presentation = Some(Box::new(presentation));
+        self
     }
 
     pub(crate) fn configuration(message: impl Into<String>) -> Self {
@@ -103,6 +117,13 @@ impl ProjectionError {
     /// Artifact or logical path associated with the failure, when known.
     pub fn path(&self) -> Option<&str> {
         self.path.as_deref()
+    }
+
+    /// The typed condition behind the failure, when one is known: for a value that
+    /// `purrdf_xsd` refuses, its `xsd-*` presentation, whose `code` argument is the
+    /// XPath F&O error code (`err:FORG0001`, `err:FOCA0003`, …).
+    pub fn presentation(&self) -> Option<&purrdf_core::DiagnosticPresentation> {
+        self.presentation.as_deref()
     }
 }
 

@@ -18,7 +18,17 @@ use crate::handles::into_handle;
 use crate::status::PurrdfStatus;
 
 fn projection_error(error: &ProjectionError) -> PurrdfError {
-    PurrdfError::new(PurrdfStatus::InvalidArgument, error.to_string())
+    match error.presentation() {
+        // The typed condition behind the failure (an XSD value refusal's `xsd-*`
+        // presentation, carrying its XPath F&O `code`) is readable through
+        // `purrdf_error_presentation_json`.
+        Some(presentation) => PurrdfError::from_diagnostic(
+            PurrdfStatus::InvalidArgument,
+            &purrdf_core::RdfDiagnostic::error(error.kind().as_str(), error.to_string())
+                .with_presentation(presentation.clone()),
+        ),
+        None => PurrdfError::new(PurrdfStatus::InvalidArgument, error.to_string()),
+    }
 }
 
 /// Project a frozen RDF dataset into a canonical deterministic USTAR carrier.

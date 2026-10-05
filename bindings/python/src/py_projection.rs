@@ -346,9 +346,16 @@ fn project_artifacts_py(
             if let Some(error) = sink.take_callback_error() {
                 return Err(error);
             }
-            Err(PyValueError::new_err(error.to_string()))
+            Err(projection_value_error(&error))
         }
     }
+}
+
+/// The `ValueError` a projection failure raises: its message, and — when the failure
+/// has a typed condition behind it, such as an XSD value refusal's `xsd-*` condition
+/// with its XPath F&O `code` — that condition as `message_id` and `presentation`.
+fn projection_value_error(error: &ProjectionError) -> PyErr {
+    crate::py_store::presentation::presented_value_error(error.to_string(), error.presentation())
 }
 
 struct PythonArtifactSink<'py> {
@@ -477,8 +484,8 @@ fn lift_py(
     let config = ProjectionConfig::from_json(&config_bytes)
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     let outcome = py
-        .detach(move || lift_archive(&archive, profile, &config).map_err(|error| error.to_string()))
-        .map_err(PyValueError::new_err)?;
+        .detach(move || lift_archive(&archive, profile, &config))
+        .map_err(|error| projection_value_error(&error))?;
     Ok(PyProjectionLift {
         dataset: outcome.dataset,
         losses: losses(&outcome.loss_ledger),

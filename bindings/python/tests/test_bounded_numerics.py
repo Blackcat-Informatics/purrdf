@@ -54,3 +54,60 @@ def test_the_rdflib_shim_reads_them_as_well_typed_numbers() -> None:
     smaller = Literal(MAX, datatype=URIRef(XSD + "integer"))
     assert smaller < big
     assert not big < smaller
+
+
+def test_shex_numeric_facets_compare_against_the_bound_as_written() -> None:
+    from purrdf import shex
+
+    schema = (
+        "PREFIX ex: <http://example.org/>\n"
+        "ex:Big { ex:n MININCLUSIVE 100000000000000000001 }\n"
+        "ex:Third { ex:n MAXEXCLUSIVE 0.30000000000000001 }\n"
+    )
+    data = (
+        "@prefix ex: <http://example.org/> .\n"
+        "ex:a ex:n 100000000000000000000 .\n"
+        "ex:b ex:n 100000000000000000001 .\n"
+        "ex:e ex:n 0.3 .\n"
+        "ex:f ex:n 0.30000000000000001 .\n"
+    )
+    for node, shape, conformant in [
+        ("a", "Big", False),
+        ("b", "Big", True),
+        ("e", "Third", True),
+        ("f", "Third", False),
+    ]:
+        entries = shex.validate(
+            schema,
+            data,
+            [(f"http://example.org/{node}", f"http://example.org/{shape}")],
+        )
+        assert entries[0]["conformant"] is conformant, (node, shape, entries)
+
+
+def test_an_xsd_refusal_names_its_fo_code() -> None:
+    from purrdf import shex
+
+    schema = (
+        "PREFIX ex: <http://example.org/>\n"
+        "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+        "ex:S { ex:n xsd:integer }\n"
+    )
+    data = (
+        "@prefix ex: <http://example.org/> .\n"
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+        'ex:bad ex:n "1.5"^^xsd:integer .\n'
+        f'ex:big ex:n "{BIG}"^^xsd:integer .\n'
+    )
+    bad, big = shex.validate(
+        schema,
+        data,
+        [
+            ("http://example.org/bad", "http://example.org/S"),
+            ("http://example.org/big", "http://example.org/S"),
+        ],
+    )
+    assert bad["conformant"] is False
+    assert "err:FORG0001" in bad["reason"], bad
+    # Neighbour: a well-formed integer past i128 conforms.
+    assert big["conformant"] is True, big

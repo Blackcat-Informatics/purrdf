@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-04T19:37:51-06:00\n"
+"POT-Creation-Date: 2026-10-05T07:54:00-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -34,16 +34,16 @@ msgid "Getting Started"
 msgstr "入门"
 
 #: src/SUMMARY.md:12 src/concepts/projections.md:449 src/concepts/jsonld.md:36
-#: src/validation/shacl.md:294 src/validation/shacl.md:398
-#: src/validation/shacl.md:433 src/validation/shacl.md:1065
+#: src/validation/shacl.md:302 src/validation/shacl.md:406
+#: src/validation/shacl.md:441 src/validation/shacl.md:1073
 #: src/entailment.md:49 src/entailment.md:94
 msgid "Rust"
 msgstr "Rust"
 
 #: src/SUMMARY.md:13 src/concepts/projections.md:451
 #: src/concepts/base-iris.md:55 src/concepts/jsonld.md:74
-#: src/validation/shacl.md:296 src/validation/shacl.md:395
-#: src/validation/shacl.md:430 src/validation/shacl.md:1235
+#: src/validation/shacl.md:304 src/validation/shacl.md:403
+#: src/validation/shacl.md:438 src/validation/shacl.md:1243
 #: src/entailment.md:51 src/entailment.md:96
 msgid "Python"
 msgstr "Python"
@@ -53,7 +53,7 @@ msgid "JavaScript / WebAssembly"
 msgstr "JavaScript / WebAssembly"
 
 #: src/SUMMARY.md:15 src/concepts/projections.md:453 src/concepts/jsonld.md:114
-#: src/validation/shacl.md:397 src/validation/shacl.md:432 src/entailment.md:53
+#: src/validation/shacl.md:405 src/validation/shacl.md:440 src/entailment.md:53
 #: src/entailment.md:98
 msgid "C"
 msgstr "C"
@@ -551,11 +551,12 @@ msgid ""
 "host may itself be compiled to wasm32. The shipped npm package and Python "
 "wheel do not yet expose these three relations."
 msgstr ""
-"三者在每个目标上都是其输入的纯函数——定点数、精确有理数，或固定顺序的 binary64，外加规范的并列"
-"判定。原生 Rust 测试固定其数值与序列化的预期结果。`make wasm` 为 `wasm32-un"
-"known-unknown` 构建三个 crate；WASM 测试只运行实际分派、SIMD 内核与宿主接"
-"口。它们是 Rust 宿主上的扩展点：宿主在自己的 IRI 之下注册一个索引或一个空间，而该宿主本身也可"
-"以编译到 wasm32。已发布的 npm 包与 Python wheel 尚未公开这三种关系。"
+"三者在每个目标上都是其输入的纯函数——定点数、精确有理数，或固定顺序的 "
+"binary64，外加规范的并列判定。原生 Rust 测试固定其数值与序列化的预期结果。"
+"`make wasm` 为 `wasm32-unknown-unknown` 构建三个 crate；WASM 测试只运行实际分"
+"派、SIMD 内核与宿主接口。它们是 Rust 宿主上的扩展点：宿主在自己的 IRI 之下注"
+"册一个索引或一个空间，而该宿主本身也可以编译到 wasm32。已发布的 npm 包与 "
+"Python wheel 尚未公开这三种关系。"
 
 #: src/introduction.md:126
 msgid "Two design rules worth knowing on day one"
@@ -939,7 +940,7 @@ msgstr ""
 "原生验证引擎以顶层子模块的形式公开，与 Rust 的 `purrdf` 门面 crate（umbrella "
 "crate）保持同构——绝不直接经由内部的 `purrdf_native` 扩展模块："
 
-#: src/getting-started/python.md:37 src/validation/shacl.md:1311
+#: src/getting-started/python.md:37 src/validation/shacl.md:1319
 msgid "\"conforms\""
 msgstr "\"conforms\""
 
@@ -4116,9 +4117,9 @@ msgstr "其他生产接口"
 msgid "The surface names follow the same profile/config/archive contract:"
 msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 
-#: src/concepts/projections.md:447 src/validation/shacl.md:292
-#: src/validation/shacl.md:392 src/validation/shacl.md:427
-#: src/validation/shacl.md:1232 src/entailment.md:47 src/entailment.md:92
+#: src/concepts/projections.md:447 src/validation/shacl.md:300
+#: src/validation/shacl.md:400 src/validation/shacl.md:435
+#: src/validation/shacl.md:1240 src/entailment.md:47 src/entailment.md:92
 msgid "Host"
 msgstr "宿主"
 
@@ -4155,9 +4156,9 @@ msgid "`lift_archive`"
 msgstr "`lift_archive`"
 
 #: src/concepts/projections.md:450 src/concepts/jsonld.md:62
-#: src/validation/shacl.md:295 src/validation/shacl.md:394
-#: src/validation/shacl.md:429 src/validation/shacl.md:1065
-#: src/validation/shacl.md:1234 src/entailment.md:50 src/entailment.md:95
+#: src/validation/shacl.md:303 src/validation/shacl.md:402
+#: src/validation/shacl.md:437 src/validation/shacl.md:1073
+#: src/validation/shacl.md:1242 src/entailment.md:50 src/entailment.md:95
 msgid "CLI"
 msgstr "CLI"
 
@@ -4830,7 +4831,7 @@ msgstr ""
 "blob/main/docs/COLUMNAR.md)。"
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
-#: src/sparql/querying.md:2001 src/validation/shacl.md:1419
+#: src/sparql/querying.md:2079 src/validation/shacl.md:1427
 #: src/validation/shex.md:64 src/entailment.md:365
 msgid "Conformance"
 msgstr "一致性"
@@ -4921,9 +4922,9 @@ msgstr "RFC 3986"
 msgid "Example"
 msgstr "示例"
 
-#: src/concepts/base-iris.md:27 src/sparql/querying.md:1010
-#: src/sparql/querying.md:1011 src/sparql/querying.md:1012
-#: src/sparql/querying.md:1013 src/sparql/querying.md:1016
+#: src/concepts/base-iris.md:27 src/sparql/querying.md:1088
+#: src/sparql/querying.md:1089 src/sparql/querying.md:1090
+#: src/sparql/querying.md:1091 src/sparql/querying.md:1094
 #: src/sparql/embedding-knn.md:47
 msgid "1"
 msgstr "1"
@@ -4944,9 +4945,9 @@ msgstr ""
 "Turtle/TriG 的 `@base` 或 `BASE`、SPARQL 的 `BASE`、RDF/XML 的 `xml:base`、"
 "JSON-LD/YAML-LD 的 `@context.@base`"
 
-#: src/concepts/base-iris.md:28 src/sparql/querying.md:1008
-#: src/sparql/querying.md:1009 src/sparql/querying.md:1015
-#: src/sparql/querying.md:1019 src/sparql/embedding-knn.md:48
+#: src/concepts/base-iris.md:28 src/sparql/querying.md:1086
+#: src/sparql/querying.md:1087 src/sparql/querying.md:1093
+#: src/sparql/querying.md:1097 src/sparql/embedding-knn.md:48
 msgid "2"
 msgstr "2"
 
@@ -5088,9 +5089,9 @@ msgstr "Rust 字节 API（`parse_dataset`、`purrdf-rdf`、`purrdf-iri`）"
 msgid "pass a base, or the document must carry one"
 msgstr "传入基准，或文档自身必须携带基准"
 
-#: src/concepts/base-iris.md:53 src/validation/shacl.md:297
-#: src/validation/shacl.md:396 src/validation/shacl.md:431
-#: src/validation/shacl.md:1065 src/validation/shacl.md:1236
+#: src/concepts/base-iris.md:53 src/validation/shacl.md:305
+#: src/validation/shacl.md:404 src/validation/shacl.md:439
+#: src/validation/shacl.md:1073 src/validation/shacl.md:1244
 msgid "WebAssembly"
 msgstr "WebAssembly"
 
@@ -5099,8 +5100,8 @@ msgstr "WebAssembly"
 msgid "as above"
 msgstr "同上"
 
-#: src/concepts/base-iris.md:54 src/validation/shacl.md:298
-#: src/validation/shacl.md:1065 src/validation/shacl.md:1237
+#: src/concepts/base-iris.md:54 src/validation/shacl.md:306
+#: src/validation/shacl.md:1073 src/validation/shacl.md:1245
 msgid "C ABI"
 msgstr "C ABI"
 
@@ -6347,10 +6348,149 @@ msgstr ""
 "`EvalError::Unsupported`，绝不会是部分或错误的答案。"
 
 #: src/sparql/querying.md:126
+msgid "Numeric limits"
+msgstr "数值限制"
+
+#: src/sparql/querying.md:128
+msgid ""
+"PurRDF computes `xsd:integer` in a signed 128-bit integer and `xsd:decimal` "
+"as a signed 128-bit mantissa with at most 18 digits after the decimal point. "
+"XSD 1.1 lets a processor limit these two value spaces, provided it supports "
+"at least 16 decimal digits and documents its limits. These are PurRDF's "
+"limits:"
+msgstr "PurRDF 用有符号 128 位整数计算 `xsd:integer`，用小数点后最多 18 位的有符号 128 位尾数计算 `xsd:decimal`。XSD 1.1 允许处理器限制这两个值空间，前提是至少支持 16 位十进制数字，并把限制写进文档。PurRDF 的限制如下："
+
+#: src/sparql/querying.md:133
+msgid "Datatype"
+msgstr "数据类型"
+
+#: src/sparql/querying.md:133
+msgid "Arithmetic range"
+msgstr "运算范围"
+
+#: src/sparql/querying.md:135
+msgid "`xsd:integer` and the integer types derived from it"
+msgstr "`xsd:integer` 及其派生的整数类型"
+
+#: src/sparql/querying.md:135
+msgid "−2^127 to 2^127 − 1, 38 digits"
+msgstr "−2^127 到 2^127 − 1，38 位数字"
+
+#: src/sparql/querying.md:136
+msgid "`xsd:decimal`"
+msgstr "`xsd:decimal`"
+
+#: src/sparql/querying.md:136
+msgid "magnitudes below 2^127, at most 18 digits after the point"
+msgstr "绝对值小于 2^127，小数点后最多 18 位"
+
+#: src/sparql/querying.md:138
+msgid ""
+"Arithmetic inside these limits is exact, except for three roundings that "
+"XPath and XQuery Functions and Operators 3.1 allows:"
+msgstr "在这些限制之内运算都是精确的，只有 XPath and XQuery Functions and Operators 3.1 允许的三种舍入例外："
+
+#: src/sparql/querying.md:141
+msgid ""
+"A decimal result with more digits than the representation keeps is truncated "
+"toward zero, at the finest scale of 18 or fewer fractional digits that holds "
+"it. This applies to `+`, `-`, `*`, `/` and `AVG`. "
+"`\"1000000000000000000000000000000\"^^xsd:decimal + "
+"\"0.000000000000000001\"^^xsd:decimal` is `1000000000000000000000000000000`, "
+"and `7 / 3` is `2.333333333333333333`."
+msgstr "decimal 结果的位数多于表示所能保留的位数时，在能容纳它的最细标度（不超过 18 位小数）上向零截断。这一规则适用于 `+`、`-`、`*`、`/` 和 `AVG`。`\"1000000000000000000000000000000\"^^xsd:decimal + \"0.000000000000000001\"^^xsd:decimal` 的结果是 `1000000000000000000000000000000`，`7 / 3` 的结果是 `2.333333333333333333`。"
+
+#: src/sparql/querying.md:146
+msgid ""
+"A conversion to `xsd:float` or `xsd:double` rounds once, to the nearest "
+"value, ties to even."
+msgstr "转换为 `xsd:float` 或 `xsd:double` 时只舍入一次，取最接近的值，平局取偶。"
+
+#: src/sparql/querying.md:148
+msgid ""
+"A conversion from `xsd:float` or `xsd:double` to `xsd:decimal` gives the "
+"nearest decimal."
+msgstr "从 `xsd:float` 或 `xsd:double` 转换为 `xsd:decimal` 时，得到最接近的 decimal。"
+
+#: src/sparql/querying.md:151
+msgid ""
+"Every other limit is an error, so the expression is unbound. An integer or "
+"decimal result whose integer part is too large is `err:FOAR0002`. A cast of "
+"a value the target cannot hold is refused too: to `xsd:integer`, "
+"`err:FOCA0003`; to `xsd:decimal`, `err:FOCA0001` when the integer part is "
+"too large and `err:FOCA0006` when more than 18 fractional digits are "
+"significant. A trailing zero is not significant: "
+"`\"0.10000000000000000000\"^^xsd:decimal` is the value `0.1`, and "
+"`\"170141183460469231731687303715884105727.0\"^^xsd:decimal + 0` is "
+"`170141183460469231731687303715884105727`. The Rust API names the code of "
+"each error through `purrdf_xsd::XsdError::code`, and the message of every "
+"error `purrdf_xsd` reports ends with it, for example `(err:FORG0001)`. The "
+"negation and the absolute value of a derived integer type are `xsd:integer`, "
+"so `-(\"5\"^^xsd:unsignedByte)` is `-5` typed `xsd:integer`."
+msgstr "其他任何限制都是错误，表达式因此无绑定。整数部分过大的整数或 decimal 结果是 `err:FOAR0002`。目标类型容纳不下的值的转换同样被拒绝：转换为 `xsd:integer` 时是 `err:FOCA0003`；转换为 `xsd:decimal` 时，整数部分过大是 `err:FOCA0001`，有效小数位超过 18 位是 `err:FOCA0006`。末尾的零不是有效位：`\"0.10000000000000000000\"^^xsd:decimal` 的值就是 `0.1`，`\"170141183460469231731687303715884105727.0\"^^xsd:decimal + 0` 的结果是 `170141183460469231731687303715884105727`。Rust API 通过 `purrdf_xsd::XsdError::code` 给出每个错误的代码，`purrdf_xsd` 报告的每个错误的消息也以它结尾，例如 `(err:FORG0001)`。派生整数类型的取负与绝对值都是 `xsd:integer`，所以 `-(\"5\"^^xsd:unsignedByte)` 是类型为 `xsd:integer` 的 `-5`。"
+
+#: src/sparql/querying.md:164
+msgid "Literals past the limits"
+msgstr "超出限制的字面量"
+
+#: src/sparql/querying.md:166
+msgid ""
+"A literal past the limits keeps its lexical form, and it is still a number. "
+"Comparison is exact for an `xsd:integer` or `xsd:decimal` literal of any "
+"length: the comparison operators, `=`, `!=`, `IN`, `ORDER BY`, `MIN`, `MAX`, "
+"`isNumeric`, the effective boolean value, and the elements of a `cdt:List`. "
+"Casts to `xsd:double`, `xsd:float`, `xsd:boolean` and `xsd:string` are exact "
+"too, and a cast to an integer or decimal type succeeds when the value fits "
+"the type."
+msgstr "超出限制的字面量保留其词法形式，它仍然是一个数。对任意长度的 `xsd:integer` 或 `xsd:decimal` 字面量，比较都是精确的：比较运算符、`=`、`!=`、`IN`、`ORDER BY`、`MIN`、`MAX`、`isNumeric`、有效布尔值，以及 `cdt:List` 的元素。到 `xsd:double`、`xsd:float`、`xsd:boolean` 和 `xsd:string` 的转换同样精确；转换为整数或 decimal 类型时，只要值放得进该类型就会成功。"
+
+#: src/sparql/querying.md:174
+msgid ""
+"```sparql\n"
+"PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+"SELECT ?big WHERE {\n"
+"  VALUES ?big "
+"{ \"100000000000000000000000000000000000000000\"^^xsd:integer }\n"
+"  FILTER(?big > \"170141183460469231731687303715884105727\"^^xsd:integer)\n"
+"}\n"
+"```"
+msgstr "```sparql\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\nSELECT ?big WHERE {\n  VALUES ?big { \"100000000000000000000000000000000000000000\"^^xsd:integer }\n  FILTER(?big > \"170141183460469231731687303715884105727\"^^xsd:integer)\n}\n```"
+
+#: src/sparql/querying.md:182
+msgid ""
+"This query binds `?big`. Arithmetic over such a literal is computed exactly, "
+"and the result follows the limits above. When the result fits, it answers, "
+"so `?big - ?big` is `0` and `?big / ?big` is `1`. When it does not fit, it "
+"is `err:FOAR0002`, so `?big + 1` is unbound. Against an `xsd:float` or "
+"`xsd:double` operand, the literal is first converted to that type, rounded "
+"once to the nearest value. SHACL range constraints, ShEx numeric facets, "
+"CSVW datatype facets and the OWL 2 RL and OWL 2 DL value identity compare "
+"numbers the same exact way. ShEx compares a facet against its bound exactly "
+"as written, so `MININCLUSIVE 100000000000000000001` and `MAXEXCLUSIVE "
+"0.30000000000000001` keep every digit."
+msgstr "这个查询会绑定 `?big`。对这样的字面量做运算会精确计算，结果遵循上面的限制。结果放得下时就有答案，所以 `?big - ?big` 是 `0`，`?big / ?big` 是 `1`；放不下时是 `err:FOAR0002`，所以 `?big + 1` 无绑定。另一个操作数是 `xsd:float` 或 `xsd:double` 时，字面量先转换为该类型，只舍入一次，取最接近的值。SHACL 范围约束、ShEx 数值 facet、CSVW 数据类型 facet，以及 OWL 2 RL 与 OWL 2 DL 的值同一性，都以同样精确的方式比较数值。ShEx 按 facet 边界的原始写法精确比较，所以 `MININCLUSIVE 100000000000000000001` 和 `MAXEXCLUSIVE 0.30000000000000001` 的每一位都会保留。"
+
+#: src/sparql/querying.md:193
+msgid "`SUM` and `AVG`"
+msgstr "`SUM` 与 `AVG`"
+
+#: src/sparql/querying.md:195
+msgid ""
+"`SUM` adds its values exactly, however large the total grows, and returns "
+"the exact total, which can be a literal past the limits. `AVG` is `SUM` "
+"divided by `COUNT`, under the division rule above, on every group. The "
+"average of the integers `170141183460469231731687303715884105727` and "
+"`170141183460469231731687303715884105726` is "
+"`\"170141183460469231731687303715884105726\"^^xsd:decimal`, and so is their "
+"`SUM` divided by their `COUNT`. `AVG` never returns a literal outside the "
+"decimal limits."
+msgstr "无论总和变得多大，`SUM` 都精确地累加其值并返回精确的总和，结果可能是超出限制的字面量。在每个分组上，`AVG` 都是 `SUM` 除以 `COUNT`，遵循上面的除法规则。整数 `170141183460469231731687303715884105727` 与 `170141183460469231731687303715884105726` 的平均值是 `\"170141183460469231731687303715884105726\"^^xsd:decimal`，它们的 `SUM` 除以 `COUNT` 也是如此。`AVG` 从不返回超出 decimal 限制的字面量。"
+
+#: src/sparql/querying.md:204
 msgid "Numeric casts"
 msgstr "数值转换"
 
-#: src/sparql/querying.md:128
+#: src/sparql/querying.md:206
 msgid ""
 "An XSD constructor function such as `xsd:double(?x)` follows the casting "
 "rules of XPath and XQuery Functions and Operators 3.1 §19. SPARQL 1.1 §17.5 "
@@ -6370,52 +6510,52 @@ msgstr ""
 "`xsd:double(\"0.1\"^^xsd:float)` 是 `1.0000000149011612E-1`。字符串参数按文本"
 "解析：`xsd:double(\"0.1\")` 是 `1.0E-1`。"
 
-#: src/sparql/querying.md:137
+#: src/sparql/querying.md:215
 msgid "From"
 msgstr "源类型"
 
-#: src/sparql/querying.md:137
+#: src/sparql/querying.md:215
 msgid "To"
 msgstr "目标类型"
 
-#: src/sparql/querying.md:137 src/sparql/querying.md:203
-#: src/sparql/querying.md:1003
+#: src/sparql/querying.md:215 src/sparql/querying.md:281
+#: src/sparql/querying.md:1081
 msgid "Result"
 msgstr "结果"
 
-#: src/sparql/querying.md:139 src/sparql/querying.md:140
+#: src/sparql/querying.md:217 src/sparql/querying.md:218
 msgid "float"
 msgstr "float"
 
-#: src/sparql/querying.md:139 src/sparql/querying.md:140
+#: src/sparql/querying.md:217 src/sparql/querying.md:218
 msgid "double"
 msgstr "double"
 
-#: src/sparql/querying.md:139
+#: src/sparql/querying.md:217
 msgid "the same value, exactly"
 msgstr "同一个值，精确无误"
 
-#: src/sparql/querying.md:140
+#: src/sparql/querying.md:218
 msgid "the nearest float, ties to even (see below)"
 msgstr "最接近的 float，平局取偶（见下文）"
 
-#: src/sparql/querying.md:141
+#: src/sparql/querying.md:219
 msgid "integer, decimal"
 msgstr "integer、decimal"
 
-#: src/sparql/querying.md:141 src/sparql/querying.md:142
+#: src/sparql/querying.md:219 src/sparql/querying.md:220
 msgid "float, double"
 msgstr "float、double"
 
-#: src/sparql/querying.md:141
+#: src/sparql/querying.md:219
 msgid "the nearest value, rounded once"
 msgstr "最接近的值，只舍入一次"
 
-#: src/sparql/querying.md:142
+#: src/sparql/querying.md:220
 msgid "decimal"
 msgstr "decimal"
 
-#: src/sparql/querying.md:142
+#: src/sparql/querying.md:220
 msgid ""
 "the nearest decimal with at most 18 fractional digits, ties toward zero; "
 "`NaN`, `INF` and values of 2^127 or more are errors"
@@ -6423,37 +6563,37 @@ msgstr ""
 "最多 18 位小数的最接近的 decimal，平局取靠近零的一方；`NaN`、`INF` 以及大于等"
 "于 2^127 的值为错误"
 
-#: src/sparql/querying.md:143
+#: src/sparql/querying.md:221
 msgid "float, double, decimal"
 msgstr "float、double、decimal"
 
-#: src/sparql/querying.md:143
+#: src/sparql/querying.md:221
 msgid "integer types"
 msgstr "整数类型"
 
-#: src/sparql/querying.md:143
+#: src/sparql/querying.md:221
 msgid ""
 "the fractional part discarded; `NaN`, `INF` and values outside the target "
 "type are errors"
 msgstr "舍去小数部分；`NaN`、`INF` 以及超出目标类型范围的值为错误"
 
-#: src/sparql/querying.md:144 src/sparql/querying.md:145
+#: src/sparql/querying.md:222 src/sparql/querying.md:223
 msgid "boolean"
 msgstr "boolean"
 
-#: src/sparql/querying.md:144 src/sparql/querying.md:145
+#: src/sparql/querying.md:222 src/sparql/querying.md:223
 msgid "numeric"
 msgstr "数值"
 
-#: src/sparql/querying.md:144
+#: src/sparql/querying.md:222
 msgid "`1` or `0`"
 msgstr "`1` 或 `0`"
 
-#: src/sparql/querying.md:145
+#: src/sparql/querying.md:223
 msgid "`false` for zero and `NaN`, otherwise `true`"
 msgstr "零和 `NaN` 为 `false`，其余为 `true`"
 
-#: src/sparql/querying.md:147
+#: src/sparql/querying.md:225
 msgid ""
 "Casting a float or double to `xsd:string` uses plain notation for magnitudes "
 "from 0.000001 up to, but not including, 1000000 (`\"0.1\"`, `\"123456.5\"`, "
@@ -6471,11 +6611,11 @@ msgstr ""
 "同一个值所需的最少位数，因此 `xsd:string(\"0.1\"^^xsd:float)` 是 `\"0.1\"`。"
 "`STR` 不做转换：它原样返回字面量的词法形式。"
 
-#: src/sparql/querying.md:155
+#: src/sparql/querying.md:233
 msgid "Double to float: round to nearest"
 msgstr "double 转 float：舍入到最近"
 
-#: src/sparql/querying.md:157
+#: src/sparql/querying.md:235
 msgid ""
 "PurRDF deliberately differs from the text of F&O 3.1 §19.1.2.1 here. That "
 "text narrows a double to a float by truncating the binary mantissa. PurRDF "
@@ -6486,7 +6626,7 @@ msgstr ""
 "double 收窄为 float。PurRDF 则像 IEEE 754 一样舍入到最近的 float，平局取偶数"
 "值。理由如下："
 
-#: src/sparql/querying.md:162
+#: src/sparql/querying.md:240
 msgid ""
 "**Accuracy.** The result is never more than half a unit in the last place "
 "from the double, and the error is unbiased. Truncation can be almost a whole "
@@ -6495,7 +6635,7 @@ msgstr ""
 "**精度。** 结果与 double 的差距不超过末位的半个单位，且误差无偏。截断的误差可"
 "接近一个完整单位，而且总是偏向零。"
 
-#: src/sparql/querying.md:165
+#: src/sparql/querying.md:243
 msgid ""
 "**One rounding everywhere.** XSD 1.1 maps a lexical form to a float with "
 "this rounding (`floatingPointRound`), and PurRDF already uses it for "
@@ -6506,12 +6646,12 @@ msgstr ""
 "为 float，PurRDF 对字符串、decimal 和 integer 也已经采用它。若用截断，一个 "
 "double 得到的 float 会与写成字符串的同一个数得到的 float 不同。"
 
-#: src/sparql/querying.md:169
+#: src/sparql/querying.md:247
 msgid ""
 "**Agreement with common engines.** Common SPARQL and XPath engines round."
 msgstr "**与常见引擎一致。** 常见的 SPARQL 和 XPath 引擎都采用舍入。"
 
-#: src/sparql/querying.md:170
+#: src/sparql/querying.md:248
 msgid ""
 "**The text is defective for very small values.** Its rule sends every result "
 "below the smallest normal exponent to zero, even when a float subnormal is "
@@ -6521,47 +6661,47 @@ msgstr ""
 "更接近的 float 次正规数。在这里 `xsd:float(\"1e-40\"^^xsd:double)` 是 "
 "`1.0E-40`，而不是零。"
 
-#: src/sparql/querying.md:174
+#: src/sparql/querying.md:252
 msgid "Two values show where the rules differ:"
 msgstr "下面两个值显示了两种规则的区别："
 
-#: src/sparql/querying.md:176
+#: src/sparql/querying.md:254
 msgid "Expression"
 msgstr "表达式"
 
-#: src/sparql/querying.md:176
+#: src/sparql/querying.md:254
 msgid "PurRDF (round to nearest)"
 msgstr "PurRDF（舍入到最近）"
 
-#: src/sparql/querying.md:176
+#: src/sparql/querying.md:254
 msgid "F&O 3.1 text (truncation)"
 msgstr "F&O 3.1 文字（截断）"
 
-#: src/sparql/querying.md:178
+#: src/sparql/querying.md:256
 msgid "`xsd:float(\"1.0000000894069671630859375\"^^xsd:double)`"
 msgstr "`xsd:float(\"1.0000000894069671630859375\"^^xsd:double)`"
 
-#: src/sparql/querying.md:178
+#: src/sparql/querying.md:256
 msgid "`1.0000001E0`"
 msgstr "`1.0000001E0`"
 
-#: src/sparql/querying.md:178
+#: src/sparql/querying.md:256
 msgid "`1.0E0`"
 msgstr "`1.0E0`"
 
-#: src/sparql/querying.md:179
+#: src/sparql/querying.md:257
 msgid "`xsd:float(\"3.4028235677973366e38\"^^xsd:double)`"
 msgstr "`xsd:float(\"3.4028235677973366e38\"^^xsd:double)`"
 
-#: src/sparql/querying.md:179
+#: src/sparql/querying.md:257
 msgid "`INF`"
 msgstr "`INF`"
 
-#: src/sparql/querying.md:179
+#: src/sparql/querying.md:257
 msgid "`3.4028235E38`"
 msgstr "`3.4028235E38`"
 
-#: src/sparql/querying.md:181
+#: src/sparql/querying.md:259
 msgid ""
 "The second double lies exactly halfway between the largest float and the "
 "next power of two, so rounding to even gives `INF`."
@@ -6569,11 +6709,11 @@ msgstr ""
 "第二个 double 恰好位于最大的 float 与下一个二的幂之间的正中，因此平局取偶得"
 "到 `INF`。"
 
-#: src/sparql/querying.md:184
+#: src/sparql/querying.md:262
 msgid "SPARQL 1.2 temporal arithmetic and adjustment"
 msgstr "SPARQL 1.2 时间运算与调整"
 
-#: src/sparql/querying.md:186
+#: src/sparql/querying.md:264
 msgid ""
 "`+`, `-`, `*`, `/`, and unary `-` extend past the numeric tower to "
 "`xsd:dateTime`/`xsd:date`/`xsd:time` (instants), `xsd:duration` and its two "
@@ -6594,11 +6734,11 @@ msgstr ""
 "blob/main/SEP/SEP-0002/sep-0002.md)，本节的覆盖范围即依照该表。`ADJUST`（见下"
 "文）是 SEP-0002 其余的、非运算类的新增内容。"
 
-#: src/sparql/querying.md:196
+#: src/sparql/querying.md:274
 msgid "The operator table"
 msgstr "运算符表"
 
-#: src/sparql/querying.md:198
+#: src/sparql/querying.md:276
 msgid ""
 "SEP-0002's table has 24 rows: 11 are comparisons (`<`/`>` between two "
 "`yearMonthDuration`s or two `dayTimeDuration`s, `=` between two `duration`s, "
@@ -6610,82 +6750,82 @@ msgstr ""
 "`date` 之间或两个 `time` 之间的 `=`/`<`/`>`），已由普通的值比较覆盖。其余 13 "
 "行是运算："
 
-#: src/sparql/querying.md:203
+#: src/sparql/querying.md:281
 msgid "Operands"
 msgstr "操作数"
 
-#: src/sparql/querying.md:205
+#: src/sparql/querying.md:283
 msgid "`date - date`"
 msgstr "`date - date`"
 
-#: src/sparql/querying.md:205 src/sparql/querying.md:210
-#: src/sparql/querying.md:213
+#: src/sparql/querying.md:283 src/sparql/querying.md:288
+#: src/sparql/querying.md:291
 msgid "`dayTimeDuration`"
 msgstr "`dayTimeDuration`"
 
-#: src/sparql/querying.md:206
+#: src/sparql/querying.md:284
 msgid "`date + yearMonthDuration`"
 msgstr "`date + yearMonthDuration`"
 
-#: src/sparql/querying.md:206 src/sparql/querying.md:207
-#: src/sparql/querying.md:208 src/sparql/querying.md:209
+#: src/sparql/querying.md:284 src/sparql/querying.md:285
+#: src/sparql/querying.md:286 src/sparql/querying.md:287
 msgid "`date`"
 msgstr "`date`"
 
-#: src/sparql/querying.md:207
+#: src/sparql/querying.md:285
 msgid "`date - yearMonthDuration`"
 msgstr "`date - yearMonthDuration`"
 
-#: src/sparql/querying.md:208
+#: src/sparql/querying.md:286
 msgid "`date + dayTimeDuration`"
 msgstr "`date + dayTimeDuration`"
 
-#: src/sparql/querying.md:209
+#: src/sparql/querying.md:287
 msgid "`date - dayTimeDuration`"
 msgstr "`date - dayTimeDuration`"
 
-#: src/sparql/querying.md:210
+#: src/sparql/querying.md:288
 msgid "`time - time`"
 msgstr "`time - time`"
 
-#: src/sparql/querying.md:211
+#: src/sparql/querying.md:289
 msgid "`time + dayTimeDuration`"
 msgstr "`time + dayTimeDuration`"
 
-#: src/sparql/querying.md:211 src/sparql/querying.md:212
+#: src/sparql/querying.md:289 src/sparql/querying.md:290
 msgid "`time`"
 msgstr "`time`"
 
-#: src/sparql/querying.md:212
+#: src/sparql/querying.md:290
 msgid "`time - dayTimeDuration`"
 msgstr "`time - dayTimeDuration`"
 
-#: src/sparql/querying.md:213
+#: src/sparql/querying.md:291
 msgid "`dateTime - dateTime`"
 msgstr "`dateTime - dateTime`"
 
-#: src/sparql/querying.md:214
+#: src/sparql/querying.md:292
 msgid "`dateTime + yearMonthDuration`"
 msgstr "`dateTime + yearMonthDuration`"
 
-#: src/sparql/querying.md:214 src/sparql/querying.md:215
-#: src/sparql/querying.md:216 src/sparql/querying.md:217
+#: src/sparql/querying.md:292 src/sparql/querying.md:293
+#: src/sparql/querying.md:294 src/sparql/querying.md:295
 msgid "`dateTime`"
 msgstr "`dateTime`"
 
-#: src/sparql/querying.md:215
+#: src/sparql/querying.md:293
 msgid "`dateTime - yearMonthDuration`"
 msgstr "`dateTime - yearMonthDuration`"
 
-#: src/sparql/querying.md:216
+#: src/sparql/querying.md:294
 msgid "`dateTime + dayTimeDuration`"
 msgstr "`dateTime + dayTimeDuration`"
 
-#: src/sparql/querying.md:217
+#: src/sparql/querying.md:295
 msgid "`dateTime - dayTimeDuration`"
 msgstr "`dateTime - dayTimeDuration`"
 
-#: src/sparql/querying.md:219
+#: src/sparql/querying.md:297
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -6703,7 +6843,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:226
+#: src/sparql/querying.md:304
 msgid ""
 "Beyond this table, `purrdf` also accepts the general `xsd:duration` on every "
 "row above (SEP-0002 lists `xsd:duration` among the operand types the "
@@ -6719,7 +6859,7 @@ msgstr ""
 "全部五种公历类型的公历值 `±` duration——前提是结果无需捏造缺失的字段（见下文"
 "[分歧](#与其他实现的分歧)）："
 
-#: src/sparql/querying.md:234
+#: src/sparql/querying.md:312
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -6737,11 +6877,11 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:241
+#: src/sparql/querying.md:319
 msgid "Result datatype"
 msgstr "结果数据类型"
 
-#: src/sparql/querying.md:243
+#: src/sparql/querying.md:321
 msgid ""
 "A `+`/`-` between two durations, or between a duration and an instant/"
 "Gregorian value, resolves its result's datatype from the operands' "
@@ -6760,13 +6900,13 @@ msgstr ""
 "则具体化，因为任意一个单独拿出来，也同样能被一条恰好在那一点上结论一致的、基"
 "于分量的规则满足："
 
-#: src/sparql/querying.md:252
+#: src/sparql/querying.md:330
 msgid ""
 "A zero-valued result keeps its operands' declared subtype rather than "
 "collapsing to a generic zero:"
 msgstr "零值结果保留其操作数声明的子类型，而不是塌缩为一个泛化的零："
 
-#: src/sparql/querying.md:255
+#: src/sparql/querying.md:333
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -6784,7 +6924,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:262
+#: src/sparql/querying.md:340
 msgid ""
 "`?zero` is `\"P0M\"^^xsd:yearMonthDuration` — a components-only rule that "
 "inspects the (zero) result rather than the (matching) declared tags would "
@@ -6798,7 +6938,7 @@ msgstr ""
 "的原因。反过来，一个和的_分量_即便看起来与纯粹的 `yearMonthDuration` 完全相"
 "同，只要任一操作数的声明标签是一般类型，结果仍会拓宽为一般类型："
 
-#: src/sparql/querying.md:269
+#: src/sparql/querying.md:347
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -6816,7 +6956,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:276
+#: src/sparql/querying.md:354
 msgid ""
 "`?mixed` is `\"P1M\"^^xsd:duration`, not `\"P1M\"^^xsd:yearMonthDuration` — "
 "the zero `dayTimeDuration` operand contributes nothing to the components but "
@@ -6827,11 +6967,11 @@ msgstr ""
 "——值为零的 `dayTimeDuration` 操作数对分量毫无贡献，却仍会拓宽结果的声明类型，"
 "因为这条规则读取的是标签，而不是值。"
 
-#: src/sparql/querying.md:280
+#: src/sparql/querying.md:358
 msgid "Divergence from other implementations"
 msgstr "与其他实现的分歧"
 
-#: src/sparql/querying.md:282
+#: src/sparql/querying.md:360
 msgid ""
 "Gregorian `±` duration can ask for a field the operand's type does not carry "
 "— adding a duration with a months component to an `xsd:gDay` needs a month "
@@ -6900,7 +7040,7 @@ msgstr ""
 "P1Y1M = \"2013-11\"`，这是 RDF4J 自身测试套件所固定的唯一一个公历用例——而恰恰"
 "在答案会取决于 RDF4J 日历碰巧选取了哪个捏造值的地方，返回带类型的错误："
 
-#: src/sparql/querying.md:321
+#: src/sparql/querying.md:399
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -6918,7 +7058,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:329
+#: src/sparql/querying.md:407
 msgid ""
 "`?bound` is `false`: the typed error `?maybe`'s `BIND` raises poisons to "
 "unbound, the engine's ordinary type-error discipline. That poisoning is also "
@@ -6939,11 +7079,11 @@ msgstr ""
 "比一个携带具体答案的 `Ok`），而不在 SPARQL 查询自身的结果中；在那里，拒绝与假"
 "想的丢弃呈现方式相同。"
 
-#: src/sparql/querying.md:340
+#: src/sparql/querying.md:418
 msgid "Extensions beyond SEP-0002 and F&O"
 msgstr "超出 SEP-0002 与 F&O 的扩展"
 
-#: src/sparql/querying.md:342
+#: src/sparql/querying.md:420
 msgid ""
 "`purrdf` adds three operators SEP-0002 and XPath and XQuery Functions and "
 "Operators (F&O) do not define, each grounded in an existing rule extended to "
@@ -6953,7 +7093,7 @@ msgstr ""
 "（F&O）均未定义的运算符，每一个都立足于一条既有规则，并把它扩展到 F&O 遗漏的"
 "类型上："
 
-#: src/sparql/querying.md:346
+#: src/sparql/querying.md:424
 msgid ""
 "**`SUM`/`AVG` over durations.** SPARQL 1.1 §18.5.1.3 defines `SUM` by "
 "repeated `op:numeric-add`, whose domain is the numeric tower only; `purrdf` "
@@ -6964,7 +7104,7 @@ msgstr ""
 "`op:numeric-add` 来定义 `SUM`，其定义域仅为数值类型体系；`purrdf` 把同样的折"
 "叠扩展到 duration 群上，该群在逐分量加法下是精确且满足结合律的。"
 
-#: src/sparql/querying.md:351
+#: src/sparql/querying.md:429
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -6982,7 +7122,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:358
+#: src/sparql/querying.md:436
 msgid ""
 "`?total` is `\"P3M\"^^xsd:yearMonthDuration`. A group mixing numeric and "
 "duration values stays unbound — the extension does not widen `SUM`'s "
@@ -6992,7 +7132,7 @@ msgstr ""
 "保持未绑定——该扩展并不拓宽 `SUM` 既有的仅限数值的接受范围，只是新增了第二个互"
 "不相交的接受范围。"
 
-#: src/sparql/querying.md:362
+#: src/sparql/querying.md:440
 msgid ""
 "**Unary minus on durations.** F&O's unary minus (§4.2.8) is numeric-only and "
 "defines no duration form. `purrdf` negates a duration's two components "
@@ -7005,7 +7145,7 @@ msgstr ""
 "绝不会产生该类型无法表示的混合符号值。一元正号刻意保持仅限数值，因此 `+(?"
 "duration)` 是类型错误，而 `-(?duration)` 不是："
 
-#: src/sparql/querying.md:368
+#: src/sparql/querying.md:446
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -7021,11 +7161,11 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:375
+#: src/sparql/querying.md:453
 msgid "`?neg` is `\"-P1Y2M\"^^xsd:yearMonthDuration`."
 msgstr "`?neg` 为 `\"-P1Y2M\"^^xsd:yearMonthDuration`。"
 
-#: src/sparql/querying.md:377
+#: src/sparql/querying.md:455
 msgid ""
 "**`duration ÷ duration` by value commensurability.** F&O defines only the "
 "two same-subtype forms (`op:divide-yearMonthDuration-by-yearMonthDuration`, "
@@ -7042,7 +7182,7 @@ msgstr ""
 "据其声明标签，因此一个 `dayTimeDuration` 与一个恰好纯粹由天构成的一般 "
 "`xsd:duration` 仍然可以相除："
 
-#: src/sparql/querying.md:385
+#: src/sparql/querying.md:463
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -7058,7 +7198,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:392
+#: src/sparql/querying.md:470
 msgid ""
 "`?ratio` is `30`, typed `xsd:decimal`. Two operands whose values are not "
 "commensurable (a purely-months value against a purely-seconds one, even "
@@ -7067,11 +7207,11 @@ msgstr ""
 "`?ratio` 为 `30`，类型为 `xsd:decimal`。两个值不可公度的操作数（一个纯月份值"
 "对一个纯秒数值，即使声明标签一致）是带类型的错误，而不是随意给出的答案。"
 
-#: src/sparql/querying.md:396
+#: src/sparql/querying.md:474
 msgid "`ADJUST`"
 msgstr "`ADJUST`"
 
-#: src/sparql/querying.md:398
+#: src/sparql/querying.md:476
 msgid ""
 "`ADJUST(value, timezone)` shifts an `xsd:dateTime`/`xsd:date`/`xsd:time` "
 "value to a given timezone offset, or attaches one to an untimezoned value. "
@@ -7088,7 +7228,7 @@ msgstr ""
 "timezone` 系列（`purrdf-xsd` 为其他每一个 SPARQL 1.2 时间内置函数实现的也是同"
 "一张表）。"
 
-#: src/sparql/querying.md:406
+#: src/sparql/querying.md:484
 msgid ""
 "```sparql\n"
 "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -7106,7 +7246,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:414
+#: src/sparql/querying.md:492
 msgid ""
 "`timezone` is an `xsd:dayTimeDuration` in `[-PT14H, PT14H]` (whole minutes "
 "only), or the empty simple literal `\"\"` — SPARQL's stand-in for XPath's "
@@ -7129,11 +7269,11 @@ msgstr ""
 "移、非时间类型的第一个参数）都是 SPARQL 类型错误；按照引擎普通的类型错误处理"
 "规则，它在 `BIND`、`FILTER` 或聚合参数内部会被毒化为未绑定，而不会中止查询。"
 
-#: src/sparql/querying.md:425
+#: src/sparql/querying.md:503
 msgid "LATERAL (SEP-0006)"
 msgstr "LATERAL（SEP-0006）"
 
-#: src/sparql/querying.md:427
+#: src/sparql/querying.md:505
 msgid ""
 "The SPARQL 1.2 Query specification's own text carries no `LATERAL` "
 "production; the one documented definition is [SEP-0006](https://github.com/"
@@ -7148,7 +7288,7 @@ msgstr ""
 "`LATERAL` 为 `GroupGraphPatternSub` 新增一个产生式，与 `OPTIONAL`/`MINUS`/ "
 "`GRAPH` 处于同一位置，并以同样的方式左结合："
 
-#: src/sparql/querying.md:438
+#: src/sparql/querying.md:516
 msgid ""
 "Unlike an ordinary join, `LATERAL`'s right-hand side is evaluated ONCE PER "
 "SOLUTION of its left-hand side, with that solution's bindings visible inside "
@@ -7164,7 +7304,7 @@ msgstr ""
 "表达：左侧的每个主语在右侧挑选自己最小的标签，而不是只计算一次全局最小的标"
 "签、再与每一行连接。"
 
-#: src/sparql/querying.md:445
+#: src/sparql/querying.md:523
 msgid ""
 "```sparql\n"
 "PREFIX : <https://example.org/>\n"
@@ -7190,7 +7330,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:457
+#: src/sparql/querying.md:535
 msgid ""
 "Correlation carries a left-hand binding of ANY RDF 1.2 term kind — including "
 "a blank node or a quoted triple — into the right-hand side, even when the "
@@ -7206,11 +7346,11 @@ msgstr ""
 "用三元组，`BOUND(?s)` 的应答与对 IRI 或字面量一样正确，而这样的行也不会因为缺"
 "少可承载它的叶子出现位置而被静默丢弃。"
 
-#: src/sparql/querying.md:465
+#: src/sparql/querying.md:543
 msgid "The scope restriction"
 msgstr "作用域限制"
 
-#: src/sparql/querying.md:467
+#: src/sparql/querying.md:545
 msgid ""
 "`LATERAL`'s right-hand side may freely REUSE a variable already bound on the "
 "left (that is the whole point — it is how correlation happens), but it may "
@@ -7234,7 +7374,7 @@ msgstr ""
 "`SELECT` 自身的投影——`OPTIONAL`/`UNION`/`GRAPH`/嵌套分组/嵌套 `LATERAL` 对此"
 "均是透明的。以下是该 SEP 自己给出的一对合法与非法示例："
 
-#: src/sparql/querying.md:479
+#: src/sparql/querying.md:557
 msgid ""
 "```sparql\n"
 "PREFIX : <https://example.org/>\n"
@@ -7259,11 +7399,11 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:500
+#: src/sparql/querying.md:578
 msgid "Points of disagreement with Jena"
 msgstr "与 Jena 的分歧之处"
 
-#: src/sparql/querying.md:502
+#: src/sparql/querying.md:580
 msgid ""
 "Two corners of the restriction disagree with Jena's own `SyntaxVarScope` "
 "check, each pinned by a named test rather than left to drift:"
@@ -7271,7 +7411,7 @@ msgstr ""
 "该限制有两处边角与 Jena 自身的 `SyntaxVarScope` 检查不一致，每一处都由一个具"
 "名测试固定下来，而不是任其漂移："
 
-#: src/sparql/querying.md:505
+#: src/sparql/querying.md:583
 msgid ""
 "**Laxer.** A `BIND`/`VALUES`/aggregate introduction confined to a `MINUS` "
 "right operand is ACCEPTED here at any depth — directly under the `LATERAL` "
@@ -7293,7 +7433,7 @@ msgstr ""
 "有任何可观察的东西可以拒绝。（在这样的右侧上使用 `SELECT *` 只是通往同一形态"
 "的一条路径，而非另一种形态。）"
 
-#: src/sparql/querying.md:515
+#: src/sparql/querying.md:593
 msgid ""
 "**Stricter.** A `SERVICE ?g { ... }` endpoint variable counts as left-hand "
 "scope here; Jena omits it. `SERVICE ?g { ... }` with a variable endpoint "
@@ -7311,11 +7451,11 @@ msgstr ""
 "`BIND`/`VALUES` 赋予它一个新（NEW）值，恰恰是这条规则所要拒绝的那种可观察的重"
 "新绑定。"
 
-#: src/sparql/querying.md:524
+#: src/sparql/querying.md:602
 msgid "In `UPDATE`"
 msgstr "在 `UPDATE` 中"
 
-#: src/sparql/querying.md:526
+#: src/sparql/querying.md:604
 msgid ""
 "`INSERT`/`DELETE ... WHERE` and `WITH ... WHERE` route through the same "
 "group-graph-pattern grammar a `SELECT`'s `WHERE` clause uses, so `LATERAL` — "
@@ -7330,11 +7470,11 @@ msgstr ""
 "而非 `GroupGraphPattern`），不含任何种类的分组模式运算符，因此 `LATERAL` 出现"
 "在那里会被点名拒绝，而不会被误解析为一个主语项。"
 
-#: src/sparql/querying.md:533
+#: src/sparql/querying.md:611
 msgid "`SERVICE` forwarding"
 msgstr "`SERVICE` 转发"
 
-#: src/sparql/querying.md:535
+#: src/sparql/querying.md:613
 msgid ""
 "A pattern containing a written `LATERAL` clause — anywhere in the forwarded "
 "body, including nested inside another `SERVICE` — is forwarded with its "
@@ -7380,11 +7520,11 @@ msgstr ""
 "`{ SERVICE ?g { … } ?s ex:endpoint ?g }`——同样成立；而 `OPTIONAL` 或 `MINUS` "
 "只从其左侧获取端点。"
 
-#: src/sparql/querying.md:560
+#: src/sparql/querying.md:638
 msgid "Per-service context: the `ServiceResolver` seam"
 msgstr "逐服务上下文：`ServiceResolver` 扩展点"
 
-#: src/sparql/querying.md:562
+#: src/sparql/querying.md:640
 msgid ""
 "`SERVICE` is answered through one trait, `ServiceResolver`, which receives "
 "the whole request as a `ServiceRequest` — endpoint, forwarded query text, "
@@ -7400,7 +7540,7 @@ msgstr ""
 "`HttpTransport` 构建并解码 SPARQL Protocol 请求；以及 "
 "`InProcessServiceResolver`，它从已在内存中的数据集作答。"
 
-#: src/sparql/querying.md:569
+#: src/sparql/querying.md:647
 msgid ""
 "Everything a resolver needs to know about an _individual_ service — extra "
 "headers, a credential, a timeout, and what it is permitted to do — lives on "
@@ -7416,7 +7556,7 @@ msgstr ""
 "查询文本，从而对编写查询的任何人可见，被序列化进计划与回执，并随嵌套的 "
 "`SERVICE` 查询体一同传播。"
 
-#: src/sparql/querying.md:577
+#: src/sparql/querying.md:655
 msgid ""
 "A `ServiceCatalog` maps each service IRI to a `ServiceProfile`, and each "
 "profile grants an explicit set of capabilities:"
@@ -7424,39 +7564,39 @@ msgstr ""
 "`ServiceCatalog` 把每个服务 IRI 映射到一个 `ServiceProfile`，每个 profile 授"
 "予一组显式的能力："
 
-#: src/sparql/querying.md:580
+#: src/sparql/querying.md:658
 msgid "Capability"
 msgstr "能力"
 
-#: src/sparql/querying.md:580
+#: src/sparql/querying.md:658
 msgid "Grants"
 msgstr "授予"
 
-#: src/sparql/querying.md:582
+#: src/sparql/querying.md:660
 msgid "`Query`"
 msgstr "`Query`"
 
-#: src/sparql/querying.md:582
+#: src/sparql/querying.md:660
 msgid "resolving this service at all"
 msgstr "解析该服务本身"
 
-#: src/sparql/querying.md:583
+#: src/sparql/querying.md:661
 msgid "`Network`"
 msgstr "`Network`"
 
-#: src/sparql/querying.md:583
+#: src/sparql/querying.md:661
 msgid "performing network I/O to resolve it"
 msgstr "为解析它而执行网络 I/O"
 
-#: src/sparql/querying.md:584
+#: src/sparql/querying.md:662
 msgid "`Credentials`"
 msgstr "`Credentials`"
 
-#: src/sparql/querying.md:584
+#: src/sparql/querying.md:662
 msgid "attaching the profile's credential to the request"
 msgstr "把该 profile 的凭据附加到请求上"
 
-#: src/sparql/querying.md:586
+#: src/sparql/querying.md:664
 msgid ""
 "A catalog denies by default: a service with no entry and no explicitly "
 "configured fallback profile is refused. Gating is opt-in — a resolver with "
@@ -7469,7 +7609,7 @@ msgstr ""
 "点，且不添加任何请求头——而配置目录不会改变 profile 未添加任何内容的请求中的任"
 "何字节。"
 
-#: src/sparql/querying.md:592
+#: src/sparql/querying.md:670
 msgid ""
 "Withholding `Network` is what makes an in-process façade _provable_ rather "
 "than promised: `InProcessServiceResolver` owns a dataset map and nothing "
@@ -7490,7 +7630,7 @@ msgstr ""
 "个去往哪里。每一次解析都会查阅目录，嵌套解析也包括在内，因此埋在转发查询体中"
 "的 `SERVICE` 无法到达目录在顶层拒绝的端点。"
 
-#: src/sparql/querying.md:602
+#: src/sparql/querying.md:680
 msgid ""
 "The policy is applied _before_ the transport is called, which is the whole "
 "difference between a gate and an audit log: a denied service never has its "
@@ -7499,7 +7639,7 @@ msgstr ""
 "该策略在调用传输层_之前_施加，这正是闸门与审计日志之间的全部区别：被拒绝的服"
 "务从不会先打开套接字再被丢弃。"
 
-#: src/sparql/querying.md:606
+#: src/sparql/querying.md:684
 msgid ""
 "A service IRI is an IRI like any other, so it is resolved by the workspace's "
 "single RFC 3986 base layer (see [Base IRIs](../concepts/base-iris.md)) and "
@@ -7519,11 +7659,11 @@ msgstr ""
 "成的端点 IRI 的承诺。在有 base 的作用域中，解析器收到的是**绝对** IRI，这正"
 "是 `ServiceCatalog` 用作键的形式。"
 
-#: src/sparql/querying.md:615
+#: src/sparql/querying.md:693
 msgid "The `SILENT` contract"
 msgstr "`SILENT` 契约"
 
-#: src/sparql/querying.md:617
+#: src/sparql/querying.md:695
 msgid ""
 "SPARQL 1.1 Federated Query §3.2 defines a `SERVICE` clause as the endpoint's "
 "answer \"in case of a successful service invocation according to the SPARQL "
@@ -7538,19 +7678,19 @@ msgstr ""
 "一的空解——连接的单位元，因此外围查询照常进行、不受影响。PurRDF 按字面理解这里"
 "的「否则」："
 
-#: src/sparql/querying.md:623
+#: src/sparql/querying.md:701
 msgid "Outcome"
 msgstr "结果"
 
-#: src/sparql/querying.md:623
+#: src/sparql/querying.md:701
 msgid "`SERVICE`"
 msgstr "`SERVICE`"
 
-#: src/sparql/querying.md:623
+#: src/sparql/querying.md:701
 msgid "`SERVICE SILENT`"
 msgstr "`SERVICE SILENT`"
 
-#: src/sparql/querying.md:625
+#: src/sparql/querying.md:703
 msgid ""
 "The invocation fails, for any reason: the endpoint is unreachable or its "
 "response undecodable; no source reaches it; a capability was denied or the "
@@ -7561,23 +7701,23 @@ msgstr ""
 "力被拒绝或宿主拒绝了该请求；宿主的处理函数发生故障；变量端点绑定到了不是 IRI "
 "的项"
 
-#: src/sparql/querying.md:625
+#: src/sparql/querying.md:703
 msgid "query error"
 msgstr "查询错误"
 
-#: src/sparql/querying.md:625
+#: src/sparql/querying.md:703
 msgid "join identity, recorded on the evidence"
 msgstr "连接的单位元，并记录在证据中"
 
-#: src/sparql/querying.md:626
+#: src/sparql/querying.md:704
 msgid "This engine's own governor tripped, or its stack ran out"
 msgstr "本引擎自身的 governor 被触发，或其栈已耗尽"
 
-#: src/sparql/querying.md:626
+#: src/sparql/querying.md:704
 msgid "truncation, or the stack refusal"
 msgstr "截断，或栈拒绝"
 
-#: src/sparql/querying.md:628
+#: src/sparql/querying.md:706
 msgid ""
 "`SILENT` is a statement about the invocation, never about the caller's own "
 "budget, so a governor trip reached through a `SERVICE` clause propagates as "
@@ -7590,7 +7730,7 @@ msgstr ""
 "播。拒绝是一次没有成功的调用，而查询的作者写下 `SILENT` 时就已知道该服务可能"
 "不会应答。"
 
-#: src/sparql/querying.md:634
+#: src/sparql/querying.md:712
 msgid ""
 "The answer `SILENT` gives is indistinguishable from an endpoint that "
 "answered with nothing to add, so every silenced invocation is recorded: "
@@ -7614,7 +7754,7 @@ msgstr ""
 "为其本来面目——结构化的拒绝——传回外层，因此外围子句在每一层深度上都会把它作为"
 "拒绝报告出来，或者记录下来。"
 
-#: src/sparql/querying.md:646
+#: src/sparql/querying.md:724
 msgid ""
 "`LOAD SILENT` follows SPARQL 1.1 Update §3.1.4, under which the operation "
 "\"will still return success\" when it fails: a document that cannot be "
@@ -7631,7 +7771,7 @@ msgstr ""
 "带类型的 `LoadError` 报告它为何没有产出文档，其 `code()` 就是不写 `SILENT` "
 "的 `LOAD` 失败时所用的诊断代码。"
 
-#: src/sparql/querying.md:654
+#: src/sparql/querying.md:732
 msgid ""
 "Under `MINUS`, a variable endpoint's left solutions are partitioned by "
 "endpoint and each partition is subtracted by the right side evaluated with "
@@ -7643,11 +7783,11 @@ msgstr ""
 "的右侧来相减，因此被静默的端点——Ω0，不绑定任何变量——不会移除自己的任何行，而"
 "每个应答了的端点仍会移除与之匹配的行。"
 
-#: src/sparql/querying.md:659
+#: src/sparql/querying.md:737
 msgid "EXISTS under SEP-0007"
 msgstr "SEP-0007 下的 EXISTS"
 
-#: src/sparql/querying.md:661
+#: src/sparql/querying.md:739
 msgid ""
 "SPARQL 1.1/1.2 §18.6 defines `EXISTS`/`NOT EXISTS` through two functions: "
 "`substitute`, which rewrites a pattern's variables against the row being "
@@ -7659,7 +7799,7 @@ msgstr ""
 "依据被过滤的行改写模式中的变量；以及 `evalExists`，它判断替换后的模式的求值结"
 "果是否非空。若按字面的项改写来理解，`substitute` 在几个确切的点上存在缺陷："
 
-#: src/sparql/querying.md:667
+#: src/sparql/querying.md:745
 msgid ""
 "**Variable-only positions.** `substitute` is stated over variable POSITIONS "
 "in a pattern, with no defined action on a `Bgp`/`Path` leaf term or a "
@@ -7672,7 +7812,7 @@ msgstr ""
 "定义任何动作——因此一个仅出现在三元组位置或图名位置的关联变量，没有可以施加的"
 "替换。"
 
-#: src/sparql/querying.md:672
+#: src/sparql/querying.md:750
 msgid ""
 "**The `MINUS` domain flip.** Rewriting a `MINUS`'s shared variables away as "
 "constants erases the very columns its domain-join compares the two operands "
@@ -7683,7 +7823,7 @@ msgstr ""
 "义域连接用以比较两个操作数的那些列，从而把一个关联的 `MINUS` 变成无条件不相交"
 "的形式——这与代入该行本应保持的东西正好相反。"
 
-#: src/sparql/querying.md:676
+#: src/sparql/querying.md:754
 msgid ""
 "**Blank nodes as variables.** No SPARQL surface syntax can spell a blank "
 "node or a quoted triple as a rewritten constant, so a correlated blank-node "
@@ -7694,7 +7834,7 @@ msgstr ""
 "后的常量，因此在字面的项改写下，关联的空节点绑定或引用三元组绑定没有合法的替"
 "换形式。"
 
-#: src/sparql/querying.md:680
+#: src/sparql/querying.md:758
 msgid ""
 "**Disconnected variables.** A correlated variable reachable ONLY through an "
 "expression position inside a nested `EXISTS` — never through that inner's "
@@ -7705,7 +7845,7 @@ msgstr ""
 "联变量——从不经由该内层自身的三元组模式叶子——在 `substitute` 的模式改写解读"
 "中，没有任何东西能把它带到那里。"
 
-#: src/sparql/querying.md:684
+#: src/sparql/querying.md:762
 msgid ""
 "**The assignment restriction.** §18.6's own text states no rule at all about "
 "an `EXISTS` body rebinding a variable already in scope on the row it filters."
@@ -7713,7 +7853,7 @@ msgstr ""
 "**赋值限制。** §18.6 自身的正文对于 `EXISTS` 主体重新绑定其所过滤的行上已处于"
 "作用域中的变量，没有规定任何规则。"
 
-#: src/sparql/querying.md:688
+#: src/sparql/querying.md:766
 msgid ""
 "SEP-0007 — a SPARQL-dev proposal, not yet folded into the SPARQL 1.1/1.2 REC "
 "text — repairs the first four by restating `substitute` as `Replace`, a JOIN "
@@ -7725,11 +7865,11 @@ msgstr ""
 "项，并把第五项作为第 3 部分新增为一条限制。`purrdf` 完整实现了 SEP-0007 的各"
 "项修复，包括第 3 部分。"
 
-#: src/sparql/querying.md:693
+#: src/sparql/querying.md:771
 msgid "The one definition"
 msgstr "唯一的定义"
 
-#: src/sparql/querying.md:699
+#: src/sparql/querying.md:777
 msgid ""
 "`Replace` is **Values Insertion**: the current row `μ` joins into `X` as a "
 "one-row `VALUES` table at each `Bgp`/`Path`/`Graph(Var, ·)` site, rather "
@@ -7753,7 +7893,7 @@ msgstr ""
 "之前，先被限制到该节点自身的变量列表——这是表层语言唯一的作用域边界，也是子 "
 "`SELECT` 自身的投影可以合理遮蔽外层变量的原因。"
 
-#: src/sparql/querying.md:711
+#: src/sparql/querying.md:789
 msgid ""
 "SEP-0007 states `Replace` in terms of `toMultiSet(μ)` — converting the row "
 "to the multiset unit the join needs. `purrdf`'s algebra has no pattern/query "
@@ -7767,7 +7907,7 @@ msgstr ""
 "（IS）那个多重集单元，因此 `Replace` 在结构上直接落在包裹其目标叶子的任何解修"
 "饰符之下，无需额外构造或裁定任何东西。"
 
-#: src/sparql/querying.md:718
+#: src/sparql/querying.md:796
 msgid ""
 "**The `HAVING` position** is outside SEP-0007's stated coverage — SEP-0007 "
 "only specifies `Replace` for `Bgp`/`Path`/`Graph` Values-Insertion sites and "
@@ -7782,11 +7922,11 @@ msgstr ""
 "`HAVING` 仅过滤该子 `SELECT` 自身的作用域，与其内部的其他每个表达式完全相同——"
 "不会为它自创任何特殊的关联通道。"
 
-#: src/sparql/querying.md:725
+#: src/sparql/querying.md:803
 msgid "Existential Normal Form"
 msgstr "存在范式（Existential Normal Form）"
 
-#: src/sparql/querying.md:727
+#: src/sparql/querying.md:805
 msgid ""
 "Exactly one bit per row is observed under `EXISTS`: whether the inner "
 "pattern's evaluation is empty. Four rewrite laws replace a node with "
@@ -7799,7 +7939,7 @@ msgstr ""
 "之处均会应用（绝不在 `Join`/`Filter`/`Extend`/ `Graph`/`Minus` 的操作数内部应"
 "用，因为它们从子节点读取的不只是空性）："
 
-#: src/sparql/querying.md:733
+#: src/sparql/querying.md:811
 msgid ""
 "**`LeftJoin(A, B, c) → A`.** `OPTIONAL` emits at least one row per left row "
 "unconditionally — a padded left row, or one row per compatible match — and "
@@ -7810,7 +7950,7 @@ msgstr ""
 "个填充后的左侧行，或每个兼容匹配各一行——且从不移除任何一行，因此当且仅当 `A` "
 "为空时，`LeftJoin(A, B, c)` 为空，与 `B` 或其连接条件无关。"
 
-#: src/sparql/querying.md:737
+#: src/sparql/querying.md:815
 msgid ""
 "**`OrderBy(P) → P`.** Sorting is a permutation, never a filter: the sort "
 "keys are never even evaluated once emptiness is the only question asked."
@@ -7818,7 +7958,7 @@ msgstr ""
 "**`OrderBy(P) → P`。** 排序是一种置换，绝不是过滤：一旦唯一的问题是空性，排序"
 "键根本不会被求值。"
 
-#: src/sparql/querying.md:739
+#: src/sparql/querying.md:817
 msgid ""
 "**`Distinct(P) → P`, `Reduced(P) → P`.** De-duplication only ever removes "
 "rows, and only when an earlier row already carried the same value, so `P` "
@@ -7827,7 +7967,7 @@ msgstr ""
 "**`Distinct(P) → P`、`Reduced(P) → P`。** 去重只会移除行，而且只在更早的某一"
 "行已携带相同的值时才移除，因此只要 `P` 非空，第一行的值总会保留下来。"
 
-#: src/sparql/querying.md:742
+#: src/sparql/querying.md:820
 msgid ""
 "**`Slice(0, len ≥ 1)(P) → P`.** An offset-zero `LIMIT` with room for at "
 "least one row drops rows only from the end of `P`'s bag, so `P` non-empty "
@@ -7836,7 +7976,7 @@ msgstr ""
 "**`Slice(0, len ≥ 1)(P) → P`。** 偏移为零、至少容纳一行的 `LIMIT` 只从 `P` 的"
 "多重集末尾丢弃行，因此只要 `P` 非空，第零行总在窗口之内。"
 
-#: src/sparql/querying.md:745
+#: src/sparql/querying.md:823
 msgid ""
 "**`Slice(_, Some(0))(P) → false`.** A zero-length `LIMIT` is empty for every "
 "`P` and every row — the whole `EXISTS` folds to constant `false` (`NOT "
@@ -7846,7 +7986,7 @@ msgstr ""
 "为空——整个 `EXISTS` 折叠为常量 `false`（`NOT EXISTS` 折叠为 `true`），完全不"
 "触及数据集。"
 
-#: src/sparql/querying.md:749
+#: src/sparql/querying.md:827
 msgid ""
 "Every law above is proved emptiness-equivalent over row SETS, never over "
 "side effects, so each fires only when the portion it erases (`B` and the "
@@ -7864,16 +8004,16 @@ msgstr ""
 "此，本会传播到 `EXISTS` 之外的硬错误或远程副作用仍会传播，而不会仅仅因为写在"
 "其内部就消失。"
 
-#: src/sparql/querying.md:757
+#: src/sparql/querying.md:835
 msgid "Two strategies, one answer"
 msgstr "两种策略，一个答案"
 
-#: src/sparql/querying.md:759
+#: src/sparql/querying.md:837
 msgid ""
 "`purrdf` carries exactly two implementations of the one definition above:"
 msgstr "对于上述唯一的定义，`purrdf` 恰好携带两种实现："
 
-#: src/sparql/querying.md:761
+#: src/sparql/querying.md:839
 msgid ""
 "**The definition itself** — per-row substitution via `Replace`, wrapped in a "
 "`Slice{0, Some(1)}` first-witness stop (sound because \"does this bag have a "
@@ -7889,7 +8029,7 @@ msgstr ""
 "列上的外层行，因此 `N` 个外层行中 `k` 个不同的限制，恰好对内层求值 `k` 次，绝"
 "不是 `N` 次。对任何内层模式都始终正确。"
 
-#: src/sparql/querying.md:768
+#: src/sparql/querying.md:846
 msgid ""
 "**The memoized probe** — evaluate the inner exactly once, unconstrained, "
 "index it on the columns it shares with the outer schema, and existence-probe "
@@ -7901,7 +8041,7 @@ msgstr ""
 "索引，然后针对该索引对每一行的 `μ` 做存在性探测。仅当预备阶段的可采纳性证明表"
 "明，对该位置可见的每一行，它都与定义等价时，才是正确的。"
 
-#: src/sparql/querying.md:774
+#: src/sparql/querying.md:852
 msgid ""
 "A prepare-time analysis decides, once per site per evaluation, which "
 "strategy answers each `EXISTS`/`NOT EXISTS`. `--explain`'s per-algebra-node "
@@ -7936,7 +8076,7 @@ msgstr ""
 "`OPTIONAL`/`ORDER BY`/`DISTINCT`/`LIMIT` 包装——见上文「存在范式」），因此它从"
 "未运行，而不是一笔遗失的计费。"
 
-#: src/sparql/querying.md:793
+#: src/sparql/querying.md:871
 msgid ""
 "**The one named exception**: an `EXISTS`/`NOT EXISTS` inner whose OWN ENF-"
 "normalized top-level shape is a `Project` (a sub-`SELECT`) or a `Union` (a "
@@ -7964,7 +8104,7 @@ msgstr ""
 "逐节点归属出现之前，每个 `EXISTS`/`NOT EXISTS` 内层原有的行为，如今只局限于这"
 "一种形态，而不是整个功能。"
 
-#: src/sparql/querying.md:808
+#: src/sparql/querying.md:886
 msgid ""
 "**The performance characteristic, stated plainly**: an uncorrelated inner, "
 "or a correlated one built only from `Bgp`/`Path`/`Values`/`Graph`/`Join`/ "
@@ -7988,11 +8128,11 @@ msgstr ""
 "的 `FILTER`/`BIND` 表达式（例如仅在某个 `OPTIONAL` 分支下可见的变量）——则经由"
 "定义逐行求值，由上述以限制为键的记忆表与首个见证即停来约束代价。"
 
-#: src/sparql/querying.md:821
+#: src/sparql/querying.md:899
 msgid "The Part 3 assignment restriction"
 msgstr "第 3 部分的赋值限制"
 
-#: src/sparql/querying.md:823
+#: src/sparql/querying.md:901
 msgid ""
 "Neither a `BIND`/a sub-`SELECT`'s `(expr AS ?v)` projection target/a `GROUP "
 "BY (expr AS ?v)` grouping target, nor a `VALUES` column, inside an `EXISTS`/"
@@ -8015,7 +8155,7 @@ msgstr ""
 "`LATERAL` 自身的作用域限制相同（§18.2.1：`MINUS`\\-右侧的引入永远不会逃逸出"
 "去，因此永远无法可观察地重新绑定该行）。"
 
-#: src/sparql/querying.md:835
+#: src/sparql/querying.md:913
 msgid ""
 "```sparql\n"
 "PREFIX : <https://example.org/>\n"
@@ -8038,7 +8178,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:855
+#: src/sparql/querying.md:933
 msgid ""
 "The restriction is SEP-0007's own addition, adopted here because it is what "
 "makes `EXISTS`'s substitution semantics defensible at every site — SPARQL "
@@ -8048,11 +8188,11 @@ msgstr ""
 "义在每个位置上都有据可依——SPARQL 1.1/1.2 自身的 §18.6 正文并不要求这样的规"
 "则。"
 
-#: src/sparql/querying.md:859
+#: src/sparql/querying.md:937
 msgid "SHA-3 hashing (SEP-0008)"
 msgstr "SHA-3 哈希（SEP-0008）"
 
-#: src/sparql/querying.md:861
+#: src/sparql/querying.md:939
 msgid ""
 "SPARQL 1.1 §17.4.4 ships five hash built-ins — `MD5`, `SHA1`, `SHA256`, "
 "`SHA384`, `SHA512`. `purrdf` adds the four SHA-3 (FIPS 202 Keccak) functions "
@@ -8069,67 +8209,67 @@ msgstr ""
 "这四个函数是第一方扩展，且[无法移植到其他引擎](#把-sha-3-查询带到另一个引"
 "擎)："
 
-#: src/sparql/querying.md:868 src/sparql/querying.md:1003
+#: src/sparql/querying.md:946 src/sparql/querying.md:1081
 msgid "Call"
 msgstr "调用"
 
-#: src/sparql/querying.md:868
+#: src/sparql/querying.md:946
 msgid "Digest"
 msgstr "摘要"
 
-#: src/sparql/querying.md:868
+#: src/sparql/querying.md:946
 msgid "Hex characters"
 msgstr "十六进制字符数"
 
-#: src/sparql/querying.md:870
+#: src/sparql/querying.md:948
 msgid "`SHA3-224(string)`"
 msgstr "`SHA3-224(string)`"
 
-#: src/sparql/querying.md:870
+#: src/sparql/querying.md:948
 msgid "SHA3-224"
 msgstr "SHA3-224"
 
-#: src/sparql/querying.md:870
+#: src/sparql/querying.md:948
 msgid "56"
 msgstr "56"
 
-#: src/sparql/querying.md:871
+#: src/sparql/querying.md:949
 msgid "`SHA3-256(string)`"
 msgstr "`SHA3-256(string)`"
 
-#: src/sparql/querying.md:871
+#: src/sparql/querying.md:949
 msgid "SHA3-256"
 msgstr "SHA3-256"
 
-#: src/sparql/querying.md:871
+#: src/sparql/querying.md:949
 msgid "64"
 msgstr "64"
 
-#: src/sparql/querying.md:872
+#: src/sparql/querying.md:950
 msgid "`SHA3-384(string)`"
 msgstr "`SHA3-384(string)`"
 
-#: src/sparql/querying.md:872
+#: src/sparql/querying.md:950
 msgid "SHA3-384"
 msgstr "SHA3-384"
 
-#: src/sparql/querying.md:872
+#: src/sparql/querying.md:950
 msgid "96"
 msgstr "96"
 
-#: src/sparql/querying.md:873
+#: src/sparql/querying.md:951
 msgid "`SHA3-512(string)`"
 msgstr "`SHA3-512(string)`"
 
-#: src/sparql/querying.md:873
+#: src/sparql/querying.md:951
 msgid "SHA3-512"
 msgstr "SHA3-512"
 
-#: src/sparql/querying.md:873
+#: src/sparql/querying.md:951
 msgid "128"
 msgstr "128"
 
-#: src/sparql/querying.md:875
+#: src/sparql/querying.md:953
 msgid ""
 "```sparql\n"
 "SELECT ?s (SHA3-256(?label) AS ?fingerprint)\n"
@@ -8141,11 +8281,11 @@ msgstr ""
 "WHERE { ?s <http://example.org/label> ?label }\n"
 "```"
 
-#: src/sparql/querying.md:880
+#: src/sparql/querying.md:958
 msgid "The argument contract"
 msgstr "参数契约"
 
-#: src/sparql/querying.md:882
+#: src/sparql/querying.md:960
 msgid ""
 "Each function takes **one** argument and hashes the UTF-8 bytes of its "
 "**lexical form**, returning the digest as a lowercase hex `xsd:string` — the "
@@ -8156,7 +8296,7 @@ msgstr ""
 "制 `xsd:string` 返回摘要——与 `SHA256` 的契约相同，因此查询可以把二者互换，而"
 "不必改动该行的任何其他内容。"
 
-#: src/sparql/querying.md:887
+#: src/sparql/querying.md:965
 msgid ""
 "The accepted arguments are a simple literal and an explicitly `xsd:string`\\-"
 "typed literal, as SPARQL 1.1 §17.4.6 requires of every hash built-in: "
@@ -8166,7 +8306,7 @@ msgstr ""
 "SPARQL 1.1 §17.4.6 对每个哈希内置函数的要求：`SHA3-256(\"abc\")` 与 "
 "`SHA3-256(\"abc\"^^xsd:string)` 的摘要相同。"
 
-#: src/sparql/querying.md:892
+#: src/sparql/querying.md:970
 msgid ""
 "Anything else is an expression error, which is SPARQL's ordinary \"this row "
 "produces no value\" outcome rather than a query failure:"
@@ -8174,25 +8314,25 @@ msgstr ""
 "其他任何参数都是表达式错误，这是 SPARQL 普通的「该行不产生值」结果，而不是查"
 "询失败："
 
-#: src/sparql/querying.md:895
+#: src/sparql/querying.md:973
 msgid "an **unbound** variable (`SHA3-256(?missing)`),"
 msgstr "**未绑定**的变量（`SHA3-256(?missing)`），"
 
-#: src/sparql/querying.md:896
+#: src/sparql/querying.md:974
 msgid "an IRI or a blank node,"
 msgstr "IRI 或空节点，"
 
-#: src/sparql/querying.md:897
+#: src/sparql/querying.md:975
 msgid ""
 "a language-tagged or RDF 1.2 directional string (`SHA3-256(\"abc\"@en)`),"
 msgstr ""
 "带语言标签的字符串或 RDF 1.2 带方向的字符串（`SHA3-256(\"abc\"@en)`），"
 
-#: src/sparql/querying.md:898
+#: src/sparql/querying.md:976
 msgid "a non-string literal (`SHA3-256(7)`)."
 msgstr "非字符串字面量（`SHA3-256(7)`）。"
 
-#: src/sparql/querying.md:900
+#: src/sparql/querying.md:978
 msgid ""
 "In a `SELECT` projection an errored call leaves the projected variable "
 "**unbound** on that row; under `FILTER` it makes the constraint false; a "
@@ -8206,49 +8346,49 @@ msgstr ""
 "看起来的样子求哈希」时，请用 `STR(…)` 包裹参数——`SHA3-256(STR(?anything))`——"
 "因为 `STR` 才是把项转为字符串的函数，而这些函数不会隐式地这样做。"
 
-#: src/sparql/querying.md:907
+#: src/sparql/querying.md:985
 msgid "The hyphen is part of the name"
 msgstr "连字符是名称的一部分"
 
-#: src/sparql/querying.md:909
+#: src/sparql/querying.md:987
 msgid ""
 "These are the only built-in names in the language containing a `-`, so the "
 "spacing rule is worth stating outright:"
 msgstr "这些是语言中仅有的名称含 `-` 的内置函数，因此值得把空白规则明确说明："
 
-#: src/sparql/querying.md:912
+#: src/sparql/querying.md:990
 msgid "Text"
 msgstr "文本"
 
-#: src/sparql/querying.md:912
+#: src/sparql/querying.md:990
 msgid "Reading"
 msgstr "解读"
 
-#: src/sparql/querying.md:914
+#: src/sparql/querying.md:992
 msgid "`SHA3-256(?o)`"
 msgstr "`SHA3-256(?o)`"
 
-#: src/sparql/querying.md:914
+#: src/sparql/querying.md:992
 msgid "the built-in call — one token, hyphen included"
 msgstr "内置函数调用——一个记号，含连字符"
 
-#: src/sparql/querying.md:915
+#: src/sparql/querying.md:993
 msgid "`SHA3 - 256`"
 msgstr "`SHA3 - 256`"
 
-#: src/sparql/querying.md:915
+#: src/sparql/querying.md:993
 msgid "**a parse error**: `SHA3` alone is no function or keyword"
 msgstr "**解析错误**：单独的 `SHA3` 既不是函数也不是关键字"
 
-#: src/sparql/querying.md:916
+#: src/sparql/querying.md:994
 msgid "`STRLEN(SHA3-256(?o)) - 4`"
 msgstr "`STRLEN(SHA3-256(?o)) - 4`"
 
-#: src/sparql/querying.md:916
+#: src/sparql/querying.md:994
 msgid "subtraction — the `-` follows `)`, not a word character"
 msgstr "减法——`-` 跟在 `)` 之后，而不是跟在单词字符之后"
 
-#: src/sparql/querying.md:918
+#: src/sparql/querying.md:996
 msgid ""
 "The lexer's `PN_PREFIX` scan admits `-` as a name character, so `SHA3-256` "
 "arrives at the parser as a single word. Whitespace around the hyphen makes "
@@ -8262,7 +8402,7 @@ msgstr ""
 "函数，带空格的形式会显式报错失败，而不是被理解为别的含义。名称与其他每个内置"
 "函数一样不区分大小写（`sha3-256` 是同一个调用）。"
 
-#: src/sparql/querying.md:924
+#: src/sparql/querying.md:1002
 msgid ""
 "SEP-0008's own text spells the four functions with an **underscore** "
 "(`sha3_256`), so `SHA3_256(?o)` is accepted as an alias for `SHA3-256(?o)`: "
@@ -8276,11 +8416,11 @@ msgstr ""
 "一种输入拼写——代数中每种摘要长度只有一个函数，因此序列化后的查询总是携带规范"
 "的连字符名称，无论键入的是哪种拼写，都保持字节级确定性。"
 
-#: src/sparql/querying.md:931
+#: src/sparql/querying.md:1009
 msgid "Taking a SHA-3 query to another engine"
 msgstr "把 SHA-3 查询带到另一个引擎"
 
-#: src/sparql/querying.md:933
+#: src/sparql/querying.md:1011
 msgid ""
 "Expect a **parse error**. `SHA3-256` is a built-in name here, but the SPARQL "
 "1.1/1.2 grammar offers exactly two ways to name a function — a keyword from "
@@ -8298,7 +8438,7 @@ msgstr ""
 "o)` 根本无法解析。带下划线的 `SHA3_256(?o)` 拼写因同样的原因失败。因此，这种"
 "失败是显式且即时的，而不是一个悄无声息地未绑定的列。"
 
-#: src/sparql/querying.md:942
+#: src/sparql/querying.md:1020
 msgid ""
 "The portable substitute is one of the SPARQL 1.1 §17.4.4 hashes. `SHA256` "
 "takes the same single argument and returns the same lowercase-hex "
@@ -8312,11 +8452,11 @@ msgstr ""
 "询的其他一切均不变。当引擎由调用方掌控且明确需要 Keccak 构造时，选用 SHA-3 名"
 "称；当查询文本必须能在任何地方运行时，选用 `SHA256`。"
 
-#: src/sparql/querying.md:949
+#: src/sparql/querying.md:1027
 msgid "Reaching it from other hosts"
 msgstr "从其他宿主到达它"
 
-#: src/sparql/querying.md:951
+#: src/sparql/querying.md:1029
 msgid ""
 "There is nothing to configure: unlike the extension-function and custom-"
 "aggregate seams, these are built-ins, so every surface that takes query text "
@@ -8329,11 +8469,11 @@ msgstr ""
 "`MutableDataset.query`、WebAssembly 中的 `Dataset.query` / "
 "`QueryEngine.select`，以及 C ABI 上的 `purrdf_query` / `purrdf_query_json`。"
 
-#: src/sparql/querying.md:957
+#: src/sparql/querying.md:1035
 msgid "Composite datatypes (SEP-0009)"
 msgstr "复合数据类型（SEP-0009）"
 
-#: src/sparql/querying.md:959
+#: src/sparql/querying.md:1037
 msgid ""
 "SPARQL 1.1 and 1.2 have no term that holds several other terms. `purrdf` "
 "implements [SEP-0009](https://github.com/w3c/sparql-dev/blob/main/SEP/"
@@ -8352,7 +8492,7 @@ msgstr ""
 "案，**不属于 SPARQL 1.1 或 1.2 推荐标准**——本节中的一切都是扩展，使用它们的查"
 "询[无法原样移植到其他引擎](#把复合值查询带到另一个引擎)。"
 
-#: src/sparql/querying.md:969
+#: src/sparql/querying.md:1047
 msgid ""
 "The namespace is the SEP's own, recognized and never invented — every "
 "example below is written under this prologue:"
@@ -8360,7 +8500,7 @@ msgstr ""
 "命名空间是该 SEP 自己的，仅被识别，绝不自创——下面的每个示例都写在这段序言之"
 "下："
 
-#: src/sparql/querying.md:972
+#: src/sparql/querying.md:1050
 msgid ""
 "```text\n"
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
@@ -8370,7 +8510,7 @@ msgstr ""
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
 "```"
 
-#: src/sparql/querying.md:976
+#: src/sparql/querying.md:1054
 msgid ""
 "A composite is an ordinary RDF literal whose datatype is `cdt:List` or "
 "`cdt:Map` and whose lexical form spells the contents out. These are terms, "
@@ -8379,7 +8519,7 @@ msgstr ""
 "复合值是一个普通的 RDF 字面量，其数据类型为 `cdt:List` 或 `cdt:Map`，其词法形"
 "式逐一写出其内容。以下是项，而不是查询："
 
-#: src/sparql/querying.md:980
+#: src/sparql/querying.md:1058
 msgid ""
 "```text\n"
 "\"[1,2,3]\"^^cdt:List\n"
@@ -8397,7 +8537,7 @@ msgstr ""
 "\"[]\"^^cdt:List        \"{}\"^^cdt:Map\n"
 "```"
 
-#: src/sparql/querying.md:988
+#: src/sparql/querying.md:1066
 msgid ""
 "List elements may be IRIs, blank nodes, literals, `null`, or nested "
 "composites. Map **keys** may be IRIs or literals — never blank nodes, never "
@@ -8415,11 +8555,11 @@ msgstr ""
 "必须是**绝对**的：复合值的内容属于它自己，不会依据外围文档恰好声明的任何 "
 "base 进行解析。"
 
-#: src/sparql/querying.md:996
+#: src/sparql/querying.md:1074
 msgid "The function library"
 msgstr "函数库"
 
-#: src/sparql/querying.md:998
+#: src/sparql/querying.md:1076
 msgid ""
 "The set is **closed**. There is no registry to configure and no way for a "
 "caller to shadow one of these names, so the same query means the same thing "
@@ -8430,153 +8570,153 @@ msgstr ""
 "个，因此同一个查询在每个宿主上含义相同，已配置的扩展命名空间也无法截获 CDT 名"
 "称。参数个数在**解析**时强制执行，早于任何求值。"
 
-#: src/sparql/querying.md:1003
+#: src/sparql/querying.md:1081
 msgid "Arity"
 msgstr "参数个数"
 
-#: src/sparql/querying.md:1005
+#: src/sparql/querying.md:1083
 msgid "`cdt:List(…)`"
 msgstr "`cdt:List(…)`"
 
-#: src/sparql/querying.md:1005 src/sparql/querying.md:1007
+#: src/sparql/querying.md:1083 src/sparql/querying.md:1085
 msgid "any"
 msgstr "任意"
 
-#: src/sparql/querying.md:1005
+#: src/sparql/querying.md:1083
 msgid "a `cdt:List` of the argument terms"
 msgstr "由各参数项构成的 `cdt:List`"
 
-#: src/sparql/querying.md:1006
+#: src/sparql/querying.md:1084
 msgid "`cdt:Map(…)`"
 msgstr "`cdt:Map(…)`"
 
-#: src/sparql/querying.md:1006
+#: src/sparql/querying.md:1084
 msgid "even"
 msgstr "偶数"
 
-#: src/sparql/querying.md:1006
+#: src/sparql/querying.md:1084
 msgid "a `cdt:Map` from alternating key/value arguments"
 msgstr "由交替的键/值参数构成的 `cdt:Map`"
 
-#: src/sparql/querying.md:1007
+#: src/sparql/querying.md:1085
 msgid "`cdt:concat(…)`"
 msgstr "`cdt:concat(…)`"
 
-#: src/sparql/querying.md:1007
+#: src/sparql/querying.md:1085
 msgid "the argument lists joined end to end"
 msgstr "将各参数列表首尾相接"
 
-#: src/sparql/querying.md:1008
+#: src/sparql/querying.md:1086
 msgid "`cdt:contains(list, term)`"
 msgstr "`cdt:contains(list, term)`"
 
-#: src/sparql/querying.md:1008
+#: src/sparql/querying.md:1086
 msgid "`xsd:boolean` — does the list hold an equal term"
 msgstr "`xsd:boolean` —— 列表是否包含相等的项"
 
-#: src/sparql/querying.md:1009
+#: src/sparql/querying.md:1087
 msgid "`cdt:get(coll, n_or_key)`"
 msgstr "`cdt:get(coll, n_or_key)`"
 
-#: src/sparql/querying.md:1009
+#: src/sparql/querying.md:1087
 msgid "one element by **1-based** position, or one map value by key"
 msgstr "按**从 1 开始**的位置取一个元素，或按键取一个映射值"
 
-#: src/sparql/querying.md:1010
+#: src/sparql/querying.md:1088
 msgid "`cdt:head(list)`"
 msgstr "`cdt:head(list)`"
 
-#: src/sparql/querying.md:1010
+#: src/sparql/querying.md:1088
 msgid "the first element"
 msgstr "第一个元素"
 
-#: src/sparql/querying.md:1011
+#: src/sparql/querying.md:1089
 msgid "`cdt:tail(list)`"
 msgstr "`cdt:tail(list)`"
 
-#: src/sparql/querying.md:1011
+#: src/sparql/querying.md:1089
 msgid "everything but the first element"
 msgstr "除第一个元素之外的全部元素"
 
-#: src/sparql/querying.md:1012
+#: src/sparql/querying.md:1090
 msgid "`cdt:reverse(list)`"
 msgstr "`cdt:reverse(list)`"
 
-#: src/sparql/querying.md:1012
+#: src/sparql/querying.md:1090
 msgid "the elements in opposite order"
 msgstr "按相反顺序排列的元素"
 
-#: src/sparql/querying.md:1013
+#: src/sparql/querying.md:1091
 msgid "`cdt:size(coll)`"
 msgstr "`cdt:size(coll)`"
 
-#: src/sparql/querying.md:1013
+#: src/sparql/querying.md:1091
 msgid ""
 "`xsd:integer` element or entry count — the one function that takes either "
 "datatype"
 msgstr "`xsd:integer` 元素数或条目数——唯一一个两种数据类型都接受的函数"
 
-#: src/sparql/querying.md:1014
+#: src/sparql/querying.md:1092
 msgid "`cdt:subseq(list, start[, len])`"
 msgstr "`cdt:subseq(list, start[, len])`"
 
-#: src/sparql/querying.md:1014 src/sparql/querying.md:1018
+#: src/sparql/querying.md:1092 src/sparql/querying.md:1096
 msgid "2–3"
 msgstr "2–3"
 
-#: src/sparql/querying.md:1014
+#: src/sparql/querying.md:1092
 msgid "a contiguous run, `start` **1-based**"
 msgstr "一段连续的元素，`start` **从 1 开始**"
 
-#: src/sparql/querying.md:1015
+#: src/sparql/querying.md:1093
 msgid "`cdt:containsKey(map, key)`"
 msgstr "`cdt:containsKey(map, key)`"
 
-#: src/sparql/querying.md:1015
+#: src/sparql/querying.md:1093
 msgid "`xsd:boolean` — is this a key of the map"
 msgstr "`xsd:boolean` —— 这是否是映射的一个键"
 
-#: src/sparql/querying.md:1016
+#: src/sparql/querying.md:1094
 msgid "`cdt:keys(map)`"
 msgstr "`cdt:keys(map)`"
 
-#: src/sparql/querying.md:1016
+#: src/sparql/querying.md:1094
 msgid "the map's keys, as a `cdt:List`"
 msgstr "映射的键，以 `cdt:List` 形式给出"
 
-#: src/sparql/querying.md:1017
+#: src/sparql/querying.md:1095
 msgid "`cdt:merge(…)`"
 msgstr "`cdt:merge(…)`"
 
-#: src/sparql/querying.md:1017
+#: src/sparql/querying.md:1095
 msgid "≥ 2"
 msgstr "≥ 2"
 
-#: src/sparql/querying.md:1017
+#: src/sparql/querying.md:1095
 msgid ""
 "the union of the argument maps; a key held by more than one is resolved by "
 "the **first** map that carries it"
 msgstr "各参数映射的并集；被不止一个映射持有的键，以携带它的**第一个**映射为准"
 
-#: src/sparql/querying.md:1018
+#: src/sparql/querying.md:1096
 msgid "`cdt:put(map, key[, value])`"
 msgstr "`cdt:put(map, key[, value])`"
 
-#: src/sparql/querying.md:1018
+#: src/sparql/querying.md:1096
 msgid ""
 "the map with one entry set; an omitted or erroring value stores the `null` "
 "entry"
 msgstr "设置了一个条目的映射；省略的值或出错的值会存入 `null` 条目"
 
-#: src/sparql/querying.md:1019
+#: src/sparql/querying.md:1097
 msgid "`cdt:remove(map, key)`"
 msgstr "`cdt:remove(map, key)`"
 
-#: src/sparql/querying.md:1019
+#: src/sparql/querying.md:1097
 msgid "the map without that entry; an absent key leaves it unchanged"
 msgstr "去掉该条目的映射；键不存在时映射保持不变"
 
-#: src/sparql/querying.md:1021
+#: src/sparql/querying.md:1099
 msgid ""
 "Handing a list function a map (or the reverse) **raises** — it is a type "
 "error, not an unbound column. The indices are 1-based throughout, per the "
@@ -8585,7 +8725,7 @@ msgstr ""
 "把映射交给列表函数（或反之）会**抛出错误**——这是类型错误，而不是未绑定的列。"
 "按照该 SEP，索引始终从 1 开始。"
 
-#: src/sparql/querying.md:1024
+#: src/sparql/querying.md:1102
 msgid ""
 "```sparql\n"
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
@@ -8607,11 +8747,11 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:1034
+#: src/sparql/querying.md:1112
 msgid "`FOLD`: a group becomes one term"
 msgstr "`FOLD`：一个分组变成一个项"
 
-#: src/sparql/querying.md:1036
+#: src/sparql/querying.md:1114
 msgid ""
 "`FOLD` is an aggregate, so it sits wherever `SUM` or `GROUP_CONCAT` sits — "
 "in the `SELECT` list, in `HAVING`, beside other aggregates, under `GROUP BY`."
@@ -8619,7 +8759,7 @@ msgstr ""
 "`FOLD` 是聚合，因此凡是 `SUM` 或 `GROUP_CONCAT` 可以出现的地方它都可以出现——"
 "在 `SELECT` 列表中、在 `HAVING` 中、与其他聚合并列、在 `GROUP BY` 之下。"
 
-#: src/sparql/querying.md:1044
+#: src/sparql/querying.md:1122
 msgid ""
 "One expression builds a `cdt:List`; two build a `cdt:Map`, the first being "
 "the key. The optional `ORDER BY` belongs to the aggregate itself and follows "
@@ -8632,15 +8772,15 @@ msgstr ""
 "点使 `FOLD` 成为引擎中第一个依赖顺序的聚合，这也是为什么 `FOLD` 可以携带 "
 "`ORDER BY`，而其他每个聚合都会拒绝它。"
 
-#: src/sparql/querying.md:1050
+#: src/sparql/querying.md:1128
 msgid "Accepted spellings, as a catalogue:"
 msgstr "可接受的写法，汇总如下："
 
-#: src/sparql/querying.md:1058
+#: src/sparql/querying.md:1136
 msgid "and one whole query:"
 msgstr "以及一个完整的查询："
 
-#: src/sparql/querying.md:1060
+#: src/sparql/querying.md:1138
 msgid ""
 "```sparql\n"
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
@@ -8656,11 +8796,11 @@ msgstr ""
 "GROUP BY ?s\n"
 "```"
 
-#: src/sparql/querying.md:1067
+#: src/sparql/querying.md:1145
 msgid "Four behaviours are worth knowing before you rely on one:"
 msgstr "在依赖以下任何一项之前，有四种行为值得了解："
 
-#: src/sparql/querying.md:1069
+#: src/sparql/querying.md:1147
 msgid ""
 "An **empty group folds to a bound empty composite** — `\"[]\"^^cdt:List` or "
 "`\"{}\"^^cdt:Map` — never to an unbound column. `SUM` over nothing is `0` "
@@ -8671,7 +8811,7 @@ msgstr ""
 "——绝不会是未绑定的列。对空集的 `SUM` 为 `0`，对空集的 `GROUP_CONCAT` 为 "
 "`\"\"`；`FOLD` 遵循的是这种形态，而不是 `MIN` 的形态。"
 
-#: src/sparql/querying.md:1073
+#: src/sparql/querying.md:1151
 msgid ""
 "A row whose element expression is **unbound or erroring contributes a `null` "
 "element**, which is the opposite of every other aggregate, all of which skip "
@@ -8683,11 +8823,11 @@ msgstr ""
 "它们都会跳过这样的行。该 SEP 要求列表的元数与分组的元数相符。未绑定或出错的映"
 "射**键**会使整个条目被丢弃，因为没有可以用来归档该值的键。"
 
-#: src/sparql/querying.md:1078
+#: src/sparql/querying.md:1156
 msgid "A repeated map key resolves to the **last** binding."
 msgstr "重复的映射键以**最后一个**绑定为准。"
 
-#: src/sparql/querying.md:1079
+#: src/sparql/querying.md:1157
 msgid ""
 "`DISTINCT` is RDF-term identity, not value equality, so `\"1\"^^xsd:integer` "
 "and `\"01\"^^xsd:integer` survive as two elements."
@@ -8695,7 +8835,7 @@ msgstr ""
 "`DISTINCT` 依据的是 RDF 项的同一性，而不是值相等，因此 `\"1\"^^xsd:integer` "
 "与 `\"01\"^^xsd:integer` 作为两个元素保留下来。"
 
-#: src/sparql/querying.md:1082
+#: src/sparql/querying.md:1160
 msgid ""
 "There is no `; SEPARATOR=` on `FOLD` — that scalar parameter is "
 "`GROUP_CONCAT`'s alone — and `FOLD(*)` is not grammar."
@@ -8703,11 +8843,11 @@ msgstr ""
 "`FOLD` 没有 `; SEPARATOR=`——这个标量参数只属于 `GROUP_CONCAT`——而 `FOLD(*)` "
 "不合语法。"
 
-#: src/sparql/querying.md:1085
+#: src/sparql/querying.md:1163
 msgid "`UNFOLD`: one term becomes rows"
 msgstr "`UNFOLD`：一个项变成若干行"
 
-#: src/sparql/querying.md:1087
+#: src/sparql/querying.md:1165
 msgid ""
 "`UNFOLD` is a **graph pattern**, not a function. It is its own "
 "`GraphPatternNotTriples` alternative — structurally where `LATERAL` sits — "
@@ -8717,43 +8857,43 @@ msgstr ""
 "`GraphPatternNotTriples` 备选项——在结构上与 `LATERAL` 所处的位置相同——并叠放"
 "在迄今已解析的模式之上："
 
-#: src/sparql/querying.md:1095
+#: src/sparql/querying.md:1173
 msgid "Operand"
 msgstr "操作数"
 
-#: src/sparql/querying.md:1095
+#: src/sparql/querying.md:1173
 msgid "first variable"
 msgstr "第一个变量"
 
-#: src/sparql/querying.md:1095
+#: src/sparql/querying.md:1173
 msgid "second variable"
 msgstr "第二个变量"
 
-#: src/sparql/querying.md:1097
+#: src/sparql/querying.md:1175
 msgid "`cdt:List`"
 msgstr "`cdt:List`"
 
-#: src/sparql/querying.md:1097
+#: src/sparql/querying.md:1175
 msgid "each element, in list order, duplicates preserved"
 msgstr "每个元素，按列表顺序，保留重复"
 
-#: src/sparql/querying.md:1097
+#: src/sparql/querying.md:1175
 msgid "the **1-based** `xsd:integer` index"
 msgstr "**从 1 开始**的 `xsd:integer` 索引"
 
-#: src/sparql/querying.md:1098
+#: src/sparql/querying.md:1176
 msgid "`cdt:Map`"
 msgstr "`cdt:Map`"
 
-#: src/sparql/querying.md:1098
+#: src/sparql/querying.md:1176
 msgid "each entry's key"
 msgstr "每个条目的键"
 
-#: src/sparql/querying.md:1098
+#: src/sparql/querying.md:1176
 msgid "that entry's value"
 msgstr "该条目的值"
 
-#: src/sparql/querying.md:1100
+#: src/sparql/querying.md:1178
 msgid ""
 "```sparql\n"
 "SELECT ?elem ?i\n"
@@ -8773,7 +8913,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:1109
+#: src/sparql/querying.md:1187
 msgid ""
 "Both targets obey `BIND`'s §19.6 scope rule: a variable already in scope in "
 "the group graph pattern is a **syntax error**, not a join, and naming the "
@@ -8782,13 +8922,13 @@ msgstr ""
 "两个目标变量都遵守 `BIND` 的 §19.6 作用域规则：已在分组图模式中处于作用域的变"
 "量是**语法错误**，而不是连接；两次指名同一个变量同样会被拒绝。"
 
-#: src/sparql/querying.md:1113
+#: src/sparql/querying.md:1191
 msgid ""
 "The two edges that decide whether an `OPTIONAL` around an `UNFOLD` is doing "
 "what you think:"
 msgstr "决定 `UNFOLD` 外围的 `OPTIONAL` 是否在做预期之事的两个边界情形："
 
-#: src/sparql/querying.md:1116
+#: src/sparql/querying.md:1194
 msgid ""
 "A **well-formed but empty** composite (`\"[]\"^^cdt:List`, `cdt:Map()`) "
 "yields **zero rows**. The row is gone."
@@ -8796,7 +8936,7 @@ msgstr ""
 "**良构但为空**的复合值（`\"[]\"^^cdt:List`、`cdt:Map()`）产生**零行**。该行消"
 "失。"
 
-#: src/sparql/querying.md:1118
+#: src/sparql/querying.md:1196
 msgid ""
 "An operand that is **not a composite at all** — unbound, erroring, an "
 "`xsd:integer`, a plain string, or a `cdt:`\\-typed literal whose lexical "
@@ -8810,7 +8950,7 @@ msgstr ""
 "这逐字遵循 SEP-0009 §12.3，并且刻意不作为无行结果，因此 `UNFOLD` 绝不会静默删"
 "除一个它仅仅是未能理解的行。"
 
-#: src/sparql/querying.md:1125
+#: src/sparql/querying.md:1203
 msgid ""
 "`FOLD` and `UNFOLD` compose, which is how a query re-orders a list without "
 "leaving the query language:"
@@ -8818,7 +8958,7 @@ msgstr ""
 "`FOLD` 与 `UNFOLD` 可以组合，查询正是借此在不离开查询语言的情况下对列表重新排"
 "序："
 
-#: src/sparql/querying.md:1128
+#: src/sparql/querying.md:1206
 msgid ""
 "```sparql\n"
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
@@ -8832,11 +8972,11 @@ msgstr ""
 "WHERE { BIND(\"[3,1,2]\"^^cdt:List AS ?l) UNFOLD(?l AS ?e) }\n"
 "```"
 
-#: src/sparql/querying.md:1134
+#: src/sparql/querying.md:1212
 msgid "Ordering, `MIN` and `MAX`"
 msgstr "排序、`MIN` 与 `MAX`"
 
-#: src/sparql/querying.md:1136
+#: src/sparql/querying.md:1214
 msgid ""
 "`ORDER BY`, `MIN`, `MAX` and `FOLD`'s own `ORDER BY` all order composite "
 "literals **by the value they denote**, not by their lexical form, through "
@@ -8851,7 +8991,7 @@ msgstr ""
 "literal < composite < triple term`。SEP-0009 并未固定这一位置；这是 `purrdf` "
 "有文档记载的选择。"
 
-#: src/sparql/querying.md:1143
+#: src/sparql/querying.md:1221
 msgid ""
 "The order `purrdf` exports for composites is **syntactic**, and that is not "
 "an oversight. SEP-0009's value relations are partial and raise on "
@@ -8868,7 +9008,7 @@ msgstr ""
 "Rust 的排序在这样的比较器上可能会 **panic**，因此在这里，全序是正确性要求，而"
 "不是锦上添花。"
 
-#: src/sparql/querying.md:1151
+#: src/sparql/querying.md:1229
 msgid ""
 "`MEDIAN` and `PERCENTILE` are numeric folds and are **not** composite-aware: "
 "a composite is outside their domain and the aggregate comes back unbound."
@@ -8876,11 +9016,11 @@ msgstr ""
 "`MEDIAN` 与 `PERCENTILE` 是数值折叠，**不**感知复合值：复合值不在其定义域内，"
 "聚合结果为未绑定。"
 
-#: src/sparql/querying.md:1154
+#: src/sparql/querying.md:1232
 msgid "Blank nodes inside a composite"
 msgstr "复合值内部的空节点"
 
-#: src/sparql/querying.md:1156
+#: src/sparql/querying.md:1234
 msgid ""
 "A `_:b` written inside a composite lexical form binds through the **same** "
 "ingress rule as a bare `_:b` token, on every codec — Turtle, TriG, N-"
@@ -8898,7 +9038,7 @@ msgstr ""
 "档中则仍是两个节点，这完全符合 RDF 1.1 §4.1 的要求。嵌入复合值中的空节点同样"
 "参与规范化与 skolem 化（skolemization）。"
 
-#: src/sparql/querying.md:1164
+#: src/sparql/querying.md:1242
 msgid ""
 "Query text gets its own blank scope for the same reason, so a `_:b` you "
 "write inside a composite literal in a query is never the `_:b` in the data."
@@ -8906,11 +9046,11 @@ msgstr ""
 "出于同样的原因，查询文本拥有自己的空节点作用域，因此在查询中写在复合字面量内"
 "部的 `_:b` 永远不是数据中的 `_:b`。"
 
-#: src/sparql/querying.md:1167
+#: src/sparql/querying.md:1245
 msgid "Limits, and what a composite refuses"
 msgstr "限制，以及复合值拒绝什么"
 
-#: src/sparql/querying.md:1169
+#: src/sparql/querying.md:1247
 msgid ""
 "A composite is bounded by memory in its nesting, and by two bounds that are "
 "an invariant of the value — the programmatic constructors enforce them "
@@ -8919,31 +9059,31 @@ msgstr ""
 "复合值的嵌套只受内存限制，另有两个界限是值的不变量——程序化构造函数与解析器以"
 "完全相同的方式强制执行它们，并且每一层嵌套都计为一个元素："
 
-#: src/sparql/querying.md:1173
+#: src/sparql/querying.md:1251
 msgid "Bound"
 msgstr "界限"
 
-#: src/sparql/querying.md:1173
+#: src/sparql/querying.md:1251
 msgid "Value"
 msgstr "值"
 
-#: src/sparql/querying.md:1175
+#: src/sparql/querying.md:1253
 msgid "Total elements, all levels"
 msgstr "元素总数（所有层级）"
 
-#: src/sparql/querying.md:1175
+#: src/sparql/querying.md:1253
 msgid "2²⁰ (1 048 576)"
 msgstr "2²⁰ (1 048 576)"
 
-#: src/sparql/querying.md:1176
+#: src/sparql/querying.md:1254
 msgid "Lexical bytes"
 msgstr "词法字节数"
 
-#: src/sparql/querying.md:1176
+#: src/sparql/querying.md:1254
 msgid "64 MiB"
 msgstr "64 MiB"
 
-#: src/sparql/querying.md:1178
+#: src/sparql/querying.md:1256
 msgid ""
 "Crossing one at evaluation is a **hard query failure** naming the bound "
 "crossed, never a quietly unbound answer."
@@ -8951,7 +9091,7 @@ msgstr ""
 "在求值时越过任一界限都是**硬性查询失败**，并指名所越过的界限，绝不会是一个悄"
 "无声息地未绑定的答案。"
 
-#: src/sparql/querying.md:1181
+#: src/sparql/querying.md:1259
 msgid ""
 "An **ill-formed composite literal in a document refuses the whole document** "
 "(`cdt-literal-malformed`), where an ill-formed `\"abc\"^^xsd:integer` does "
@@ -8971,11 +9111,11 @@ msgstr ""
 "同一个字面量可以解析——在那里，类型是否不良是求值时的问题，作用于它的函数结果"
 "为未绑定，与它的比较则会抛出错误。"
 
-#: src/sparql/querying.md:1190
+#: src/sparql/querying.md:1268
 msgid "Taking a composite query to another engine"
 msgstr "把复合值查询带到另一个引擎"
 
-#: src/sparql/querying.md:1192
+#: src/sparql/querying.md:1270
 msgid ""
 "Expect a **parse error** for `FOLD` and `UNFOLD`, which are keywords no "
 "unextended grammar admits, and quietly **different answers** for the "
@@ -8995,7 +9135,7 @@ msgstr ""
 "WebAssembly 的 `Dataset.query` / `QueryEngine.select`，以及 C ABI 的 "
 "`purrdf_query` / `purrdf_query_json` 都具备它们。"
 
-#: src/sparql/querying.md:1201
+#: src/sparql/querying.md:1279
 msgid ""
 "One divergence runs the other way, and it is stated rather than argued. "
 "`purrdf`'s reader admits two element forms the published SEP-0009 lexical "
@@ -9018,11 +9158,11 @@ msgstr ""
 "一分歧以及限定其影响范围的扫描，见 [`docs/CONFORMANCE.md`](https://"
 "github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)。"
 
-#: src/sparql/querying.md:1213
+#: src/sparql/querying.md:1291
 msgid "Quad templates: `CONSTRUCT` into named graphs"
 msgstr "四元组模板：`CONSTRUCT` 到命名图中"
 
-#: src/sparql/querying.md:1215
+#: src/sparql/querying.md:1293
 msgid ""
 "A SPARQL 1.1 `CONSTRUCT` template is a set of triples, and the result is one "
 "graph. `purrdf` also accepts a **quad template**, so a template may name the "
@@ -9033,11 +9173,11 @@ msgstr ""
 "元组模板**，从而模板可以指名每条语句所落入的图，单个结果也可以跨越多个命名"
 "图。"
 
-#: src/sparql/querying.md:1220
+#: src/sparql/querying.md:1298
 msgid "Provenance: a `purrdf` extension, not a SPARQL 1.2 feature"
 msgstr "溯源：`purrdf` 的扩展，并非 SPARQL 1.2 特性"
 
-#: src/sparql/querying.md:1222
+#: src/sparql/querying.md:1300
 msgid ""
 "**SPARQL 1.2 does not define the quad template.** Neither the 1.1 nor the "
 "1.2 grammar admits a `GRAPH` block inside a `CONSTRUCT` template "
@@ -9057,7 +9197,7 @@ msgstr ""
 "附了它的某种形式，但并不存在标准化的写法，因此这里描述的写法是 `purrdf` 自己"
 "的。"
 
-#: src/sparql/querying.md:1232
+#: src/sparql/querying.md:1310
 msgid ""
 "Declaring `VERSION \"1.2\"` does not subtract the extension: a version "
 "declaration selects semantics, not a feature whitelist. See [The `VERSION` "
@@ -9066,11 +9206,11 @@ msgstr ""
 "声明 `VERSION \"1.2\"` 不会去掉该扩展：版本声明选择的是语义，而不是功能白名"
 "单。见 [`VERSION` 声明](#version-声明)。"
 
-#: src/sparql/querying.md:1236
+#: src/sparql/querying.md:1314
 msgid "Taking one of these queries to another engine"
 msgstr "把这类查询带到另一个引擎"
 
-#: src/sparql/querying.md:1238
+#: src/sparql/querying.md:1316
 msgid ""
 "Expect a **parse error**, not a different answer. An engine without the "
 "extension rejects the `GRAPH` keyword as soon as it meets it inside a "
@@ -9084,11 +9224,11 @@ msgstr ""
 "——查询在求值之前就会失败，因此不存在静默得到错误图的风险。随附了自己形式的该"
 "功能的引擎，可能只接受两种写法中的一种，因为二者都未标准化。"
 
-#: src/sparql/querying.md:1245
+#: src/sparql/querying.md:1323
 msgid "Two portable rewrites:"
 msgstr "两种可移植的改写："
 
-#: src/sparql/querying.md:1247
+#: src/sparql/querying.md:1325
 msgid ""
 "**If the result is going into a store**, use SPARQL 1.1 Update rather than "
 "`CONSTRUCT`. Update's template has always been a quad template, so `INSERT "
@@ -9100,7 +9240,7 @@ msgstr ""
 "的模板向来就是四元组模板，因此 `INSERT { GRAPH … { … } } WHERE { … }` 是标准"
 "的、被普遍实现的，并能提供同样的逐解图定位——包括逐行绑定的图名："
 
-#: src/sparql/querying.md:1253
+#: src/sparql/querying.md:1331
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -9114,7 +9254,7 @@ msgstr ""
 "WHERE  { GRAPH ?g { ?s ex:knows ?o } }\n"
 "```"
 
-#: src/sparql/querying.md:1259
+#: src/sparql/querying.md:1337
 msgid ""
 "**If the result must come back as a document**, issue one ordinary triple-"
 "producing `CONSTRUCT` per target graph and assemble the dataset on the "
@@ -9125,7 +9265,7 @@ msgstr ""
 "的 `CONSTRUCT`，并在客户端组装数据集。这样每个图都要付出一次往返的代价，且无"
 "法表达逐解行计算出的图名，而这正是四元组模板所填补的空白。"
 
-#: src/sparql/querying.md:1264
+#: src/sparql/querying.md:1342
 msgid ""
 "Queries that stay inside the triple form are unaffected in either direction: "
 "a template with no `GRAPH` slot is an ordinary SPARQL 1.1 `CONSTRUCT` here "
@@ -9136,11 +9276,11 @@ msgstr ""
 "就是普通的 SPARQL 1.1 `CONSTRUCT`，输出逐字节相同，因此只有真正指名了图的模板"
 "才无法移植。"
 
-#: src/sparql/querying.md:1269
+#: src/sparql/querying.md:1347
 msgid "`GRAPH` blocks inside the template"
 msgstr "模板内部的 `GRAPH` 块"
 
-#: src/sparql/querying.md:1271
+#: src/sparql/querying.md:1349
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -9154,17 +9294,17 @@ msgstr ""
 "WHERE { ?s ex:knows ?o }\n"
 "```"
 
-#: src/sparql/querying.md:1277
+#: src/sparql/querying.md:1355
 msgid "A variable graph name"
 msgstr "变量图名"
 
-#: src/sparql/querying.md:1279
+#: src/sparql/querying.md:1357
 msgid ""
 "The graph slot takes a variable as well as an IRI, so the graph a statement "
 "lands in can be decided per solution row:"
 msgstr "图槽位既接受 IRI，也接受变量，因此语句所落入的图可以逐解行决定："
 
-#: src/sparql/querying.md:1282
+#: src/sparql/querying.md:1360
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -9178,11 +9318,11 @@ msgstr ""
 "WHERE { GRAPH ?g { ?s ex:knows ?o } }\n"
 "```"
 
-#: src/sparql/querying.md:1288
+#: src/sparql/querying.md:1366
 msgid "Several graphs, and mixed default-graph triples"
 msgstr "多个图，以及混合的默认图三元组"
 
-#: src/sparql/querying.md:1290
+#: src/sparql/querying.md:1368
 msgid ""
 "One template may write into more than one graph, and may mix graph-scoped "
 "quads with unscoped triples that land in the default graph:"
@@ -9190,7 +9330,7 @@ msgstr ""
 "一个模板可以写入不止一个图，并且可以把限定于图的四元组与落入默认图的未限定三"
 "元组混合在一起："
 
-#: src/sparql/querying.md:1293
+#: src/sparql/querying.md:1371
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -9212,11 +9352,11 @@ msgstr ""
 "WHERE { ?s ex:knows ?o }\n"
 "```"
 
-#: src/sparql/querying.md:1303
+#: src/sparql/querying.md:1381
 msgid "The whole-template shorthand"
 msgstr "整模板简写"
 
-#: src/sparql/querying.md:1305
+#: src/sparql/querying.md:1383
 msgid ""
 "`CONSTRUCT GRAPH <iri> { … }` scopes the entire template to one graph "
 "without a `GRAPH` block around it. It also works with the short form "
@@ -9227,7 +9367,7 @@ msgstr ""
 "`GRAPH` 块。它同样适用于简短形式（`CONSTRUCT GRAPH <iri> WHERE { … }`），并接"
 "受变量（`CONSTRUCT GRAPH ?g { … }`）、前缀名或相对于 `BASE` 的 IRI："
 
-#: src/sparql/querying.md:1310
+#: src/sparql/querying.md:1388
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -9241,7 +9381,7 @@ msgstr ""
 "WHERE { ?s ex:knows ?o }\n"
 "```"
 
-#: src/sparql/querying.md:1316
+#: src/sparql/querying.md:1394
 msgid ""
 "The shorthand is a **default, not an override**: it supplies the graph for "
 "every template slot that did not name one itself, so an inner `GRAPH` block "
@@ -9252,11 +9392,11 @@ msgstr ""
 "部的 `GRAPH` 块仍然优先于它。不带名称的 `CONSTRUCT GRAPH { … }` 是语法错误，"
 "而不是一个被静默取消限定的模板。"
 
-#: src/sparql/querying.md:1321
+#: src/sparql/querying.md:1399
 msgid "Skip semantics"
 msgstr "跳过语义"
 
-#: src/sparql/querying.md:1323
+#: src/sparql/querying.md:1401
 msgid ""
 "SPARQL §16.2 already skips a template statement whose variables are unbound "
 "or whose instantiation is ill-formed. Ill-formed means \"not a legal RDF 1.2 "
@@ -9265,7 +9405,7 @@ msgstr ""
 "SPARQL §16.2 已规定跳过变量未绑定或实例化结果格式错误的模板语句。格式错误意为"
 "「不是合法的 RDF 1.2 语句」，逐位置而言："
 
-#: src/sparql/querying.md:1327
+#: src/sparql/querying.md:1405
 msgid ""
 "the **subject** is an IRI or a blank node — a literal is illegal there, and "
 "so is a triple term (a quoted triple is a value; an asserted statement is "
@@ -9278,11 +9418,11 @@ msgstr ""
 "可能来自普通数据：对于 RDF 1.2 输入，`CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?"
 "o }` 把 `?o` 绑定到三元组项，就像绑定到字面量一样轻而易举；"
 
-#: src/sparql/querying.md:1332
+#: src/sparql/querying.md:1410
 msgid "the **predicate** is an IRI, and nothing else;"
 msgstr "**谓语**是 IRI，别无其他；"
 
-#: src/sparql/querying.md:1333
+#: src/sparql/querying.md:1411
 msgid ""
 "the **object** may be any term, but when it is a triple term that triple "
 "term's own components carry the same rules recursively (its subject must not "
@@ -9291,12 +9431,12 @@ msgstr ""
 "**宾语**可以是任何项，但当它是三元组项时，该三元组项自身的各分量递归地遵守同"
 "样的规则（其主语不得为字面量，其谓语必须是 IRI）。"
 
-#: src/sparql/querying.md:1337
+#: src/sparql/querying.md:1415
 msgid ""
 "The graph slot follows the same rule, and this is worth being explicit about:"
 msgstr "图槽位遵循同样的规则，这一点值得明确说明："
 
-#: src/sparql/querying.md:1339
+#: src/sparql/querying.md:1417
 msgid ""
 "**An unresolvable graph name skips its statement.** It is not an error, and "
 "it is _not_ a fallback to the default graph. The graph slot is resolved "
@@ -9311,7 +9451,7 @@ msgstr ""
 "三元组项）的语句，根本不会被实例化——它也不会生成任何空节点标签，因此结果的其"
 "余部分与模板中不存在该四元组时完全相同。"
 
-#: src/sparql/querying.md:1346
+#: src/sparql/querying.md:1424
 msgid ""
 "The skip is **per statement**, not per row: a sibling template quad whose "
 "own graph slot resolves is still emitted for the same solution."
@@ -9319,33 +9459,33 @@ msgstr ""
 "跳过是**逐语句**的，而不是逐行的：对于同一个解，自身图槽位可以解析的同级模板"
 "四元组仍会被输出。"
 
-#: src/sparql/querying.md:1349
+#: src/sparql/querying.md:1427
 msgid "Which output formats can carry the result"
 msgstr "哪些输出格式可以承载该结果"
 
-#: src/sparql/querying.md:1351
+#: src/sparql/querying.md:1429
 msgid ""
 "A named graph needs a syntax with somewhere to put a graph name. Six of the "
 "nine RDF syntaxes have one:"
 msgstr "命名图需要一种有地方放置图名的语法。九种 RDF 语法中有六种具备这一点："
 
-#: src/sparql/querying.md:1354
+#: src/sparql/querying.md:1432
 msgid "Carries named graphs"
 msgstr "承载命名图"
 
-#: src/sparql/querying.md:1354
+#: src/sparql/querying.md:1432
 msgid "Does not"
 msgstr "不承载"
 
-#: src/sparql/querying.md:1356
+#: src/sparql/querying.md:1434
 msgid "TriG, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD"
 msgstr "TriG, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD"
 
-#: src/sparql/querying.md:1356
+#: src/sparql/querying.md:1434
 msgid "Turtle, N-Triples, RDF/XML"
 msgstr "Turtle, N-Triples, RDF/XML"
 
-#: src/sparql/querying.md:1358
+#: src/sparql/querying.md:1436
 msgid ""
 "The single-graph serializers **drop** graph-scoped statements — they do not "
 "fold them into the default graph — so writing a graph-carrying result to one "
@@ -9362,7 +9502,7 @@ msgstr ""
 "本会丢弃的图、所要求的格式，以及可承载四元组的替代格式；出口为数据集本身的 C "
 "ABI 则改为以计数形式报告损失："
 
-#: src/sparql/querying.md:1366
+#: src/sparql/querying.md:1444
 msgid ""
 "**CLI** — `purrdf query … --results-format turtle` exits **2** (a usage "
 "refusal, distinct from an evaluation error) and prints the refusal on "
@@ -9373,7 +9513,7 @@ msgstr ""
 "面的拒绝，有别于求值错误），并在 stderr 上打印拒绝信息，指向 `--results-"
 "format trig/nquads/trix/hextuples/jsonld/yamlld`。"
 
-#: src/sparql/querying.md:1370
+#: src/sparql/querying.md:1448
 msgid ""
 "**Python** — the result of a graph-carrying `CONSTRUCT` is a `QueryQuads` "
 "(whose members are `Quad`s with a live `graph_name`) rather than a "
@@ -9385,7 +9525,7 @@ msgstr ""
 "`QueryQuads.serialize(RdfFormat.TURTLE)` 会抛出 `ValueError`，并指名 "
 "`RdfFormat.N_QUADS/TRIG/TRIX/HEXTUPLES/JSON_LD/YAML_LD`。"
 
-#: src/sparql/querying.md:1374
+#: src/sparql/querying.md:1452
 msgid ""
 "**WebAssembly** — an explicit `serialize(\"turtle\")` / `queryRaw(…, "
 "{format: \"turtle\"})` **throws**, with the same sentence and the same "
@@ -9400,7 +9540,7 @@ msgstr ""
 "存在可被违背的请求，而一个空文档会是错误的答案；不含命名图的结果仍然得到 "
 "`turtle`，逐字节相同。"
 
-#: src/sparql/querying.md:1380
+#: src/sparql/querying.md:1458
 msgid ""
 "**C ABI** — the shape is different, and deliberately so. `purrdf_query` "
 "hands back a `PurrdfDataset` handle, which is the frozen IR itself and has "
@@ -9421,7 +9561,7 @@ msgstr ""
 "null 的调用方表示不希望被告知，因此只要结果可能承载图，就应读取它——或序列化为"
 "可承载四元组的媒体类型。"
 
-#: src/sparql/querying.md:1391
+#: src/sparql/querying.md:1469
 msgid ""
 "The convenience path, `purrdf_query_json`, needs neither: it renders a "
 "`CONSTRUCT`/`DESCRIBE` result as **N-Quads** inside its `{\"graph\": \"...\"}"
@@ -9441,7 +9581,7 @@ msgstr ""
 "果，与该成员过去所存放的 N-Triples 逐字节相同——不含图项的 N-Quads 行就是 N-"
 "Triples 行。"
 
-#: src/sparql/querying.md:1401
+#: src/sparql/querying.md:1479
 msgid ""
 "A result carrying only default-graph statements is untouched everywhere: "
 "every SPARQL 1.1 `CONSTRUCT` and every `DESCRIBE` serializes to Turtle "
@@ -9453,11 +9593,11 @@ msgstr ""
 "每一个 `DESCRIBE` 都与以往完全一样序列化为 Turtle。**混合**结果会被整体拒绝，"
 "而不会只输出一半，因为输出默认图那一半会把部分答案报告为完整答案。"
 
-#: src/sparql/querying.md:1407
+#: src/sparql/querying.md:1485
 msgid "The `VERSION` declaration"
 msgstr "`VERSION` 声明"
 
-#: src/sparql/querying.md:1409
+#: src/sparql/querying.md:1487
 msgid ""
 "A query or update prologue may declare `VERSION \"<string>\"` (SPARQL 1.2 "
 "Query specification §4.4). Parsing is syntax-only — any string is accepted, "
@@ -9471,7 +9611,7 @@ msgstr ""
 "的值不再被丢弃：`Query::version()` / `Update::version()` 以带类型的 "
 "`SparqlVersion` 公开它，与既有的 `dataset()`/`base_iri()` 访问器并列。"
 
-#: src/sparql/querying.md:1415
+#: src/sparql/querying.md:1493
 msgid ""
 "Evaluation is the admission boundary. `VERSION \"1.2\"` and `VERSION \"1.2-"
 "basic\"` are recognized; any other declared string — `VERSION \"1.1\"`, a "
@@ -9483,7 +9623,7 @@ msgstr ""
 "何声明的字符串——`VERSION \"1.1\"`、拼写错误、本构建之后才出现的未来版本——都会"
 "在求值准入时被拒绝，给出指名所声明字符串的带类型错误，且早于任何工作的开销。"
 
-#: src/sparql/querying.md:1420
+#: src/sparql/querying.md:1498
 msgid ""
 "`VERSION \"1.2\"` evaluates normally on the full engine. `VERSION \"1.2-"
 "basic\"` is enforced as a narrower profile: the SPARQL 1.2 Query "
@@ -9510,11 +9650,11 @@ msgstr ""
 "对于更新，不会施加任何变更。未使用上述任何构造的 `1.2-basic` 请求，其求值与 "
 "`1.2` 请求完全相同。"
 
-#: src/sparql/querying.md:1433
+#: src/sparql/querying.md:1511
 msgid "Aggregate determinism: row order, `DISTINCT`, and `GROUP_CONCAT`"
 msgstr "聚合的确定性：行顺序、`DISTINCT` 与 `GROUP_CONCAT`"
 
-#: src/sparql/querying.md:1435
+#: src/sparql/querying.md:1513
 msgid ""
 "SPARQL 1.1/1.2 leave several corners of `GROUP BY`/aggregate evaluation "
 "intentionally underspecified — a conforming engine may pick any answer "
@@ -9530,7 +9670,7 @@ msgstr ""
 "`purrdf_sparql_eval::modifier` 的 crate 文档中），从而「`GROUP_CONCAT` 返回什"
 "么」具有单一、可测试的含义，而不是「引擎碰巧产生的任何顺序」。"
 
-#: src/sparql/querying.md:1442
+#: src/sparql/querying.md:1520
 msgid ""
 "**Row and group order (§18.6.1 \"Aggregate Algebra\").** `GROUP BY` "
 "partitions the inner solution sequence into groups; this crate keeps groups "
@@ -9548,7 +9688,7 @@ msgstr ""
 "`SAMPLE` 的「第一个值胜出」、自定义聚合的 `OrderDependent` 折叠——都严格按这一"
 "顺序对各行折叠。"
 
-#: src/sparql/querying.md:1451
+#: src/sparql/querying.md:1529
 msgid ""
 "\"Inner-operator order\" is REPRODUCIBLE (the same query against the same "
 "dataset yields the same order every time) but is not, by itself, a "
@@ -9571,7 +9711,7 @@ msgstr ""
 "ORDER BY ?key }`——「内层算子顺序」恰恰就是该 `ORDER BY` 的 SPARQL 全序"
 "（§15.1），而这是规范本身所固定的。"
 
-#: src/sparql/querying.md:1463
+#: src/sparql/querying.md:1541
 msgid ""
 "**`DISTINCT` (inside an aggregate call).** Per §18.6.1's `Aggregation` "
 "definition, `DISTINCT` folds `Dedup(M(Ψ))` rather than `M(Ψ)` — an order-"
@@ -9585,11 +9725,11 @@ msgstr ""
 "其中各元素首次出现的相对顺序得以保持。本 crate 的去重保留按值相等的元组的第一"
 "次（FIRST）出现（按上述行顺序）；之后的每次出现都不会到达折叠的 `step`。"
 
-#: src/sparql/querying.md:1470
+#: src/sparql/querying.md:1548
 msgid "`GROUP_CONCAT` ordering"
 msgstr "`GROUP_CONCAT` 的排序"
 
-#: src/sparql/querying.md:1472
+#: src/sparql/querying.md:1550
 msgid ""
 "§18.6.1.7 defines `GroupConcat` as concatenating the sequence's elements "
 "with `sep` between them, but explicitly leaves the sequence's own order "
@@ -9610,7 +9750,7 @@ msgstr ""
 "有词法形式的项（空节点或三元组项）会把折叠毒化为未绑定，这与 `SUM`/`AVG` 对非"
 "数值累计值的解读相同。"
 
-#: src/sparql/querying.md:1483
+#: src/sparql/querying.md:1561
 msgid ""
 "Because a plain BGP's own scan order is an implementation detail rather than "
 "a documented guarantee (see above), a `GROUP_CONCAT` fixture that wants to "
@@ -9636,11 +9776,11 @@ msgstr ""
 "`DESC` 而不是 `ASC`，这样一个静默忽略子查询 `ORDER BY`（并退回到存储偶然的扫"
 "描顺序）的回归，就会产生一个可以察觉的不同的错误字符串，而不是碰巧通过。"
 
-#: src/sparql/querying.md:1497
+#: src/sparql/querying.md:1575
 msgid "Extending the evaluator: custom aggregates"
 msgstr "扩展求值器：自定义聚合"
 
-#: src/sparql/querying.md:1499
+#: src/sparql/querying.md:1577
 msgid ""
 "Beyond the SPARQL 1.1 built-in aggregates (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`/ "
 "`SAMPLE`/`GROUP_CONCAT`), a Rust host may register additional `GROUP BY` "
@@ -9661,7 +9801,7 @@ msgstr ""
 "是一个**折叠**：分组中的各行经由调用方提供的累加器归约为一个值，与内置聚合的"
 "做法完全相同。"
 
-#: src/sparql/querying.md:1509
+#: src/sparql/querying.md:1587
 msgid ""
 "A registered aggregate implements two traits — `CustomAggregate` (the per-"
 "IRI factory: declared arity, `Volatility`, `AlgebraicClass`, and a declared "
@@ -9676,7 +9816,7 @@ msgstr ""
 "个部分折叠，`finish` 得出分组的答案）——并以调用方选定的 IRI 注册到 "
 "`AggregateRegistry` 中："
 
-#: src/sparql/querying.md:1523
+#: src/sparql/querying.md:1601
 msgid ""
 "/// A running total over one numeric argument — `example.org`'s own\n"
 "/// `AGG(<https://example.org/agg#total>, ?x)`.\n"
@@ -9684,7 +9824,7 @@ msgstr ""
 "/// 对单个数值参数的累计求和——`example.org` 自己的\n"
 "/// `AGG(<https://example.org/agg#total>, ?x)`。\n"
 
-#: src/sparql/querying.md:1541
+#: src/sparql/querying.md:1619
 msgid ""
 "// Recover `other`'s real state through `into_any` rather than\n"
 "        // re-deriving it from `finish()`'s lexical form: `finish()` is a\n"
@@ -9705,32 +9845,32 @@ msgstr ""
 "        // 才是在折叠的最终答案本身并非（NOT）充分的可合并状态时\n"
 "        // 应当照搬的模式。\n"
 
-#: src/sparql/querying.md:1551
+#: src/sparql/querying.md:1629
 msgid "\"combine received a partial accumulator of a different concrete type\""
 msgstr ""
 "\"combine received a partial accumulator of a different concrete type\""
 
-#: src/sparql/querying.md:1559
+#: src/sparql/querying.md:1637
 msgid "// a running total IS its own sufficient merge state\n"
 msgstr "// 累计求和本身就是（IS）其充分的合并状态\n"
 
-#: src/sparql/querying.md:1565
+#: src/sparql/querying.md:1643
 msgid "\"http://www.w3.org/2001/XMLSchema#integer\""
 msgstr "\"http://www.w3.org/2001/XMLSchema#integer\""
 
-#: src/sparql/querying.md:1577
+#: src/sparql/querying.md:1655
 msgid "// eligible for the within-group parallel fold\n"
 msgstr "// 可参与分组内的并行折叠\n"
 
-#: src/sparql/querying.md:1583
+#: src/sparql/querying.md:1661
 msgid "// stateless besides the running total\n"
 msgstr "// 除累计求和外无其他状态\n"
 
-#: src/sparql/querying.md:1592
+#: src/sparql/querying.md:1670
 msgid "\"https://example.org/agg#total\""
 msgstr "\"https://example.org/agg#total\""
 
-#: src/sparql/querying.md:1594
+#: src/sparql/querying.md:1672
 msgid ""
 "// The environment a query text is read in: `AGG(<iri>, …)` is admitted "
 "against\n"
@@ -9739,7 +9879,7 @@ msgstr ""
 "// 读取查询文本所处的环境：`AGG(<iri>, …)` 依据这个\n"
 "// 注册表被接纳。\n"
 
-#: src/sparql/querying.md:1603
+#: src/sparql/querying.md:1681
 msgid ""
 "\"SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s "
 "<https://example.org/n> ?x }\""
@@ -9747,7 +9887,7 @@ msgstr ""
 "\"SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s "
 "<https://example.org/n> ?x }\""
 
-#: src/sparql/querying.md:1611
+#: src/sparql/querying.md:1689
 msgid ""
 "An `AGG(<iri>, …)` call to an unregistered IRI, with the wrong argument "
 "count, or with an invalid `; NAME=value` scalarval clause (an unrecognized "
@@ -9767,11 +9907,11 @@ msgstr ""
 "叠最终答案本身无法重建的结构化状态时所起的作用，见 `purrdf-sparql-eval` 的 "
 "`agg_fn` 模块文档）。"
 
-#: src/sparql/querying.md:1621
+#: src/sparql/querying.md:1699
 msgid "Named scalar-value parameters"
 msgstr "具名标量值参数"
 
-#: src/sparql/querying.md:1623
+#: src/sparql/querying.md:1701
 msgid ""
 "Beyond its positional `args`, `AGG(<iri>, …)` admits zero or more trailing "
 "`; NAME=value` clauses — a named, per-aggregation scalar parameter, "
@@ -9798,7 +9938,7 @@ msgstr ""
 "义，它们必须是整个分组中一个固定的值，而不是查询作者仅仅打算保持不变的逐行表"
 "达式。"
 
-#: src/sparql/querying.md:1637
+#: src/sparql/querying.md:1715
 msgid ""
 "A registered aggregate declares which names it accepts via "
 "`CustomAggregate::scalarvals`, returning a slice of `ScalarvalSpec { name, "
@@ -9816,7 +9956,7 @@ msgstr ""
 "器可以按名称读回它们（`scalarvals.iter().find(|(k, _)| k == \"P\")`），而无需"
 "重新检查类型或是否存在。"
 
-#: src/sparql/querying.md:1646
+#: src/sparql/querying.md:1724
 msgid ""
 "`AGG(<iri>, …)` execution is governed like any other fold: profile v6 adds "
 "two charge points — `aggregate-invocation` (once per group per aggregate "
@@ -9833,11 +9973,11 @@ msgstr ""
 "GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/"
 "main/docs/SPARQL-GOVERNOR-PROFILE.md)。"
 
-#: src/sparql/querying.md:1653
+#: src/sparql/querying.md:1731
 msgid "The statistical aggregate set"
 msgstr "统计聚合集"
 
-#: src/sparql/querying.md:1655
+#: src/sparql/querying.md:1733
 msgid ""
 "`purrdf-sparql-eval` ships ten exact statistical aggregates — `MEDIAN`, "
 "`PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, "
@@ -9851,18 +9991,18 @@ msgstr ""
 "是封闭的（没有供调用方扩展的扩展点），并通过**一次**调用到达："
 "`AggregateRegistry::register_statistical_aggregates`："
 
-#: src/sparql/querying.md:1663
+#: src/sparql/querying.md:1741
 msgid "\"https://example.org/agg#\""
 msgstr "\"https://example.org/agg#\""
 
-#: src/sparql/querying.md:1663
+#: src/sparql/querying.md:1741
 msgid ""
 "// Now reachable: AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …"
 "TOPK…\n"
 msgstr ""
 "// 现已可到达：AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …TOPK…\n"
 
-#: src/sparql/querying.md:1667
+#: src/sparql/querying.md:1745
 msgid ""
 "As with every vocabulary PurRDF touches, `namespace` is caller-supplied "
 "configuration with no fabricated default — a host that never calls this "
@@ -9875,11 +10015,11 @@ msgstr ""
 "`ParserOptions::extension_fn_namespaces` 的宿主得不到任何内置标量扩展函数完全"
 "一样。"
 
-#: src/sparql/querying.md:1673
+#: src/sparql/querying.md:1751
 msgid "Per-member semantics:"
 msgstr "各成员的语义："
 
-#: src/sparql/querying.md:1675
+#: src/sparql/querying.md:1753
 msgid ""
 "**Numeric members** (`STDDEV*`/`VARIANCE*`, `MEDIAN`, `PERCENTILE`) follow "
 "the same `integer ⊂ decimal ⊂ float ⊂ double` promotion tower the built-in "
@@ -9894,7 +10034,7 @@ msgstr ""
 "一致。只有 `STDDEV`/`STDDEV_POP` 最后的平方根会离开精确的 decimal 体系；"
 "`VARIANCE`/`VAR_POP` 从不离开。"
 
-#: src/sparql/querying.md:1681
+#: src/sparql/querying.md:1759
 msgid ""
 "**`STDDEV`/`VARIANCE`** are the sample statistics (`n - 1` denominator, "
 "unbound under two values); **`STDDEV_POP`/`VAR_POP`** are the population "
@@ -9905,7 +10045,7 @@ msgstr ""
 "定）；**`STDDEV_POP`/`VAR_POP`** 是总体统计量（分母为 `n`，一个值时即有定义）"
 "——这是 SQL 自身的命名约定。"
 
-#: src/sparql/querying.md:1685
+#: src/sparql/querying.md:1763
 msgid ""
 "**`MEDIAN`** is `PERCENTILE` at `p = 0.5` under linear interpolation between "
 "the two closest ranks — for an even-sized group this is exactly the mean of "
@@ -9914,7 +10054,7 @@ msgstr ""
 "**`MEDIAN`** 即 `p = 0.5` 时的 `PERCENTILE`，在两个最接近的秩之间做线性插值——"
 "对于大小为偶数的分组，这恰好是两个中间值的平均值。"
 
-#: src/sparql/querying.md:1688
+#: src/sparql/querying.md:1766
 msgid ""
 "**`PERCENTILE`** takes a named scalarval, `AGG(<{NS}PERCENTILE>, ?x; "
 "P=0.95)`: `P` is resolved once for the whole aggregation (never per row — "
@@ -9927,7 +10067,7 @@ msgstr ""
 "于 `[0, 1]` 之外的 `P` 会毒化为未绑定，这与每个数值型成员所用的「毒化，而非中"
 "止」规则相同。缺失或非数值的 `P` 会在预备时被拒绝。"
 
-#: src/sparql/querying.md:1693
+#: src/sparql/querying.md:1771
 msgid ""
 "**`MODE`** works over any term kind, counted by RDF term identity (not value "
 "equality — `\"5\"^^xsd:integer` and `\"05\"^^xsd:integer` count as two "
@@ -9938,11 +10078,11 @@ msgstr ""
 "`\"5\"^^xsd:integer` 与 `\"05\"^^xsd:integer` 算作两个不同的项）。平局时取 "
 "`MIN`/`ORDER BY` 所用的同一全序下最小的项。"
 
-#: src/sparql/querying.md:1697
+#: src/sparql/querying.md:1775
 msgid "**`FIRST`/`LAST`** work over any term kind, in input row order."
 msgstr "**`FIRST`/`LAST`** 适用于任何项类型，按输入行顺序。"
 
-#: src/sparql/querying.md:1698
+#: src/sparql/querying.md:1776
 msgid ""
 "**`TOPK`** takes a named scalarval, `AGG(<{NS}TOPK>, ?x; K=3)`: `K` must be "
 "a positive `xsd:integer`, resolved once for the whole aggregation (a `K ≤ 0` "
@@ -9958,7 +10098,7 @@ msgstr ""
 "应答方式与 `GROUP_CONCAT` 应答多值问题的方式相同——前 `k` 个值，按降序排列，其"
 "词法形式以单个固定的空格分隔符连接。"
 
-#: src/sparql/querying.md:1706
+#: src/sparql/querying.md:1784
 msgid ""
 "All ten declare `Volatility::Stable` and merge partial folds through real, "
 "type-recovered structural state (`AggregateAccumulator::into_any`) rather "
@@ -9971,11 +10111,11 @@ msgstr ""
 "新推导——因此单个大分组可以分块并行折叠（见 "
 "`crate::modifier::eval_custom_aggregate`），其结果与顺序折叠逐字节相同。"
 
-#: src/sparql/querying.md:1712
+#: src/sparql/querying.md:1790
 msgid "Path witnesses: binding the derivation, not the endpoints"
 msgstr "路径见证：绑定推导过程，而不是端点"
 
-#: src/sparql/querying.md:1714
+#: src/sparql/querying.md:1792
 msgid ""
 "The core grammar's property paths answer a **reachability** question. `?s "
 "ex:p+ ?o` says that some sequence of `ex:p` edges leads from `?s` to `?o`, "
@@ -9987,13 +10127,13 @@ msgstr ""
 "`ex:p` 边构成的序列从 `?s` 通往 `?o`，答案是端点对；_哪些_边则无法表达，因此"
 "需要解释、加权、过滤或重新连接该路线的查询无处可查。"
 
-#: src/sparql/querying.md:1719
+#: src/sparql/querying.md:1797
 msgid ""
 "A **path-witness** property function answers the derivation question "
 "instead. A call reads"
 msgstr "**路径见证**属性函数回答的则是推导问题。调用形式如下"
 
-#: src/sparql/querying.md:1726
+#: src/sparql/querying.md:1804
 msgid ""
 "and emits **one row per hop**. For a walk of `k` hops, row `i` binds `?len = "
 "k`, `?step = i`, `?node` to the node that hop arrived at, and `?edge` to the "
@@ -10009,7 +10149,7 @@ msgstr ""
 "直接连接回数据集。`?step` 与 `?len` 是 `xsd:integer` 字面量，正是为了让 "
 "`ORDER BY ?step` 按数值排序，而不是把 `\"10\"` 排在 `\"2\"` 之前。"
 
-#: src/sparql/querying.md:1733
+#: src/sparql/querying.md:1811
 msgid ""
 "There is no default relation IRI and no default traversal envelope. PurRDF "
 "mints no vocabulary IRIs, so the name a query spells in predicate position "
@@ -10025,7 +10165,7 @@ msgstr ""
 "`u32` 能容纳的任何 `max_hops` 都会被接受：遍历把每一层深度的状态都保存在堆"
 "上，而两个资源守卫限定一次游走所做的工作量。"
 
-#: src/sparql/querying.md:1741
+#: src/sparql/querying.md:1819
 msgid ""
 "Two relation TYPES, not one with a mode switch: `PathWitnessRelation` "
 "enumerates every simple-prefix walk (exponential in the worst case) and "
@@ -10039,15 +10179,15 @@ msgstr ""
 "个可达对产生一个最短见证（多项式级）。规划器从注册信息中读取基数，因此由二者"
 "中的哪一个应答某个 IRI，是注册的属性，而不是规划器无法看到的运行时值的属性。"
 
-#: src/sparql/querying.md:1748
+#: src/sparql/querying.md:1826
 msgid "A worked example"
 msgstr "一个完整示例"
 
-#: src/sparql/querying.md:1750
+#: src/sparql/querying.md:1828
 msgid "Over a three-edge chain `ex:a → ex:b → ex:c → ex:d`:"
 msgstr "在一条三边链 `ex:a → ex:b → ex:c → ex:d` 上："
 
-#: src/sparql/querying.md:1761
+#: src/sparql/querying.md:1839
 msgid ""
 "```text\n"
 "end,len,step,node\n"
@@ -10069,7 +10209,7 @@ msgstr ""
 "http://example.org/d,3,3,http://example.org/d\n"
 "```"
 
-#: src/sparql/querying.md:1771
+#: src/sparql/querying.md:1849
 msgid ""
 "`GROUP BY ?pathId` is how the hop rows become walks again. The identifier is "
 "constant across one walk's rows and distinct between walks, so each group IS "
@@ -10081,7 +10221,7 @@ msgstr ""
 "start`、`?end` 与 `?len` 在分组内保持不变，因此同时按它们分组不需要任何代价，"
 "还能把它们投影出来："
 
-#: src/sparql/querying.md:1785
+#: src/sparql/querying.md:1863
 msgid ""
 "```text\n"
 "end,len,route\n"
@@ -10099,7 +10239,7 @@ msgstr ""
 "example.org/d\n"
 "```"
 
-#: src/sparql/querying.md:1792
+#: src/sparql/querying.md:1870
 msgid ""
 "Swap `?node` for `?edge` and the same grouping reconstructs the STATEMENT "
 "sequence, which is where an aggregate over a walk belongs: a `SUM` of a per-"
@@ -10113,45 +10253,45 @@ msgstr ""
 "求 `MIN`、用 `HAVING` 只保留每一跳都带有注解的路线。这些都无法从一个返回端点"
 "的关系中得到，而且都不需要列表项。"
 
-#: src/sparql/querying.md:1798
+#: src/sparql/querying.md:1876
 msgid "The same registration from Python:"
 msgstr "在 Python 中进行同样的注册："
 
-#: src/sparql/querying.md:1802
+#: src/sparql/querying.md:1880
 msgid "\"SELECT ?end ?len ?step ?node WHERE { <http://example.org/a> \""
 msgstr "\"SELECT ?end ?len ?step ?node WHERE { <http://example.org/a> \""
 
-#: src/sparql/querying.md:1803
+#: src/sparql/querying.md:1881
 msgid ""
 "\"<http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) } \""
 msgstr ""
 "\"<http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) } \""
 
-#: src/sparql/querying.md:1804
+#: src/sparql/querying.md:1882
 msgid "\"ORDER BY ?len ?step\""
 msgstr "\"ORDER BY ?len ?step\""
 
-#: src/sparql/querying.md:1806
+#: src/sparql/querying.md:1884
 msgid "\"http://example.org/pf#walk\""
 msgstr "\"http://example.org/pf#walk\""
 
-#: src/sparql/querying.md:1807
+#: src/sparql/querying.md:1885
 msgid "\"http://example.org/p\""
 msgstr "\"http://example.org/p\""
 
-#: src/sparql/querying.md:1807
+#: src/sparql/querying.md:1885
 msgid "\"forward\""
 msgstr "\"forward\""
 
-#: src/sparql/querying.md:1808
+#: src/sparql/querying.md:1886
 msgid "\"walk\""
 msgstr "\"walk\""
 
-#: src/sparql/querying.md:1814
+#: src/sparql/querying.md:1892
 msgid "Under an entailment regime, the walk reads the closure"
 msgstr "在蕴涵机制（entailment regime）下，游走读取的是推理闭包"
 
-#: src/sparql/querying.md:1816
+#: src/sparql/querying.md:1894
 msgid ""
 "A path relation is a snapshot of the step's edges, and the dataset it must "
 "be snapshotted from is the one the query is _answered over_. Under `--"
@@ -10165,7 +10305,7 @@ msgstr ""
 "下，那就是**推理闭包**，而不是源图——因此，在步骤谓语下推导出四元组的蕴涵机"
 "制，会拓宽游走，与它拓宽写在旁边的 `p+` 完全一样。以如下数据为例："
 
-#: src/sparql/querying.md:1828
+#: src/sparql/querying.md:1906
 msgid ""
 "`SELECT ?end WHERE { ex:a ex:p+ ?end }` under `rdfs` answers `ex:b, ex:c`, "
 "and the registered walk seeded at `ex:a` reaches `ex:c` too. Without the "
@@ -10176,7 +10316,7 @@ msgstr ""
 "而以 `ex:a` 为起点注册的游走同样会到达 `ex:c`。没有该蕴涵机制时，二者都止于 "
 "`ex:b`，因为推导出的 `ex:b ex:p ex:c` 并不存在，无从游走。"
 
-#: src/sparql/querying.md:1832
+#: src/sparql/querying.md:1910
 msgid ""
 "One pairing is refused rather than answered: `--entailment owl-direct` on an "
 "ontology whose restricted chase mints existential witnesses. Those witnesses "
@@ -10195,7 +10335,7 @@ msgstr ""
 "种组合的蕴涵机制。不生成任何见证的 `owl-direct` 运行——TBox 位于组合方法的 "
 "Horn 片段之外，或其 chase 未触发任何存在性规则——不会被拒绝。"
 
-#: src/sparql/querying.md:1841
+#: src/sparql/querying.md:1919
 msgid ""
 "The Rust surface spells the same thing explicitly: `query_with_entailment` "
 "and `query_with_entailment_governed` take a `ClosureRelations` argument, "
@@ -10210,11 +10350,11 @@ msgstr ""
 "样使用），要么是 `ClosureRelations::rebuilt_by(&f)`，其中 `f` 接收物化后的推"
 "理闭包，并返回用于作答的注册表。"
 
-#: src/sparql/querying.md:1847
+#: src/sparql/querying.md:1925
 msgid "Reaching extensions from other hosts"
 msgstr "从其他宿主到达扩展"
 
-#: src/sparql/querying.md:1849
+#: src/sparql/querying.md:1927
 msgid ""
 "The SHACL-AF function registry and the GENERAL custom-aggregate registry are "
 "**Rust-closure seams**: a registered function or aggregate is arbitrary host "
@@ -10230,7 +10370,7 @@ msgstr ""
 "符串或任何其他 FFI 形态的值跨越 Python、WebAssembly 或 C 边界——本项目不愿为此"
 "自创任何回调协议，下述四个宿主接口也都没有公开它。"
 
-#: src/sparql/querying.md:1857
+#: src/sparql/querying.md:1935
 msgid ""
 "The property-function registry is a closure seam in the same sense — a "
 "`PropertyFunction` is an arbitrary host implementation — but its DATA-SHAPED "
@@ -10256,12 +10396,12 @@ msgstr ""
 "期间调用的任何东西都无法重新进入解释器，这正是它们能够跨越边界的原因。"
 "WebAssembly 与 C-ABI 接口完全不公开属性函数注册。"
 
-#: src/sparql/querying.md:1870
+#: src/sparql/querying.md:1948
 msgid ""
 "What a relation attests about itself, and the one lane that can record it"
 msgstr "关系对自身作出的证明，以及唯一能够记录它的通道"
 
-#: src/sparql/querying.md:1872
+#: src/sparql/querying.md:1950
 msgid ""
 "Two facts about an invocation are known to a relation's cursor and to "
 "nothing else: which generation of its index answered, and whether that index "
@@ -10275,7 +10415,7 @@ msgstr ""
 "`(generation, incompleteness)`，二者各为字符串或 `None`，并各自被逐字记录。两"
 "者都不声明是默认情况，意味着该关系什么也没说——这是沉默，而不是声称索引完整。"
 
-#: src/sparql/querying.md:1879
+#: src/sparql/querying.md:1957
 msgid ""
 "A relation that declares itself **incomplete** is refused at any entry point "
 "with nowhere to put that declaration: the ungoverned `query` and every "
@@ -10291,7 +10431,7 @@ msgstr ""
 "无人能读取其回执的不完整（被截短）的答案，恰恰是硬失败原则所禁止的。因此，受"
 "治理通道会作答，其结果携带："
 
-#: src/sparql/querying.md:1887
+#: src/sparql/querying.md:1965
 msgid ""
 "# {relation_iri: {\"invocations\": int,\n"
 "#                 \"generations\": [str | None],\n"
@@ -10301,7 +10441,7 @@ msgstr ""
 "#                 \"generations\": [str | None],\n"
 "#                 \"incompleteness\": [str]}}\n"
 
-#: src/sparql/querying.md:1893
+#: src/sparql/querying.md:1971
 msgid ""
 "The mapping is always present and may be empty — a governed query that "
 "invoked no relation reports `{}`, which is a fact rather than an absence. "
@@ -10320,7 +10460,7 @@ msgstr ""
 "因此在同一快照上两次运行的声明（DECLARATIONS）可以逐字节比较。已触发的 "
 "governor 仍会报告各关系在触发之前所证明的内容。"
 
-#: src/sparql/querying.md:1902
+#: src/sparql/querying.md:1980
 msgid ""
 "`invocations` is the one field that does not: it counts entries into host "
 "code, which is a fact about the schedule rather than about the index. Under "
@@ -10342,7 +10482,7 @@ msgstr ""
 "同，包括在两次仅所给预算不同的运行之间。应把它读作「该关系是否运行过」（`0` "
 "对比非零），或作为日志行中的粗略量级；绝不要在两份回执之间比较它。"
 
-#: src/sparql/querying.md:1913
+#: src/sparql/querying.md:1991
 msgid ""
 "PurRDF's first-party **statistical set** is different, precisely because it "
 "is NOT an arbitrary closure: "
@@ -10365,13 +10505,13 @@ msgstr ""
 "接口传递 `property_fn_namespaces` 或最接近的等价可选字符串配置的方式保持一"
 "致："
 
-#: src/sparql/querying.md:1923
+#: src/sparql/querying.md:2001
 msgid ""
 "**Rust** (embedding the engine directly): `QueryOptions.aggregates`, as "
 "shown throughout this page."
 msgstr "**Rust**（直接嵌入引擎）：`QueryOptions.aggregates`，如本页各处所示。"
 
-#: src/sparql/querying.md:1925
+#: src/sparql/querying.md:2003
 msgid ""
 "**Python** (`purrdf.Store` / `purrdf.MutableDataset`): the "
 "`aggregate_namespace` keyword on `query` / `query_governed` / `update` / "
@@ -10381,24 +10521,24 @@ msgstr ""
 "`query_governed` / `update` / `update_governed` 上的 `aggregate_namespace` 关"
 "键字参数。"
 
-#: src/sparql/querying.md:1931
+#: src/sparql/querying.md:2009
 msgid "\"PREFIX ex: <https://ex.example/> \""
 msgstr "\"PREFIX ex: <https://ex.example/> \""
 
-#: src/sparql/querying.md:1932
+#: src/sparql/querying.md:2010
 msgid "\"SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) \""
 msgstr "\"SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) \""
 
-#: src/sparql/querying.md:1933
+#: src/sparql/querying.md:2011
 msgid "\"WHERE { ?s ex:value ?v }\""
 msgstr "\"WHERE { ?s ex:value ?v }\""
 
-#: src/sparql/querying.md:1934 src/sparql/querying.md:1951
-#: src/sparql/querying.md:1961
+#: src/sparql/querying.md:2012 src/sparql/querying.md:2029
+#: src/sparql/querying.md:2039
 msgid "\"https://ex.example/agg#\""
 msgstr "\"https://ex.example/agg#\""
 
-#: src/sparql/querying.md:1938
+#: src/sparql/querying.md:2016
 msgid ""
 "**CLI** (`purrdf query` / `purrdf update`): the `--aggregate-namespace IRI` "
 "flag."
@@ -10406,17 +10546,17 @@ msgstr ""
 "**CLI**（`purrdf query` / `purrdf update`）：`--aggregate-namespace IRI` 标"
 "志。"
 
-#: src/sparql/querying.md:1942
+#: src/sparql/querying.md:2020
 msgid "'https://ex.example/agg#'"
 msgstr "'https://ex.example/agg#'"
 
-#: src/sparql/querying.md:1943
+#: src/sparql/querying.md:2021
 msgid ""
 "'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) WHERE { ?s ?p ?v }'"
 msgstr ""
 "'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) WHERE { ?s ?p ?v }'"
 
-#: src/sparql/querying.md:1946
+#: src/sparql/querying.md:2024
 msgid ""
 "**WebAssembly** (`QueryEngine.queryGoverned` / `updateGoverned`): the "
 "`aggregateNamespace` option, alongside the other governed-call options."
@@ -10424,7 +10564,7 @@ msgstr ""
 "**WebAssembly**（`QueryEngine.queryGoverned` / `updateGoverned`）："
 "`aggregateNamespace` 选项，与其他受治理调用选项并列。"
 
-#: src/sparql/querying.md:1955
+#: src/sparql/querying.md:2033
 msgid ""
 "**C ABI** (`purrdf_query_governed` / `purrdf_update_governed`): a nullable "
 "`const char *aggregate_namespace` parameter, the same optional-C-string "
@@ -10434,15 +10574,15 @@ msgstr ""
 "的 `const char *aggregate_namespace` 参数，与该 ABI 上其他每个可为空字符串所"
 "用的可选 C 字符串约定相同。"
 
-#: src/sparql/querying.md:1960
+#: src/sparql/querying.md:2038
 msgid "/* base_iri */"
 msgstr "/* base_iri */"
 
-#: src/sparql/querying.md:1961
+#: src/sparql/querying.md:2039
 msgid "/* … */"
 msgstr "/* … */"
 
-#: src/sparql/querying.md:1964
+#: src/sparql/querying.md:2042
 msgid ""
 "`namespace` stays caller-supplied configuration with no fabricated default "
 "on every one of these surfaces: omitting it (`None` / not passing the flag / "
@@ -10454,7 +10594,7 @@ msgstr ""
 "省略它（`None` / 不传该标志 / `undefined` / 空指针）会使十个名称中的每一个都"
 "成为普通的未注册自定义聚合 IRI，与该参数出现之前完全一样被拒绝。"
 
-#: src/sparql/querying.md:1970
+#: src/sparql/querying.md:2048
 msgid ""
 "The **entailment-aware query lane** (`query_with_entailment`/ "
 "`query_with_entailment_governed`, and every Python/CLI/WebAssembly/C wrapper "
@@ -10471,7 +10611,7 @@ msgstr ""
 "此 `AGG(<{NS}MEDIAN>, …)` 在蕴涵得出的推理闭包上的解析方式，与在原始视图上相"
 "同。"
 
-#: src/sparql/querying.md:1984
+#: src/sparql/querying.md:2062
 msgid ""
 "`purrdf.Store.query_entailment_governed(..., aggregate_namespace=NS)` "
 "answers the same query the same way, and the WebAssembly and C-ABI governed "
@@ -10480,7 +10620,7 @@ msgstr ""
 "`purrdf.Store.query_entailment_governed(..., aggregate_namespace=NS)` 以同样"
 "的方式回答同一个查询，WebAssembly 与 C-ABI 的受治理蕴涵入口也接受同一个参数。"
 
-#: src/sparql/querying.md:1988
+#: src/sparql/querying.md:2066
 msgid ""
 "One structural limit applies everywhere the statistical set is reachable: "
 "SPARQL UPDATE's grammar admits an aggregate only inside a nested `SELECT … "
@@ -10493,11 +10633,11 @@ msgstr ""
 "`INSERT WHERE` 基本图模式自身没有 `GROUP BY`）——每个宿主的 `update` 入口都恰"
 "好通过这种嵌套子查询形态到达统计集。"
 
-#: src/sparql/querying.md:1995
+#: src/sparql/querying.md:2073
 msgid "Entailment regimes"
 msgstr "蕴涵机制"
 
-#: src/sparql/querying.md:1997
+#: src/sparql/querying.md:2075
 msgid ""
 "SPARQL queries can be answered under an entailment regime by materializing "
 "the dataset first with [`purrdf-entail`](../entailment.md) — "
@@ -10508,7 +10648,7 @@ msgstr ""
 "SPARQL 查询——`Regime::from_iri` 把 `sparql:entailmentRegime` IRI 映射到相应的"
 "引擎。"
 
-#: src/sparql/querying.md:2003
+#: src/sparql/querying.md:2081
 msgid ""
 "The full W3C SPARQL 1.1 query + update evaluation suites plus the SPARQL 1.2 "
 "suite are vendored verbatim and run by `purrdf-sparql-conformance`; every "
@@ -11003,12 +11143,14 @@ msgid ""
 "native Rust tests. `make wasm` separately builds the crate for WASM; focused "
 "WASM execution covers actual target paths and host interfaces."
 msgstr ""
-"这是一项正确性要求，而不是偏好。BM25 需要自然对数，而 libm 的 `ln` 在不同实现之间可能相"
-"差一个最后位单位（ulp）——这足以颠倒两个分数几乎相同的文档的顺序，从而使同一数据上的同一查询，在原生"
-"构建中按一种顺序返回行，而在同一引擎的 `wasm32-unknown-unknown` 构建中按另一种"
-"顺序返回。这里的对数是一个固定长度、固定迭代次数的整数级数，从不使用收敛测试，因此其结果在每个目标上都是"
-"其输入的纯函数。排名——行顺序连同每个分数的十进制词法形式——由原生 Rust 测试按独立预期结果固定。"
-"`make wasm` 单独为 WASM 构建 crate；WASM 执行只覆盖实际目标路径与宿主接口。"
+"这是一项正确性要求，而不是偏好。BM25 需要自然对数，而 libm 的 `ln` 在不同实现"
+"之间可能相差一个最后位单位（ulp）——这足以颠倒两个分数几乎相同的文档的顺序，从"
+"而使同一数据上的同一查询，在原生构建中按一种顺序返回行，而在同一引擎的 "
+"`wasm32-unknown-unknown` 构建中按另一种顺序返回。这里的对数是一个固定长度、固"
+"定迭代次数的整数级数，从不使用收敛测试，因此其结果在每个目标上都是其输入的纯"
+"函数。排名——行顺序连同每个分数的十进制词法形式——由原生 Rust 测试按独立预期结"
+"果固定。`make wasm` 单独为 WASM 构建 crate；WASM 执行只覆盖实际目标路径与宿主"
+"接口。"
 
 #: src/sparql/full-text.md:140
 msgid ""
@@ -11399,8 +11541,8 @@ msgid ""
 "Native Rust pins the complete geometry corpus against committed digest "
 "bytes. `make wasm` separately builds the crate for the WASM target."
 msgstr ""
-"原生 Rust 测试按已提交的摘要字节固定完整几何语料。`make wasm` 单独为 WASM 目标构"
-"建 crate。"
+"原生 Rust 测试按已提交的摘要字节固定完整几何语料。`make wasm` 单独为 WASM 目"
+"标构建 crate。"
 
 #: src/sparql/geosparql.md:177
 msgid "What is here, and what is not"
@@ -11850,6 +11992,18 @@ msgstr ""
 
 #: src/validation/shacl.md:39
 msgid ""
+"**Exact numeric ranges** — `sh:minInclusive`, `sh:maxInclusive`, "
+"`sh:minExclusive`, `sh:maxExclusive`, `sh:lessThan` and "
+"`sh:lessThanOrEquals` compare numbers with the SPARQL operators, as SHACL "
+"defines them. An `xsd:integer` or `xsd:decimal` literal of any size is "
+"compared exactly, never through a double, so `9007199254740992` is below a "
+"bound of `9007199254740993`. A literal whose lexical form its datatype "
+"rejects, such as `\"1.5\"^^xsd:integer`, cannot be compared and violates the "
+"constraint. See [Numeric limits](../sparql/querying.md#numeric-limits)."
+msgstr "**精确的数值范围** —— `sh:minInclusive`、`sh:maxInclusive`、`sh:minExclusive`、`sh:maxExclusive`、`sh:lessThan` 与 `sh:lessThanOrEquals` 按 SHACL 的定义，用 SPARQL 运算符比较数值。任意大小的 `xsd:integer` 或 `xsd:decimal` 字面量都精确比较，从不经过 double，所以 `9007199254740992` 低于界限 `9007199254740993`。词法形式被其数据类型拒绝的字面量（例如 `\"1.5\"^^xsd:integer`）无法比较，因而违反约束。参见[数值限制](../sparql/querying.md#数值限制)。"
+
+#: src/validation/shacl.md:47
+msgid ""
 "**SHACL 1.2 SPARQL Extensions** — SPARQL-based constraints and targets, "
 "custom constraint components with pre-binding semantics, user-defined "
 "`sh:SPARQLFunction` calls, `sh:SPARQLTargetType`, `sh:sparqlExpr`, and "
@@ -11861,7 +12015,7 @@ msgstr ""
 "`sh:sparqlExpr`，以及按该文档规定解析的 `sh:prefixes`（见[下文](#shacl-"
 "sparql-查询中的前缀)），全部运行在原生 SPARQL 引擎上。"
 
-#: src/validation/shacl.md:44
+#: src/validation/shacl.md:52
 msgid ""
 "**SHACL 1.2 Node Expressions** — the `shnex:` vocabulary and the older SHACL-"
 "AF `sh:` spelling of a node expression parse to one representation and run "
@@ -11877,7 +12031,7 @@ msgstr ""
 "取 `sh:then`。`shnex-sparql.ttl` 函数库为原生实现。`sh:nodeByExpression` 与 "
 "`sh:ExpressionConstraintComponent` 均参与验证。"
 
-#: src/validation/shacl.md:51
+#: src/validation/shacl.md:59
 msgid ""
 "**SHACL 1.2 Inference Rules** — `sh:TripleRule` and `sh:SPARQLRule`, with "
 "`sh:condition`, `sh:layer`, `sh:order`, `sh:runOnce`, `sh:deactivated`, rule "
@@ -11899,7 +12053,7 @@ msgstr ""
 "此交换两条规则的次序可能改变推论。无法解析的 `sh:condition` 是加载错误，而不"
 "是一条静默地永不触发的规则。"
 
-#: src/validation/shacl.md:61
+#: src/validation/shacl.md:69
 msgid ""
 "**SPARQL 1.2 RL** — the rule language's text syntax is parsed, checked for "
 "well-formedness, stratified, imported and evaluated (`purrdf_shapes::srl`). "
@@ -11910,7 +12064,7 @@ msgstr ""
 "求值（`purrdf_shapes::srl`）。SHACL 规则降为同一种规则集表示，二者都运行在同"
 "一个规则引擎 `purrdf-datalog` 上。"
 
-#: src/validation/shacl.md:66
+#: src/validation/shacl.md:74
 msgid ""
 "A shapes graph is either loaded faithfully or refused. An unknown term, an "
 "ill-typed parameter value, or a construct the engine does not evaluate is a "
@@ -11926,12 +12080,12 @@ msgstr ""
 "`sh:SPARQLTarget` 只能携带其规范赋予它们的术语，因此约束的 `sh:select` 旁的 "
 "`sh:ask`，或拼错的 `sh:mesage`，都会被拒绝，而不是被忽略。"
 
-#: src/validation/shacl.md:74
+#: src/validation/shacl.md:82
 msgid ""
 "The terms the SHACL vocabularies define and the engine refuses by name are:"
 msgstr "SHACL 词汇表定义、而引擎会点名拒绝的术语有："
 
-#: src/validation/shacl.md:76
+#: src/validation/shacl.md:84
 msgid ""
 "the SHACL JavaScript Extensions (`sh:js`, `sh:JSConstraint` and the rest), "
 "which are not part of SHACL 1.2; this engine has no JavaScript engine to "
@@ -11961,7 +12115,7 @@ msgstr ""
 "class`）的值时，它会使形状图成为格式错误的，无论是否有形状使用该组件，加载都"
 "会以 `ShapesError::IllFormed` 失败；"
 
-#: src/validation/shacl.md:90
+#: src/validation/shacl.md:98
 msgid ""
 "`sh:describe` and `sh:update` on a shape, a node expression, a SPARQL-based "
 "constraint, a validator or a rule. The SHACL 1.2 vocabulary declares them as "
@@ -11976,11 +12130,11 @@ msgstr ""
 "此在这些位置上，它们否则会被静默忽略。若某个资源仅仅是此类可执行体，且没有任"
 "何形状读取它，则它可以加载。"
 
-#: src/validation/shacl.md:97
+#: src/validation/shacl.md:105
 msgid "Two of the terms the engine evaluates need a note:"
 msgstr "引擎所求值的术语中，有两个需要说明："
 
-#: src/validation/shacl.md:99
+#: src/validation/shacl.md:107
 msgid ""
 "**SHACL-SPARQL result annotations.** A `sh:resultAnnotation` on a SPARQL-"
 "based constraint or on a validator of a SPARQL-based constraint component "
@@ -12005,7 +12159,7 @@ msgstr ""
 "无法绑定的变量名会在加载时被拒绝；把 `sh:focusNode` 之类的 SHACL 报告属性用作"
 "注解属性，同样会被拒绝。"
 
-#: src/validation/shacl.md:111
+#: src/validation/shacl.md:119
 msgid ""
 "**`sh:minus`.** The SHACL Advanced Features 1.1 minus expression, "
 "`[ sh:nodes N ; sh:minus M ]`, evaluates exactly as SHACL 1.2's "
@@ -12016,13 +12170,13 @@ msgstr ""
 "sh:minus M ]`，其求值与 SHACL 1.2 的 `[ shnex:nodes N ; shnex:remove M ]` 完"
 "全相同：给出 N 中不在 M 里的节点，并保持 N 的顺序。其 `sh:nodes` 是必需的。"
 
-#: src/validation/shacl.md:116
+#: src/validation/shacl.md:124
 msgid ""
 "Every IRI the engine implements is defined by a W3C document; PurRDF mints "
 "none."
 msgstr "引擎实现的每个 IRI 都由某份 W3C 文档定义；PurRDF 一个也不生成。"
 
-#: src/validation/shacl.md:119
+#: src/validation/shacl.md:127
 msgid ""
 "The W3C SHACL 1.0 `data-shapes` suite passes as approved (129/129, zero "
 "ledgered gaps at the time of writing), and so does the approved W3C SHACL "
@@ -12038,7 +12192,7 @@ msgstr ""
 "CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
 "docs/CONFORMANCE.md)，复现方法见下文的 [SHACL 1.2 一致性](#shacl-12-一致性)。"
 
-#: src/validation/shacl.md:128
+#: src/validation/shacl.md:136
 msgid ""
 "A parsed shapes graph can also be compiled once and written out as a "
 "deterministic, authenticated byte artifact, so a later process restores a "
@@ -12049,11 +12203,11 @@ msgstr ""
 "进程可以恢复一个预备好的验证器，而不必重新解析 Turtle——参见[预备形状产物]"
 "(shapes-products.md)。"
 
-#: src/validation/shacl.md:133
+#: src/validation/shacl.md:141
 msgid "`owl:imports` in a shapes graph"
 msgstr "形状图中的 `owl:imports`"
 
-#: src/validation/shacl.md:135
+#: src/validation/shacl.md:143
 msgid ""
 "A shapes document may carry an `owl:Ontology` header or a `sh:ShapesGraph` "
 "declaration that `owl:imports` other documents, and the shapes it constrains "
@@ -12070,7 +12224,7 @@ msgstr ""
 "内容的验证裁决是不可复现的。因此，导入闭包是调用方提供的配置，与 `entails` "
 "和 `shex` 完全一样："
 
-#: src/validation/shacl.md:150
+#: src/validation/shacl.md:158
 msgid ""
 "The table is followed **transitively** — an imported document's own "
 "`owl:imports` are resolved from the same table — and a cycle terminates "
@@ -12086,7 +12240,7 @@ msgstr ""
 "同携带，因此写在被导入文件中的 SHACL-AF `sh:select` 会依据该文件所声明的前缀"
 "解析。"
 
-#: src/validation/shacl.md:157
+#: src/validation/shacl.md:165
 msgid ""
 "The shapes document parses under its own `file://` retrieval IRI, or under "
 "`--shapes-base IRI` when given. That flag is the same one `shacl pack --"
@@ -12099,7 +12253,7 @@ msgstr ""
 "互独立——后者只设置**数据**图的基准 IRI。按 Turtle 的规定，形状文档内部的 "
 "`@base` 在该文档内仍然优先。"
 
-#: src/validation/shacl.md:163
+#: src/validation/shacl.md:171
 msgid ""
 "Not every `owl:imports` triple is an import. OWL 2 reads a document's "
 "imports off its ontology header (_Mapping to RDF Graphs_ §3.1.2, Table 4: `x "
@@ -12120,7 +12274,7 @@ msgstr ""
 "底线，并在其上加入 SHACL 的形状图。因此，只有当 `owl:imports` 的主语是以下之"
 "一时，它才是导入："
 
-#: src/validation/shacl.md:173
+#: src/validation/shacl.md:181
 msgid ""
 "the shapes document's own IRI (its `file://` retrieval IRI, `--shapes-base`, "
 "`shacl pack --base` or an in-document `@base`; for an imported document, the "
@@ -12129,11 +12283,11 @@ msgstr ""
 "形状文档自身的 IRI（其 `file://` 获取 IRI、`--shapes-base`、`shacl pack --"
 "base` 或文档内的 `@base`；对于被导入的文档，则是导入它时所用的 IRI）；"
 
-#: src/validation/shacl.md:176
+#: src/validation/shacl.md:184
 msgid "a node the document types `owl:Ontology`;"
 msgstr "文档将其类型声明为 `owl:Ontology` 的节点；"
 
-#: src/validation/shacl.md:177
+#: src/validation/shacl.md:185
 msgid ""
 "a node the document types `sh:ShapesGraph`. Every such node counts, and so "
 "does a `sh:RulesGraph` or a node of a class the document declares "
@@ -12143,11 +12297,11 @@ msgstr ""
 "`sh:RulesGraph`，以及某个被文档声明为 `rdfs:subClassOf sh:ShapesGraph` 的类的"
 "节点，同样计入；"
 
-#: src/validation/shacl.md:180
+#: src/validation/shacl.md:188
 msgid "a node naming one of those as its `owl:versionIRI`."
 msgstr "以上述之一作为其 `owl:versionIRI` 的节点。"
 
-#: src/validation/shacl.md:182
+#: src/validation/shacl.md:190
 msgid ""
 "On any other node it is data: it stays in the shapes graph as written, and "
 "no document is looked for. A node that is only a `sh:DataGraph` is such a "
@@ -12167,7 +12321,7 @@ msgstr ""
 "`owl:imports` 列在 `unanchored-imports` 下。蕴涵的导入由同一规则决定，而该规"
 "则所读取的节点集合，也正是下文隐式 SPARQL 前缀的收集来源。"
 
-#: src/validation/shacl.md:191
+#: src/validation/shacl.md:199
 msgid ""
 "SHACL-SPARQL's prefix path is such data. A query collects its prefixes along "
 "`sh:prefixes/owl:imports*/sh:declare` within the shapes graph, and the W3C "
@@ -12176,7 +12330,7 @@ msgstr ""
 "SHACL-SPARQL 的前缀路径正是这样的数据。查询在形状图内沿 `sh:prefixes/"
 "owl:imports*/sh:declare` 收集其前缀，而 W3C 测试套件是这样写的："
 
-#: src/validation/shacl.md:195
+#: src/validation/shacl.md:203
 msgid ""
 "```turtle\n"
 "<http://example.com/ns#> sh:declare [ sh:prefix \"ex\" ; sh:namespace "
@@ -12194,7 +12348,7 @@ msgstr ""
 "ns#\"^^xsd:anyURI ] .\n"
 "```"
 
-#: src/validation/shacl.md:201
+#: src/validation/shacl.md:209
 msgid ""
 "`ex:TestPrefixes` is neither the document's IRI nor an ontology header nor a "
 "shapes graph, so that `owl:imports` is a prefix edge, not an import, and the "
@@ -12206,7 +12360,7 @@ msgstr ""
 "component/validator-001` 同样如此：其 `owl:imports <http://datashapes.org/"
 "dash>` 所在的节点三者皆非。"
 
-#: src/validation/shacl.md:206
+#: src/validation/shacl.md:214
 msgid ""
 "An import whose document or ontology is **already loaded** needs no pair. It "
 "is resolved when it names a document that was read: the shapes document's "
@@ -12221,7 +12375,7 @@ msgstr ""
 "图中含有 `<X> a owl:Ontology`、`<X> a sh:ShapesGraph`，或含有一个 "
 "`owl:versionIRI` 为 `<X>` 的本体时，导入同样视为已解析。"
 
-#: src/validation/shacl.md:213
+#: src/validation/shacl.md:221
 msgid ""
 "Every one of these rules applies across the whole closure, so a declaration "
 "that arrives in an imported document counts too. A shapes document that "
@@ -12232,7 +12386,7 @@ msgstr ""
 "合并了 W3C SHACL 1.2 词汇表的形状文档——`shnex.ttl` 导入 `sh:`，而与之并列的 "
 "`shacl.ttl` 声明了 `sh:`——按原样即是完整的。"
 
-#: src/validation/shacl.md:219
+#: src/validation/shacl.md:227
 msgid ""
 "Every **other** `owl:imports` no pair resolves is refused (exit 1). The "
 "refusal names each missing IRI and the `--import IRI=FILE` pair that "
@@ -12249,7 +12403,7 @@ msgstr ""
 "因此不存在「警告后继续」的路径。导入闭包从未到达的配对会作为未使用而被拒绝"
 "（退出码 2），而不是读入后忽略。"
 
-#: src/validation/shacl.md:228
+#: src/validation/shacl.md:236
 msgid ""
 "A closure must also hold **one version of each series**. SHACL 1.2 Core §1.3 "
 "makes a shapes graph ill-formed when its import closure holds two graphs "
@@ -12272,15 +12426,15 @@ msgstr ""
 "`incompatible-import-versions`，并点名这两个图。蕴涵拒绝同样的导入闭包（OWL "
 "2 §3.4 给出了同样的两个条件）。"
 
-#: src/validation/shacl.md:238
+#: src/validation/shacl.md:246
 msgid "A data graph names its shapes graphs"
 msgstr "数据图指名其形状图"
 
-#: src/validation/shacl.md:240
+#: src/validation/shacl.md:248
 msgid "SHACL 1.2 Core §6.4 lets the DATA graph suggest shapes graphs:"
 msgstr "SHACL 1.2 Core §6.4 允许由数据图一方建议形状图："
 
-#: src/validation/shacl.md:242
+#: src/validation/shacl.md:250
 msgid ""
 "```turtle\n"
 "<http://example.com/myDataGraph> a sh:DataGraph ;\n"
@@ -12294,7 +12448,7 @@ msgstr ""
 "  sh:shapesGraph ex:graph-shapes2 .\n"
 "```"
 
-#: src/validation/shacl.md:248
+#: src/validation/shacl.md:256
 msgid ""
 "\"Every value of sh:shapesGraph is an IRI representing a graph that SHOULD "
 "be included into the shapes graph used to validate the data graph\", and "
@@ -12322,7 +12476,7 @@ msgstr ""
 "的形状图；若形状文档为空，它们就构成整个形状图。只被某个链接指名的表项算作已"
 "使用，而不是未到达。"
 
-#: src/validation/shacl.md:262
+#: src/validation/shacl.md:270
 msgid ""
 "A link nothing resolves is refused as `unresolved-shapes-graph-link`, naming "
 "the IRI (and, on the command line, the `--import IRI=FILE` pair that "
@@ -12338,7 +12492,7 @@ msgstr ""
 "数据，与其他三元组无异。数据图自身的 `owl:imports` 仍不执行（§6.2）：链接是为"
 "形状图指名一个图，其中没有任何东西会把数据图的导入变成指令。"
 
-#: src/validation/shacl.md:270
+#: src/validation/shacl.md:278
 msgid ""
 "A shapes graph prepared before the data graph was known — a parsed `Shapes` "
 "validated against many graphs, a `PreparedShapes`, a prepared product — "
@@ -12360,11 +12514,11 @@ msgstr ""
 "加或撤回链接的变更会改变形状图本身，因此该次运行会验证整个变更后的图，其范围"
 "（scope）会说明原因。"
 
-#: src/validation/shacl.md:281
+#: src/validation/shacl.md:289
 msgid "The same rule on every host"
 msgstr "每个宿主上的同一规则"
 
-#: src/validation/shacl.md:283
+#: src/validation/shacl.md:291
 msgid ""
 "The command line is one caller of a rule that lives in the engine. Every way "
 "a shapes graph becomes a validator — parsing it, validating with it, running "
@@ -12382,15 +12536,15 @@ msgstr ""
 "涵同样应用的 `purrdf_core::imports` 规则之上。因此，同一个形状图在每个宿主上"
 "得到同一裁决，而每个宿主以各自的写法接受导入表："
 
-#: src/validation/shacl.md:292
+#: src/validation/shacl.md:300
 msgid "Import table"
 msgstr "导入表"
 
-#: src/validation/shacl.md:292
+#: src/validation/shacl.md:300
 msgid "Refusal"
 msgstr "拒绝"
 
-#: src/validation/shacl.md:294
+#: src/validation/shacl.md:302
 msgid ""
 "a `ShapesImports` (`from_turtle`, `insert`, `declare_loaded`, "
 "`link_data_graph`) passed to `parse_shapes_with_config`, "
@@ -12402,7 +12556,7 @@ msgstr ""
 "`ShapesImports`（`from_turtle`、`insert`、`declare_loaded`、"
 "`link_data_graph`）；`purrdf-validate` 边界接受 `(IRI, Turtle)` 配对"
 
-#: src/validation/shacl.md:294
+#: src/validation/shacl.md:302
 msgid ""
 "`ShapesError::Imports(ShapesImportError::Unresolved \\| Unreached \\| "
 "InvalidEntry \\| UnresolvedLink \\| UnheldLink \\| InvalidLink)`"
@@ -12410,18 +12564,18 @@ msgstr ""
 "`ShapesError::Imports(ShapesImportError::Unresolved \\| Unreached \\| "
 "InvalidEntry \\| UnresolvedLink \\| UnheldLink \\| InvalidLink)`"
 
-#: src/validation/shacl.md:295
+#: src/validation/shacl.md:303
 msgid "`--import IRI=FILE`, repeatable"
 msgstr "`--import IRI=FILE`，可重复"
 
-#: src/validation/shacl.md:295
+#: src/validation/shacl.md:303
 msgid ""
 "exit 1 for an unresolved import; exit 2 for a pair nothing imports or a "
 "malformed pair"
 msgstr ""
 "未解析的导入为退出码 1；没有任何导入指向的配对或格式错误的配对为退出码 2"
 
-#: src/validation/shacl.md:296
+#: src/validation/shacl.md:304
 msgid ""
 "`imports=[(iri, turtle), ...]` on `validate`, `entail`, `apply_rules`, "
 "`eval_node_expr`, `lint_shapes`, `pack_product` and `Shapes(...)`"
@@ -12429,30 +12583,30 @@ msgstr ""
 "`validate`、`entail`、`apply_rules`、`eval_node_expr`、`lint_shapes`、"
 "`pack_product` 与 `Shapes(...)` 上的 `imports=[(iri, turtle), ...]`"
 
-#: src/validation/shacl.md:296
+#: src/validation/shacl.md:304
 msgid ""
 "`purrdf.shapes.ShapesImportError` (a `ValueError`) with `.kind` and `.iris`"
 msgstr ""
 "`purrdf.shapes.ShapesImportError`（一个 `ValueError`），带有 `.kind` 与 "
 "`.iris`"
 
-#: src/validation/shacl.md:297
+#: src/validation/shacl.md:305
 msgid ""
 "trailing `importIris`, `importDocuments` arrays on every `shacl*` function "
 "that takes a shapes graph"
 msgstr ""
 "每个接受形状图的 `shacl*` 函数末尾的 `importIris`、`importDocuments` 数组"
 
-#: src/validation/shacl.md:297
+#: src/validation/shacl.md:305
 msgid "`ShaclImportError` with `kind`, `iris` and `message`"
 msgstr "`ShaclImportError`，带有 `kind`、`iris` 与 `message`"
 
-#: src/validation/shacl.md:298
+#: src/validation/shacl.md:306
 msgid ""
 "`import_iris`, `import_documents`, `import_count` before the out-parameters"
 msgstr "位于输出参数之前的 `import_iris`、`import_documents`、`import_count`"
 
-#: src/validation/shacl.md:298
+#: src/validation/shacl.md:306
 msgid ""
 "`PURRDF_STATUS_SHAPES_IMPORT_ERROR`, read with "
 "`purrdf_shapes_import_error_kind`, `_iri_count` and `_iri`"
@@ -12460,7 +12614,7 @@ msgstr ""
 "`PURRDF_STATUS_SHAPES_IMPORT_ERROR`，通过 `purrdf_shapes_import_error_kind`、"
 "`_iri_count` 与 `_iri` 读取"
 
-#: src/validation/shacl.md:300
+#: src/validation/shacl.md:308
 msgid ""
 "Each imported document is Turtle, parsed with its ontology IRI as its base. "
 "The kind is `unresolved-import`, `unreached-import` (a table entry neither "
@@ -12477,11 +12631,11 @@ msgstr ""
 "下文三种 `*-shapes-graph-link` kind 属于数据图的链接。应依据 kind 分支，而不"
 "是依据消息文本。"
 
-#: src/validation/shacl.md:312
+#: src/validation/shacl.md:320
 msgid "\"https://example.org/lib\""
 msgstr "\"https://example.org/lib\""
 
-#: src/validation/shacl.md:316
+#: src/validation/shacl.md:324
 msgid ""
 "A lint certifies the whole closure: an imported document's shapes are loaded "
 "and checked against `shacl-shacl.ttl` like the importing document's, and a "
@@ -12492,11 +12646,11 @@ msgstr ""
 "依据 `shacl-shacl.ttl` 检查；其导入文档并未备齐的形状图会被拒绝，而不是被报告"
 "为干净。"
 
-#: src/validation/shacl.md:321
+#: src/validation/shacl.md:329
 msgid "`IMPORTS` in a SPARQL 1.2 RL rule set"
 msgstr "SPARQL 1.2 RL 规则集中的 `IMPORTS`"
 
-#: src/validation/shacl.md:323
+#: src/validation/shacl.md:331
 msgid ""
 "A SPARQL 1.2 RL rule set can `IMPORTS` other rule sets. PurRDF fetches none "
 "of them. The rules tool takes the imported rule sets from the same import "
@@ -12519,7 +12673,7 @@ msgstr ""
 "导入表。导入会被传递地跟随，每个 IRI 只读取一次。被导入的规则集以其 IRI 作为"
 "基准 IRI 进行解析，其规则在导入方的规则之后运行。"
 
-#: src/validation/shacl.md:334
+#: src/validation/shacl.md:342
 msgid ""
 "Every host refuses an import that no table entry supplies, with the same "
 "message, which names the IRI. It also refuses a table entry that the import "
@@ -12530,19 +12684,19 @@ msgstr ""
 "从未提及的表项同样会被拒绝，因为那个规则集会被读取却从不被使用。对第一种情"
 "况，命令行以退出码 1 退出；对第二种情况，以退出码 2 退出。"
 
-#: src/validation/shacl.md:343
+#: src/validation/shacl.md:351
 msgid "\"https://example.org/more\""
 msgstr "\"https://example.org/more\""
 
-#: src/validation/shacl.md:344 src/validation/shacl.md:1162
+#: src/validation/shacl.md:352 src/validation/shacl.md:1170
 msgid "\"inferred\""
 msgstr "\"inferred\""
 
-#: src/validation/shacl.md:347
+#: src/validation/shacl.md:355
 msgid "Prefixes in SHACL-SPARQL queries"
 msgstr "SHACL-SPARQL 查询中的前缀"
 
-#: src/validation/shacl.md:349
+#: src/validation/shacl.md:357
 msgid ""
 "A SPARQL query in a shapes graph (`sh:select`, `sh:ask`, `sh:construct`, "
 "`sh:sparqlExpr`, a validator, a target or a function body) gets a `PREFIX` "
@@ -12553,7 +12707,7 @@ msgstr ""
 "`sh:sparqlExpr`、验证器、目标或函数体）在编译前会获得一个 `PREFIX` 头。该头遵"
 "循 SHACL 1.2 SPARQL 扩展中的「Prefix Declarations for SPARQL Queries」："
 
-#: src/validation/shacl.md:354
+#: src/validation/shacl.md:362
 msgid ""
 "**A query with `sh:prefixes`** uses the prefix declarations on the path "
 "`sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`. The path is read "
@@ -12563,7 +12717,7 @@ msgstr ""
 "owl:imports)*/sh:declare` 上的前缀声明。该路径从查询节点以及携带它的形状或组"
 "件读取。"
 
-#: src/validation/shacl.md:357
+#: src/validation/shacl.md:365
 msgid ""
 "**A query without `sh:prefixes`** uses every `sh:declare` of every SHACL "
 "instance of `owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or "
@@ -12576,7 +12730,7 @@ msgstr ""
 "些类的子类同样计入。这些节点正是 `owl:imports` 规则所读取的节点：两者由同一个"
 "分类器决定。"
 
-#: src/validation/shacl.md:362
+#: src/validation/shacl.md:370
 msgid ""
 "**Two different namespaces for one prefix** in the declarations a query "
 "reaches make the shapes graph ill-formed. The load fails, and the error "
@@ -12588,7 +12742,7 @@ msgstr ""
 "加载会失败，错误信息点名该前缀与两个命名空间。同一前缀以相同命名空间声明两次"
 "则没有问题。没有任何查询到达的声明不会被检查。"
 
-#: src/validation/shacl.md:366
+#: src/validation/shacl.md:374
 msgid ""
 "**A malformed declaration** that a query reaches also fails the load. A "
 "declaration needs exactly one `xsd:string` `sh:prefix` and exactly one "
@@ -12597,7 +12751,7 @@ msgstr ""
 "查询所到达的**格式错误的声明**同样会使加载失败。一条声明需要恰好一个 "
 "`xsd:string` 类型的 `sh:prefix` 与恰好一个 `sh:namespace`。"
 
-#: src/validation/shacl.md:370
+#: src/validation/shacl.md:378
 msgid ""
 "The shapes document's own `@prefix` / `PREFIX` directives are a fallback. "
 "They only supply a prefix the declarations above leave unbound, and they "
@@ -12612,11 +12766,11 @@ msgstr ""
 "此查询字符串字面量中的 `PREFIX` 行绝不会被误认为指令。若文档把某个前缀声明了"
 "两次，后备来源采用最后一次声明。查询自身文本中的 `PREFIX` 只作用于该查询。"
 
-#: src/validation/shacl.md:378
+#: src/validation/shacl.md:386
 msgid "The shapes graph as a named graph: `$shapesGraph`"
 msgstr "作为命名图的形状图：`$shapesGraph`"
 
-#: src/validation/shacl.md:380
+#: src/validation/shacl.md:388
 msgid ""
 "SHACL 1.0 pre-binds `$shapesGraph` in every SHACL-SPARQL query to the IRI of "
 "the shapes graph, so a query can read the shapes graph with `GRAPH "
@@ -12638,21 +12792,21 @@ msgstr ""
 "所指名的对象。作用域内没有基准时，相对 IRI 不指名任何图，会被拒绝（`iri-"
 "relative-no-base`）。"
 
-#: src/validation/shacl.md:390
+#: src/validation/shacl.md:398
 msgid "Every host takes the IRI:"
 msgstr "每个宿主都接受该 IRI："
 
-#: src/validation/shacl.md:392 src/validation/shacl.md:427
+#: src/validation/shacl.md:400 src/validation/shacl.md:435
 msgid "Spelling"
 msgstr "写法"
 
-#: src/validation/shacl.md:394
+#: src/validation/shacl.md:402
 msgid ""
 "`--shapes-graph IRI` on `validate`, `shapes lint`, `shacl pack` and `rules`"
 msgstr ""
 "`validate`、`shapes lint`、`shacl pack` 与 `rules` 上的 `--shapes-graph IRI`"
 
-#: src/validation/shacl.md:395
+#: src/validation/shacl.md:403
 msgid ""
 "`shapes_graph=` on `validate`, `Shapes(...)`, `pack_product`, `lint_shapes`, "
 "`apply_rules` and `entail`"
@@ -12660,7 +12814,7 @@ msgstr ""
 "`validate`、`Shapes(...)`、`pack_product`、`lint_shapes`、`apply_rules` 与 "
 "`entail` 上的 `shapes_graph=`"
 
-#: src/validation/shacl.md:396
+#: src/validation/shacl.md:404
 msgid ""
 "a trailing `shapesGraph` on `shaclValidateToSarif`, "
 "`shaclValidateChangesToSarif`, `shaclPackProduct`, `shaclLintShapes`, "
@@ -12670,7 +12824,7 @@ msgstr ""
 "`shaclLintShapes`、`shaclApplyRules` 与 `shaclEntail` 末尾的 `shapesGraph` 参"
 "数"
 
-#: src/validation/shacl.md:397
+#: src/validation/shacl.md:405
 msgid ""
 "`shapes_graph_iri` after `shapes_base_iri` on "
 "`purrdf_shacl_validate_to_sarif`, `purrdf_shacl_validate_changes_to_sarif`, "
@@ -12682,7 +12836,7 @@ msgstr ""
 "`purrdf_shacl_apply_rules` 与 `purrdf_shacl_entail_to_ntriples` 上紧随 "
 "`shapes_base_iri` 之后的 `shapes_graph_iri`"
 
-#: src/validation/shacl.md:398
+#: src/validation/shacl.md:406
 msgid ""
 "`engine::parse_shapes_with_graph`, "
 "`engine::validate_graphs_with_shapes_graph`, "
@@ -12694,7 +12848,7 @@ msgstr ""
 "`engine::entail_graphs_with_shapes_graph`、`RulesRequest::shapes_graph`，以"
 "及 `purrdf-validate` 的 `*_with_shapes_graph` 入口点"
 
-#: src/validation/shacl.md:400
+#: src/validation/shacl.md:408
 msgid ""
 "A `Shapes` parsed under the IRI carries it into every validation, every "
 "`PreparedShapes` binding and every prepared product, whose identity binds "
@@ -12716,11 +12870,11 @@ msgstr ""
 "告那一条经批准的结果。不指名时，`$shapesGraph` 未绑定，查询什么也选不出，数据"
 "图符合约束。"
 
-#: src/validation/shacl.md:410
+#: src/validation/shacl.md:418
 msgid "Class hierarchies kept in the shapes graph: `subClassOfInShapesGraph`"
 msgstr "保存在形状图中的类层次：`subClassOfInShapesGraph`"
 
-#: src/validation/shacl.md:412
+#: src/validation/shacl.md:420
 msgid ""
 "SHACL type — whether a node is a SHACL instance of a class, which "
 "`sh:targetClass`, implicit class targets, `sh:class`, `sh:rootClass` and "
@@ -12741,7 +12895,7 @@ msgstr ""
 "graph in addition to the data graph.」PurRDF 在每个宿主上都提供该参数。它默认"
 "关闭，这也是规范的默认值。"
 
-#: src/validation/shacl.md:421
+#: src/validation/shacl.md:429
 msgid ""
 "With it on, the shapes graph's `rdfs:subClassOf` triples (its whole import "
 "closure's) join the data graph's wherever SHACL type is decided, and nowhere "
@@ -12754,20 +12908,20 @@ msgstr ""
 "三元组，因此路径、`sh:targetSubjectsOf rdfs:subClassOf` 或 SPARQL 模式仍然只"
 "读取数据图。`rdf:type` 三元组始终从数据图读取。"
 
-#: src/validation/shacl.md:429
+#: src/validation/shacl.md:437
 msgid ""
 "`--subclass-of-in-shapes-graph` on `validate` (document and product routes)"
 msgstr "`validate` 上的 `--subclass-of-in-shapes-graph`（文档与产物两种路径）"
 
-#: src/validation/shacl.md:430
+#: src/validation/shacl.md:438
 msgid "`subclass_of_in_shapes_graph=True` on `validate` and `Shapes(...)`"
 msgstr "`validate` 与 `Shapes(...)` 上的 `subclass_of_in_shapes_graph=True`"
 
-#: src/validation/shacl.md:431
+#: src/validation/shacl.md:439
 msgid "a trailing `subClassOfInShapesGraph` on `shaclValidateToSarif`"
 msgstr "`shaclValidateToSarif` 末尾的 `subClassOfInShapesGraph` 参数"
 
-#: src/validation/shacl.md:432
+#: src/validation/shacl.md:440
 msgid ""
 "`bool subclass_of_in_shapes_graph` after the import table on "
 "`purrdf_shacl_validate_to_sarif`"
@@ -12775,15 +12929,15 @@ msgstr ""
 "`purrdf_shacl_validate_to_sarif` 上紧随导入表之后的 `bool "
 "subclass_of_in_shapes_graph`"
 
-#: src/validation/shacl.md:433
+#: src/validation/shacl.md:441
 msgid "`ValidationOptions::with_subclass_of_in_shapes_graph`"
 msgstr "`ValidationOptions::with_subclass_of_in_shapes_graph`"
 
-#: src/validation/shacl.md:435
+#: src/validation/shacl.md:443
 msgid "Built-in declarations and the W3C vocabularies"
 msgstr "内置声明与 W3C 词汇表"
 
-#: src/validation/shacl.md:437
+#: src/validation/shacl.md:445
 msgid ""
 "The SHACL 1.2 vocabularies (`shacl.ttl`, `shnex.ttl` and `shnex-sparql.ttl`) "
 "declare every built-in constraint component and node-expression function, "
@@ -12799,14 +12953,14 @@ msgstr ""
 "由引擎提供。形状图可以合并这些词汇表，加载时会把每条声明与引擎的「已实现项」"
 "表进行解析："
 
-#: src/validation/shacl.md:444
+#: src/validation/shacl.md:452
 msgid ""
 "a bare declaration of a built-in binds to the native implementation and adds "
 "nothing to the custom-function index or the component registry;"
 msgstr ""
 "对内置项的裸声明绑定到原生实现，不向自定义函数索引或组件注册表添加任何内容；"
 
-#: src/validation/shacl.md:446
+#: src/validation/shacl.md:454
 msgid ""
 "a built-in declared again with a body is a duplicate definition, and so is a "
 "built-in component given an `sh:ask` or `sh:select` of its own; one declared "
@@ -12817,7 +12971,7 @@ msgstr ""
 "`sh:ask` 或 `sh:select` 同样如此；在错误的类下声明或带有相矛盾签名的内置项即"
 "为不匹配；以上所有情形都会使加载失败；"
 
-#: src/validation/shacl.md:450
+#: src/validation/shacl.md:458
 msgid ""
 "validators declared for a built-in component are alternatives the native "
 "implementation supersedes. SHACL 1.2 SPARQL Extensions selects \"one of the "
@@ -12843,7 +12997,7 @@ msgstr ""
 "询中的 `MINUS` 也不会使加载失败：`purrdf shapes lint` 会把它列在 "
 "`unexecuted` 下；"
 
-#: src/validation/shacl.md:462
+#: src/validation/shacl.md:470
 msgid ""
 "any other `sh:` statement on a built-in's declaration fails the load, except "
 "`sh:message`, `sh:labelTemplate` and the non-validating characteristics "
@@ -12856,7 +13010,7 @@ msgstr ""
 "外：例如，`sh:MinCountConstraintComponent` 上的 `sh:severity` 会要求原生实现"
 "做一件它并不做的事；"
 
-#: src/validation/shacl.md:467
+#: src/validation/shacl.md:475
 msgid ""
 "a function the engine does not implement still needs its body, whatever its "
 "namespace: a bodiless `ex:f` fails the load, and so does a bodiless "
@@ -12865,7 +13019,7 @@ msgstr ""
 "引擎未实现的函数无论位于哪个命名空间都仍需函数体：没有函数体的 `ex:f` 会使加"
 "载失败，没有函数体的 `sh:NotABuiltin` 同样如此；"
 
-#: src/validation/shacl.md:470
+#: src/validation/shacl.md:478
 msgid ""
 "a custom function whose key parameter is a built-in's key parameter fails "
 "the load, because the key parameters of all node expression functions must "
@@ -12874,7 +13028,7 @@ msgstr ""
 "若自定义函数的键参数与某个内置项的键参数相同，加载失败，因为所有节点表达式函"
 "数的键参数必须互不相交（任意两个函数都不得共用同一个键参数）。"
 
-#: src/validation/shacl.md:474
+#: src/validation/shacl.md:482
 msgid ""
 "So merging the W3C vocabularies into a shapes graph is a no-op. A test holds "
 "this over every shapes graph in three corpora (the first-party corpus, the "
@@ -12895,7 +13049,7 @@ msgstr ""
 "主扩展，并把为内置组件声明的每个验证器列为 `superseded-by-native`。这些行从不"
 "算作问题。"
 
-#: src/validation/shacl.md:484
+#: src/validation/shacl.md:492
 msgid ""
 "A SHACL-SPARQL or SHACL-AF declaration that violates a syntax rule fails the "
 "load whether or not any shape reaches it. SHACL 1.2 Core says \"A SHACL "
@@ -12934,7 +13088,7 @@ msgstr ""
 "违规，因此导入了带有格式错误声明的库（DASH 就有这类声明）的形状图会加载失败，"
 "并点名其中的全部违规。"
 
-#: src/validation/shacl.md:504
+#: src/validation/shacl.md:512
 msgid ""
 "A pre-binding violation is judged where the query runs. SHACL 1.2 SPARQL "
 "Extensions requires a failure for a query \"executed with pre-bound "
@@ -12961,7 +13115,7 @@ msgstr ""
 "中的验证器、没有任何调用的函数，以及没有任何形状实例化的目标类型，同样不会运"
 "行。它们可以加载，`purrdf shapes lint` 会把每一个列为一个问题。"
 
-#: src/validation/shacl.md:517
+#: src/validation/shacl.md:525
 msgid ""
 "The same appendix says \"SPARQL queries SHOULD not contain a federated query "
 "(SERVICE)\", and \"Implementations that do not permit SERVICE MUST report a "
@@ -12981,7 +13135,7 @@ msgstr ""
 "询会在其运行之处以 `ShapesError::Prebinding` 使加载失败；在没有任何东西运行它"
 "的地方，则由 `lint` 列出。字符串字面量中的这个词不是 `SERVICE`。"
 
-#: src/validation/shacl.md:526
+#: src/validation/shacl.md:534
 msgid ""
 "A shape whose `sh:target` is a custom target PurRDF cannot compute is "
 "refused with `ShapesError::UnsupportedTarget`, naming the shape and the "
@@ -13000,7 +13154,7 @@ msgstr ""
 "然是那份报告，因此 PurRDF 选择拒绝，这更为严格。SHACL-JS 目标以 "
 "`ShapesError::ShaclJs` 被拒绝。"
 
-#: src/validation/shacl.md:534
+#: src/validation/shacl.md:542
 msgid ""
 "A `sh:SPARQLTarget` may also carry one `sh:ask`. SHACL Advanced Features "
 "§3.1 says \"SPARQL-based targets have at most one value for the property "
@@ -13041,11 +13195,11 @@ msgstr ""
 "`sh:ask`、不是 ASK 查询的值，或违反预绑定限制的 ASK，都会在加载时被拒绝。没"
 "有 `sh:ask` 的目标检查候选节点的方式，是在其 SELECT 的结果中查找它。"
 
-#: src/validation/shacl.md:555
+#: src/validation/shacl.md:563
 msgid "SHACL 1.2 conformance"
 msgstr "SHACL 1.2 一致性"
 
-#: src/validation/shacl.md:557
+#: src/validation/shacl.md:565
 msgid ""
 "The complete W3C `shacl12-test-suite` is vendored byte-exact under `vectors/"
 "shacl12/` and run through the library API: 547 tests, covering 174 "
@@ -13067,7 +13221,7 @@ msgstr ""
 "条目，单独报告。SPARQL 1.2 RL 的负例测试必须在其测试类型所指明的阶段失败，而"
 "不能在更早的阶段失败。复现方式："
 
-#: src/validation/shacl.md:573
+#: src/validation/shacl.md:581
 msgid ""
 "The last line of the approved suite's scoreboard is `W3C12 TOTAL: passed "
 "538, non-canonical-expected-decimal 6, xfailed 0, ledger 0`, and the "
@@ -13078,7 +13232,7 @@ msgstr ""
 "expected-decimal 6, xfailed 0, ledger 0`，未收录文件自己的那一行是 `W3C12 "
 "UNLISTED: passed 3, exact 2, with-delta 1, total 3`。"
 
-#: src/validation/shacl.md:578
+#: src/validation/shacl.md:586
 msgid ""
 "Three vendored files carry test entries that no upstream manifest includes: "
 "`core/node/xone-002.ttl`, `core/node/xone-003.ttl` and `inference-rules/rdfs/"
@@ -13105,7 +13259,7 @@ msgstr ""
 "测试框架对该文件的报告判分时恰好修正这一条结果，在修正旁引用该条款，并证明缺"
 "少该修正或采用不同修正的报告都会失败。"
 
-#: src/validation/shacl.md:591
+#: src/validation/shacl.md:599
 msgid ""
 "A `sh:reifierShape` or `sh:reificationRequired` result carries the value "
 "node as `sh:value`. The textual definition in SHACL 1.2 Core section 7.8.5 "
@@ -13131,7 +13285,7 @@ msgstr ""
 "具体化节点为焦点节点，因此报告仍会点名该具体化节点并说明其失败原因。缺失的具"
 "体化没有具体化节点，因而不携带任何细节。"
 
-#: src/validation/shacl.md:604
+#: src/validation/shacl.md:612
 msgid ""
 "In six node-expression tests the approved result spells a computed "
 "`xsd:decimal` in a lexical form that is not canonical: `\"4.0\"`, `\"3.0\"`, "
@@ -13158,7 +13312,7 @@ msgstr ""
 "是：用规范拼写替换预期拼写，再按 RDF 项逐一比较；对这六个条目而言，这与比较值"
 "完全相同。它们单独计为一行 `non-canonical-expected-decimal`，不计入通过数。"
 
-#: src/validation/shacl.md:618
+#: src/validation/shacl.md:626
 msgid ""
 "`sparql/component/validator-001`, in this suite and in the SHACL 1.0 suite, "
 "passes by name with no import supplied. Its `owl:imports <http://"
@@ -13176,7 +13330,7 @@ msgstr ""
 "SHACL 1.2 Core，这条三元组是数据，而不是导入（参见[形状图中的 `owl:imports`]"
 "(#形状图中的-owlimports)）。测试工具以空的导入表加载该用例。"
 
-#: src/validation/shacl.md:627
+#: src/validation/shacl.md:635
 msgid ""
 "SPARQL 1.2 RL grammar rule \\[2\\], `RuleOrDataBlock ::= Prologue "
 "( RuleOrData+ ( Prologue1 RuleOrData? )* )?`, is implemented as its evident "
@@ -13192,11 +13346,11 @@ msgstr ""
 "按字面理解，该规则会拒绝 `RULE … PREFIX … RULE … RULE …`，却接受在最后两条规"
 "则之间多一条声明的同一组规则。"
 
-#: src/validation/shacl.md:635
+#: src/validation/shacl.md:643
 msgid "JSON-LD instance projection and JSON Schema"
 msgstr "JSON-LD 实例投影与 JSON Schema"
 
-#: src/validation/shacl.md:637
+#: src/validation/shacl.md:645
 msgid ""
 "`json_schema::compile` and `instance::project_graph` are one pair. The "
 "schema describes the JSON-LD `@graph` document the projection writes, and a "
@@ -13209,7 +13363,7 @@ msgstr ""
 "文列出的已记录损失除外。投影不丢弃任何三元组。每个被携带的项都保留约束所能判"
 "定的内容："
 
-#: src/validation/shacl.md:643
+#: src/validation/shacl.md:651
 msgid ""
 "An `@id` is the full IRI, or `_:label` for a blank node. It is never a "
 "compact IRI, so a lexical constraint judges `str()` of an IRI directly. Keys "
@@ -13218,7 +13372,7 @@ msgstr ""
 "`@id` 是完整的 IRI，空节点则为 `_:label`。它从不是紧凑 IRI，因此词法约束直接"
 "判定 IRI 的 `str()`。键与 `@type` 值保持紧凑形式。"
 
-#: src/validation/shacl.md:646
+#: src/validation/shacl.md:654
 msgid ""
 "A well-formed RDF list is the JSON-LD list object `{\"@list\": [...]}`, and "
 "its cells are not `@graph` nodes. `rdf:nil` is `{\"@list\": []}`. The list "
@@ -13237,7 +13391,7 @@ msgstr ""
 "表，以其首单元的标签作为 `@index`。`@index` 不具有 RDF 意义，它使两个不同的成"
 "员列表保持区分。"
 
-#: src/validation/shacl.md:654
+#: src/validation/shacl.md:662
 msgid ""
 "A bare JSON scalar appears only where it denotes the literal exactly (JSON-"
 "LD 1.1 section 8.6): a canonical `xsd:integer` within 64 bits, and "
@@ -13248,11 +13402,11 @@ msgstr ""
 "以内的规范 `xsd:integer`，以及 `xsd:boolean` 的 `true` 或 `false`。其他所有数"
 "值字面量都保留其 `{\"@value\", \"@type\"}` 对象。"
 
-#: src/validation/shacl.md:658
+#: src/validation/shacl.md:666
 msgid "An `rdf:dirLangString` literal carries `@direction`."
 msgstr "`rdf:dirLangString` 字面量携带 `@direction`。"
 
-#: src/validation/shacl.md:660
+#: src/validation/shacl.md:668
 msgid ""
 "The schema projects the SHACL 1.2 list components onto the `@list` array. "
 "`sh:minListLength` becomes `minItems`, `sh:maxListLength` becomes "
@@ -13295,12 +13449,12 @@ msgstr ""
 "±14:00 范围内的 1,681 个分钟，因此体积很大：约 100 KB，带小数秒的界则更大。节"
 "点形状的节点种类、`sh:in`、`sh:hasValue` 与词法约束判定焦点节点的 `@id`。"
 
-#: src/validation/shacl.md:684
+#: src/validation/shacl.md:692
 msgid ""
 "What remains is recorded on the forward ledger, each case with its reason:"
 msgstr "余下的情况都记录在正向台账上，每种情况附带其原因："
 
-#: src/validation/shacl.md:686
+#: src/validation/shacl.md:694
 msgid ""
 "A list kept as linked `@graph` nodes is not judged. A JSON Schema keyword "
 "judges only the instance location it applies to and the locations beneath "
@@ -13310,7 +13464,7 @@ msgstr ""
 "用的实例位置及其下方的位置，因此没有任何关键字能到达另一个节点的 "
 "`rdf:first`。"
 
-#: src/validation/shacl.md:689
+#: src/validation/shacl.md:697
 msgid ""
 "A node shape's `sh:uniqueMembers` does not compare the focus node's own "
 "member with its tail's members. Those are two instance locations."
@@ -13318,7 +13472,7 @@ msgstr ""
 "节点形状的 `sh:uniqueMembers` 不会把焦点节点自身的成员与其尾部的成员相比较。"
 "它们是两个实例位置。"
 
-#: src/validation/shacl.md:691
+#: src/validation/shacl.md:699
 msgid ""
 "A pattern over a bare integer's numeral is not judged. The integers whose "
 "numerals start with `1` are no finite union of the intervals and residue "
@@ -13327,7 +13481,7 @@ msgstr ""
 "裸整数数字串上的正则模式不被判定。数字串以 `1` 开头的整数，不是 `minimum`、"
 "`maximum` 与 `multipleOf` 所表述的区间与剩余类的任何有限并集。"
 
-#: src/validation/shacl.md:694
+#: src/validation/shacl.md:702
 msgid ""
 "A range bound over `xsd:double` or `xsd:float` lexical forms is not judged. "
 "Those forms on one side of a bound are no regular language."
@@ -13335,7 +13489,7 @@ msgstr ""
 "`xsd:double` 或 `xsd:float` 词法形式上的范围界不被判定。位于某个界一侧的这些"
 "形式不构成正则语言。"
 
-#: src/validation/shacl.md:696
+#: src/validation/shacl.md:704
 msgid ""
 "A node shape's class membership is not judged. It runs through "
 "`rdfs:subClassOf*` triples on other nodes."
@@ -13343,7 +13497,7 @@ msgstr ""
 "节点形状的类成员关系不被判定。它要经由其他节点上的 `rdfs:subClassOf*` 三元"
 "组。"
 
-#: src/validation/shacl.md:699
+#: src/validation/shacl.md:707
 msgid ""
 "The Pydantic package enforces the list components, uniqueness included, with "
 "a validator over the raw JSON items. TypeScript states the length bounds "
@@ -13366,7 +13520,7 @@ msgstr ""
 "约束，其数值类型也没有界，因此这些都在其所在位置被记录。每个输出器判定依据"
 "（oracle）都在真实数据的投影实例上运行这些组件。"
 
-#: src/validation/shacl.md:711
+#: src/validation/shacl.md:719
 msgid ""
 "A property shape that judges its values against shapes projects each shape "
 "as one value's schema, compiled as `sh:memberShape`'s is. `sh:node` and "
@@ -13397,7 +13551,7 @@ msgstr ""
 "出、与多个值组成的数组并存时，值模式也会拒绝数组，因此数组中的每个值都会被判"
 "定。"
 
-#: src/validation/shacl.md:726
+#: src/validation/shacl.md:734
 msgid ""
 "Pydantic enforces `allOf`, `oneOf`, `not` and `contains` with its runtime "
 "check over the raw JSON input, so it agrees with validation on each of "
@@ -13422,7 +13576,7 @@ msgstr ""
 "录它没有对应类型的 `oneOf`、`not` 与 `contains`。GraphQL 把组合委托给其自定义"
 "标量。每个输出器判定依据（oracle）都在真实数据的投影实例上运行这些约束。"
 
-#: src/validation/shacl.md:739
+#: src/validation/shacl.md:747
 msgid ""
 "Each emitter oracle also runs the temporal bounds over projected instances. "
 "Pydantic and LinkML agree with validation on each of them. TypeScript and "
@@ -13436,11 +13590,11 @@ msgstr ""
 "都没有补集类型。TypeScript 也无法正向写出被接纳的词法形式，因为仅四位数年份的"
 "日期就已超出其并集上限。"
 
-#: src/validation/shacl.md:745
+#: src/validation/shacl.md:753
 msgid "Ontology-complete developer schemas"
 msgstr "本体完整的开发者模式（schema）"
 
-#: src/validation/shacl.md:747
+#: src/validation/shacl.md:755
 msgid ""
 "The public `compile_schema` boundary accepts a `SchemaCompileRequest` that "
 "binds the parsed shapes, exact ontology dataset, caller-owned `Namespaces`, "
@@ -13460,7 +13614,7 @@ msgstr ""
 "一份规范的属性覆盖报告，以及一个确定性的预编译缓存键。其 `CompiledSchema` 供 "
 "LinkML、TypeScript、GraphQL 与 Pydantic 输出器使用，无需第二遍模式发现。"
 
-#: src/validation/shacl.md:757
+#: src/validation/shacl.md:765
 msgid ""
 "The bounded theory catalogs only schema evidence: direct IRI `sh:path`, RDF/"
 "OWL property declarations, domain/range declarations, and both endpoints of "
@@ -13475,7 +13629,7 @@ msgstr ""
 "会被提升。类的接纳同样是显式的，合成的定义仅限于调用方提供的命名空间；PurRDF "
 "不会把内置的压缩前缀变成本体边界。"
 
-#: src/validation/shacl.md:764
+#: src/validation/shacl.md:772
 msgid ""
 "Subclass/equivalent-class closure determines domain membership. Multiple "
 "domains are conjunctive; OWL union members are alternatives and intersection "
@@ -13491,7 +13645,7 @@ msgstr ""
 "性双向传播，逆属性交换定义域与值域。强连通环以确定性方式收缩。多个值域在输出"
 "的 JSON Schema 中仍保持合取；并集与交集表达式分别映射为 `anyOf` 与 `allOf`。"
 
-#: src/validation/shacl.md:772
+#: src/validation/shacl.md:780
 msgid ""
 "Direct SHACL remains authoritative. Ontology-only fields are optional; "
 "`owl:FunctionalProperty` gives a scalar representation with approximation "
@@ -13507,7 +13661,7 @@ msgstr ""
 "没有目标形状的类以开放载体的形式输出，绝不会被输出为捏造的封闭模型。这既不是 "
 "ABox 物化，也不是不受限的 OWL：属性链以及该片段之外的公理不会产生字段。"
 
-#: src/validation/shacl.md:780
+#: src/validation/shacl.md:788
 msgid ""
 "`SchemaCoverageReport` accounts for every catalogued property once, "
 "including exclusions, with sorted per-class outcomes and source-axiom "
@@ -13526,15 +13680,15 @@ msgstr ""
 "65,536 个类、1,048,576 个关系或覆盖单元格，以及表达式深度 64。格式错误的 OWL "
 "列表、相互矛盾的属性种类/值域、键冲突以及上限耗尽，都是带类型的失败。"
 
-#: src/validation/shacl.md:789
+#: src/validation/shacl.md:797
 msgid "Run the complete two-mode and four-emitter example with:"
 msgstr "运行完整的双模式、四输出器示例："
 
-#: src/validation/shacl.md:795
+#: src/validation/shacl.md:803
 msgid "Schema → SHACL imports"
 msgstr "Schema → SHACL 导入"
 
-#: src/validation/shacl.md:797
+#: src/validation/shacl.md:805
 msgid ""
 "The schema-projection surface is bidirectional. `SchemaImportConfig` "
 "requires the caller's namespace table and the complete RDF datatype mapping "
@@ -13554,7 +13708,7 @@ msgstr ""
 "同一个有序的 JSON-Schema 语义模型降级，并返回带类型的形状，外加一份总会计算"
 "的、带位置的反向 `LossLedger`。"
 
-#: src/validation/shacl.md:806
+#: src/validation/shacl.md:814
 msgid ""
 "A range bound reads back as itself. An order pattern states the set of "
 "lexical forms on one side of a bound, not the bound, and different bounds "
@@ -13584,7 +13738,7 @@ msgstr ""
 "`sh:minInclusive 1.5` 以及 `xsd:date`、`xsd:dateTime` 或 `xsd:time` 上的界都"
 "能经受往返，重新输出的模式逐字节相同。"
 
-#: src/validation/shacl.md:821
+#: src/validation/shacl.md:829
 msgid ""
 "Malformed values, open or dangling references, identity collisions, "
 "generated artifact/map drift, and resource-limit exhaustion fail closed. "
@@ -13602,17 +13756,17 @@ msgstr ""
 "实有原生读取器；因此，即使承载验证语义的 SHACL 逐字节重新编译一致，其模式标识"
 "与文档仍可能表现为损失。"
 
-#: src/validation/shacl.md:830
+#: src/validation/shacl.md:838
 msgid ""
 "The executable example constructs caller-owned `example.org` configuration "
 "and exercises all five paths:"
 msgstr "可执行示例构造调用方持有的 `example.org` 配置，并覆盖全部五条路径："
 
-#: src/validation/shacl.md:837
+#: src/validation/shacl.md:845
 msgid "Pydantic v2 projection"
 msgstr "Pydantic v2 投影"
 
-#: src/validation/shacl.md:839
+#: src/validation/shacl.md:847
 msgid ""
 "`purrdf-shapes` can transliterate a compiled SHACL-derived JSON Schema into "
 "a deterministic, typed Pydantic v2 package entirely in memory. The public "
@@ -13625,7 +13779,7 @@ msgstr ""
 "`CompiledSchema`；`PydanticConfig` 要求调用方提供包名以及包/模块说明文字，因"
 "此库不会自行发明词汇表、命名空间或下游品牌。"
 
-#: src/validation/shacl.md:845
+#: src/validation/shacl.md:853
 msgid ""
 "Every `$defs` entry gets a stable import path, JSON property names remain "
 "exact through Pydantic aliases, and generated classes expose the originating "
@@ -13649,7 +13803,7 @@ msgstr ""
 "的代码，并检查实际的反向/模式接口。`import_pydantic_package` 在导入 SHACL 之"
 "前，单独校验所保留的源模式、生成的文件、模型映射、方言以及正向台账。"
 
-#: src/validation/shacl.md:857
+#: src/validation/shacl.md:865
 msgid ""
 "A JSON Schema `not` has no annotation equivalent. The package checks it at "
 "run time instead: a before-validator evaluates the negated schema over the "
@@ -13667,7 +13821,7 @@ msgstr ""
 "——例如 `propertyNames`、某种 format，或通用语法之外的 pattern——仍是一项已记录"
 "的损失。"
 
-#: src/validation/shacl.md:865
+#: src/validation/shacl.md:873
 msgid ""
 "The optional caller-owned `PydanticPackageTopology` is a total partition of "
 "`$defs` entries into portable dotted leaf modules. Each route carries the "
@@ -13692,11 +13846,11 @@ msgstr ""
 "置/输出上限，都按失败即关闭处理。拓扑与版本标记都省略时，原有的扁平包字节保持"
 "不变。扁平包的版本标记会增加 `__about__.py` 并更新 `__init__.py` 的导出。"
 
-#: src/validation/shacl.md:878
+#: src/validation/shacl.md:886
 msgid "LinkML 1.11 projection"
 msgstr "LinkML 1.11 投影"
 
-#: src/validation/shacl.md:880
+#: src/validation/shacl.md:888
 msgid ""
 "The same `CompiledSchema` carrier can be projected to canonical LinkML 1.11 "
 "with `emit_linkml`. `LinkmlConfig` requires the caller's schema IRI, name, "
@@ -13713,7 +13867,7 @@ msgstr ""
 "schema` → `linkml-1.11` 损失台账。它还携带有序的、经完整性检查的 slot 重命名"
 "报告与跳过诊断报告。"
 
-#: src/validation/shacl.md:888
+#: src/validation/shacl.md:896
 msgid ""
 "Classes and exact property aliases, types, enums, local references, inline "
 "objects, requiredness, homogeneous arrays, patterns, inclusive bounds, and "
@@ -13736,7 +13890,7 @@ msgstr ""
 "效的 IRI scheme 都保持为绝对形式，因此不会根据拼写猜测自定义 scheme。安全名称"
 "优先保留，而基于哈希加序号的冲突分配是有界且确定性的。"
 
-#: src/validation/shacl.md:900
+#: src/validation/shacl.md:908
 msgid ""
 "Every unsupported assertion is classified by a closed capability table; "
 "malformed inputs, external/dynamic/dangling references, stale re-home hints, "
@@ -13751,7 +13905,7 @@ msgstr ""
 "稳定的读/写往返（转换），同时拒绝仅限 YAML 的标签、重复键、非字符串键以及非有"
 "限数。"
 
-#: src/validation/shacl.md:908
+#: src/validation/shacl.md:916
 msgid ""
 "`import_linkml` consumes that validated native document; the emitted-package "
 "variant `import_linkml_package` first verifies canonical YAML and the "
@@ -13767,7 +13921,7 @@ msgstr ""
 "器应原样传递 `CompiledSchema`，配置精确的重新归属，并消费 `slot_renames`；无"
 "需重写共享的属性键/必需键。"
 
-#: src/validation/shacl.md:915
+#: src/validation/shacl.md:923
 msgid ""
 "The Rust production path has no LinkML-toolkit dependency. CI uses the "
 "locked official LinkML 1.11.1 Python packages only as a differential oracle. "
@@ -13779,11 +13933,11 @@ msgstr ""
 "`SchemaView` 加载安全、有损与重命名的测试夹具，重新生成 JSON Schema，并验证反"
 "向谓词："
 
-#: src/validation/shacl.md:924
+#: src/validation/shacl.md:932
 msgid "TypeScript 7.0 projection"
 msgstr "TypeScript 7.0 投影"
 
-#: src/validation/shacl.md:926
+#: src/validation/shacl.md:934
 msgid ""
 "`emit_typescript` projects the same `CompiledSchema` into deterministic "
 "TypeScript 7.0 declarations. The caller supplies the package name and all "
@@ -13798,7 +13952,7 @@ msgstr ""
 "`json-schema` → `typescript-7.0` 损失台账；PurRDF 不为使用方发明任何标识或词"
 "汇表。"
 
-#: src/validation/shacl.md:933
+#: src/validation/shacl.md:941
 msgid ""
 "The fixed declaration dialect uses `strict` plus "
 "`exactOptionalPropertyTypes`. Type aliases preserve JSON primitives and "
@@ -13813,7 +13967,7 @@ msgstr ""
 "并集、交集、数组以及元组。不存在运行时枚举、可合并的接口、带品牌的伪验证器或 "
 "`any` 逃生口。无效关键字、开放/悬空引用以及名称冲突都会在输出字节之前失败。"
 
-#: src/validation/shacl.md:941
+#: src/validation/shacl.md:949
 msgid ""
 "Array length bounds are exact at any size. A tuple element states each "
 "position-specific item. A length beyond those positions is stated as an "
@@ -13839,7 +13993,7 @@ msgstr ""
 "100,000 个成员（TS2590）。作用于有限 `const` 或 `enum` 的数值关键字，会排除不"
 "满足它们的数字。"
 
-#: src/validation/shacl.md:954
+#: src/validation/shacl.md:962
 msgid ""
 "Runtime assertions outside TypeScript structural assignability are never "
 "silently erased: integer, numeric/string predicate, closure, pattern-"
@@ -13864,7 +14018,7 @@ msgstr ""
 "步即被拒绝。CI 用一个 draft 2020-12 验证器独立地对实例分类，并用锁定版本的 "
 "TypeScript 7.0.2 编译器编译生成的声明，包括新鲜字面量与经由变量的探针："
 
-#: src/validation/shacl.md:971
+#: src/validation/shacl.md:979
 msgid ""
 "The projection intentionally has no arbitrary TypeScript reader. TypeScript "
 "declarations do not define a unique runtime JSON acceptance relation, and "
@@ -13880,11 +14034,11 @@ msgstr ""
 "台账。TypeScript 只是开发期的判定依据（oracle）依赖；Rust 输出器/导入器不访问"
 "文件系统，并保持 wasm-clean。"
 
-#: src/validation/shacl.md:979
+#: src/validation/shacl.md:987
 msgid "GraphQL September 2025 projection"
 msgstr "GraphQL September 2025 投影"
 
-#: src/validation/shacl.md:981
+#: src/validation/shacl.md:989
 msgid ""
 "`emit_graphql` projects `CompiledSchema` into deterministic GraphQL "
 "September 2025 SDL. `GraphqlConfig` has no defaults: the caller supplies the "
@@ -13900,7 +14054,7 @@ msgstr ""
 "的 `name-map.json`、以带类型 Rust 数据表示的同一名称映射、一份带位置的 `json-"
 "schema` → `graphql-september-2025` 损失台账，以及生产用的值编解码器。"
 
-#: src/validation/shacl.md:988
+#: src/validation/shacl.md:996
 msgid ""
 "The SDL is deliberately a type-system fragment. PurRDF emits paired output "
 "`type` and input `input` objects, but no query, mutation, or subscription "
@@ -13912,7 +14066,7 @@ msgstr ""
 "`input` 对象，但不输出查询、变更或订阅根类型、解析器、分页规则、授权策略、联"
 "邦指令或其他应用行为。调用方把该片段与其自己的可执行模式组合起来。"
 
-#: src/validation/shacl.md:994
+#: src/validation/shacl.md:1002
 msgid ""
 "The exact grammar includes GraphQL booleans, strings, numbers, the signed 32-"
 "bit `Int` domain, explicit nullability, finite JSON `const`/`enum` sets, "
@@ -13938,7 +14092,7 @@ msgstr ""
 "标量；字段与枚举符号在其 GraphQL 局部命名空间中检查。带类型/规范的名称映射保"
 "留源定义键、属性键以及有限的 JSON 值。"
 
-#: src/validation/shacl.md:1008
+#: src/validation/shacl.md:1016
 msgid ""
 "`GraphqlPackage::encode_input` maps source JSON keys and finite values to "
 "input field names and enum symbols, and wraps a union value in its "
@@ -13964,75 +14118,75 @@ msgstr ""
 "型/规范的映射、标识、所保留的源模式以及正向台账。任意的 GraphQL SDL 没有唯一"
 "的 JSON Schema 接受关系，不被接受为逆向格式。"
 
-#: src/validation/shacl.md:1021
+#: src/validation/shacl.md:1029
 msgid ""
 "GraphQL variable coercion differs from JSON Schema validation at these "
 "closed boundaries:"
 msgstr "GraphQL 变量强制转换与 JSON Schema 验证在以下封闭边界上存在差异："
 
-#: src/validation/shacl.md:1024
+#: src/validation/shacl.md:1032
 msgid "Boundary"
 msgstr "边界"
 
-#: src/validation/shacl.md:1024
+#: src/validation/shacl.md:1032
 msgid "Located loss families"
 msgstr "带位置的损失类别"
 
-#: src/validation/shacl.md:1026
+#: src/validation/shacl.md:1034
 msgid "object fields and names"
 msgstr "对象字段与名称"
 
-#: src/validation/shacl.md:1026
+#: src/validation/shacl.md:1034
 msgid "additional properties, pattern properties, property names/counts"
 msgstr "附加属性、模式属性、属性名/属性数量"
 
-#: src/validation/shacl.md:1027
+#: src/validation/shacl.md:1035
 msgid "requiredness and recursion"
 msgstr "是否必需与递归"
 
-#: src/validation/shacl.md:1027
+#: src/validation/shacl.md:1035
 msgid ""
 "nullable-presence widening, one deterministic recursive-input nullability "
 "relaxation"
 msgstr "可空存在性放宽，一处确定性的递归输入可空性放宽"
 
-#: src/validation/shacl.md:1028
+#: src/validation/shacl.md:1036
 msgid "lists"
 msgstr "列表"
 
-#: src/validation/shacl.md:1028
+#: src/validation/shacl.md:1036
 msgid ""
 "singleton coercion, cardinality, contains, uniqueness, tuples, unevaluated "
 "items"
 msgstr "单例强制转换、基数、contains、唯一性、元组、未求值项"
 
-#: src/validation/shacl.md:1029
+#: src/validation/shacl.md:1037
 msgid "scalar assertions"
 msgstr "标量断言"
 
-#: src/validation/shacl.md:1029
+#: src/validation/shacl.md:1037
 msgid "integer domain delegation, numeric predicates, string predicates"
 msgstr "整数值域委托、数值谓词、字符串谓词"
 
-#: src/validation/shacl.md:1030
+#: src/validation/shacl.md:1038
 msgid "applicators"
 msgstr "应用器（applicator）"
 
-#: src/validation/shacl.md:1030
+#: src/validation/shacl.md:1038
 msgid ""
 "conditionals, dependencies, intersections, overlapping and type-array "
 "unions, `oneOf`, negation"
 msgstr "条件、依赖、交集、重叠的并集与类型数组并集、`oneOf`、否定"
 
-#: src/validation/shacl.md:1031
+#: src/validation/shacl.md:1039
 msgid "runtime boundary"
 msgstr "运行时边界"
 
-#: src/validation/shacl.md:1031
+#: src/validation/shacl.md:1039
 msgid "custom-scalar and unknown-keyword validation delegation"
 msgstr "自定义标量与未知关键字的验证委托"
 
-#: src/validation/shacl.md:1033
+#: src/validation/shacl.md:1041
 msgid ""
 "The caller-named fallback scalar is declared but PurRDF does not invent its "
 "`parseValue`, `parseLiteral`, or serialization semantics. Every delegated "
@@ -14043,7 +14197,7 @@ msgstr ""
 "`parseLiteral` 或序列化语义。因此，每一处委托使用都会记入台账。损失条目携带稳"
 "定的代码与源 JSON Pointer 位置；精确的包台账为空。"
 
-#: src/validation/shacl.md:1038
+#: src/validation/shacl.md:1046
 msgid ""
 "Emission fails before returning bytes for invalid caller configuration, "
 "malformed schema keywords, `$id` rebasing, external/indirect/dangling "
@@ -14059,7 +14213,7 @@ msgstr ""
 "码值各 16 MiB；定义数、每个对象的字段数或有限值数各 65,536；深度 128；每个 "
 "GraphQL 名称 255 字节。"
 
-#: src/validation/shacl.md:1045
+#: src/validation/shacl.md:1053
 msgid ""
 "The independent dev oracle classifies source values with `purrdf-"
 "jsonschema`, builds the SDL with locked official GraphQL.js 16.14.0, and "
@@ -14073,18 +14227,18 @@ msgstr ""
 "致，验证每个封闭的损失类别及其位置、名称映射与生产用编解码器，以及刻意损坏时"
 "的失败。每个有效值还会经由其输出类型返回，且 GraphQL.js 必须原样序列化它："
 
-#: src/validation/shacl.md:1056
+#: src/validation/shacl.md:1064
 msgid ""
 "GraphQL.js is dev-only. Emission and value translation remain filesystem-"
 "free, wasm-clean Rust."
 msgstr ""
 "GraphQL.js 仅用于开发。输出与值转换仍是不访问文件系统、wasm-clean 的 Rust。"
 
-#: src/validation/shacl.md:1059
+#: src/validation/shacl.md:1067
 msgid "Rules, node expressions and certifying a shapes graph"
 msgstr "规则、节点表达式与形状图认证"
 
-#: src/validation/shacl.md:1061
+#: src/validation/shacl.md:1069
 msgid ""
 "Four tools sit beside validation. Every host reaches the same library entry "
 "point, so the command line, Python, WebAssembly and C cannot disagree about "
@@ -14093,111 +14247,111 @@ msgstr ""
 "验证之外还有四个工具。每个宿主都到达同一个库入口点，因此命令行、Python、"
 "WebAssembly 与 C 在答案上不可能出现分歧。"
 
-#: src/validation/shacl.md:1065
+#: src/validation/shacl.md:1073
 msgid "Tool"
 msgstr "工具"
 
-#: src/validation/shacl.md:1065
+#: src/validation/shacl.md:1073
 msgid "Python (`purrdf.shapes`)"
 msgstr "Python（`purrdf.shapes`）"
 
-#: src/validation/shacl.md:1067
+#: src/validation/shacl.md:1075
 msgid "Run rules, write the inference graph"
 msgstr "运行规则，写出推理图"
 
-#: src/validation/shacl.md:1067
+#: src/validation/shacl.md:1075
 msgid "`purrdf_shapes::infer`, `srl::infer`"
 msgstr "`purrdf_shapes::infer`, `srl::infer`"
 
-#: src/validation/shacl.md:1067
+#: src/validation/shacl.md:1075
 msgid "`purrdf rules`"
 msgstr "`purrdf rules`"
 
-#: src/validation/shacl.md:1067
+#: src/validation/shacl.md:1075
 msgid "`apply_rules`"
 msgstr "`apply_rules`"
 
-#: src/validation/shacl.md:1067
+#: src/validation/shacl.md:1075
 msgid "`shaclApplyRules`"
 msgstr "`shaclApplyRules`"
 
-#: src/validation/shacl.md:1067
+#: src/validation/shacl.md:1075
 msgid "`purrdf_shacl_apply_rules`"
 msgstr "`purrdf_shacl_apply_rules`"
 
-#: src/validation/shacl.md:1068
+#: src/validation/shacl.md:1076
 msgid "Check a SPARQL 1.2 RL rule set, run nothing"
 msgstr "检查 SPARQL 1.2 RL 规则集，不运行任何规则"
 
-#: src/validation/shacl.md:1068
+#: src/validation/shacl.md:1076
 msgid "`srl::check`"
 msgstr "`srl::check`"
 
-#: src/validation/shacl.md:1068
+#: src/validation/shacl.md:1076
 msgid "`purrdf rules --srl FILE --check`"
 msgstr "`purrdf rules --srl FILE --check`"
 
-#: src/validation/shacl.md:1068
+#: src/validation/shacl.md:1076
 msgid "`check_rules`"
 msgstr "`check_rules`"
 
-#: src/validation/shacl.md:1068
+#: src/validation/shacl.md:1076
 msgid "`shaclCheckRules`"
 msgstr "`shaclCheckRules`"
 
-#: src/validation/shacl.md:1068
+#: src/validation/shacl.md:1076
 msgid "`purrdf_shacl_check_rules`"
 msgstr "`purrdf_shacl_check_rules`"
 
-#: src/validation/shacl.md:1069
+#: src/validation/shacl.md:1077
 msgid "Evaluate one node expression"
 msgstr "对单个节点表达式求值"
 
-#: src/validation/shacl.md:1069
+#: src/validation/shacl.md:1077
 msgid "`free_expression::evaluate`"
 msgstr "`free_expression::evaluate`"
 
-#: src/validation/shacl.md:1069
+#: src/validation/shacl.md:1077
 msgid "`purrdf node-expr`"
 msgstr "`purrdf node-expr`"
 
-#: src/validation/shacl.md:1069
+#: src/validation/shacl.md:1077
 msgid "`eval_node_expr`"
 msgstr "`eval_node_expr`"
 
-#: src/validation/shacl.md:1069
+#: src/validation/shacl.md:1077
 msgid "`shaclEvalNodeExpr`"
 msgstr "`shaclEvalNodeExpr`"
 
-#: src/validation/shacl.md:1069
+#: src/validation/shacl.md:1077
 msgid "`purrdf_shacl_eval_node_expr`"
 msgstr "`purrdf_shacl_eval_node_expr`"
 
-#: src/validation/shacl.md:1070
+#: src/validation/shacl.md:1078
 msgid "Certify a shapes graph"
 msgstr "认证形状图"
 
-#: src/validation/shacl.md:1070
+#: src/validation/shacl.md:1078
 msgid "`lint::lint`"
 msgstr "`lint::lint`"
 
-#: src/validation/shacl.md:1070
+#: src/validation/shacl.md:1078
 msgid "`purrdf shapes lint`"
 msgstr "`purrdf shapes lint`"
 
-#: src/validation/shacl.md:1070
+#: src/validation/shacl.md:1078
 msgid "`lint_shapes`"
 msgstr "`lint_shapes`"
 
-#: src/validation/shacl.md:1070
+#: src/validation/shacl.md:1078
 msgid "`shaclLintShapes`"
 msgstr "`shaclLintShapes`"
 
-#: src/validation/shacl.md:1070
+#: src/validation/shacl.md:1078
 msgid "`purrdf_shacl_lint_shapes`"
 msgstr "`purrdf_shacl_lint_shapes`"
 
-#: src/validation/shacl.md:1072
+#: src/validation/shacl.md:1080
 msgid ""
 "**Rules.** The rule source is either a shapes graph, whose SHACL 1.2 rules "
 "run (its default rule set), or a SPARQL 1.2 RL rule set, but not both. The "
@@ -14215,7 +14369,7 @@ msgstr ""
 "后是 `  rule R`，以及规则体所匹配的每个事实各一行 `  premise S P O .`。"
 "SPARQL 1.2 RL 数据块中的三元组则改为 `  data-block`。"
 
-#: src/validation/shacl.md:1080
+#: src/validation/shacl.md:1088
 msgid ""
 "Every host takes the same four **rule-evaluation limits**, on both of its "
 "SHACL rules entry points: the rules run above and SHACL-AF entailment "
@@ -14242,7 +14396,7 @@ msgstr ""
 "shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, "
 "maxJoinSteps?)`。"
 
-#: src/validation/shacl.md:1091
+#: src/validation/shacl.md:1099
 msgid ""
 "The **term-generating round limit** bounds the evaluation rounds that infer "
 "a term the graph did not already hold. The default is 16384 rounds. A "
@@ -14253,7 +14407,7 @@ msgstr ""
 "轮。一个步进到 10,000 的计数器会完成。一个没有界的计数器每轮推出一个新项，会"
 "在远不到一秒的时间内被拒绝。"
 
-#: src/validation/shacl.md:1095
+#: src/validation/shacl.md:1103
 msgid ""
 "The **generated-term budget** bounds the terms inferred beyond the input's. "
 "The default is `max(65536, 4 × N)`, where `N` is the number of distinct "
@@ -14265,7 +14419,7 @@ msgstr ""
 "其中 `N` 是数据图（以及 SPARQL 1.2 RL 规则集的数据块）中不同项的数量。新项每"
 "次迭代都翻倍的规则集会在几次迭代之内达到该预算，远早于达到轮数上限。"
 
-#: src/validation/shacl.md:1100
+#: src/validation/shacl.md:1108
 msgid ""
 "The **stored-fact limit** bounds the facts the evaluation store holds: the "
 "data graph, a rule set's data and every inferred triple. The default is "
@@ -14280,7 +14434,7 @@ msgstr ""
 "制到 `ex:q` 的规则，或一条千节点链的传递闭包（500,500 条三元组），都能在原生"
 "环境下完成。"
 
-#: src/validation/shacl.md:1106
+#: src/validation/shacl.md:1114
 msgid ""
 "The **join-step limit** bounds the candidate solutions the rule bodies "
 "enumerate. The default is 1,048,576 on every host. It bounds a rule body "
@@ -14296,7 +14450,7 @@ msgstr ""
 "存。需要更多工作量的规则集——千节点链的非线性传递闭包要枚举超过 6700 万个候选"
 "——需声明更大的上限。"
 
-#: src/validation/shacl.md:1114
+#: src/validation/shacl.md:1122
 msgid ""
 "A run past any limit is refused. The error names the limit, the numbers, the "
 "knob that raises it and, for the two term limits, the rules that inferred a "
@@ -14330,7 +14484,7 @@ msgstr ""
 "误信息从不称其为发散。声明的上限是精确的，而且上限只能拒绝：它所允许的运行，"
 "推出的内容与在任何更大上限下完全相同。"
 
-#: src/validation/shacl.md:1131
+#: src/validation/shacl.md:1139
 msgid ""
 "A shape rule (a rule linked to a shape, run once per focus node) is re-run "
 "each iteration only for the focus nodes whose answer can have changed: the "
@@ -14364,7 +14518,7 @@ msgstr ""
 "则会在几秒内被某个项上限拒绝——新项保持较短时为轮数上限，每个新项都比上一个更"
 "长时为固定的 16 MiB 项存储区上限——而绝不会被连接步数上限拒绝。"
 
-#: src/validation/shacl.md:1149
+#: src/validation/shacl.md:1157
 msgid ""
 "A global SPARQL rule whose query is a conjunctive pattern (triple patterns, "
 "`FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or "
@@ -14382,23 +14536,23 @@ msgstr ""
 "模板三元组中，且模板不得含有空节点。否则，该规则仍像以前一样，作为作用于整个"
 "图的生产者运行。"
 
-#: src/validation/shacl.md:1162
+#: src/validation/shacl.md:1170
 msgid "# the inference graph, N-Triples\n"
 msgstr "# 推理图，N-Triples\n"
 
-#: src/validation/shacl.md:1163
+#: src/validation/shacl.md:1171
 msgid "\"proof\""
 msgstr "\"proof\""
 
-#: src/validation/shacl.md:1163
+#: src/validation/shacl.md:1171
 msgid "# the proof text\n"
 msgstr "# 证明文本\n"
 
-#: src/validation/shacl.md:1164
+#: src/validation/shacl.md:1172
 msgid "# SPARQL 1.2 RL\n"
 msgstr "# SPARQL 1.2 RL\n"
 
-#: src/validation/shacl.md:1167
+#: src/validation/shacl.md:1175
 msgid ""
 "**Checking a SPARQL 1.2 RL rule set.** A rule set can be checked without "
 "being run. The check applies the static checks up to a level, and each level "
@@ -14431,7 +14585,7 @@ msgstr ""
 "stratification」都是有效的，因此以 `syntax` 级别评分。其中十五个在完整检查中"
 "失败，由后面的阶段拒绝。"
 
-#: src/validation/shacl.md:1184
+#: src/validation/shacl.md:1192
 msgid ""
 "The `syntax` stage also holds a rule set to where it announces its version. "
 "SPARQL 1.2 RL §7.1 says \"The version announcement SHOULD be made early in "
@@ -14447,15 +14601,15 @@ msgstr ""
 "`syntax` 阶段被拒绝，并点名该句。规则集可以不宣告任何版本；在较早的 "
 "`VERSION` 之后出现的后续 `VERSION`，对文档中其后的部分而言仍是一条指令。"
 
-#: src/validation/shacl.md:1192
+#: src/validation/shacl.md:1200
 msgid "# every static check\n"
 msgstr "# 全部静态检查\n"
 
-#: src/validation/shacl.md:1193
+#: src/validation/shacl.md:1201
 msgid "# the grammar alone\n"
 msgstr "# 仅检查语法\n"
 
-#: src/validation/shacl.md:1196
+#: src/validation/shacl.md:1204
 msgid ""
 "**Node expressions.** One node expression of a shapes graph is evaluated "
 "against a focus node of a data graph, as SHACL 1.2 Node Expressions' "
@@ -14486,11 +14640,11 @@ msgstr ""
 "`purrdf_shacl_eval_node_expr` 则把 `diagnostic RULE SHAPE` 行写入非 NULL 的 "
 "`out_diagnostics`。"
 
-#: src/validation/shacl.md:1211
+#: src/validation/shacl.md:1219
 msgid "Every host names the expression in one of three ways:"
 msgstr "每个宿主都以下列三种方式之一指名表达式："
 
-#: src/validation/shacl.md:1213
+#: src/validation/shacl.md:1221
 msgid ""
 "**The node itself**: an IRI, or `_:label` for a blank node the shapes "
 "document labels. An IRI that is the subject of no triple is a constant "
@@ -14499,7 +14653,7 @@ msgstr ""
 "**节点本身**：一个 IRI，或以 `_:label` 表示形状文档所标注的空节点。不作为任何"
 "三元组主语的 IRI 是常量表达式，求值结果为其自身。"
 
-#: src/validation/shacl.md:1216
+#: src/validation/shacl.md:1224
 msgid ""
 "**A walk from a named node**: a start node and one or more predicates, "
 "followed in order. Each step must reach exactly one value; a step that "
@@ -14519,7 +14673,7 @@ msgstr ""
 "后 `sht:nodeExpr`。该套件全部 143 个节点表达式测试都以这种方式经由 `purrdf "
 "node-expr` 运行。"
 
-#: src/validation/shacl.md:1225
+#: src/validation/shacl.md:1233
 msgid ""
 "**Inline Turtle**: a Turtle document read under the shapes document's "
 "prefixes and base, where its own directives take precedence. It is merged "
@@ -14534,113 +14688,113 @@ msgstr ""
 "与形状文档的空节点保持分离。表达式是该文档唯一的根：作为某个三元组的主语、且"
 "不作为任何三元组宾语的那个空节点。没有根或有多个根的文档会被拒绝。"
 
-#: src/validation/shacl.md:1232
+#: src/validation/shacl.md:1240
 msgid "Node"
 msgstr "节点"
 
-#: src/validation/shacl.md:1232
+#: src/validation/shacl.md:1240
 msgid "Walk"
 msgstr "游走"
 
-#: src/validation/shacl.md:1232
+#: src/validation/shacl.md:1240
 msgid "Inline Turtle"
 msgstr "内联 Turtle"
 
-#: src/validation/shacl.md:1234
+#: src/validation/shacl.md:1242
 msgid "`--expr`"
 msgstr "`--expr`"
 
-#: src/validation/shacl.md:1234
+#: src/validation/shacl.md:1242
 msgid "`--expr-at NODE --expr-via PREDICATE…`"
 msgstr "`--expr-at NODE --expr-via PREDICATE…`"
 
-#: src/validation/shacl.md:1234
+#: src/validation/shacl.md:1242
 msgid "`--expr-turtle`, `--expr-turtle-file`"
 msgstr "`--expr-turtle`, `--expr-turtle-file`"
 
-#: src/validation/shacl.md:1235 src/validation/shacl.md:1236
-#: src/validation/shacl.md:1237
+#: src/validation/shacl.md:1243 src/validation/shacl.md:1244
+#: src/validation/shacl.md:1245
 msgid "`expr`"
 msgstr "`expr`"
 
-#: src/validation/shacl.md:1235
+#: src/validation/shacl.md:1243
 msgid "`expr_at=`, `expr_via=[…]`"
 msgstr "`expr_at=`, `expr_via=[…]`"
 
-#: src/validation/shacl.md:1235
+#: src/validation/shacl.md:1243
 msgid "`expr_turtle=`"
 msgstr "`expr_turtle=`"
 
-#: src/validation/shacl.md:1236
+#: src/validation/shacl.md:1244
 msgid "`exprAt`, `exprVia`"
 msgstr "`exprAt`, `exprVia`"
 
-#: src/validation/shacl.md:1236
+#: src/validation/shacl.md:1244
 msgid "`exprTurtle`"
 msgstr "`exprTurtle`"
 
-#: src/validation/shacl.md:1237
+#: src/validation/shacl.md:1245
 msgid "`expr_at`, `expr_via`, `expr_via_count`"
 msgstr "`expr_at`, `expr_via`, `expr_via_count`"
 
-#: src/validation/shacl.md:1237
+#: src/validation/shacl.md:1245
 msgid "`expr_turtle`"
 msgstr "`expr_turtle`"
 
-#: src/validation/shacl.md:1238
+#: src/validation/shacl.md:1246
 msgid "Rust (`purrdf_validate`)"
 msgstr "Rust（`purrdf_validate`）"
 
-#: src/validation/shacl.md:1238
+#: src/validation/shacl.md:1246
 msgid "`ExprSelector::Node`"
 msgstr "`ExprSelector::Node`"
 
-#: src/validation/shacl.md:1238
+#: src/validation/shacl.md:1246
 msgid "`ExprSelector::At`"
 msgstr "`ExprSelector::At`"
 
-#: src/validation/shacl.md:1238
+#: src/validation/shacl.md:1246
 msgid "`ExprSelector::Turtle`"
 msgstr "`ExprSelector::Turtle`"
 
-#: src/validation/shacl.md:1240
+#: src/validation/shacl.md:1248
 msgid "Naming none of the three, or more than one, is refused."
 msgstr "三者一个都不指名，或指名多于一个，都会被拒绝。"
 
-#: src/validation/shacl.md:1243
+#: src/validation/shacl.md:1251
 msgid "\"_:suffix\""
 msgstr "\"_:suffix\""
 
-#: src/validation/shacl.md:1244 src/validation/shacl.md:1245
-#: src/validation/shacl.md:1248
+#: src/validation/shacl.md:1252 src/validation/shacl.md:1253
+#: src/validation/shacl.md:1256
 msgid "\"http://example.org/a\""
 msgstr "\"http://example.org/a\""
 
-#: src/validation/shacl.md:1244
+#: src/validation/shacl.md:1252
 msgid "\"suffix\""
 msgstr "\"suffix\""
 
-#: src/validation/shacl.md:1244
+#: src/validation/shacl.md:1252
 msgid "'\"!\"'"
 msgstr "'\"!\"'"
 
-#: src/validation/shacl.md:1246
+#: src/validation/shacl.md:1254
 msgid "\"http://example.org/Label\""
 msgstr "\"http://example.org/Label\""
 
-#: src/validation/shacl.md:1247
+#: src/validation/shacl.md:1255
 msgid "\"http://www.w3.org/ns/shacl#values\""
 msgstr "\"http://www.w3.org/ns/shacl#values\""
 
-#: src/validation/shacl.md:1249
+#: src/validation/shacl.md:1257
 msgid "\"[ sh:path ex:name ] .\""
 msgstr "\"[ sh:path ex:name ] .\""
 
-#: src/validation/shacl.md:1253
+#: src/validation/shacl.md:1261
 msgid "'[ sh:path ex:name ] .'"
 msgstr "'[ sh:path ex:name ] .'"
 
-#: src/validation/shacl.md:1257
+#: src/validation/shacl.md:1265
 msgid ""
 "**Certifying a shapes graph.** Loading a shapes graph is the hot path: it "
 "refuses the first construct it cannot evaluate faithfully, and does not pay "
@@ -14651,11 +14805,11 @@ msgstr ""
 "不为依据 W3C `shacl-shacl.ttl` 验证该图付出代价。lint 按需付出这一代价一次，"
 "并报告七个部分："
 
-#: src/validation/shacl.md:1262
+#: src/validation/shacl.md:1270
 msgid "`load`: the loader's verdict, accepted or the refusal it raised."
 msgstr "`load`：加载器的裁决，即接受，或它抛出的拒绝。"
 
-#: src/validation/shacl.md:1263
+#: src/validation/shacl.md:1271
 msgid ""
 "`shacl-shacl`: every result of validating the shapes graph against the "
 "vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core "
@@ -14670,7 +14824,7 @@ msgstr ""
 "`sh:targetNode`）。若某条结果所指出的构造在 SHACL 1.2 Core 中是良构的，该结果"
 "会被标记为 `superseded`，不算作问题，但仅在加载器接受了该图时如此。"
 
-#: src/validation/shacl.md:1269
+#: src/validation/shacl.md:1277
 msgid ""
 "`functions`: which implementation every node-expression function call binds "
 "to — `native`, `custom`, `sparql-registered` or `host-extension`. For a "
@@ -14682,7 +14836,7 @@ msgstr ""
 "状图，即使图中声明了 `sh:SPARQLExprExpression`，`sh:sparqlExpr` 调用仍绑定为 "
 "`native`。"
 
-#: src/validation/shacl.md:1273
+#: src/validation/shacl.md:1281
 msgid ""
 "`validators`: every validator the shapes graph declares for a built-in "
 "constraint component, which the native implementation supersedes and never "
@@ -14691,7 +14845,7 @@ msgstr ""
 "`validators`：形状图为内置约束组件声明的每个验证器，这些验证器被原生实现取"
 "代，从不运行。这些行从不算作问题。"
 
-#: src/validation/shacl.md:1276
+#: src/validation/shacl.md:1284
 msgid ""
 "`unexecuted`: every query that violates a pre-binding restriction and that "
 "nothing runs: a validator of a built-in component, a validator no use of its "
@@ -14705,7 +14859,7 @@ msgstr ""
 "何形状实例化的 `sh:SPARQLTargetType`。加载会接受它们；它们在这里各计为一个问"
 "题。违反语法规则的声明从不列在这里，因为它会使加载失败。"
 
-#: src/validation/shacl.md:1282
+#: src/validation/shacl.md:1290
 msgid ""
 "`diagnostics`: every mandatory diagnostic, one `diagnostic RULE SHAPE` line "
 "per shape whose `sh:in` or `sh:xone` list is empty. `RULE` is the syntax "
@@ -14724,7 +14878,7 @@ msgstr ""
 "`shacl-shacl.ttl` 会就同一个空列表发出警告；该结果列出时标记为 `diagnosed "
 "RULE`，不会被重复计数。"
 
-#: src/validation/shacl.md:1290
+#: src/validation/shacl.md:1298
 msgid ""
 "`unanchored-imports`: every `owl:imports` triple of the closure that is not "
 "an import, because its subject is no anchor of its document (see "
@@ -14741,7 +14895,7 @@ msgstr ""
 "`sh:Info` 严重级别，报告使用了 `owl:imports` 却不带 `owl:Ontology` 类型的 "
 "`sh:DataGraph`。"
 
-#: src/validation/shacl.md:1298
+#: src/validation/shacl.md:1306
 msgid ""
 "A report is clean when the loader accepted the graph, every `shacl-shacl` "
 "result is superseded (an `sh:Info` result counts like any other), no "
@@ -14757,27 +14911,27 @@ msgstr ""
 "文本；[CLI 参考](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
 "crates/cli/README.md#shapes-lint)给出了示例。"
 
-#: src/validation/shacl.md:1305 src/validation/shapes-products.md:795
+#: src/validation/shacl.md:1313 src/validation/shapes-products.md:795
 msgid "From Python"
 msgstr "从 Python 调用"
 
-#: src/validation/shacl.md:1310
+#: src/validation/shacl.md:1318
 msgid "\"...\""
 msgstr "\"...\""
 
-#: src/validation/shacl.md:1311
+#: src/validation/shacl.md:1319
 msgid "# True / False\n"
 msgstr "# True / False\n"
 
-#: src/validation/shacl.md:1312
+#: src/validation/shacl.md:1320
 msgid "\"results\""
 msgstr "\"results\""
 
-#: src/validation/shacl.md:1312
+#: src/validation/shacl.md:1320
 msgid "# list of violation dicts\n"
 msgstr "# 违规字典列表\n"
 
-#: src/validation/shacl.md:1315
+#: src/validation/shacl.md:1323
 msgid ""
 "Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`, "
 "`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each "
@@ -14792,11 +14946,11 @@ msgstr ""
 "SPARQL 结果注解的结果还带有 `annotations`：一个元组列表，每个元组由一个属性 "
 "IRI 与一个采用 N-Triples 语法的值组成。"
 
-#: src/validation/shacl.md:1321
+#: src/validation/shacl.md:1329
 msgid "The report is a dataset"
 msgstr "报告是一个数据集"
 
-#: src/validation/shacl.md:1323
+#: src/validation/shacl.md:1331
 msgid ""
 "`ValidationReport::to_dataset()` materializes the W3C validation report — "
 "the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen "
@@ -14814,7 +14968,7 @@ msgstr ""
 "以任意语法渲染报告就是 `serialize_dataset(&report.to_dataset(), …)`，这正是 "
 "`purrdf validate --format` 所做的。"
 
-#: src/validation/shacl.md:1331
+#: src/validation/shacl.md:1339
 msgid ""
 "A report carries blank nodes from two graphs: a focus node, a value and an "
 "annotation value come from the data graph, and a source shape from the "
@@ -14845,7 +14999,7 @@ msgstr ""
 "的 `results` 保留原始标签。报告所*生成*的空节点（报告节点、每条结果各一个、复"
 "杂 `sh:path` 的内部节点）与这两个标签空间都不相同。"
 
-#: src/validation/shacl.md:1347
+#: src/validation/shacl.md:1355
 msgid ""
 "Every report a validation produces also states `sh:shapesGraphWellFormed`. "
 "SHACL 1.2 Core §6.7.1.4 says a processor that checks the shapes graph "
@@ -14878,7 +15032,7 @@ msgstr ""
 "点名该规则 id 的问题。`ValidationReport::shapes_graph_well_formed` 携带该值，"
 "SARIF 运行则以 `properties.shaclShapesGraphWellFormed` 携带它。"
 
-#: src/validation/shacl.md:1362
+#: src/validation/shacl.md:1370
 msgid ""
 "Every run reports the same diagnostics, not only the lint. A validation "
 "report carries them in `ValidationReport::diagnostics` — one "
@@ -14930,11 +15084,11 @@ msgstr ""
 "间是统一的：规则与形状是两个独立字段——在 Python 中是字典键，在 WebAssembly 中"
 "是 getter——C 的输出行以相同顺序携带同样的两个字段，规则在前。"
 
-#: src/validation/shacl.md:1387
+#: src/validation/shacl.md:1395
 msgid "SARIF output"
 msgstr "SARIF 输出"
 
-#: src/validation/shacl.md:1389
+#: src/validation/shacl.md:1397
 msgid ""
 "Validation reports stay structured in the engine; the SARIF 2.1.0 boundary "
 "is the separate [`purrdf-validate`](https://docs.rs/purrdf-validate) crate "
@@ -14947,28 +15101,28 @@ msgstr ""
 "析器诊断——渲染为可追溯到源位置、逐字节确定性的 SARIF 日志，供编辑器、CI 与代"
 "码扫描仪表板使用："
 
-#: src/validation/shacl.md:1398
-msgid ""
-"r#\"\n"
-"    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
-"    @prefix ex:  <http://example.org/> .\n"
-"    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
-"    ex:PersonShape a sh:NodeShape ;\n"
-"      sh:targetClass ex:Person ;\n"
-"      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
-"\"#"
-msgstr ""
-"r#\"\n"
-"    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
-"    @prefix ex:  <http://example.org/> .\n"
-"    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
-"    ex:PersonShape a sh:NodeShape ;\n"
-"      sh:targetClass ex:Person ;\n"
-"      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
-"\"#"
-
 #: src/validation/shacl.md:1406
 msgid ""
+"r#\"\n"
+"    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
+"    @prefix ex:  <http://example.org/> .\n"
+"    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+"    ex:PersonShape a sh:NodeShape ;\n"
+"      sh:targetClass ex:Person ;\n"
+"      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
+"\"#"
+msgstr ""
+"r#\"\n"
+"    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
+"    @prefix ex:  <http://example.org/> .\n"
+"    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+"    ex:PersonShape a sh:NodeShape ;\n"
+"      sh:targetClass ex:Person ;\n"
+"      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
+"\"#"
+
+#: src/validation/shacl.md:1414
+msgid ""
 "r#\"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-"
 "ns#type> <http://example.org/Person> .\n"
 "<http://example.org/alice> <http://example.org/age> \"nope\" .\n"
@@ -14979,15 +15133,15 @@ msgstr ""
 "<http://example.org/alice> <http://example.org/age> \"nope\" .\n"
 "\"#"
 
-#: src/validation/shacl.md:1411
+#: src/validation/shacl.md:1419
 msgid "\"sarif produced\""
 msgstr "\"sarif produced\""
 
-#: src/validation/shacl.md:1412
+#: src/validation/shacl.md:1420
 msgid "\"\\\"version\\\": \\\"2.1.0\\\"\""
 msgstr "\"\\\"version\\\": \\\"2.1.0\\\"\""
 
-#: src/validation/shacl.md:1415
+#: src/validation/shacl.md:1423
 msgid ""
 "Lower-level entry points (`build_report_sarif`, `build_diagnostics_sarif`) "
 "build a `SarifLog` value instead of a string, so a host can merge runs "
@@ -14996,7 +15150,7 @@ msgstr ""
 "更底层的入口点（`build_report_sarif`、`build_diagnostics_sarif`）构建的是 "
 "`SarifLog` 值而非字符串，因此宿主可以在序列化之前合并多个 run。"
 
-#: src/validation/shacl.md:1421
+#: src/validation/shacl.md:1429
 msgid ""
 "The validator is gated by the vendored W3C SHACL 1.0 `data-shapes` suite, "
 "the vendored W3C SHACL 1.2 suite, a vendored DASH SHACL-AF/rules corpus, and "

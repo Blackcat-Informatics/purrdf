@@ -82,8 +82,6 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::mem;
 
-use purrdf_xsd::XsdValue;
-
 use crate::error::CdtTypeError;
 use crate::literal::LiteralValue;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm};
@@ -287,8 +285,9 @@ fn push_value_cmp<'a>(jobs: &mut Vec<CmpJob<'a>>, a: &'a CdtValue, b: &'a CdtVal
 enum Denotation {
     /// A `cdt:List` / `cdt:Map` literal whose lexical form parses.
     Composite(CdtValue),
-    /// An XSD literal whose lexical form parses.
-    Xsd(XsdValue),
+    /// An XSD literal whose lexical form parses — an `xsd:integer`/`xsd:decimal`
+    /// past the bounded representation included, held exactly.
+    Xsd(purrdf_xsd::LiteralValue),
     /// A language-tagged string (`rdf:langString`, or RDF 1.2's `rdf:dirLangString`).
     /// Its value space is term identity: two of them are the same value exactly when
     /// they are the same term.
@@ -319,7 +318,8 @@ fn denotation(literal: &CdtLiteral) -> Denotation {
     }
     match crate::literal::parse_literal(&literal.lexical, &literal.datatype) {
         LiteralValue::Cdt(value) => Denotation::Composite(value),
-        LiteralValue::Xsd(value) => Denotation::Xsd(value),
+        LiteralValue::Xsd(value) => Denotation::Xsd(purrdf_xsd::LiteralValue::Bounded(value)),
+        LiteralValue::XsdUnbounded(value) => Denotation::Xsd(value),
         LiteralValue::IllTyped { .. } => Denotation::IllTyped,
         LiteralValue::Opaque => Denotation::Unmodelled,
     }
@@ -427,7 +427,8 @@ enum LeafEq {
 ///   language-tagged string that is not the same term — `false`.
 ///   `list-functions/contains-03.rq` requires a list holding `'b'@en` to answer
 ///   `false`, not an error, when asked for the plain string `'b'`.
-/// * two XSD values — `purrdf_xsd::value_eq`, which is definite in both directions.
+/// * two XSD values — `purrdf_xsd::literal_equal`, which is definite in both
+///   directions and exact for an integer or decimal of any size.
 fn literal_equal(a: &CdtLiteral, b: &CdtLiteral) -> LeafEq {
     if a == b {
         return LeafEq::Answer(Ok(true));
@@ -440,7 +441,9 @@ fn literal_equal(a: &CdtLiteral, b: &CdtLiteral) -> LeafEq {
         (Denotation::Unmodelled, _) | (_, Denotation::Unmodelled) => Err(unmodelled()),
         (Denotation::Composite(_), _) | (_, Denotation::Composite(_)) => Ok(false),
         (Denotation::LanguageTagged, _) | (_, Denotation::LanguageTagged) => Ok(false),
-        (Denotation::Xsd(x), Denotation::Xsd(y)) => Ok(purrdf_xsd::value_eq(&x, &y)),
+        (Denotation::Xsd(x), Denotation::Xsd(y)) => {
+            Ok(purrdf_xsd::literal_equal(&x, &y) == Some(true))
+        }
     })
 }
 
@@ -527,7 +530,7 @@ fn leaf_less_than(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
     match (denotation(p), denotation(q)) {
         (Denotation::IllTyped, _) | (_, Denotation::IllTyped) => Err(ill_typed()),
         (Denotation::Unmodelled, _) | (_, Denotation::Unmodelled) => Err(unmodelled()),
-        (Denotation::Xsd(x), Denotation::Xsd(y)) => match purrdf_xsd::value_cmp(&x, &y) {
+        (Denotation::Xsd(x), Denotation::Xsd(y)) => match purrdf_xsd::literal_cmp(&x, &y) {
             Some(ordering) => Ok(ordering == Ordering::Less),
             None => Err(unordered()),
         },

@@ -16,17 +16,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `XsdError::code()` returns the XPath and XQuery Functions and Operators 3.1
   code as an `ErrorCode`: `err:FOAR0002` for an arithmetic result that is too
   large, `err:FOCA0003` and `err:FOCA0001` for an integer or decimal lexical
-  form that is too large, `err:FOCA0006` for one with too many fractional
-  digits, and `err:FOCA0002` for `NaN` or an infinity cast to decimal.
+  form that is too large, `err:FOCA0006` for one with too many significant
+  fractional digits, and `err:FOCA0002` for `NaN` or an infinity cast to
+  decimal. `XsdError::presentation()` gives the error as a typed
+  `DiagnosticPresentation` with the code as its `code` argument, and every
+  error's message now ends with the code, for example `(err:FORG0001)`.
   `Decimal::try_from_f64` is `Decimal::from_f64_closest` with these errors.
-- **Exact comparison at any size:** `DecimalDigits` holds an `xsd:integer` or
+  `ProjectionError::presentation()` carries the typed condition of an XSD
+  refusal behind a projection failure; Python's projection `ValueError` and the
+  C ABI's `purrdf_error_presentation_json` report it.
+- **Exact numbers at any size:** `DecimalDigits` holds an `xsd:integer` or
   `xsd:decimal` value of any length and scale. It compares exactly, needs no
   arithmetic, and converts to `f64` and `f32` with one correct rounding.
-  `LiteralValue` is a bounded `XsdValue` or such a value, and
-  `literal_cmp`, `literal_equal` and `literal_total_cmp` extend `value_cmp`,
-  `value_equal` and `value_total_cmp` to it. `decimal_mean` divides an exact
-  running total of any size by a row count under `numeric_div`'s precision
-  rule.
+  `LiteralValue` is a bounded `XsdValue` or such a value. `literal_cmp`,
+  `literal_equal` and `literal_total_cmp` extend `value_cmp`, `value_equal` and
+  `value_total_cmp` to it. `literal_add`, `literal_sub`, `literal_mul`,
+  `literal_div`, `literal_unary_minus`, `literal_unary_plus`, `literal_abs`,
+  `literal_ceil`, `literal_floor` and `literal_round` compute over it exactly
+  and answer whenever the bounded value space holds the result. `decimal_mean`
+  divides an exact running total of any size by a row count under
+  `numeric_div`'s precision rule. `purrdf-cdt`'s `LiteralValue` gains
+  `XsdUnbounded` for such an element.
+- **Exact ShEx facets:** `ExactSchema` keeps every numeric facet bound exactly
+  as written, beside the existing `Schema` (`ExactSchema::parse_shexc`,
+  `parse_shexj`, `from_schema`, `resolve_imports`), and `validate_exact` and
+  `validate_shape_map_exact` validate against those bounds.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -111,24 +125,27 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **SPARQL numbers past the bounds:** an `xsd:integer` or `xsd:decimal`
   literal past the bounded representation is a number. The comparison
   operators, `=`, `!=`, `IN`, `ORDER BY`, `MIN`, `MAX`, `isNumeric`, the
-  effective boolean value, and casts to `xsd:double`, `xsd:float`,
-  `xsd:boolean` and `xsd:string` treat it exactly. Before, it was an opaque
-  term: `ORDER BY` sorted it by its digits as text, and `=` and `<` raised an
-  error. Arithmetic with an `xsd:float` or `xsd:double` operand converts it to
-  that type, rounded once. A cast to an integer or decimal type succeeds when
-  the value fits.
-- **SPARQL `AVG`:** a decimal `AVG` whose running total passes the bounds
-  answers when the mean fits, instead of being unbound. An integer `AVG`
-  returns one representable `xsd:decimal`, truncated at the finest scale that
-  fits, as `/` does. It no longer returns a literal that no operator could read
-  back. `AVG` equals `SUM / COUNT` wherever `SUM` is bounded. A decimal `SUM`
-  adds exactly and fails only when its total is too large.
+  effective boolean value, `cdt:List` element comparison, and casts to
+  `xsd:double`, `xsd:float`, `xsd:boolean` and `xsd:string` treat it exactly.
+  Before, it was an opaque term: `ORDER BY` sorted it by its digits as text,
+  and `=` and `<` raised an error. Arithmetic over it is computed exactly and
+  answers whenever the result fits, so `?big - ?big` is `0`; a result past the
+  bounds is still `err:FOAR0002`. A cast to an integer or decimal type succeeds
+  when the value fits.
+- **SPARQL `SUM` and `AVG`:** `AVG` equals `SUM / COUNT` on every group. A
+  decimal `SUM` is the exact total at any size, as an integer `SUM` already was,
+  and `/` divides a total past the bounds exactly. A decimal `AVG` whose running
+  total passes the bounds now answers instead of being unbound. An integer
+  `AVG` returns one representable `xsd:decimal`, truncated at the finest scale
+  that fits, as `/` does, and no longer returns a literal that no operator could
+  read back.
 - **XSD decimal arithmetic:** `+`, `-` and `*` keep every digit the
   representation holds and truncate the rest toward zero, the precision rule
   `/` already follows. They raise `err:FOAR0002` only when the integer part of
   the result is too large. Before, `1e30 + 1e-18` and `0.5 * 4e37` were
-  refused as overflows. A decimal lexical form whose fractional digits past
-  the eighteenth are all zeros now parses.
+  refused as overflows. Trailing fractional zeros no longer refuse a value the
+  representation holds, at any scale:
+  `"170141183460469231731687303715884105727.0"^^xsd:decimal + 0` answers.
 - **Unary minus and `abs` on derived integer types:** they return
   `xsd:integer`, as do `ceiling`, `floor` and `round`. Before,
   `-("5"^^xsd:unsignedByte)` produced `"-5"^^xsd:unsignedByte`, a literal
@@ -139,11 +156,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Before, both sides went through a double, so `9007199254740992` satisfied
   `sh:minInclusive 9007199254740993`, and spellings the datatype rejects, such
   as `"1.5"^^xsd:integer` or `"inf"^^xsd:double`, were compared as numbers.
-- **D-entailment, ShEx and CSVW:** an integer or decimal literal past the
-  bounds is no longer ill-typed. The OWL 2 RL datatype rules decide its
-  equality with other literals exactly. ShEx accepts it, compares it and counts
-  its digits exactly. CSVW accepts such a cell and checks its datatype facets
-  exactly.
+- **D-entailment, OWL 2 DL, ShEx and CSVW:** an integer or decimal literal
+  past the bounds is no longer ill-typed or unexaminable. The OWL 2 RL datatype
+  rules and the OWL 2 DL value classes decide its equality with other literals
+  exactly, so a functional data property holding two different 60-digit
+  integers is inconsistent. ShEx accepts it, compares it and counts its digits
+  exactly, and the `purrdf shex` command and Python's `purrdf.shex.validate`
+  compare every numeric facet against its bound as written: before, the bounds
+  were doubles, so `100000000000000000000` met `MININCLUSIVE
+  100000000000000000001`. CSVW accepts such a cell and checks its datatype
+  facets exactly.
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
   with a non-ASCII character where the timezone suffix would be, such as
   `"2001-01-01€12345"`, is rejected as an invalid lexical form instead of

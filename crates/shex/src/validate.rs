@@ -291,6 +291,22 @@ pub fn validate_with(
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
 ) -> ResultShapeMap {
+    validate_with_bounds(schema, data, map, options, None)
+}
+
+/// The exact numeric facet bounds of an [`crate::ExactSchema`], by node-constraint
+/// address.
+pub(crate) type ExactBoundsMap = FastMap<usize, [Option<purrdf_xsd::LiteralValue>; 4]>;
+
+/// [`validate_with`], comparing numeric facets against `bounds` where a node
+/// constraint has an entry, and against its `i64`/`f64` AST values otherwise.
+pub(crate) fn validate_with_bounds(
+    schema: &Schema,
+    data: &RdfDataset,
+    map: &[(TermValue, ShapeSelector)],
+    options: &ValidationOptions<'_>,
+    bounds: Option<&ExactBoundsMap>,
+) -> ResultShapeMap {
     // Resolve whole-declaration EXTERNALs up front so the resolved
     // expressions outlive the engine borrowing them.
     let externals: Vec<(String, ShapeExpr)> = match options.external_resolver {
@@ -329,6 +345,7 @@ pub fn validate_with(
     }
 
     let mut engine = Engine::new(schema, data, &externals, &options.sem_acts);
+    engine.bounds = bounds;
     let mut entries = Vec::with_capacity(map.len());
     for (value, selector) in map {
         let outcome = engine.check_association(value, selector);
@@ -377,6 +394,9 @@ struct Engine<'a> {
     /// checked per value node, so without the memo a `PATTERN` over a large
     /// neighbourhood recompiles the same regex once per value.
     patterns: pattern::PatternCache,
+    /// The exact numeric facet bounds of an [`crate::ExactSchema`], by
+    /// node-constraint address; `None` compares against the AST's `i64`/`f64`.
+    bounds: Option<&'a ExactBoundsMap>,
 }
 
 struct PreparedShape<'a> {
@@ -514,6 +534,7 @@ impl<'a> Engine<'a> {
             used_assumptions: FastSet::default(),
             detached_in_progress: FastSet::default(),
             patterns: pattern::PatternCache::default(),
+            bounds: None,
         }
     }
 
@@ -568,7 +589,10 @@ impl<'a> Engine<'a> {
                     Focus::Id(id) => facts_of_id(self.data, id),
                     Focus::Detached(value) => facts_of_value(value),
                 };
-                node::check_node_constraint(nc, &facts, &mut self.patterns)
+                let exact = self
+                    .bounds
+                    .and_then(|bounds| bounds.get(&(std::ptr::from_ref(nc) as usize)));
+                node::check_node_constraint(nc, &facts, &mut self.patterns, exact)
             }
             ShapeExpr::Shape(shape) => self.match_shape(focus, shape),
             ShapeExpr::External => Err("EXTERNAL shape has no resolved definition".to_owned()),

@@ -1624,3 +1624,89 @@ fn the_required_inputs_are_required() {
         );
     }
 }
+
+/// Numeric facets compare against their bounds exactly as written: past `i64`, and
+/// with digits a double cannot hold.
+#[test]
+fn numeric_facets_compare_against_the_bound_as_written() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let schema = write_file(
+        dir.path(),
+        "schema.shex",
+        concat!(
+            "PREFIX ex: <http://example.org/>\n",
+            "ex:Big { ex:n MININCLUSIVE 100000000000000000001 }\n",
+            "ex:Tenth { ex:n MINEXCLUSIVE 0.1 }\n",
+            "ex:Third { ex:n MAXEXCLUSIVE 0.30000000000000001 }\n",
+        ),
+    );
+    let data = write_file(
+        dir.path(),
+        "data.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "ex:a ex:n 100000000000000000000 .\n",
+            "ex:b ex:n 100000000000000000001 .\n",
+            "ex:c ex:n 0.1000000000000000000000001 .\n",
+            "ex:d ex:n 0.1 .\n",
+            "ex:e ex:n 0.3 .\n",
+            "ex:f ex:n 0.30000000000000001 .\n",
+        ),
+    );
+    for (node, shape, conformant) in [
+        ("a", "Big", false),
+        ("b", "Big", true),
+        ("c", "Tenth", true),
+        ("d", "Tenth", false),
+        ("e", "Third", true),
+        ("f", "Third", false),
+    ] {
+        let map = format!("<http://example.org/{node}>@<http://example.org/{shape}>");
+        let out = run(&["shex", "--schema", &schema, "--data", &data, &map]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let want = if conformant {
+            "conformant"
+        } else {
+            "nonconformant"
+        };
+        assert!(
+            stdout(&out).contains(&format!("\"status\":\"{want}\"")),
+            "{node}@{shape} should be {want}:\n{}",
+            stdout(&out)
+        );
+    }
+}
+
+/// A value `purrdf_xsd` refuses is reported with its XPath F&O error code.
+#[test]
+fn an_xsd_refusal_names_its_fo_code() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let schema = write_file(
+        dir.path(),
+        "schema.shex",
+        concat!(
+            "PREFIX ex: <http://example.org/>\n",
+            "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n",
+            "ex:S { ex:n xsd:integer }\n",
+        ),
+    );
+    let data = write_file(
+        dir.path(),
+        "data.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+            "ex:bad ex:n \"1.5\"^^xsd:integer .\n",
+        ),
+    );
+    let out = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "<http://example.org/bad>@<http://example.org/S>",
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("err:FORG0001"), "{}", stdout(&out));
+}

@@ -619,3 +619,42 @@ fn an_absent_proof_is_refused_by_name() {
 /// A different consistent ontology, for the wrong-ontology negative.
 const OTHER_ONTOLOGY: &str =
     "<https://example.org/a> <https://example.org/p> <https://example.org/c> .\n";
+
+/// A functional data property holding two values: the ontology is inconsistent exactly
+/// when the two literals denote different values — decided the same way for integers
+/// past `i128` as for small ones, because value identity needs no arithmetic.
+fn functional_with(a: &str, b: &str) -> String {
+    format!(
+        "@prefix : <http://example.org/> .\n\
+         @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+         :p a owl:DatatypeProperty , owl:FunctionalProperty .\n\
+         :x :p \"{a}\"^^xsd:integer , \"{b}\"^^xsd:integer .\n"
+    )
+}
+
+#[test]
+fn functional_data_values_past_i128_are_compared_exactly() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let big = "1".repeat(60);
+    let other = format!("{}2", "1".repeat(59));
+    for (name, a, b, verdict) in [
+        (
+            "small-distinct.ttl",
+            "1".to_owned(),
+            "2".to_owned(),
+            "false",
+        ),
+        ("big-distinct.ttl", big.clone(), other, "false"),
+        ("big-same.ttl", big.clone(), format!("+000{big}"), "true"),
+    ] {
+        let input = write_file(dir.path(), name, &functional_with(&a, &b));
+        let out = run(&["consistency", &input]);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(
+            text.starts_with(&format!("consistency {verdict}\n")),
+            "{name}: expected `consistency {verdict}`:\n{text}"
+        );
+    }
+}

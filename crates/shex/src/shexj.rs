@@ -116,13 +116,24 @@ const SHEXJ_LIMITS: Limits = Limits {
 /// assert!(err.to_string().contains("iri-relative-no-base"));
 /// ```
 pub fn parse_shexj(input: &str, base: Option<&str>) -> Result<Schema> {
+    parse_shexj_exact(input, base).map(|(schema, _)| schema)
+}
+
+/// [`parse_shexj`], with each numeric facet bound's lexeme recorded beside the AST
+/// (see [`crate::ExactSchema`]).
+pub(crate) fn parse_shexj_exact(
+    input: &str,
+    base: Option<&str>,
+) -> Result<(Schema, crate::exact::ExactTable)> {
     let value = json::read_with(input, SHEXJ_LIMITS)
         .map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
     // A numeric facet's value is compared with every datum validated against it: its
     // lexeme becomes a binary64 inside a binary64 scope so the x87 rounds it once, like
     // every other unit.
     let _binary64 = Binary64Scope::enter();
-    Reader::new(base)?.schema(&value)
+    let reader = Reader::new(base)?;
+    let schema = reader.schema(&value)?;
+    Ok((schema, reader.table.into_inner()))
 }
 
 /// Serialize a [`Schema`] to pretty-printed ShExJ.
@@ -611,6 +622,11 @@ struct Reader {
     /// The base the document's IRI references resolve against — empty when the
     /// caller supplied none, which makes a relative reference a hard failure.
     base: BaseScope,
+    /// The exact bounds of each numeric node constraint read so far in the current
+    /// owner, in creation order (see [`crate::ExactSchema`]).
+    exact: std::cell::RefCell<Vec<crate::exact::ExactBounds>>,
+    /// The exact bounds per owner, filled as each owner completes.
+    table: std::cell::RefCell<crate::exact::ExactTable>,
 }
 
 impl Reader {
@@ -624,7 +640,11 @@ impl Reader {
             ),
             None => BaseScope::empty(),
         };
-        Ok(Self { base })
+        Ok(Self {
+            base,
+            exact: std::cell::RefCell::default(),
+            table: std::cell::RefCell::default(),
+        })
     }
 
     /// Resolve one document-relative IRI reference (a `"@type": "@id"` member).
@@ -670,12 +690,17 @@ impl Reader {
             }
         }
         if let Some(start) = obj.take("start") {
+            let mark = self.exact.borrow().len();
             schema.start = Some(Box::new(self.shape_expr(start)?));
+            self.table.borrow_mut().start = self.exact.borrow_mut().split_off(mark);
         }
         if let Some(items) = obj.take_array("shapes")? {
             schema.shapes.reserve(items.len());
             for item in items {
+                let mark = self.exact.borrow().len();
                 schema.shapes.push(self.shape_decl(item)?);
+                let groups = self.exact.borrow_mut().split_off(mark);
+                self.table.borrow_mut().shapes.push(groups);
             }
         }
         obj.finish()?;
@@ -746,6 +771,24 @@ impl Reader {
     }
 
     fn node_constraint(&self, value: &Value) -> Result<NodeConstraint> {
+        // Each numeric facet's lexeme, kept exactly (see [`crate::ExactSchema`]).
+        let mut exact = crate::exact::ExactBounds::default();
+        if let Some(map) = value.as_object() {
+            for (index, key) in [
+                "mininclusive",
+                "minexclusive",
+                "maxinclusive",
+                "maxexclusive",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if let Some(Value::Number(number)) = map.get(key) {
+                    exact.slots[index] =
+                        Some(crate::exact::ExactBound::from_lexical(number.lexeme()));
+                }
+            }
+        }
         let mut obj = Obj::typed(value, "NodeConstraint", "NodeConstraint")?;
         let mut nc = NodeConstraint {
             node_kind: obj
@@ -777,6 +820,9 @@ impl Reader {
             nc.values = Some(values);
         }
         obj.finish()?;
+        if !exact.is_empty() {
+            self.exact.borrow_mut().push(exact);
+        }
         Ok(nc)
     }
 
