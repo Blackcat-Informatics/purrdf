@@ -1667,22 +1667,21 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 ///
 /// # v12
 ///
-/// [`CHARGE_SCHEDULE`] gains [`ChargePoint::ExactArithmeticWork`], because
-/// `xsd:integer` and `xsd:decimal` became exact at every size: an operation whose
-/// operands do not both fit machine words runs on the arbitrary-precision tower,
-/// where one `*` over two million-digit integers is billions of limb operations
-/// and its result millions of digits. Priced by one
-/// [`ChargePoint::RowExpressionEvaluation`] like any other expression, such a
-/// product was invisible to every fuel ceiling, and a query squaring a value a
-/// few times (`BIND(?x * ?x AS ?y)` chained) could run until memory ran out.
+/// The schedule is unchanged; what [`ChargePoint::RowExpressionEvaluation`] counts
+/// moves, because `xsd:integer` and `xsd:decimal` became exact at every size. An
+/// operation whose operands do not both fit machine words runs on the
+/// arbitrary-precision tower, where one `*` over two million-digit integers is
+/// billions of limb operations and its result millions of digits. Priced by one
+/// occurrence like any other expression, such a product was invisible to every fuel
+/// ceiling, and a query squaring a value a few times (`BIND(?x * ?x AS ?y)` chained)
+/// could run until memory ran out.
 ///
-/// The point is charged with the operation's own cost estimate — the limb
-/// operations [`purrdf_xsd::numeric::numeric_cost`] computes from the operand sizes
-/// alone, for `+`, `-`, `*` and `/` — before the operation runs. Machine-word
-/// operands charge nothing, so a query whose numbers all fit machine words buys
-/// exactly the execution under v12 that it bought under v11. The number moves
-/// anyway, because the schedule moved and the schedule is what the digest
-/// describes.
+/// Each such `+`, `-`, `*` and `/` now also charges `row-expression-evaluation` once
+/// per unit of its own cost estimate — the base-`1e9` limb operations
+/// [`purrdf_xsd::numeric::numeric_cost`] computes from the operand sizes alone —
+/// before the operation runs. Machine-word operands charge nothing extra, so a query
+/// whose numbers all fit machine words buys exactly the execution under v12 that it
+/// bought under v11.
 pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 
 /// The charge schedule, as data rather than as scattered literals.
@@ -1693,7 +1692,8 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 /// it unchanged and moves only the order of charges in a per-row loop; v10 also
 /// leaves it unchanged and corrects scratch ownership and mint checkpoints; v11
 /// leaves it unchanged and moves charged work through binding-driven positive
-/// operands and existence restrictions; v12 appends `exact-arithmetic-work` — see
+/// operands and existence restrictions; v12 leaves it unchanged and charges
+/// arbitrary-precision arithmetic through `row-expression-evaluation` — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
@@ -1717,9 +1717,8 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 /// documentation names (a distance computation, a posting scanned). The engine cannot
 /// define that unit for host code, so it prices it at one and lets the relation say how
 /// many; what makes the number comparable across relations is that each one documents its
-/// unit, not that the engine imposed one. `exact-arithmetic-work` is one base-`1e9` limb
-/// operation of an `xsd:integer`/`xsd:decimal` operation on the arbitrary-precision tower.
-pub const CHARGE_SCHEDULE: [(&str, u64); 18] = [
+/// unit, not that the engine imposed one.
+pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1737,7 +1736,6 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 18] = [
     ("exists-definition-answered", 1),
     ("exists-inner-solutions-consumed", 1),
     ("property-function-work", 1),
-    ("exact-arithmetic-work", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -1872,18 +1870,6 @@ pub enum ChargePoint {
     /// searches eagerly in `open` are charged the same total. A relation that does not
     /// override `take_work` reports zero and charges nothing.
     PropertyFunctionWork,
-    /// One unit of work on the arbitrary-precision numeric tower: one base-`1e9`
-    /// limb operation of an `xsd:integer`/`xsd:decimal` operation whose operands do
-    /// not both fit machine words.
-    ///
-    /// Charged with the operation's [`purrdf_xsd::exact::Cost::work`] occurrences —
-    /// an upper bound computed from the operand sizes alone, in constant time —
-    /// **before** the operation runs, so an operation whose cost would cross the
-    /// fuel ceiling is refused before it allocates. Operands that both fit machine
-    /// words cost nothing here: their arithmetic is a fixed number of machine
-    /// instructions, already priced by [`Self::RowExpressionEvaluation`]. See
-    /// [`GOVERNOR_PROFILE_VERSION`]'s v12 note.
-    ExactArithmeticWork,
 }
 
 impl ChargePoint {
@@ -1906,7 +1892,6 @@ impl ChargePoint {
         Self::ExistsDefinitionAnswered,
         Self::ExistsInnerSolutionsConsumed,
         Self::PropertyFunctionWork,
-        Self::ExactArithmeticWork,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -1935,7 +1920,6 @@ impl ChargePoint {
             Self::ExistsDefinitionAnswered => 14,
             Self::ExistsInnerSolutionsConsumed => 15,
             Self::PropertyFunctionWork => 16,
-            Self::ExactArithmeticWork => 17,
         }
     }
 
@@ -2719,8 +2703,8 @@ mod tests {
         );
         assert_eq!(GOVERNOR_PROFILE_VERSION, 12);
         assert_eq!(
-            pinned, "310a608e0df2200e5f8dd047481a0f7da3e0ac604df20f2e977c89b5b1453ca5",
-            "the consumer's v12 receipt identity pins the charge table with exact-arithmetic-work"
+            pinned, "a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a",
+            "the consumer's v12 receipt identity pins the unchanged charge table"
         );
         assert_ne!(
             schedule_digest(GOVERNOR_PROFILE_ID, 11, &CHARGE_SCHEDULE),

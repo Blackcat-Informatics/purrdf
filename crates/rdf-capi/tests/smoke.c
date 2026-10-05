@@ -563,6 +563,83 @@ static int check_srl_rules(void) {
     return 0;
 }
 
+/* The XSD value space through the real header and linkage: integers and decimals past
+ * every C integer type keep their exact canonical lexical form and order, a SPARQL sum
+ * past i128 answers its exact lexical form, and each refusal sits beside the valid
+ * neighbour it must keep. */
+static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
+    const char *xsd_integer = "http://www.w3.org/2001/XMLSchema#integer";
+    const char *xsd_decimal = "http://www.w3.org/2001/XMLSchema#decimal";
+    const char *xsd_double = "http://www.w3.org/2001/XMLSchema#double";
+    const char *past_i128 = "170141183460469231731687303715884105728";
+    const char *sixty = "123456789012345678901234567890123456789012345678901234567890";
+    const char *sixty_next = "123456789012345678901234567890123456789012345678901234567891";
+    PurrdfBuffer *canonical = NULL;
+    PurrdfError *error = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+
+    int32_t rc = purrdf_xsd_canonical_lexical(past_i128, xsd_integer, &canonical, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && canonical != NULL,
+          "canonical lexical of i128::MAX + 1");
+    purrdf_buffer_data(canonical, &bytes, &len);
+    CHECK(len == strlen(past_i128) && memcmp(bytes, past_i128, len) == 0,
+          "i128::MAX + 1 keeps every digit");
+    purrdf_buffer_free(canonical);
+
+    canonical = NULL;
+    rc = purrdf_xsd_canonical_lexical("1.50", xsd_decimal, &canonical, &error);
+    CHECK(rc == PURRDF_STATUS_OK && canonical != NULL, "canonical lexical of 1.50");
+    purrdf_buffer_data(canonical, &bytes, &len);
+    CHECK(len == 3 && memcmp(bytes, "1.5", 3) == 0, "1.50 is canonically 1.5");
+    purrdf_buffer_free(canonical);
+
+    canonical = NULL;
+    rc = purrdf_xsd_canonical_lexical("12x", xsd_integer, &canonical, &error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && canonical == NULL && error != NULL,
+          "a malformed integer is refused");
+    purrdf_error_free(error);
+    error = NULL;
+    rc = purrdf_xsd_canonical_lexical("12", xsd_integer, &canonical, &error);
+    CHECK(rc == PURRDF_STATUS_OK && canonical != NULL, "its well-formed neighbour is not");
+    purrdf_buffer_free(canonical);
+
+    uint8_t comparable = 9;
+    int32_t order = 9;
+    rc = purrdf_xsd_value_compare(sixty, xsd_integer, sixty_next, xsd_integer, &comparable,
+                                  &order, &error);
+    CHECK(rc == PURRDF_STATUS_OK && comparable == 1 && order == -1,
+          "sixty-digit integers one apart compare exactly");
+    rc = purrdf_xsd_value_compare(sixty, xsd_integer, "1.0e60", xsd_double, &comparable,
+                                  &order, &error);
+    CHECK(rc == PURRDF_STATUS_OK && comparable == 1, "an integer compares with a double");
+    rc = purrdf_xsd_value_compare("NaN", xsd_double, "1", xsd_double, &comparable, &order,
+                                  &error);
+    CHECK(rc == PURRDF_STATUS_OK && comparable == 0 && order == 0, "NaN is incomparable");
+    rc = purrdf_xsd_value_compare("12x", xsd_integer, "12", xsd_integer, &comparable, &order,
+                                  &error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "a malformed operand is refused");
+    purrdf_error_free(error);
+    error = NULL;
+    rc = purrdf_xsd_value_compare("12", xsd_integer, "012", xsd_integer, &comparable, &order,
+                                  &error);
+    CHECK(rc == PURRDF_STATUS_OK && comparable == 1 && order == 0,
+          "its well-formed neighbour compares equal");
+
+    PurrdfBuffer *results = NULL;
+    rc = purrdf_query_json(dataset,
+                           "SELECT ?n WHERE { BIND(170141183460469231731687303715884105727 + 1 "
+                           "AS ?n) }",
+                           NULL, NULL, NULL, &results, &error);
+    CHECK(rc == PURRDF_STATUS_OK && results != NULL, "a SPARQL sum past i128");
+    purrdf_buffer_data(results, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"170141183460469231731687303715884105728\""),
+          "the SPARQL sum answers its exact lexical form");
+    purrdf_buffer_free(results);
+    printf("xsd: exact canonical forms and order past every C integer type\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     CHECK(argc == 7,
           "shared OKF fixture, OKF config, entailment golden vector, and the three "
@@ -577,7 +654,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.9.0` is pinned in tests/abi.rs. */
+     * literal `0.10.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -1535,6 +1612,7 @@ int main(int argc, char **argv) {
 
     CHECK(check_shapes_graph_iri() == 0, "the shapes-graph IRI");
     CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
+    CHECK(check_xsd_exact_numerics(dataset) == 0, "the exact XSD value space");
 
     purrdf_dataset_free(dataset);
     printf("C smoke OK\n");

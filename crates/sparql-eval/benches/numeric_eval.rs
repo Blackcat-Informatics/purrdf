@@ -27,8 +27,10 @@
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench numeric_eval` (the
 //! `make bench` lane) — excluded from `make check`. Timings are not asserted.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
+
+#[path = "../tests/support/mod.rs"]
+mod support;
 
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
@@ -36,6 +38,7 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
 };
 use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions};
+use support::squaring_chain;
 
 /// Row count.
 const ROWS: usize = 20_000;
@@ -119,16 +122,6 @@ const EXACT: &[(&str, &str)] = &[
         "PREFIX ex: <https://example.org/> SELECT (AVG(?b) AS ?m) WHERE { ?s ex:b ?b }",
     ),
 ];
-
-/// `SELECT` of `STRLEN` of the `steps`-th square of a `digits`-digit integer.
-fn squaring_chain(digits: usize, steps: usize) -> String {
-    let mut binds = format!("BIND({} AS ?x0)", "7".repeat(digits));
-    for step in 1..=steps {
-        let previous = step - 1;
-        let _ = write!(binds, " BIND(?x{previous} * ?x{previous} AS ?x{step})");
-    }
-    format!("SELECT (STRLEN(STR(?x{steps})) AS ?len) WHERE {{ {binds} }}")
-}
 
 fn request(query: &str) -> SparqlRequest<'_> {
     SparqlRequest {

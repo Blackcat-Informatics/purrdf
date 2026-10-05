@@ -211,8 +211,20 @@
  * keeps calling everything it called before unchanged. It bumps for the reason the
  * `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
  * answer `purrdf_abi_version` the way `0.8.0` does.
+ *
+ * # `0.9.0` → `0.10.0`: two added symbols
+ *
+ * `0.9.0` shipped as the ABI of the `3.0.1` libraries. This bump adds
+ * `purrdf_xsd_canonical_lexical` — the XSD canonical lexical form of a typed value —
+ * and `purrdf_xsd_value_compare` — the XSD value-space order of two typed values, with
+ * incomparability reported through its `out_comparable` flag — both exact for integers
+ * and decimals of any length. It changes no existing prototype, struct layout or
+ * status number, so a host built against `0.9.0` keeps calling everything it called
+ * before unchanged. It bumps for the reason the `0.8.0` paragraph gives: a library
+ * exporting two more symbols than `0.9.0` must not answer `purrdf_abi_version` the way
+ * `0.9.0` does.
  */
-#define PURRDF_ABI_MINOR 9
+#define PURRDF_ABI_MINOR 10
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -3660,6 +3672,50 @@ int32_t purrdf_abi_version(PurrdfAbiVersion *out);
  * `dataset` must be a live handle; `out` must be writable.
  */
 int32_t purrdf_capabilities(const PurrdfDataset *dataset, PurrdfCapabilities *out);
+
+/**
+ * Write the XSD canonical lexical form of `lexical`, read as the datatype IRI
+ * `datatype`, to `*out_buffer` as UTF-8 with no terminating NUL (`"+007"` as
+ * `xsd:integer` is `7`, `"1.50"` as `xsd:decimal` is `1.5`). Integers and decimals are
+ * exact at any length.
+ *
+ * Returns `PURRDF_STATUS_INVALID_ARGUMENT` when `datatype` is not an XSD datatype the
+ * engine maps, and `PURRDF_STATUS_PARSE_ERROR` when `lexical` is not in its lexical
+ * space; `*out_buffer` is left untouched on any error. Release the buffer with
+ * `purrdf_buffer_free`.
+ *
+ * # Safety
+ * `lexical` and `datatype` must be NUL-terminated C strings; `out_buffer` must be
+ * writable; `out_error` must be null or writable.
+ */
+int32_t purrdf_xsd_canonical_lexical(const char *lexical,
+                                     const char *datatype,
+                                     PurrdfBuffer **out_buffer,
+                                     PurrdfError **out_error);
+
+/**
+ * Compare two typed values in the XSD value space. On success `*out_comparable` is `1`
+ * and `*out_order` is `-1` when the left value is the smaller, `0` when they are equal
+ * and `1` when it is the larger; or `*out_comparable` is `0` and `*out_order` is `0`
+ * when the two values are incomparable (a `NaN`, or two value-space families such as a
+ * number and a string). Numeric datatypes compare across each other, exactly at any
+ * length.
+ *
+ * Returns `PURRDF_STATUS_INVALID_ARGUMENT` when either datatype is not an XSD datatype
+ * the engine maps, and `PURRDF_STATUS_PARSE_ERROR` when either lexical form is not in
+ * its datatype's lexical space; the out-params are left untouched on any error.
+ *
+ * # Safety
+ * The four string arguments must be NUL-terminated C strings; `out_comparable` and
+ * `out_order` must be writable; `out_error` must be null or writable.
+ */
+int32_t purrdf_xsd_value_compare(const char *left_lexical,
+                                 const char *left_datatype,
+                                 const char *right_lexical,
+                                 const char *right_datatype,
+                                 uint8_t *out_comparable,
+                                 int32_t *out_order,
+                                 PurrdfError **out_error);
 
 #ifdef __cplusplus
 }  // extern "C"

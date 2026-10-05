@@ -81,10 +81,6 @@ const EDGES: [&str; 14] = [
     "7",
 ];
 
-fn canonical(value: &Oracle) -> String {
-    value.to_canonical_decimal().expect("a terminating value")
-}
-
 fn main() {
     let mut recorder = Recorder::new();
     recorder
@@ -120,9 +116,9 @@ fn main() {
             Oracle::parse(a).expect("a numeral"),
             Oracle::parse(b).expect("a numeral"),
         );
-        record(["add", a, b, &canonical(&x.add(&y))]);
-        record(["sub", a, b, &canonical(&x.sub(&y))]);
-        record(["mul", a, b, &canonical(&x.mul(&y))]);
+        record(["add", a, b, &x.add(&y).canonical_terminating()]);
+        record(["sub", a, b, &x.sub(&y).canonical_terminating()]);
+        record(["mul", a, b, &x.mul(&y).canonical_terminating()]);
         match x.div(&y) {
             None => {
                 record(["div", a, b, "division-by-zero"]);
@@ -130,7 +126,7 @@ fn main() {
             }
             Some(quotient) => {
                 let truncated = quotient.round_to_scale(18, Direction::TowardZero);
-                record(["div", a, b, &canonical(&truncated)]);
+                record(["div", a, b, &truncated.canonical_terminating()]);
                 let exact = quotient
                     .to_canonical_decimal()
                     .unwrap_or_else(|| "non-terminating".to_owned());
@@ -150,7 +146,7 @@ fn main() {
         let x = if x.is_zero() { Oracle::from_i128(0) } else { x };
         record(["double", a, "-", &format!("{:016x}", x.to_f64().to_bits())]);
         record(["float", a, "-", &format!("{:08x}", x.to_f32().to_bits())]);
-        record(["canonical", a, "-", &canonical(&x)]);
+        record(["canonical", a, "-", &x.canonical_terminating()]);
     }
     print!("{}", recorder.render());
 }

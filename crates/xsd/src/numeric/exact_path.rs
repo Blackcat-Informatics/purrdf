@@ -58,6 +58,8 @@ fn integer_of(value: &XsdValue) -> exact::Integer {
 
 /// `a op b` for two exact-branch operands: an integer result when both are
 /// integers, a decimal result otherwise.
+#[cold]
+#[inline(never)]
 pub(crate) fn binop(a: &XsdValue, b: &XsdValue, op: Op) -> Result<XsdValue, XsdError> {
     if is_integer_family(a) && is_integer_family(b) {
         let (x, y) = (integer_of(a), integer_of(b));
@@ -79,6 +81,8 @@ pub(crate) fn binop(a: &XsdValue, b: &XsdValue, op: Op) -> Result<XsdValue, XsdE
 
 /// `op:numeric-divide` for two exact-branch operands under `policy`: always a
 /// decimal (integer ÷ integer included, as XPath defines).
+#[cold]
+#[inline(never)]
 pub(crate) fn div(
     a: &XsdValue,
     b: &XsdValue,
@@ -100,6 +104,8 @@ pub(crate) fn div(
 }
 
 /// The exact order of two exact-branch operands.
+#[cold]
+#[inline(never)]
 pub(crate) fn cmp(a: &XsdValue, b: &XsdValue) -> Ordering {
     if is_integer_family(a) && is_integer_family(b) {
         return integer_of(a).cmp(&integer_of(b));
@@ -109,6 +115,8 @@ pub(crate) fn cmp(a: &XsdValue, b: &XsdValue) -> Ordering {
 
 /// The exact order of an exact-branch operand against a finite or infinite IEEE
 /// value; `None` only for `NaN`.
+#[cold]
+#[inline(never)]
 pub(crate) fn cmp_ieee(exact: &XsdValue, ieee: f64) -> Option<Ordering> {
     if ieee.is_nan() {
         return None;
@@ -126,6 +134,8 @@ pub(crate) fn cmp_ieee(exact: &XsdValue, ieee: f64) -> Option<Ordering> {
 }
 
 /// The correctly rounded `f64` of an exact-branch operand.
+#[cold]
+#[inline(never)]
 pub(crate) fn to_f64(value: &XsdValue) -> f64 {
     match value {
         XsdValue::BigInteger { value, .. } => value.to_f64(),
@@ -134,6 +144,8 @@ pub(crate) fn to_f64(value: &XsdValue) -> f64 {
 }
 
 /// The correctly rounded `f32` of an exact-branch operand, rounded once.
+#[cold]
+#[inline(never)]
 pub(crate) fn to_f32(value: &XsdValue) -> f32 {
     match value {
         XsdValue::BigInteger { value, .. } => value.to_f32(),
@@ -142,6 +154,8 @@ pub(crate) fn to_f32(value: &XsdValue) -> f32 {
 }
 
 /// Negation, keeping the operand's datatype family.
+#[cold]
+#[inline(never)]
 pub(crate) fn neg(value: &XsdValue) -> XsdValue {
     if is_integer_family(value) {
         return XsdValue::from_exact_integer(-&integer_of(value), value.datatype());
@@ -150,6 +164,8 @@ pub(crate) fn neg(value: &XsdValue) -> XsdValue {
 }
 
 /// The absolute value, keeping the operand's datatype family.
+#[cold]
+#[inline(never)]
 pub(crate) fn abs(value: &XsdValue) -> XsdValue {
     if is_integer_family(value) {
         return XsdValue::from_exact_integer(integer_of(value).abs(), value.datatype());
@@ -165,6 +181,8 @@ pub(crate) fn abs(value: &XsdValue) -> XsdValue {
 /// The value rounded to an integer in direction `rounding`, keeping the operand's
 /// datatype family (`fn:ceiling`, `fn:floor`, `fn:round` over decimals return a
 /// decimal).
+#[cold]
+#[inline(never)]
 pub(crate) fn round_to_integer(value: &XsdValue, rounding: Rounding) -> XsdValue {
     if is_integer_family(value) {
         return value.clone();
@@ -175,6 +193,8 @@ pub(crate) fn round_to_integer(value: &XsdValue, rounding: Rounding) -> XsdValue
 }
 
 /// The cost of one exact-branch operation over these operands, for a governor.
+#[cold]
+#[inline(never)]
 pub(crate) fn cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> exact::Cost {
     if is_integer_family(a) && is_integer_family(b) && !matches!(op, CostOp::Div(_)) {
         let (x, y) = (integer_of(a), integer_of(b));
@@ -192,7 +212,7 @@ pub(crate) fn cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> exact::Cost {
     }
 }
 
-/// The operation a [`cost`] estimate is for.
+/// The operation an [`exact::Cost`](crate::exact::Cost) estimate is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CostOp {

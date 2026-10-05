@@ -12,6 +12,7 @@ pub mod boundary_joins;
 pub mod segmented;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -21,6 +22,23 @@ use purrdf_core::{
 };
 use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
 use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+
+/// A frozen dataset holding nothing.
+pub fn empty_dataset() -> Arc<RdfDataset> {
+    RdfDatasetBuilder::new().freeze().expect("an empty dataset")
+}
+
+/// A `SELECT` of the length of `?x{steps}`, where `?x0` is a `digits`-digit
+/// integer of sevens and each `?x{n}` squares `?x{n-1}`: a product chain whose
+/// operands double in length at every step.
+pub fn squaring_chain(digits: usize, steps: usize) -> String {
+    let mut binds = format!("BIND({} AS ?x0)", "7".repeat(digits));
+    for step in 1..=steps {
+        let previous = step - 1;
+        let _ = write!(binds, " BIND(?x{previous} * ?x{previous} AS ?x{step})");
+    }
+    format!("SELECT (STRLEN(STR(?x{steps})) AS ?len) WHERE {{ {binds} }}")
+}
 
 /// The namespace the local-name fixtures below mint their IRIs under.
 pub const EX: &str = "http://example.org/";

@@ -252,6 +252,12 @@ ownership, and all limits. Complete examples are in
   EXPLAIN evaluates the query to measure it, so `explainQueryAsync` is its
   Promise-returning twin: it explains a `SERVICE` query over the host's answer, yields
   while it measures, and stops on its `signal`.
+- `xsdCanonicalLexical(lexical, datatype)` / `xsdValueCompare(leftLexical,
+  leftDatatype, rightLexical, rightDatatype)` — the XSD canonical lexical form of a
+  typed value, and the value-space order of two (`-1`, `0`, `1`). Integers and
+  decimals are exact at any length, where a JavaScript `number` keeps 53 bits; each
+  returns `undefined` for an unmapped datatype, a lexical form outside its datatype's
+  lexical space, or (comparison only) incomparable values.
 - `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)` /
   `shaclEntail(shapesTtl, dataNt, shapesBase?)` — SHACL validation to a SARIF
   2.1.0 report and SHACL-AF `sh:rule` entailment, returned as a

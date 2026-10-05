@@ -176,13 +176,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   needs arms for the two new variants (the enum is `#[non_exhaustive]`, so
   existing wildcard arms compile); code that relied on `OutOfRange` to reject
   large values must check the variant or the magnitude itself.
-- **Governor profile version 12:** the charge schedule adds
-  `exact-arithmetic-work`, charged once per unit of `exact::Cost` work before
-  an arithmetic operation on a value past machine words, so a fuel ceiling
-  refuses a run of repeated squaring before it allocates. Operations on
-  in-range values charge nothing new. `GOVERNOR_PROFILE_VERSION` is 12 and
-  `GOVERNOR_PROFILE_DIGEST` is
-  `310a608e0df2200e5f8dd047481a0f7da3e0ac604df20f2e977c89b5b1453ca5`;
+- **Governor profile version 12:** the charge schedule is unchanged, and
+  `row-expression-evaluation` is now also charged once per unit of
+  `exact::Cost` work before an arithmetic operation on a value past machine
+  words, so a fuel ceiling refuses a run of repeated squaring before it
+  allocates. Operations on in-range values charge nothing new.
+  `GOVERNOR_PROFILE_VERSION` is 12 and `GOVERNOR_PROFILE_DIGEST` is
+  `a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a`;
   consumers that pin either must re-pin.
 
 ### Fixed

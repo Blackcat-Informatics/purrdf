@@ -2335,7 +2335,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// Charge one operation on the arbitrary-precision numeric tower: its limb work
-    /// as [`ChargePoint::ExactArithmeticWork`](crate::governor::ChargePoint::ExactArithmeticWork)
+    /// as [`ChargePoint::RowExpressionEvaluation`](crate::governor::ChargePoint::RowExpressionEvaluation)
     /// occurrences against the fuel ceiling, before the operation runs. A zero cost
     /// (machine-word operands) charges nothing.
     pub(crate) fn charge_exact_numeric(
@@ -2343,7 +2343,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         cost: purrdf_xsd::exact::Cost,
     ) -> Result<(), TrippedGovernor> {
         self.charge_occurrences(
-            crate::governor::ChargePoint::ExactArithmeticWork,
+            crate::governor::ChargePoint::RowExpressionEvaluation,
             cost.work(),
         )
     }

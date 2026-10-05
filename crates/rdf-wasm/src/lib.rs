@@ -87,6 +87,8 @@ use wasm_bindgen::prelude::*;
 //                 applied, its response format negotiated, and a failure's HTTP problem
 //   * `panic_poison` — the panic hook that poisons the instance before a panic's trap
 //                 unwinds, so no later call runs on the state the panic left behind
+//   * `xsd`     — the XSD value space: exact canonical lexical forms and value-space
+//                 comparison (`xsdCanonicalLexical`/`xsdValueCompare`)
 mod async_query;
 mod codec;
 mod convert;
@@ -106,6 +108,7 @@ pub mod shacl;
 mod shadow_stack;
 mod stream;
 mod term;
+mod xsd;
 
 #[cfg(target_arch = "wasm32")]
 pub use async_query::purrdf_jspi_run;
@@ -131,6 +134,7 @@ pub use query::{
 };
 pub use stream::Sink;
 pub use term::{Quad, Term};
+pub use xsd::{xsd_canonical_lexical, xsd_value_compare};
 
 /// Runs once, when the instance starts: installs the synchronous shadow stack's floor
 /// in [`purrdf_stack`], the measurement the SPARQL evaluator's stack guards refuse

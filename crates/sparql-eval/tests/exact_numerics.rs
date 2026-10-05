@@ -8,7 +8,8 @@
 //! checked against the exact rational oracle (`purrdf_testkit::exact`) or written
 //! out by hand; every refusal runs beside a neighbour that answers.
 
-use std::fmt::Write as _;
+mod support;
+
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -19,16 +20,13 @@ use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, Qu
 use purrdf_testkit::exact::{Direction, Rational as Oracle};
 use purrdf_testkit::rng::splitmix64_next;
 use purrdf_xsd::exact::DivisionPolicy;
+use support::{empty_dataset as empty, squaring_chain};
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const EX: &str = "http://example.org/";
 
 /// `2^127`, one past `i128::MAX`.
 const PAST_I128: &str = "170141183460469231731687303715884105728";
-
-fn empty() -> Arc<RdfDataset> {
-    RdfDatasetBuilder::new().freeze().expect("an empty dataset")
-}
 
 /// A dataset of `ex:s{i} ex:v "{value}"^^xsd:{datatype}` for each value.
 fn values(values: &[(&str, &str)]) -> Arc<RdfDataset> {
@@ -363,16 +361,6 @@ fn the_division_policy_is_the_query_s_and_refuses_only_non_terminating_quotients
     // Division by zero stays an expression error under every policy.
     assert_eq!(eval_with("1 / 0", exact), "-");
     assert_eq!(eval("1 / 0"), "-");
-}
-
-/// `?x` squared `steps` times, starting from a `digits`-digit integer.
-fn squaring_chain(digits: usize, steps: usize) -> String {
-    let mut binds = format!("BIND({} AS ?x0)", "7".repeat(digits));
-    for step in 1..=steps {
-        let previous = step - 1;
-        let _ = write!(binds, " BIND(?x{previous} * ?x{previous} AS ?x{step})");
-    }
-    format!("SELECT (STRLEN(STR(?x{steps})) AS ?len) WHERE {{ {binds} }}")
 }
 
 fn governed(query: &str, governors: &QueryGovernors) -> GovernedOutcome {

@@ -15,6 +15,8 @@
 //! pass because every operation runs through `purrdf_xsd::ieee`'s precision guard and
 //! subnormal scaling.
 
+mod support;
+
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -22,13 +24,10 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, Te
 use purrdf_sparql_eval::{AggregateRegistry, ExtensionEnv, NativeSparqlEngine, QueryOptions};
 use purrdf_xsd::ieee::reference as soft;
 use purrdf_xsd::numeric::{canonical_double, canonical_float};
+use support::empty_dataset as empty;
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const STAT_NS: &str = "http://example.org/agg/";
-
-fn empty() -> Arc<RdfDataset> {
-    RdfDatasetBuilder::new().freeze().expect("an empty dataset")
-}
 
 /// Every row of `query`, over the empty dataset, under `options`.
 fn run(query: &str, options: QueryOptions<'_>) -> Vec<Vec<Option<TermValue>>> {

@@ -185,7 +185,7 @@ units mean nothing outside this build.
 | `committed-output-row` | 1 | row committed to an operator's output |
 | `bgp-candidate-quad` | 1 | candidate quad examined while matching a basic graph pattern |
 | `path-frontier-expansion` | 1 | property-path frontier node expanded |
-| `row-expression-evaluation` | 1 | expression evaluated over one row (per row, not per sub-expression, so the cost is stable across planner changes) |
+| `row-expression-evaluation` | 1 | expression evaluated over one row (per row, not per sub-expression, so the cost is stable across planner changes); in addition, one per base-`1e9` limb operation of an `xsd:integer`/`xsd:decimal` `+`, `-`, `*` or `/` whose operands do not both fit machine words, charged with the operation's own cost bound (computed from the operand sizes alone) before the operation runs |
 | `user-function-invocation` | 1 | user-defined function invocation |
 | `remote-request-issued` | 1 | request issued to a remote endpoint |
 | `remote-row-ingested` | 1 | row ingested from a remote endpoint's response |
@@ -198,7 +198,6 @@ units mean nothing outside this build.
 | `exists-definition-answered` | 1 | per-row-definition evaluation of an `EXISTS`/`NOT EXISTS` inner — once per distinct restriction of the row to the inner's correlated variables, never once per outer row |
 | `exists-inner-solutions-consumed` | 1 | row the definition path's inner materialized before its first-witness stop |
 | `property-function-work` | 1 | unit of internal work a property-function relation performed and reported through `PfCursor::take_work` — the unit is the relation's own (a candidate examined, a posting decoded), because the engine cannot see inside host code to define one |
-| `exact-arithmetic-work` | 1 | base-`1e9` limb operation of an `xsd:integer`/`xsd:decimal` `+`, `-`, `*` or `/` whose operands do not both fit machine words, charged with the operation's own cost bound (computed from the operand sizes alone) before the operation runs; machine-word operands charge nothing |
 
 `update-mutated-quad` is the only point outside the query evaluator and the only one
 no algebra node raises. It exists because `CLEAR ALL`, `MOVE`, `COPY`, `ADD`, `LOAD`
@@ -543,9 +542,9 @@ therefore recompute it from this document alone:
     property-function-invocation property-function-row \
     aggregate-invocation aggregate-accumulation \
     exists-probe-answered exists-definition-answered \
-    exists-inner-solutions-consumed property-function-work exact-arithmetic-work
+    exists-inner-solutions-consumed property-function-work
 } | sha256sum
-# 310a608e0df2200e5f8dd047481a0f7da3e0ac604df20f2e977c89b5b1453ca5
+# a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -677,7 +676,7 @@ increment it. That restraint is what makes the number worth pinning.
 | 9 | schedule byte-identical; the per-row loops of `FILTER`, `BIND`, `UNFOLD` and every aggregate pass one checkpoint: a trip already latched is observed before the next row, `UNFOLD` admits a row before it ingests it, work is reported to the stop poll exactly once, and a loop forked across threads admits only the rows the remaining fuel covers and commits them in source order, so it trips on the row, spends the fuel and keeps the prefix the sequential loop does. Charge order inside those loops, and where polls fall in forked loops, move |
 | 10 | fuel schedule byte-identical; each scratch arena charges its own retention independently of aggregate buffers/state and child arenas, so an unrelated scratch charge cannot hide later computed values. Concrete identity registration, fresh blank mints and stateful child reservation copies checkpoint scratch growth immediately. Incomplete expression/template/list/SERVICE output is withheld and staged UPDATE publication is aborted on a trip. Scratch consumption and the point at which a scratch ceiling trips can move |
 | 11 | fuel schedule byte-identical; eligible positive operands of ordinary joins receive incoming bindings, replacing independent-relation work with indexed candidate visits and carried rows. OPTIONAL evaluates its positive right operand per driver occurrence, moving node-entry counts and row-charge order; eligible correlated EXISTS/NOT EXISTS uses native restrictions and the first-witness definition path, moving candidate and existence-evidence charges. Carried columns change intermediate-cell widths, and admission forecasts the seeded plan with relation-local join domains. Complete answers keep their scope and bag multiplicity; fuel totals and budget-cut points can move |
-| **12** | `exact-arithmetic-work` is appended, because `xsd:integer` and `xsd:decimal` became exact at every size: an operation whose operands do not both fit machine words runs on the arbitrary-precision tower, where one product of two million-digit integers is billions of limb operations. Priced by one `row-expression-evaluation` like any expression, a chain of squarings could run until memory ran out under every fuel ceiling. Each such `+`, `-`, `*` and `/` is now charged its own cost bound, computed from the operand sizes alone, before it runs. Machine-word operands charge nothing, so a query whose numbers fit machine words buys exactly the execution it bought under v11 |
+| **12** | The schedule is unchanged; what `row-expression-evaluation` counts moves, because `xsd:integer` and `xsd:decimal` became exact at every size: an operation whose operands do not both fit machine words runs on the arbitrary-precision tower, where one product of two million-digit integers is billions of limb operations. Priced by one `row-expression-evaluation` like any expression, a chain of squarings could run until memory ran out under every fuel ceiling. Each such `+`, `-`, `*` and `/` now also charges `row-expression-evaluation` once per base-`1e9` limb operation of its own cost bound, computed from the operand sizes alone, before it runs. Machine-word operands charge nothing extra, so a query whose numbers fit machine words buys exactly the execution it bought under v11 |
 
 ### 12.1 What a consumer must re-verify when the version moves
 

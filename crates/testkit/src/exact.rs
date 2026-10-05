@@ -844,6 +844,18 @@ impl Rational {
         }
     }
 
+    /// [`Self::to_canonical_decimal`] for a value whose expansion the caller knows
+    /// terminates (a sum, difference, product or truncated quotient of decimals).
+    ///
+    /// # Panics
+    ///
+    /// When the expansion does not terminate.
+    #[must_use]
+    pub fn canonical_terminating(&self) -> String {
+        self.to_canonical_decimal()
+            .expect("the decimal expansion of the value terminates")
+    }
+
     /// The XSD 1.1 canonical `xsd:decimal` lexical form of the value, or `None`
     /// when its decimal expansion does not terminate: digits with no leading
     /// zero, a `.` and the fraction only when the value is not an integer, the

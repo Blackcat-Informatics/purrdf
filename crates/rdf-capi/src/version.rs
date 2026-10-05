@@ -196,7 +196,19 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// keeps calling everything it called before unchanged. It bumps for the reason the
 /// `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
 /// answer `purrdf_abi_version` the way `0.8.0` does.
-pub const PURRDF_ABI_MINOR: u32 = 9;
+///
+/// # `0.9.0` → `0.10.0`: two added symbols
+///
+/// `0.9.0` shipped as the ABI of the `3.0.1` libraries. This bump adds
+/// `purrdf_xsd_canonical_lexical` — the XSD canonical lexical form of a typed value —
+/// and `purrdf_xsd_value_compare` — the XSD value-space order of two typed values, with
+/// incomparability reported through its `out_comparable` flag — both exact for integers
+/// and decimals of any length. It changes no existing prototype, struct layout or
+/// status number, so a host built against `0.9.0` keeps calling everything it called
+/// before unchanged. It bumps for the reason the `0.8.0` paragraph gives: a library
+/// exporting two more symbols than `0.9.0` must not answer `purrdf_abi_version` the way
+/// `0.9.0` does.
+pub const PURRDF_ABI_MINOR: u32 = 10;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

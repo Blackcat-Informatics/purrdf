@@ -112,13 +112,13 @@ fn oracle_rational_lexical(text: &str) -> Oracle {
         .expect("a nonzero denominator")
 }
 
-/// The canonical form the oracle writes for an exact value known to terminate.
-fn canonical(value: &Oracle) -> String {
-    value.to_canonical_decimal().expect("a terminating value")
-}
-
 fn assert_same(got: &str, expected: &Oracle, context: &str) -> Result<(), TestCaseError> {
-    prop_assert_eq!(got, canonical(expected).as_str(), "{}", context);
+    prop_assert_eq!(
+        got,
+        expected.canonical_terminating().as_str(),
+        "{}",
+        context
+    );
     Ok(())
 }
 
@@ -321,7 +321,7 @@ prop_test! {
         let exact = oracle(&text);
         // From the oracle's own canonical form: its fractional digits are the
         // scale, its digits without the point the coefficient.
-        let written = canonical(&exact);
+        let written = exact.canonical_terminating();
         let fits_scale = written.split_once('.').map_or(0, |(_, fraction)| fraction.len()) <= 18;
         let coefficient: String = written.chars().filter(|&c| c != '.').collect();
         let fits_mantissa = coefficient.parse::<i128>().is_ok();

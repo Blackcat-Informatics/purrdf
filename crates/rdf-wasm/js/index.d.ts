@@ -3076,3 +3076,26 @@ export function shaclProductValidateToSarifRebuildExpectingAsync(
 ): Promise<string>;
 
 export function version(): string;
+
+/**
+ * The XSD canonical lexical form of `lexical` read as the datatype IRI `datatype`
+ * (`"+007"` as `xsd:integer` is `"7"`, `"1.50"` as `xsd:decimal` is `"1.5"`). Integers
+ * and decimals are exact at any length, so the result can be handed to `BigInt` or a
+ * decimal library without losing digits. `undefined` when `datatype` is not an XSD
+ * datatype the engine maps, or `lexical` is not in its lexical space.
+ */
+export function xsdCanonicalLexical(lexical: string, datatype: string): string | undefined;
+
+/**
+ * Compare two typed values in the XSD value space: `-1` when the left value is the
+ * smaller, `0` when they are equal, `1` when it is the larger. Numeric datatypes compare
+ * across each other, exactly at any length. `undefined` when either datatype is not an
+ * XSD datatype the engine maps, either lexical form is not in its datatype's lexical
+ * space, or the values are incomparable (a `NaN`, or a number against a string).
+ */
+export function xsdValueCompare(
+  leftLexical: string,
+  leftDatatype: string,
+  rightLexical: string,
+  rightDatatype: string,
+): -1 | 0 | 1 | undefined;

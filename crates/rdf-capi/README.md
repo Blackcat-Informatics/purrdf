@@ -133,7 +133,7 @@ the IRI failure without parsing English. The error message and the record's
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.9.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.10.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -206,6 +206,12 @@ the IRI failure without parsing English. The error message and the record's
   syntaxes cannot write a graph that holds no row). `purrdf_serialize` keeps its
   prototype. It bumps because `0.8.0` is the ABI of the released `3.0.x` libraries,
   which do not export the symbol.
+  `0.9.0` → `0.10.0` adds two symbols and changes nothing else:
+  `purrdf_xsd_canonical_lexical(lexical, datatype, out_buffer, out_error)` and
+  `purrdf_xsd_value_compare(left_lexical, left_datatype, right_lexical,
+  right_datatype, out_comparable, out_order, out_error)` (see
+  [The XSD value space](#the-xsd-value-space)). It bumps because `0.9.0` is the ABI
+  of the released `3.0.1` libraries, which do not export them.
 
 ## Shapes-graph tools
 
@@ -434,6 +440,25 @@ Three representations are offered (per-row N-Triples reparse is **not** the only
 path): structured borrowed term views (`PurrdfTermView`), a cursor-scoped opaque
 `term_id` for re-addressing a term (notably a quoted triple, whose components do
 not fit a flat view), and the `purrdf_term_to_ntriples` convenience function.
+
+## The XSD value space
+
+A literal's lexical form is text, and C has no exact type for an `xsd:integer` past
+its widest integer or for an `xsd:decimal` at all. Two entry points keep the value in
+the engine, exact at any length:
+
+- `purrdf_xsd_canonical_lexical(lexical, datatype, out_buffer, out_error)` writes the
+  XSD canonical lexical form (`+007` as `xsd:integer` is `7`, `1.50` as `xsd:decimal`
+  is `1.5`) to a `PurrdfBuffer`.
+- `purrdf_xsd_value_compare(left_lexical, left_datatype, right_lexical,
+  right_datatype, out_comparable, out_order, out_error)` sets `*out_comparable` to
+  `1` and `*out_order` to `-1`, `0` or `1`, or `*out_comparable` to `0` when the
+  values are incomparable (a `NaN`, or a number against a string). Numeric datatypes
+  compare across each other.
+
+Both return `PURRDF_STATUS_INVALID_ARGUMENT` for a datatype IRI that is not an XSD
+datatype the engine maps and `PURRDF_STATUS_PARSE_ERROR` for a lexical form outside
+its datatype's lexical space.
 
 ## GTS star-layer round-trip
 

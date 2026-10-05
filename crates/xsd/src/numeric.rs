@@ -34,8 +34,10 @@ pub fn numeric_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> crate::exact::Cos
 /// the bounded variants (which the bounded match refuses as a type mismatch) or a
 /// bounded overflow (`OutOfRange`) recomputes on the tower.
 ///
-/// `#[inline]` so an `Ok` from the bounded operator returns in place: per-row
-/// folds (`SUM`) call the operators once per row.
+/// Inlined, so an `Ok` from the bounded operator returns in place in every caller
+/// (per-row folds such as `SUM` call the operators once per row); the tower itself
+/// is behind the `#[cold]`, never-inlined [`exact_path::binop`], so none of its
+/// temporaries land in a caller's frame.
 #[allow(
     clippy::inline_always,
     reason = "an `Ok` from the bounded operator must return in place in every caller; per-row folds pay for the call and the result copy otherwise"

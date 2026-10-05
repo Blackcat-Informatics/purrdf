@@ -17,7 +17,7 @@
 #
 # Regenerate by running `cargo test -p purrdf-capi --test abi_signatures` and
 # pasting the ACTUAL block it prints. Never hand-tune a single line.
-abi-version 0.9.0
+abi-version 0.10.0
 const char *purrdf_error_message(const PurrdfError *err)
 const char *purrdf_error_presentation_json(const PurrdfError *err)
 const char *purrdf_shapes_import_error_iri(const PurrdfError *err, size_t index)
@@ -102,6 +102,8 @@ int32_t purrdf_shapes_product_rebuild_expecting(const uint8_t *product, size_t p
 int32_t purrdf_term_to_ntriples(const PurrdfDataset *dataset, const PurrdfTermView *view, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_to_gts(const PurrdfDataset *dataset, const char *profile, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_update_governed(PurrdfDataset *dataset, const char *request, const char *base_iri, const char *aggregate_namespace, const PurrdfQueryGovernors *governors, int32_t *out_outcome, PurrdfGovernorEvidence *out_evidence, PurrdfError **out_error)
+int32_t purrdf_xsd_canonical_lexical(const char *lexical, const char *datatype, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_xsd_value_compare(const char *left_lexical, const char *left_datatype, const char *right_lexical, const char *right_datatype, uint8_t *out_comparable, int32_t *out_order, PurrdfError **out_error)
 size_t purrdf_shapes_import_error_iri_count(const PurrdfError *err)
 void purrdf_buffer_free(PurrdfBuffer *buf)
 void purrdf_cancellation_free(PurrdfCancellation *cancellation)
