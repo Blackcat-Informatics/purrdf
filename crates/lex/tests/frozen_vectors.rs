@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The frozen lexical vectors, replayed against `purrdf-lex`, natively and on
-//! wasm32.
+//! The complete frozen lexical vectors, replayed natively against `purrdf-lex`.
+//! Release-crate WASM compilation is checked separately by `make wasm`.
 //!
 //! Each file in `tests/vectors/` was recorded from the implementation that
 //! did the job before it moved here: UCHAR and ECHAR decoding from the

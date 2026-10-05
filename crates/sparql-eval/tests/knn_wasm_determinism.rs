@@ -1,41 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! **The same nearest-neighbour answer, executed on x86-64 and on
-//! `wasm32-unknown-unknown`, compared against the same pinned bytes.**
+//! Native exact nearest-neighbour expectations against pinned distance lexicals.
 //!
-//! The kNN kernels rank by binary64 arithmetic. Every other test in this crate proves the
-//! kernel is a pure function *of one target*: run it twice on this machine and it agrees
-//! with itself. That is not the claim the surface makes. The claim is that a host and a
-//! browser answering the same query over the same artifact return the same rows in the
-//! same order with the same distance lexicals — and two runs on one target cannot
-//! distinguish a kernel that is target-independent from one that merely happens to be
-//! self-consistent wherever it was last compiled.
-//!
-//! Floating-point ranking is exactly where that distinction bites. Reassociating a sum,
-//! or contracting a multiply and an add into a fused multiply-add, changes the last bit;
-//! two nearly-tied neighbours then swap, and the two engines disagree about the *answer*
-//! rather than about a rounding detail. The kernels are written to make both impossible
-//! (see `knn::metric`), and the WebAssembly core specification requires the same
-//! correctly-rounded IEEE-754 results this target does. This file is where that stops
-//! being an argument and becomes an executed test.
-//!
-//! # How it runs on both
-//!
-//! One test body per case, one runner on both targets. The target is `harness = false`,
-//! and its `main` hands the named cases to `purrdf_testkit::harness`: natively they run
-//! under `cargo test --workspace`, and on `wasm32-unknown-unknown` the same named cases
-//! run in Node through `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test`
-//! (and CI's wasm job) sets:
-//!
-//! ```text
-//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
-//!     cargo test -p purrdf-sparql-eval --target wasm32-unknown-unknown --test knn_wasm_determinism
-//! ```
-//!
-//! Both runs assert the *same* literal expectations — the ones written below. A target
-//! that computes a different last bit renders a different `xsd:double` lexical and fails
-//! here rather than surfacing as a mystery reordering in production.
+//! The kNN kernels rank by binary64 arithmetic with a fixed accumulation order.
+//! Reassociation or contraction can move a last bit and swap nearly tied rows;
+//! these cases pin independent literals under `cargo test --workspace`.
+//! Actual WASM dispatch and simd128 kernels are selected separately from
+//! `knn_wasm_reassociated` by `make wasm-test`.
 //!
 //! # Why the fixture looks like that
 //!
@@ -57,9 +29,8 @@
 //! four whole chunks fill all sixteen lanes and the 64-element bound checkpoint, the
 //! pairwise tree combines them, and six components are left for the tail. It is asked
 //! twice, under cosine (signed products, where the order moves the sum) and under squared
-//! Euclidean (the bounded fold's own body), and `make wasm-test` runs this file on a
-//! baseline wasm32 build and again on a `+simd128` one, where LLVM packs the lanes into
-//! `f64x2` operations. All three executions assert the same pinned lexicals.
+//! Euclidean (the bounded fold's own body). Native execution asserts the pinned
+//! lexicals for both the sequential tail and the full lane tree.
 
 #![allow(clippy::doc_markdown, reason = "prose names targets, not items")]
 
