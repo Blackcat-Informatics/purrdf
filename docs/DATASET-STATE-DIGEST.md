@@ -158,6 +158,15 @@ The following exact construction specifies that family.
    generate every permutation of the cell; batch individualization yields the
    same terminal family and may use any member order.
 
+For each transposition, compare the sorted renderings of the deduplicated union
+of the two blanks' incident records before and after exchanging their ordinals.
+Incidence includes every blank occurrence in graph declarations, each row role,
+nested triple terms and CDT values. All records outside this union are fixed by
+the exchange. Multiset cancellation therefore makes the incident comparison
+equivalent to comparing the complete typed record set; overlapping incidence
+lists do not count a record twice. The temporary indices and both renderings
+fit the unchanged aggregate workspace admission.
+
 ## Completeness theorem
 
 The typed codec is injective: disjoint term/record tags, explicit presence,

@@ -675,11 +675,25 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
         &self,
         a: usize,
         b: usize,
-        original: &[Vec<u8>],
+        incidence: &[Vec<usize>],
         identity: &mut [usize],
     ) -> bool {
+        let mut affected: Vec<_> = incidence[a].iter().chain(&incidence[b]).copied().collect();
+        affected.sort_unstable();
+        affected.dedup();
+        let records = |labels: &[usize]| {
+            let mut records: Vec<_> = affected
+                .iter()
+                .map(|&index| self.render(self.records[index], Labels::Ordinals(labels)))
+                .collect();
+            records.sort_unstable();
+            records
+        };
+        // The fixed complement cancels from the full-state multiset comparison.
+        // Incidence includes graph names, every role, nested terms and CDT blanks.
+        let original = records(identity);
         identity.swap(a, b);
-        let same = self.rendered_records(Labels::Ordinals(identity)) == original;
+        let same = records(identity) == original;
         identity.swap(a, b);
         same
     }
@@ -707,7 +721,6 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
                 .ok_or(DatasetStateError::Capacity)?,
         )?;
         let mut identity: Vec<_> = (0..count).collect();
-        let original = self.rendered_records(Labels::Ordinals(&identity));
         let mut pending: WorkList<Vec<usize>, 8> = WorkList::with(vec![0; count]);
         let mut best: Option<Vec<u8>> = None;
         let mut work = 0;
@@ -738,7 +751,7 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
                 let mut equivalent = false;
                 for &representative in &representatives {
                     Self::tick(&mut work, limit)?;
-                    if self.automorphism(candidate, representative, &original, &mut identity) {
+                    if self.automorphism(candidate, representative, &incidence, &mut identity) {
                         equivalent = true;
                         break;
                     }

@@ -1177,7 +1177,7 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
     );
 }
 
-fn disconnected_symmetry_refuses_production_search_and_has_a_small_neighbor() {
+fn disconnected_symmetry_refuses_production_search_and_has_an_admitted_neighbor() {
     assert_eq!(
         DatasetStateDigest::from_view(&fixtures::triangle_components(8)),
         Err(DatasetStateError::SearchBudgetExceeded),
@@ -1185,32 +1185,53 @@ fn disconnected_symmetry_refuses_production_search_and_has_a_small_neighbor() {
     assert!(DatasetStateDigest::from_view(&fixtures::triangle_components(2)).is_ok());
 }
 
-fn capped_workspace_admits_independent_anchors_and_covers_observed_allocations() {
-    let source = fixtures::anchored_blanks(256, false);
-    let expected = DatasetStateDigest::from_view(&source).unwrap();
-    let mut probe = Probe::new(source, FaultMode::Ready);
-    probe.workspace_limit = 2 * 1024 * 1024;
-    probe
-        .allocation_window
-        .replace(Some(purrdf_alloc_probe::CurrentThreadWindow::open()));
-    let actual = DatasetStateDigest::from_view(&probe);
-    let observed = probe.allocation_window.take().unwrap().close();
-    assert_eq!(actual.unwrap(), expected);
-    assert!(u64::try_from(observed.peak_working_bytes).unwrap() <= probe.reservation_peak.get());
-    assert!(probe.reservation_peak.get() <= probe.workspace_limit);
-    assert!(!probe.reservation_live.get());
-    let mut lower = Probe::new(Arc::clone(&probe.source), FaultMode::Ready);
-    lower.workspace_limit = probe.reservation_peak.get() - 1;
-    assert!(matches!(
-        DatasetStateDigest::from_view(&lower),
-        Err(DatasetStateError::Read(error)) if error == SourceFault::new("workspace ceiling"),
-    ));
-    assert!(!lower.reservation_live.get());
-    eprintln!(
-        "anchored workspace: admitted={} observed_peak={}",
-        probe.reservation_peak.get(),
-        observed.peak_working_bytes
-    );
+fn capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocations() {
+    for (name, source, renamed, ceiling) in [
+        (
+            "anchored",
+            fixtures::anchored_blanks(256, false),
+            fixtures::anchored_blanks(256, true),
+            2 * 1024 * 1024,
+        ),
+        (
+            "interchangeable",
+            fixtures::interchangeable_leaves(4096, false),
+            fixtures::interchangeable_leaves(4096, true),
+            32 * 1024 * 1024,
+        ),
+    ] {
+        let expected = DatasetStateDigest::from_view(&source).unwrap();
+        assert_eq!(
+            DatasetStateDigest::from_view(&renamed).unwrap(),
+            expected,
+            "{name} global relabeling"
+        );
+        let mut probe = Probe::new(source, FaultMode::Ready);
+        probe.workspace_limit = ceiling;
+        probe
+            .allocation_window
+            .replace(Some(purrdf_alloc_probe::CurrentThreadWindow::open()));
+        let actual = DatasetStateDigest::from_view(&probe);
+        let observed = probe.allocation_window.take().unwrap().close();
+        assert_eq!(actual.unwrap(), expected);
+        assert!(
+            u64::try_from(observed.peak_working_bytes).unwrap() <= probe.reservation_peak.get()
+        );
+        assert!(probe.reservation_peak.get() <= probe.workspace_limit);
+        assert!(!probe.reservation_live.get());
+        let mut lower = Probe::new(Arc::clone(&probe.source), FaultMode::Ready);
+        lower.workspace_limit = probe.reservation_peak.get() - 1;
+        assert!(matches!(
+            DatasetStateDigest::from_view(&lower),
+            Err(DatasetStateError::Read(error)) if error == SourceFault::new("workspace ceiling"),
+        ));
+        assert!(!lower.reservation_live.get());
+        eprintln!(
+            "{name} workspace: admitted={} observed_peak={}",
+            probe.reservation_peak.get(),
+            observed.peak_working_bytes
+        );
+    }
 }
 
 fn high_incidence_nested_cdt_and_duplicate_rows_have_admitted_allocation_neighbors() {
@@ -1291,7 +1312,7 @@ purrdf_testkit::harness_main!(
     exact_lexical_bytes_and_maximum_accepted_nesting_have_neighbors,
     authored_reserved_namespace_iris_remain_ordinary_terms,
     capacity_and_invalid_datatype_refusals_have_ready_neighbors,
-    disconnected_symmetry_refuses_production_search_and_has_a_small_neighbor,
-    capped_workspace_admits_independent_anchors_and_covers_observed_allocations,
+    disconnected_symmetry_refuses_production_search_and_has_an_admitted_neighbor,
+    capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocations,
     high_incidence_nested_cdt_and_duplicate_rows_have_admitted_allocation_neighbors,
 );

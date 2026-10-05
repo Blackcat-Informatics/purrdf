@@ -137,3 +137,126 @@ fn genuine_branching_refuses_its_search_budget_and_has_an_admitted_neighbor() {
     );
     assert!(captured.canonical_bytes(RDFC_CALL_LIMIT).is_ok());
 }
+
+fn incidence_fixture(asymmetric: bool) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    let q = builder.intern_iri("http://example.org/q");
+    let g = builder.intern_iri("http://example.org/g");
+    let h = builder.intern_iri("http://example.org/h");
+    let labels = ["left", "right"];
+    let blanks = labels.map(|label| builder.intern_blank(label, BlankScope::DEFAULT));
+    for (index, &blank) in blanks.iter().enumerate() {
+        let other = blanks[1 - index];
+        let label = labels[index];
+        let other_label = labels[1 - index];
+        builder.declare_named_graph(blank);
+        let inner = builder.intern_triple(blank, p, other);
+        let outer = builder.intern_triple(other, p, inner);
+        builder.push_quad(g, p, outer, None);
+        builder.push_quad(g, q, h, Some(blank));
+        builder.push_reifier(blank, inner);
+        builder.push_annotation(blank, q, h);
+        let list = builder.intern_literal(RdfLiteral::typed(
+            format!("[ _:{label}, [ _:{other_label}, _:{label} ] ]"),
+            purrdf_cdt::CDT_LIST,
+        ));
+        builder.push_quad(g, p, list, None);
+        let map = builder.intern_literal(RdfLiteral::typed(
+            format!("{{ _:{label}: [ _:{other_label}, _:{label} ] }}"),
+            purrdf_cdt::CDT_MAP,
+        ));
+        builder.push_annotation(g, q, map);
+        let embedded = builder.intern_literal(RdfLiteral::typed(
+            format!(
+                "[\"[_:{label}, _:{other_label}]\"^^<{}> ]",
+                purrdf_cdt::CDT_LIST
+            ),
+            purrdf_cdt::CDT_LIST,
+        ));
+        builder.push_quad(g, q, embedded, None);
+    }
+    builder.push_quad(g, p, h, None);
+    if asymmetric {
+        let object = builder.intern_literal(RdfLiteral::typed(
+            format!("[\"{{_:left: [_:left]}}\"^^<{}> ]", purrdf_cdt::CDT_MAP),
+            purrdf_cdt::CDT_LIST,
+        ));
+        builder.push_quad(g, p, object, None);
+    }
+    builder.freeze().unwrap()
+}
+
+#[test]
+fn incident_transpositions_match_every_record_and_restore_labels() {
+    let mut cases: Vec<_> = VECTORS
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .map(|line| {
+            let name = line.split_whitespace().next().unwrap();
+            (name, fixture(name))
+        })
+        .collect();
+    cases.extend([
+        (
+            "interchangeable_leaves",
+            fixtures::interchangeable_leaves(8, false),
+        ),
+        ("directed_triangles", fixtures::triangle_components(2)),
+        ("mixed_symmetric", incidence_fixture(false)),
+        ("mixed_asymmetric", incidence_fixture(true)),
+    ]);
+    let mut accepted = false;
+    let mut refused = false;
+    let mut pairs = 0;
+    for (name, dataset) in cases {
+        let mut reservation = dataset.reserve_workspace(0).unwrap();
+        let mut captured = Captured::new(&*dataset, &mut reservation).unwrap();
+        captured.collect().unwrap();
+        let incidence = captured.incidence();
+        for reverse in [false, true] {
+            let mut identity: Vec<_> = (0..captured.blank_count).collect();
+            if reverse {
+                identity.reverse();
+            }
+            let before = identity.clone();
+            // A fresh ordinal changes every occurrence of this blank without
+            // using incidence to choose the record. This proves its exactness.
+            for (blank, incident) in incidence.iter().enumerate() {
+                let original = identity[blank];
+                for (index, &record) in captured.records.iter().enumerate() {
+                    let bytes = captured.render(record, Labels::Ordinals(&identity));
+                    identity[blank] = captured.blank_count;
+                    let changed = captured.render(record, Labels::Ordinals(&identity));
+                    identity[blank] = original;
+                    assert_eq!(
+                        incident.binary_search(&index).is_ok(),
+                        bytes != changed,
+                        "{name} blank {blank}, record {index}, reverse={reverse}",
+                    );
+                }
+            }
+            let original = captured.rendered_records(Labels::Ordinals(&identity));
+            for a in 0..captured.blank_count {
+                for b in a + 1..captured.blank_count {
+                    identity.swap(a, b);
+                    let expected =
+                        captured.rendered_records(Labels::Ordinals(&identity)) == original;
+                    identity.swap(a, b);
+                    let actual = captured.automorphism(a, b, &incidence, &mut identity);
+                    assert_eq!(actual, expected, "{name}: {a}/{b}, reverse={reverse}");
+                    assert_eq!(identity, before, "labels restored after {name}: {a}/{b}");
+                    accepted |= actual;
+                    refused |= !actual;
+                    pairs += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        accepted && refused,
+        "both automorphisms and invalid transpositions are exercised"
+    );
+    assert_eq!(pairs, 90, "every blank pair under both ordinal bijections");
+    eprintln!("incident/full-record transposition comparisons: {pairs}");
+}

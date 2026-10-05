@@ -54,6 +54,14 @@ fn cases() -> Vec<(&'static str, Arc<RdfDataset>)> {
             fixtures::anchored_blanks(4096, false),
         ),
         ("branching_two_triangles", fixtures::triangle_components(2)),
+        (
+            "interchangeable_256_leaves",
+            fixtures::interchangeable_leaves(256, false),
+        ),
+        (
+            "interchangeable_4096_leaves",
+            fixtures::interchangeable_leaves(4096, false),
+        ),
     ]
 }
 

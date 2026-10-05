@@ -32,6 +32,26 @@ pub(super) fn anchored_blanks(count: usize, reverse: bool) -> Arc<RdfDataset> {
     builder.freeze().unwrap()
 }
 
+/// Identical leaf rows put every blank in one interchangeable refinement cell.
+pub(super) fn interchangeable_leaves(count: usize, reverse: bool) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("http://example.org/p");
+    let object = builder.intern_iri("http://example.org/leaf");
+    for ordinal in 0..count {
+        let label = if reverse { count - ordinal } else { ordinal };
+        let blank = builder.intern_blank(
+            &format!("leaf{label}"),
+            if reverse {
+                BlankScope(19)
+            } else {
+                BlankScope::DEFAULT
+            },
+        );
+        builder.push_quad(blank, predicate, object, None);
+    }
+    builder.freeze().unwrap()
+}
+
 /// Disjoint directed triangles have component permutations without blank transpositions.
 pub(super) fn triangle_components(count: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
