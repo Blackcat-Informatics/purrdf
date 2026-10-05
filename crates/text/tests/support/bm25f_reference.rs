@@ -19,6 +19,11 @@ fn pairs(text: &str) -> Vec<(u64, u64)> {
 
 /// Compare the complete nonempty reference corpus, one raw integer at a time.
 pub(super) fn verify_reference_corpus() {
+    verify_reference_corpus_with_population_mode(false);
+}
+
+/// Native dense-equivalence qualification under the explicit carrier law.
+pub(super) fn verify_reference_corpus_with_population_mode(field_populations: bool) {
     let mut vectors = 0;
     for row in include_str!("../reference/bm25f.tsv")
         .lines()
@@ -39,13 +44,22 @@ pub(super) fn verify_reference_corpus() {
             })
             .collect();
         let profile = RankingProfile::new(fields, Vec::new(), Some(0)).expect("profile");
+        let profile = if field_populations {
+            profile.with_field_populations()
+        } else {
+            profile
+        };
         let totals: Vec<u128> = columns[2]
             .split(',')
             .map(|value| value.parse().expect("total"))
             .collect();
-        let corpus =
-            PreparedCorpus::new(&profile, columns[1].parse().expect("population"), &totals)
-                .expect("corpus");
+        let populations = vec![columns[1].parse().expect("population"); totals.len()];
+        let corpus = if field_populations {
+            PreparedCorpus::with_field_populations(&profile, populations[0], &totals, &populations)
+        } else {
+            PreparedCorpus::new(&profile, populations[0], &totals)
+        }
+        .expect("corpus");
         let frequencies: Vec<u64> = columns[4]
             .split(',')
             .map(|value| value.parse().expect("df"))
