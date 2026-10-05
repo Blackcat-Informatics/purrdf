@@ -503,11 +503,13 @@ pub(crate) enum LoweredPath {
 /// three siblings).
 ///
 /// The bound is a constant of the shape, so the strip-prefix, the datatype test
-/// over the XSD numeric lattice and the `f64` parse that decide it are stage-0
-/// work; they used to run once per VALUE NODE, on a term that never changed.
+/// over the XSD numeric lattice and the value-space parse that decide it are
+/// stage-0 work; they used to run once per VALUE NODE, on a term that never
+/// changed. The parse is exact for an `xsd:integer`/`xsd:decimal` bound of any
+/// size ([`purrdf_xsd::LiteralValue`]).
 ///
 /// `None` means the bound is not an XSD numeric literal, or is one whose lexical
-/// form does not parse as an `f64`. **That is an ordinary shapes graph, not a
+/// form its own datatype rejects. **That is an ordinary shapes graph, not a
 /// refusal.** [`crate::constraints`]'s range-facet comparison documents the rule
 /// and this lowering preserves it verbatim: a comparison whose numeric half
 /// yields nothing falls through to the XSD temporal value-space comparison, and
@@ -517,7 +519,7 @@ pub(crate) enum LoweredPath {
 /// produces the violation it produces today. Turning either into a hard error
 /// here would refuse shapes graphs that validate now, which is the exact mirror
 /// of a silently dropped result.
-pub(crate) type BoundParse = Option<f64>;
+pub(crate) type BoundParse = Option<purrdf_xsd::LiteralValue>;
 
 /// The stage-0 lowering of one constraint.
 ///
@@ -1229,9 +1231,9 @@ pub(crate) struct RangeBound<'a> {
     /// fall-through compares the bound as a term, and because a violation's
     /// message-free report never needs it but the comparison always does.
     term: &'a Term,
-    /// Its stage-0 numeric parse — see [`BoundParse`] for why `None` is an
-    /// ordinary answer and never an error.
-    numeric: BoundParse,
+    /// Its stage-0 numeric parse, borrowed from the lowering — see
+    /// [`BoundParse`] for why `None` is an ordinary answer and never an error.
+    numeric: Option<&'a purrdf_xsd::LiteralValue>,
 }
 
 impl<'a> RangeBound<'a> {
@@ -1243,7 +1245,7 @@ impl<'a> RangeBound<'a> {
 
     /// The bound's numeric value, or `None` when it has none.
     #[inline]
-    pub(crate) fn numeric(&self) -> BoundParse {
+    pub(crate) fn numeric(&self) -> Option<&'a purrdf_xsd::LiteralValue> {
         self.numeric
     }
 }
@@ -1612,25 +1614,25 @@ impl<'a> ShapePlan<'a> {
             (Constraint::MinInclusive(bound), LoweredConstraint::MinInclusive(numeric)) => {
                 PlannedConstraint::MinInclusive(RangeBound {
                     term: bound,
-                    numeric: *numeric,
+                    numeric: numeric.as_ref(),
                 })
             }
             (Constraint::MaxInclusive(bound), LoweredConstraint::MaxInclusive(numeric)) => {
                 PlannedConstraint::MaxInclusive(RangeBound {
                     term: bound,
-                    numeric: *numeric,
+                    numeric: numeric.as_ref(),
                 })
             }
             (Constraint::MinExclusive(bound), LoweredConstraint::MinExclusive(numeric)) => {
                 PlannedConstraint::MinExclusive(RangeBound {
                     term: bound,
-                    numeric: *numeric,
+                    numeric: numeric.as_ref(),
                 })
             }
             (Constraint::MaxExclusive(bound), LoweredConstraint::MaxExclusive(numeric)) => {
                 PlannedConstraint::MaxExclusive(RangeBound {
                     term: bound,
-                    numeric: *numeric,
+                    numeric: numeric.as_ref(),
                 })
             }
             (Constraint::And(shapes), LoweredConstraint::And(lowered)) => {

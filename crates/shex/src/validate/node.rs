@@ -5,7 +5,7 @@
 //! with lexical-validity checking, string/numeric XML-Schema facets, and
 //! value sets with stems, ranges and exclusions.
 
-use purrdf_xsd::{XsdDatatype, XsdValue, value_cmp};
+use purrdf_xsd::{LiteralValue, XsdDatatype, XsdValue, literal_cmp};
 
 use super::pattern::PatternCache;
 use crate::ast::{
@@ -151,8 +151,11 @@ fn check_datatype(datatype: &str, facts: &NodeFacts<'_>) -> Result<(), String> {
     {
         // shexTest v2.1.0 pins the XSD 1.0 float/double lexical space
         // (INF/-INF, not the XSD 1.1 "+INF" spelling), so validate with the
-        // XSD-1.0-restricted parser rather than the 1.1 kernel default.
-        purrdf_xsd::parse_xsd10(facts.lexical, xsd)
+        // XSD-1.0-restricted parser rather than the 1.1 kernel default. An
+        // `xsd:integer`/`xsd:decimal` literal past the bounded numeric
+        // representation is well formed: its value lies in the unbounded value
+        // space.
+        LiteralValue::parse_xsd10(facts.lexical, xsd)
             .map_err(|e| format!("ill-formed <{datatype}> literal {:?}: {e}", facts.lexical))?;
     }
     Ok(())
@@ -218,8 +221,9 @@ fn check_string_facets(
 
 // ── numeric facets ──────────────────────────────────────────────────────────
 
-/// Parse the node into the XSD numeric value space, or explain why not.
-fn numeric_value(facts: &NodeFacts<'_>) -> Result<XsdValue, String> {
+/// Parse the node into the XSD numeric value space — exactly, for an integer or
+/// decimal of any size — or explain why not.
+fn numeric_value(facts: &NodeFacts<'_>) -> Result<LiteralValue, String> {
     if facts.kind != FactKind::Literal {
         return Err(format!(
             "numeric facet requires a numeric literal, got {}",
@@ -237,7 +241,7 @@ fn numeric_value(facts: &NodeFacts<'_>) -> Result<XsdValue, String> {
             "numeric facet requires a numeric datatype, got <{datatype}>"
         ));
     }
-    purrdf_xsd::parse_xsd10(facts.lexical, xsd)
+    LiteralValue::parse_xsd10(facts.lexical, xsd)
         .map_err(|e| format!("ill-formed numeric literal {:?}: {e}", facts.lexical))
 }
 
@@ -277,8 +281,8 @@ fn check_numeric_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<()
     let value = numeric_value(facts)?;
     for (name, bound, allowed) in comparisons {
         if let Some(bound) = bound {
-            let facet = facet_value(bound);
-            let Some(ordering) = value_cmp(&value, &facet) else {
+            let facet = LiteralValue::Bounded(facet_value(bound));
+            let Some(ordering) = literal_cmp(&value, &facet) else {
                 return Err(format!(
                     "{name} comparison with {} failed",
                     facts.describe()
@@ -318,11 +322,15 @@ fn check_numeric_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<()
 
 /// `(total, fraction)` digit counts of the canonical decimal representation,
 /// or `None` when the value is not decimal-derived (spec §5.4.5: the digit
-/// facets fail on float/double).
-fn decimal_digits(value: &XsdValue) -> Option<(u64, u64)> {
+/// facets fail on float/double). Exact for an integer or decimal of any size.
+fn decimal_digits(value: &LiteralValue) -> Option<(u64, u64)> {
     let canonical = match value {
-        XsdValue::Integer { value, .. } => value.unsigned_abs().to_string(),
-        XsdValue::Decimal(d) => d.canonical_lexical(),
+        LiteralValue::Bounded(XsdValue::Integer { value, .. }) => value.unsigned_abs().to_string(),
+        LiteralValue::Bounded(XsdValue::Decimal(d)) => d.canonical_lexical(),
+        LiteralValue::Unbounded { digits, .. } => {
+            let fraction = digits.fraction_digits();
+            return Some((digits.integer_digits() + fraction, fraction));
+        }
         _ => return None,
     };
     let unsigned = canonical.trim_start_matches('-');
@@ -447,7 +455,7 @@ mod tests {
     #[test]
     fn digit_counting_matches_the_suite() {
         let d = |s: &str| {
-            purrdf_xsd::parse(s, XsdDatatype::Decimal)
+            LiteralValue::parse(s, XsdDatatype::Decimal)
                 .map(|v| decimal_digits(&v).expect("decimal"))
                 .expect("parse")
         };
@@ -455,9 +463,12 @@ mod tests {
         assert_eq!(d("01.23450"), (5, 4));
         assert_eq!(d("1.234560"), (6, 5));
         assert_eq!(d("0.05"), (2, 2));
-        let i = purrdf_xsd::parse("12345", XsdDatatype::Integer).expect("parse");
+        let i = LiteralValue::parse("12345", XsdDatatype::Integer).expect("parse");
         assert_eq!(decimal_digits(&i), Some((5, 0)));
-        assert_eq!(decimal_digits(&XsdValue::Double(1.5)), None);
+        assert_eq!(
+            decimal_digits(&LiteralValue::Bounded(XsdValue::Double(1.5))),
+            None
+        );
     }
 
     #[test]
@@ -488,6 +499,51 @@ mod tests {
         assert!(check_datatype("http://www.w3.org/2001/XMLSchema#integer", &facts).is_err());
         let ok = literal_facts("42", "http://www.w3.org/2001/XMLSchema#integer", None);
         assert!(check_datatype("http://www.w3.org/2001/XMLSchema#integer", &ok).is_ok());
+    }
+
+    /// A literal past the bounded numeric representation is well formed — its value
+    /// lies in the unbounded `xsd:integer`/`xsd:decimal` value space — and the numeric
+    /// facets compare and count it exactly.
+    #[test]
+    fn a_literal_past_the_bounds_is_well_formed_and_compared_exactly() {
+        const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        const POSITIVE: &str = "http://www.w3.org/2001/XMLSchema#positiveInteger";
+        const LONG: &str = "http://www.w3.org/2001/XMLSchema#long";
+        let big = "100000000000000000000000000000000000000000";
+        assert!(check_datatype(INTEGER, &literal_facts(big, INTEGER, None)).is_ok());
+        assert!(check_datatype(POSITIVE, &literal_facts(big, POSITIVE, None)).is_ok());
+        let negative = format!("-{big}");
+        assert!(check_datatype(POSITIVE, &literal_facts(&negative, POSITIVE, None)).is_err());
+        assert!(check_datatype(LONG, &literal_facts(big, LONG, None)).is_err());
+        let fine = "0.10000000000000000001";
+        assert!(check_datatype(DECIMAL, &literal_facts(fine, DECIMAL, None)).is_ok());
+
+        let min = |bound: i64| NodeConstraint {
+            mininclusive: Some(NumericLiteral::Integer(bound)),
+            ..NodeConstraint::default()
+        };
+        let max = |bound: i64| NodeConstraint {
+            maxinclusive: Some(NumericLiteral::Integer(bound)),
+            ..NodeConstraint::default()
+        };
+        assert!(check_numeric_facets(&min(0), &literal_facts(big, INTEGER, None)).is_ok());
+        assert!(check_numeric_facets(&max(0), &literal_facts(big, INTEGER, None)).is_err());
+        assert!(check_numeric_facets(&max(0), &literal_facts(&negative, INTEGER, None)).is_ok());
+        let digits = NodeConstraint {
+            totaldigits: Some(42),
+            fractiondigits: Some(20),
+            ..NodeConstraint::default()
+        };
+        assert!(check_numeric_facets(&digits, &literal_facts(big, INTEGER, None)).is_ok());
+        assert!(check_numeric_facets(&digits, &literal_facts(fine, DECIMAL, None)).is_ok());
+        let tight = NodeConstraint {
+            totaldigits: Some(41),
+            fractiondigits: Some(19),
+            ..NodeConstraint::default()
+        };
+        assert!(check_numeric_facets(&tight, &literal_facts(big, INTEGER, None)).is_err());
+        assert!(check_numeric_facets(&tight, &literal_facts(fine, DECIMAL, None)).is_err());
     }
 
     #[test]

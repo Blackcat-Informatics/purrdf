@@ -14,7 +14,8 @@ use purrdf_core::datatype::{XSD_NORMALIZED_STRING, XSD_TOKEN};
 ///
 /// Returns `-1`, `0`, or `1` when both datatypes are supported and comparable.
 /// Returns `None` for unsupported datatypes, malformed lexicals, or spec-level
-/// incomparability such as `NaN`.
+/// incomparability such as `NaN`. An `xsd:integer` or `xsd:decimal` value past the
+/// bounded numeric representation compares exactly (`purrdf_xsd::literal_cmp`).
 #[pyfunction]
 pub(crate) fn xsd_value_compare(
     left_lexical: &str,
@@ -22,13 +23,13 @@ pub(crate) fn xsd_value_compare(
     right_lexical: &str,
     right_datatype: &str,
 ) -> Option<i8> {
-    let left = purrdf_xsd::parse_by_iri(left_lexical, left_datatype)
+    let left = purrdf_xsd::LiteralValue::parse_by_iri(left_lexical, left_datatype)
         .ok()
         .flatten()?;
-    let right = purrdf_xsd::parse_by_iri(right_lexical, right_datatype)
+    let right = purrdf_xsd::LiteralValue::parse_by_iri(right_lexical, right_datatype)
         .ok()
         .flatten()?;
-    match purrdf_xsd::value_cmp(&left, &right)? {
+    match purrdf_xsd::literal_cmp(&left, &right)? {
         Ordering::Less => Some(-1),
         Ordering::Equal => Some(0),
         Ordering::Greater => Some(1),
@@ -37,13 +38,17 @@ pub(crate) fn xsd_value_compare(
 
 /// Return the canonical lexical form of a supported XSD lexical value.
 ///
-/// Returns `None` for unsupported datatypes or malformed lexicals.
+/// Returns `None` for unsupported datatypes or malformed lexicals. An
+/// `xsd:integer` or `xsd:decimal` value past the bounded numeric representation is
+/// well formed, and has its exact canonical form.
 #[pyfunction]
 pub(crate) fn xsd_canonical_lexical(lexical: &str, datatype: &str) -> Option<String> {
-    purrdf_xsd::parse_by_iri(lexical, datatype)
-        .ok()
-        .flatten()
-        .map(|value| value.canonical_lexical())
+    match purrdf_xsd::LiteralValue::parse_by_iri(lexical, datatype).ok()?? {
+        purrdf_xsd::LiteralValue::Bounded(value) => Some(value.canonical_lexical()),
+        other => other
+            .unbounded()
+            .map(purrdf_xsd::DecimalDigits::canonical_lexical),
+    }
 }
 
 /// Decode an `xsd:hexBinary` or `xsd:base64Binary` lexical form to Python `bytes`.

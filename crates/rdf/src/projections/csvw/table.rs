@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use purrdf_core::csv::{CsvErrorKind, Dialect, Encoding, LineTerminators, Trim, read_table};
 use purrdf_iri::langtag::identity_fold;
 use purrdf_iri::terminals::{self, is_ws, is_xml_name_char, is_xml_name_start_char};
-use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
+use purrdf_xsd::{LiteralValue, XsdDatatype, literal_cmp, parse as parse_xsd};
 use regex::Regex;
 
 use super::super::ProjectionError;
@@ -594,7 +594,9 @@ fn validate_lexical(
     config: &CsvwConfig,
 ) -> Result<(), String> {
     if let Some(xsd) = xsd_datatype(&datatype.base, config) {
-        parse_xsd(lexical, xsd)
+        // An `xsd:integer`/`xsd:decimal` cell past the bounded numeric
+        // representation is still a valid value of its datatype.
+        LiteralValue::parse(lexical, xsd)
             .map_err(|error| format!("invalid CSVW {} value: {error}", datatype.base))?;
     } else if datatype.base == config.vocabulary().xsd("dateTimeStamp") {
         parse_xsd(lexical, XsdDatatype::DateTime)
@@ -1199,7 +1201,9 @@ fn validate_value_facets(
     let Some(xsd) = xsd_datatype(&datatype.base, config) else {
         return Ok(());
     };
-    let value = parse_xsd(lexical, xsd)
+    // The facets compare in the XSD value space, exactly for an integer or decimal
+    // of any size (`purrdf_xsd::literal_cmp`).
+    let value = LiteralValue::parse(lexical, xsd)
         .map_err(|error| format!("invalid CSVW value for facets: {error}"))?;
     let lower = datatype
         .minimum
@@ -1208,7 +1212,7 @@ fn validate_value_facets(
     if let Some(bound) = lower {
         let bound = parse_bound(bound, xsd)?;
         if !matches!(
-            value_cmp(&value, &bound),
+            literal_cmp(&value, &bound),
             Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
         ) {
             return Err("CSVW value is below its inclusive lower bound".to_owned());
@@ -1216,7 +1220,7 @@ fn validate_value_facets(
     }
     if let Some(bound) = &datatype.min_exclusive {
         let bound = parse_bound(bound, xsd)?;
-        if value_cmp(&value, &bound) != Some(std::cmp::Ordering::Greater) {
+        if literal_cmp(&value, &bound) != Some(std::cmp::Ordering::Greater) {
             return Err("CSVW value is not above its exclusive lower bound".to_owned());
         }
     }
@@ -1227,7 +1231,7 @@ fn validate_value_facets(
     if let Some(bound) = upper {
         let bound = parse_bound(bound, xsd)?;
         if !matches!(
-            value_cmp(&value, &bound),
+            literal_cmp(&value, &bound),
             Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
         ) {
             return Err("CSVW value exceeds its inclusive upper bound".to_owned());
@@ -1235,7 +1239,7 @@ fn validate_value_facets(
     }
     if let Some(bound) = &datatype.max_exclusive {
         let bound = parse_bound(bound, xsd)?;
-        if value_cmp(&value, &bound) != Some(std::cmp::Ordering::Less) {
+        if literal_cmp(&value, &bound) != Some(std::cmp::Ordering::Less) {
             return Err("CSVW value is not below its exclusive upper bound".to_owned());
         }
     }
@@ -1245,14 +1249,15 @@ fn validate_value_facets(
 fn parse_bound(
     value: &purrdf_lex::json::Value,
     datatype: XsdDatatype,
-) -> Result<purrdf_xsd::XsdValue, String> {
+) -> Result<LiteralValue, String> {
     let lexical = match value {
         purrdf_lex::json::Value::String(value) => value.clone(),
         purrdf_lex::json::Value::Number(value) => value.lexeme().to_owned(),
         purrdf_lex::json::Value::Bool(value) => value.to_string(),
         _ => return Err("CSVW datatype facet is not atomic".to_owned()),
     };
-    parse_xsd(&lexical, datatype).map_err(|error| format!("invalid CSVW datatype facet: {error}"))
+    LiteralValue::parse(&lexical, datatype)
+        .map_err(|error| format!("invalid CSVW datatype facet: {error}"))
 }
 
 fn has_timezone(value: &str) -> bool {
@@ -1623,18 +1628,16 @@ mod tests {
         }
     }
 
-    /// The judgement is REACHABLE: a cell whose column datatype is
-    /// `xsd:language` is routed here by the ordinary datatype path, so this is
-    /// wiring and not a leaf predicate nobody calls.
-    #[test]
-    fn xsd_language_cells_are_judged_through_the_datatype_route() {
-        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    /// The XML Schema namespace the fixtures name datatypes in.
+    const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
 
-        let config = CsvwConfig::new(
+    /// A minimal-mode configuration over the W3C vocabularies.
+    fn test_config() -> CsvwConfig {
+        CsvwConfig::new(
             "https://example.org/catalog/metadata.json",
             crate::projections::CsvwContext::new(
                 "http://www.w3.org/ns/csvw",
-                BTreeMap::from([("xsd".to_owned(), XSD.to_owned())]),
+                BTreeMap::from([("xsd".to_owned(), XSD_NS.to_owned())]),
             )
             .expect("context"),
             "https://example.org/catalog",
@@ -1642,7 +1645,7 @@ mod tests {
                 "http://www.w3.org/ns/csvw#",
                 "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
                 "http://www.w3.org/2000/01/rdf-schema#",
-                XSD,
+                XSD_NS,
             )
             .expect("vocabulary"),
             crate::projections::CsvwMode::Minimal,
@@ -1650,21 +1653,67 @@ mod tests {
                 .expect("limits"),
             10_000,
         )
-        .expect("config");
-        let datatype = CsvwDatatype {
+        .expect("config")
+    }
+
+    /// A datatype with `base` and the inclusive bounds given, every other facet absent.
+    fn bounded_datatype(base: &str, min: Option<&str>, max: Option<&str>) -> CsvwDatatype {
+        CsvwDatatype {
             id: None,
-            base: format!("{XSD}language"),
+            base: format!("{XSD_NS}{base}"),
             format: None,
             length: None,
             min_length: None,
             max_length: None,
             minimum: None,
             maximum: None,
-            min_inclusive: None,
-            max_inclusive: None,
+            min_inclusive: min.map(|m| purrdf_lex::json::Value::String(m.to_owned())),
+            max_inclusive: max.map(|m| purrdf_lex::json::Value::String(m.to_owned())),
             min_exclusive: None,
             max_exclusive: None,
-        };
+        }
+    }
+
+    /// An integer or decimal cell past the bounded numeric representation is a
+    /// valid value of its datatype, and the value facets compare it exactly.
+    #[test]
+    fn numeric_cells_of_any_size_validate_and_compare_exactly() {
+        let config = test_config();
+        let big = "100000000000000000000000000000000000000000";
+        let integer = bounded_datatype("integer", None, None);
+        assert_eq!(validate_lexical(big, &integer, &config), Ok(()));
+        let fine = bounded_datatype("decimal", None, None);
+        assert_eq!(
+            validate_lexical("0.10000000000000000001", &fine, &config),
+            Ok(())
+        );
+        // Neighbour: a malformed integer is still refused.
+        assert!(validate_lexical("1.5", &integer, &config).is_err());
+
+        let floor = bounded_datatype(
+            "integer",
+            Some("99999999999999999999999999999999999999999"),
+            None,
+        );
+        assert_eq!(validate_lexical(big, &floor, &config), Ok(()));
+        assert!(
+            validate_lexical("99999999999999999999999999999999999999998", &floor, &config).is_err()
+        );
+        let ceiling = bounded_datatype("decimal", None, Some("0.1"));
+        assert!(validate_lexical("0.10000000000000000001", &ceiling, &config).is_err());
+        assert_eq!(
+            validate_lexical("0.09999999999999999999", &ceiling, &config),
+            Ok(())
+        );
+    }
+
+    /// The judgement is REACHABLE: a cell whose column datatype is
+    /// `xsd:language` is routed here by the ordinary datatype path, so this is
+    /// wiring and not a leaf predicate nobody calls.
+    #[test]
+    fn xsd_language_cells_are_judged_through_the_datatype_route() {
+        let config = test_config();
+        let datatype = bounded_datatype("language", None, None);
 
         for lexical in ["en", "en-us", "en-US", "a", "en-fr-jura"] {
             assert_eq!(

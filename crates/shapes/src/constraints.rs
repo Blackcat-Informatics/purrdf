@@ -3815,14 +3815,17 @@ fn language_tag_matches_any(lang: &str, tags: &[String]) -> bool {
     })
 }
 
-/// Parse a numeric value (xsd:integer, xsd:decimal, xsd:double) as `f64`.
+/// The XSD numeric value of a literal — exact for an `xsd:integer`/`xsd:decimal`
+/// literal of any size ([`purrdf_xsd::LiteralValue`]), the IEEE value for
+/// `xsd:float`/`xsd:double` — or `None` when it is not a well-typed numeric
+/// literal.
 ///
 /// `pub(crate)` for [`crate::plan`], which runs it over a range facet's BOUND at
 /// stage 0 — the bound is a constant of the shape, so this whole test belongs
 /// there and not on the per-value-node path. `None` is an ordinary answer for a
 /// bound, never an error: see the range-facet comparison below for what happens
 /// to a bound that is not numeric.
-pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
+pub(crate) fn numeric_value(term: &Term) -> Option<purrdf_xsd::LiteralValue> {
     let Term::Literal(lit) = term else {
         return None;
     };
@@ -3834,7 +3837,7 @@ pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
 /// The value-node side of every range facet reaches the comparison this way, out
 /// of [`ValueNode::literal_parts`], so a conforming value node is compared without
 /// ever being materialized into an owned [`Term`].
-fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
+fn numeric_parts(lexical: &str, datatype: &str) -> Option<purrdf_xsd::LiteralValue> {
     // The full XSD numeric lattice: the primitives plus EVERY derived integer
     // datatype. The set must match the rest of the engine (see
     // `instance.rs::numeric_or_bool_scalar`); the previous list omitted the
@@ -3843,21 +3846,28 @@ fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
     // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission is
     // masked whenever data round-trips through a value-space-normalizing NT
     // serializer that rewrites such literals to `xsd:integer`.)
-    if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_numeric) {
-        // Every numeric datatype fixes `whiteSpace` = `collapse`, so the
-        // lexical form is trimmed with the four code points that names — see
-        // [`trim_ws`](purrdf_iri::terminals::trim_ws).
-        purrdf_iri::terminals::trim_ws(lexical).parse::<f64>().ok()
-    } else {
-        None
-    }
+    //
+    // The value is read in the XSD value space, never through a binary64: an
+    // `f64` parse rounds `2^53 + 1` onto `2^53` and every integer past it onto a
+    // neighbour, and it accepts spellings the datatype rejects (`1.5` as an
+    // `xsd:integer`, `inf` as an `xsd:double`). The lexical space is XSD 1.0's,
+    // the same profile `sh:datatype` checks against (`xsd_lexical_valid`).
+    let datatype = XsdDatatype::from_iri(datatype).filter(|d| d.is_numeric())?;
+    // Every numeric datatype fixes `whiteSpace` = `collapse`, so the lexical form
+    // is trimmed with the four code points that names — see
+    // [`trim_ws`](purrdf_iri::terminals::trim_ws).
+    purrdf_xsd::LiteralValue::parse_xsd10(purrdf_iri::terminals::trim_ws(lexical), datatype)
+        .ok()
+        .filter(purrdf_xsd::LiteralValue::is_numeric)
 }
 
 /// Value-space comparison for the range facets (`sh:minInclusive`,
 /// `sh:maxInclusive`, `sh:minExclusive`, `sh:maxExclusive`):
 ///
-/// - two numeric literals compare by numeric value ([`numeric_value`], the
-///   full XSD numeric lattice);
+/// - two numeric literals compare by numeric value under the SPARQL operator
+///   semantics SHACL defines the facets by ([`purrdf_xsd::literal_cmp`]: exact
+///   for `xsd:integer`/`xsd:decimal` literals of any size, the numeric promotion
+///   lattice against `xsd:float`/`xsd:double`);
 /// - two temporal literals (`xsd:dateTime` / `xsd:date` / `xsd:time`) compare
 ///   in the XSD VALUE space via `purrdf-xsd` — a timezone-carrying value
 ///   against a timezone-less one follows the ±14:00 rule, whose indeterminate
@@ -3896,7 +3906,7 @@ fn range_facet_cmp(
 ) -> Option<std::cmp::Ordering> {
     let (lexical, datatype) = value?;
     if let (Some(v), Some(b)) = (numeric_parts(lexical, datatype), bound.numeric()) {
-        return v.partial_cmp(&b);
+        return purrdf_xsd::literal_cmp(&v, b);
     }
     // The temporal fall-through, preserved verbatim. A bound that is not a literal
     // is not a temporal one either, and was already `None` from the two-literal
@@ -4232,8 +4242,9 @@ fn pair_order_offenders(
 /// SPARQL-style `<` comparison of two terms, as used by `sh:lessThan` /
 /// `sh:lessThanOrEquals` (and the same value machinery as the range facets):
 ///
-/// - two numeric literals compare by numeric value ([`numeric_parts`] — the
-///   full XSD numeric lattice);
+/// - two numeric literals compare by numeric value ([`numeric_parts`] and
+///   [`purrdf_xsd::literal_cmp`] — the full XSD numeric lattice, exact for
+///   `xsd:integer`/`xsd:decimal` literals of any size);
 /// - two plain/`xsd:string` literals compare by codepoint order;
 /// - two `xsd:boolean` literals compare with `false < true`;
 /// - two temporal literals of the SAME datatype (`xsd:dateTime`, `xsd:date`,
@@ -4258,7 +4269,7 @@ fn compare_literal_views(
         numeric_parts(a.lexical, a.datatype),
         numeric_parts(b.lexical, b.datatype),
     ) {
-        return x.partial_cmp(&y);
+        return purrdf_xsd::literal_cmp(&x, &y);
     }
     // SPARQL `<` is undefined for language-tagged literals.
     if a.language.is_some() || b.language.is_some() {
@@ -4501,10 +4512,12 @@ mod tests {
             "unsignedShort",
             "unsignedByte",
         ] {
-            // nonPositive/negative datatypes accept a non-positive lexical; use "0"
-            // for those, "1" otherwise — both must parse to a numeric value.
-            let lexical = if dt.contains("nonPositive") || dt.starts_with("negative") {
+            // Each datatype's own facets decide: `0` for nonPositiveInteger, `-1`
+            // for negativeInteger, `1` otherwise — all must parse to a value.
+            let lexical = if dt.contains("nonPositive") {
                 "0"
+            } else if dt.starts_with("negative") {
+                "-1"
             } else {
                 "1"
             };
@@ -6001,6 +6014,80 @@ mod tests {
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
         assert!(component_iri(&results)[0].contains("MinInclusive"));
+    }
+
+    /// The range facets compare numbers EXACTLY — under the SPARQL operator
+    /// semantics SHACL defines them by — for integer and decimal literals of any
+    /// size: never through a binary64 that rounds `2^53 + 1` onto `2^53`, and
+    /// never on a lexical form the datatype itself rejects.
+    #[test]
+    fn range_facets_compare_numbers_exactly_at_any_size() {
+        let verdict = |value: &str, datatype: &str, bound: Constraint| {
+            let store = load_store(&format!(
+                "@prefix ex: <{EX}> . ex:a ex:n \"{value}\"^^<{XSD}{datatype}> ."
+            ));
+            validate_shape(
+                &store,
+                &ex("a"),
+                &prop_shape("S", &format!("{EX}n"), vec![bound]),
+            )
+            .len()
+        };
+        let min =
+            |lexical: &str, datatype: &str| Constraint::MinInclusive(xsd_lit(lexical, datatype));
+        let max_ex =
+            |lexical: &str, datatype: &str| Constraint::MaxExclusive(xsd_lit(lexical, datatype));
+        // 2^53 is below the bound 2^53 + 1, which a binary64 cannot tell apart.
+        assert_eq!(
+            verdict(
+                "9007199254740992",
+                "integer",
+                min("9007199254740993", "integer")
+            ),
+            1
+        );
+        assert_eq!(
+            verdict(
+                "9007199254740993",
+                "integer",
+                min("9007199254740993", "integer")
+            ),
+            0
+        );
+        // Past i128, and past eighteen fractional digits.
+        let big = "100000000000000000000000000000000000000000";
+        assert_eq!(
+            verdict(
+                big,
+                "integer",
+                min("99999999999999999999999999999999999999999", "integer")
+            ),
+            0
+        );
+        assert_eq!(
+            verdict(
+                "99999999999999999999999999999999999999999",
+                "integer",
+                min(big, "integer")
+            ),
+            1
+        );
+        assert_eq!(
+            verdict("0.1", "decimal", min("0.10000000000000000001", "decimal")),
+            1
+        );
+        assert_eq!(
+            verdict("0.10000000000000000001", "decimal", min("0.1", "decimal")),
+            0
+        );
+        assert_eq!(verdict(big, "integer", max_ex("1.0E42", "double")), 0);
+        assert_eq!(verdict(big, "integer", max_ex("1.0E41", "double")), 1);
+        // A lexical form its own datatype rejects is incomparable, so it violates;
+        // its valid neighbour conforms.
+        assert_eq!(verdict("1.5", "integer", min("1", "integer")), 1);
+        assert_eq!(verdict("inf", "double", min("1", "integer")), 1);
+        assert_eq!(verdict("INF", "double", min("1", "integer")), 0);
+        assert_eq!(verdict("2", "integer", min("1", "integer")), 0);
     }
 
     /// **A range-facet bound that is not an XSD numeric literal is an ordinary

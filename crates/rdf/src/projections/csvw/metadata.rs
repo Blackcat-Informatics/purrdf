@@ -7,7 +7,7 @@ use super::table::temporal_datatype;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_lex::json::{Object, Value};
-use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
+use purrdf_xsd::{LiteralValue, XsdDatatype, literal_cmp};
 use regex::Regex;
 
 use purrdf_core::RdfTextDirection;
@@ -2509,7 +2509,7 @@ fn validate_facet_combinations(
     if let (Some((lower, lower_inclusive)), Some((upper, upper_inclusive))) = (lower, upper) {
         let lower = parse_facet_value(lower, xsd, resource)?;
         let upper = parse_facet_value(upper, xsd, resource)?;
-        let ordering = value_cmp(&upper, &lower).ok_or_else(|| {
+        let ordering = literal_cmp(&upper, &lower).ok_or_else(|| {
             ProjectionError::integrity("CSVW datatype bounds are incomparable").at_path(resource)
         })?;
         if ordering == std::cmp::Ordering::Less
@@ -2558,7 +2558,7 @@ fn parse_facet_value(
     value: &Value,
     datatype: XsdDatatype,
     resource: &str,
-) -> Result<purrdf_xsd::XsdValue, ProjectionError> {
+) -> Result<LiteralValue, ProjectionError> {
     let lexical = match value {
         Value::String(value) => value.clone(),
         Value::Number(value) => value.lexeme().to_owned(),
@@ -2569,7 +2569,7 @@ fn parse_facet_value(
             );
         }
     };
-    parse_xsd(&lexical, datatype).map_err(|error| {
+    LiteralValue::parse(&lexical, datatype).map_err(|error| {
         ProjectionError::integrity(format!("invalid CSVW datatype facet: {error}"))
             .at_path(resource)
     })

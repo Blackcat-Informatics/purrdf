@@ -69,7 +69,7 @@
 
 use std::collections::BTreeMap;
 
-use purrdf_xsd::{XsdValue, parse_by_iri, value_eq};
+use purrdf_xsd::{LiteralValue, literal_equal};
 
 use crate::calculus::dt::SUPPORTED_DATATYPES;
 use crate::lists::{
@@ -123,10 +123,14 @@ impl LiteralIndex {
     pub(crate) fn materialize(&self) -> Vec<InternalFact> {
         let mut facts = Vec::new();
         // The value each literal denotes under its OWN datatype, or `None` when that
-        // datatype is one `purrdf-xsd` does not model — an absence of judgement.
-        let mut values: BTreeMap<&str, XsdValue> = BTreeMap::new();
+        // datatype is one `purrdf-xsd` does not model — an absence of judgement. An
+        // `xsd:integer`/`xsd:decimal` literal past the bounded representation is a
+        // value like any other: its lexical form is in the lexical space and its value
+        // in the (unbounded) value space, so it is well typed, and its identity with
+        // every other literal is decided exactly (`purrdf_xsd::LiteralValue`).
+        let mut values: BTreeMap<&str, LiteralValue> = BTreeMap::new();
         for (surface, (lexical, datatype)) in &self.literals {
-            match parse_by_iri(lexical, datatype) {
+            match LiteralValue::parse_by_iri(lexical, datatype) {
                 Ok(Some(value)) => {
                     let _ = values.insert(surface.as_str(), value);
                 }
@@ -173,7 +177,7 @@ impl LiteralIndex {
         // the mirror would double the largest relation this crate materializes and find
         // nothing new; `the_asymmetric_dt_different_still_clashes_either_way` is the check.
         //
-        // INCOMPARABLE values — `value_eq` is false and the two are not in one value space
+        // INCOMPARABLE values — `literal_equal` is not `true` and the two are not in one value space
         // at all — count as different, because "different data value" is what `dt-diff`
         // says and two values in different spaces are certainly not the same one.
         //
@@ -185,7 +189,7 @@ impl LiteralIndex {
         // truncated.
         for (left, left_value) in &values {
             for (right, right_value) in &values {
-                if value_eq(left_value, right_value) {
+                if literal_equal(left_value, right_value) == Some(true) {
                     facts.push(InternalFact {
                         subject: (*left).to_owned(),
                         predicate: DT_EQUAL_RELATION,
@@ -221,8 +225,11 @@ fn iri_surface(iri: &str) -> String {
 ///
 /// See the [module docs](self) for why that is exact for the integer tower and incomplete
 /// across lexical spaces, and why it is a boundary rather than a defect.
-fn in_value_space(lexical: &str, candidate: &str, value: &XsdValue) -> bool {
-    matches!(parse_by_iri(lexical, candidate), Ok(Some(other)) if value_eq(value, &other))
+fn in_value_space(lexical: &str, candidate: &str, value: &LiteralValue) -> bool {
+    matches!(
+        LiteralValue::parse_by_iri(lexical, candidate),
+        Ok(Some(other)) if literal_equal(value, &other) == Some(true)
+    )
 }
 
 #[cfg(test)]
@@ -319,6 +326,69 @@ mod tests {
             "DT_DIFFERENT carries ONE orientation; `eq-sym` supplies the other: \
              {different:?}"
         );
+    }
+
+    /// A literal past the bounded numeric representation is WELL TYPED — its value
+    /// lies in `xsd:integer`'s unbounded value space — and its identity with another
+    /// spelling of the same value is decided exactly. Reading it as ill typed would
+    /// make `dt-not-type` declare a consistent ontology inconsistent.
+    #[test]
+    fn a_literal_past_the_bounds_is_well_typed_and_valued_exactly() {
+        let big = "100000000000000000000000000000000000000000";
+        let index = index_of(&[
+            ("a", big, XSD_INTEGER),
+            ("b", &format!("+000{big}"), XSD_INTEGER),
+            ("c", &format!("{big}.000"), XSD_DECIMAL),
+            (
+                "d",
+                "99999999999999999999999999999999999999999",
+                XSD_INTEGER,
+            ),
+            ("e", "0.10000000000000000001", XSD_DECIMAL),
+            ("f", "0.1", XSD_DECIMAL),
+        ]);
+        assert!(
+            rows(&index, DT_ILL_TYPED_RELATION).is_empty(),
+            "{:?}",
+            rows(&index, DT_ILL_TYPED_RELATION)
+        );
+        let equal = rows(&index, DT_EQUAL_RELATION);
+        for pair in [("a", "b"), ("a", "c"), ("b", "c"), ("e", "e")] {
+            assert!(
+                equal.contains(&(pair.0.to_owned(), pair.1.to_owned())),
+                "{pair:?} missing from {equal:?}"
+            );
+        }
+        let different = rows(&index, super::DT_DIFFERENT_RELATION);
+        for pair in [("a", "d"), ("e", "f")] {
+            assert!(
+                different.contains(&(pair.0.to_owned(), pair.1.to_owned())),
+                "{pair:?} missing from {different:?}"
+            );
+        }
+        // `dt-type2` finds the value in the unbounded integer types and not in the
+        // bounded ones.
+        let found: Vec<(String, String)> = rows(&index, DT_VALUE_RELATION)
+            .into_iter()
+            .filter(|(literal, _)| literal == "a")
+            .collect();
+        assert!(
+            found.iter().any(|(_, d)| d == &format!("<{XSD_INTEGER}>")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|(_, d)| d.ends_with("#positiveInteger>")),
+            "{found:?}"
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|(_, d)| d == &format!("<{XSD_BYTE}>") || d.ends_with("#long>")),
+            "{found:?}"
+        );
+        // Neighbour: a lexically malformed literal is still ill typed.
+        let index = index_of(&[("bad", "1.5", XSD_INTEGER)]);
+        assert_eq!(rows(&index, DT_ILL_TYPED_RELATION).len(), 1);
     }
 
     /// A lexical form its own datatype refuses is ILL TYPED — `dt-not-type`'s premise —
