@@ -434,7 +434,7 @@ const KIND: &str = "custom aggregate";
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the boxed
+/// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the boxed
 /// accumulator.
 pub(crate) fn init_contained(
     agg: &dyn CustomAggregate,
@@ -448,8 +448,8 @@ pub(crate) fn init_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise the accumulator's own
-/// error, propagated unchanged.
+/// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+/// failure. More specific typed causes propagate unchanged.
 pub(crate) fn step_contained(
     accumulator: &mut dyn AggregateAccumulator,
     iri: &str,
@@ -464,7 +464,8 @@ pub(crate) fn step_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic.
+/// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+/// failure. More specific typed causes propagate unchanged.
 pub(crate) fn combine_contained(
     accumulator: &mut dyn AggregateAccumulator,
     iri: &str,
@@ -484,7 +485,7 @@ pub(crate) fn combine_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] if `other`'s concrete type is not `T` — never true
+/// [`EvalError::FunctionOperational`] if `other`'s concrete type is not `T` — never true
 /// when `other` was created by the SAME [`CustomAggregate::init`] factory as the
 /// accumulator calling this, which is the only way
 /// `crate::modifier::eval_custom_aggregate`'s chunked fold ever calls `combine`.
@@ -502,7 +503,7 @@ pub(crate) fn downcast_combine_partial<T: 'static>(
         .downcast::<T>()
         .map(|boxed| *boxed)
         .map_err(|_| {
-            EvalError::function(
+            EvalError::function_operational(
                 "AggregateAccumulator::combine received a partial accumulator of a different \
              concrete type than Self — every partial combine merges was created by the SAME \
              CustomAggregate::init factory, so a mismatch here is a host bug in how partial \
@@ -516,8 +517,8 @@ pub(crate) fn downcast_combine_partial<T: 'static>(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise the accumulator's own
-/// error, propagated unchanged.
+/// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+/// failure. More specific typed causes propagate unchanged.
 pub(crate) fn finish_contained(
     accumulator: Box<dyn AggregateAccumulator>,
     iri: &str,
@@ -538,7 +539,7 @@ pub(crate) fn finish_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic.
+/// [`EvalError::FunctionOperational`] on a caught panic.
 pub(crate) fn arity_contained(agg: &dyn CustomAggregate, iri: &str) -> Result<Arity, EvalError> {
     crate::contain::declaration_contained(KIND, iri, "arity", || agg.arity())
 }
@@ -547,7 +548,7 @@ pub(crate) fn arity_contained(agg: &dyn CustomAggregate, iri: &str) -> Result<Ar
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic.
+/// [`EvalError::FunctionOperational`] on a caught panic.
 pub(crate) fn volatility_contained(
     agg: &dyn CustomAggregate,
     iri: &str,
@@ -559,7 +560,7 @@ pub(crate) fn volatility_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic.
+/// [`EvalError::FunctionOperational`] on a caught panic.
 pub(crate) fn algebraic_class_contained(
     agg: &dyn CustomAggregate,
     iri: &str,
@@ -574,7 +575,7 @@ pub(crate) fn algebraic_class_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic.
+/// [`EvalError::FunctionOperational`] on a caught panic.
 pub(crate) fn state_bound_contained(
     agg: &dyn CustomAggregate,
     iri: &str,
@@ -588,7 +589,7 @@ pub(crate) fn state_bound_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic.
+/// [`EvalError::FunctionOperational`] on a caught panic.
 pub(crate) fn scalarvals_contained(
     agg: &dyn CustomAggregate,
     iri: &str,
@@ -855,7 +856,7 @@ impl AggregateRegistry {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] if any registered aggregate's declaration methods
+    /// [`EvalError::FunctionOperational`] if any registered aggregate's declaration methods
     /// panic.
     pub fn describe(&self) -> Result<Vec<AggDescriptor>, EvalError> {
         let mut out: Vec<AggDescriptor> = Vec::with_capacity(self.aggregates.len());
@@ -904,7 +905,7 @@ impl AggregateRegistry {
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] if a registered aggregate's declaration methods panic
+/// [`EvalError::FunctionOperational`] if a registered aggregate's declaration methods panic
 /// — [`AggregateRegistry::describe`]'s own failure, propagated unchanged. Never
 /// raised when `aggregates` is empty (which [`AggregateRegistry::EMPTY`] — the
 /// canonical "no registry" value — always is).
@@ -971,7 +972,7 @@ const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/aggregate-regist
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] if a registered aggregate's declaration methods panic —
+/// [`EvalError::FunctionOperational`] if a registered aggregate's declaration methods panic —
 /// [`AggregateRegistry::describe`]'s own failure, propagated unchanged.
 pub fn content_fingerprint(aggregates: &AggregateRegistry) -> Result<ContentDigest, EvalError> {
     let mut bytes = Vec::new();
@@ -1320,6 +1321,7 @@ mod tests {
                 .contains("partial accumulator of a different concrete type"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         // Distinguishes the typed refusal from `combine_contained`'s own
         // catch_unwind-containment message — this must be `downcast_combine_partial`'s
         // OWN `Err`, reached without ever unwinding.
@@ -1416,6 +1418,7 @@ mod tests {
                 .contains("panicked while reporting its initial accumulator"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         assert!(!error.to_string().contains("exploded"), "got {error}");
     }
 
@@ -1434,6 +1437,7 @@ mod tests {
             error.to_string().contains("panicked while folding a row"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         assert!(!error.to_string().contains("exploded"), "got {error}");
     }
 
@@ -1455,6 +1459,7 @@ mod tests {
                 .contains("panicked while combining partial state"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         assert!(!error.to_string().contains("exploded"), "got {error}");
     }
 
@@ -1472,6 +1477,7 @@ mod tests {
             error.to_string().contains("panicked while finishing"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         assert!(!error.to_string().contains("exploded"), "got {error}");
     }
 
@@ -1491,6 +1497,7 @@ mod tests {
                 .contains("panicked while reporting its arity"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         assert!(!error.to_string().contains("exploded"), "got {error}");
     }
 

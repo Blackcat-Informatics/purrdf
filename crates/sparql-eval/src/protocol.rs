@@ -1257,6 +1257,7 @@ impl From<&EvalError> for FailureCode {
             | EvalError::Data(_)
             | EvalError::Function(_)
             | EvalError::FunctionAdmission(_)
+            | EvalError::FunctionOperational(_)
             | EvalError::ExistsScopeCollision { .. }
             | EvalError::Config(_)
             | EvalError::CompositeBound(_)

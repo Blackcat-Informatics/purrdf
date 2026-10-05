@@ -248,13 +248,10 @@ pub enum EvalError {
     /// variant, because all three are "the host's callee could not be invoked as
     /// written":
     ///
-    /// - a SHACL-AF SPARQL-based function (`sh:SPARQLFunction`: an arity mismatch, a
-    ///   `sh:datatype`/`sh:nodeKind`/`sh:returnType` violation, or exceeding the
-    ///   user-function recursion bound);
-    /// - a native (host-Rust closure) function (an arity mismatch, the closure's own
-    ///   returned `Err`, or a caught panic inside the closure);
-    /// - a property function (`crate::property_fn`: an argument-vector arity mismatch,
-    ///   the relation's own returned `Err`, or a caught panic inside `open`/`next`).
+    /// - a SHACL-AF SPARQL-based function (`sh:SPARQLFunction`: an arity mismatch or a
+    ///   `sh:datatype`/`sh:nodeKind`/`sh:returnType` violation);
+    /// - a native (host-Rust closure) function with an argument arity/type mismatch;
+    /// - a property function with an argument-vector arity/access-mode mismatch.
     ///
     /// Per the hard-fail doctrine a mis-invoked callee aborts the query rather than
     /// yielding a wrong or unbound value — or, for a relation, a short row stream
@@ -264,6 +261,12 @@ pub enum EvalError {
     /// A selected invocation law refused a SPARQL-bodied function. This is a
     /// hard query failure, with the caller's exact cause retained through workers.
     FunctionAdmission(crate::user_fn::UserFunctionRefusal),
+
+    /// An invoked function or relation failed operationally: an opaque host error,
+    /// a caught panic, a resource ceiling, or an invalid host protocol response.
+    /// Distinct from [`Self::Function`]'s request refusal so consumers cannot
+    /// discard an execution failure when another validation alternative conforms.
+    FunctionOperational(String),
 
     /// An `EXISTS`/`NOT EXISTS` body contains a `BIND`/`(expr AS ?v)` target or
     /// a `VALUES` column that collides with a variable already bound on the
@@ -409,6 +412,9 @@ purrdf_lex::constructors! {
         /// Construct an [`EvalError::Function`] from any displayable message.
         pub fn function(what) -> Self::Function;
 
+        /// Preserve a function's execution failure separately from a bad request.
+        pub(crate) fn function_operational(what) -> Self::FunctionOperational;
+
         /// Construct an [`EvalError::Config`] from any displayable message.
         pub fn config(what) -> Self::Config;
 
@@ -425,6 +431,16 @@ purrdf_lex::constructors! {
 }
 
 impl EvalError {
+    /// A caller-returned `Function` contains no typed request classification.
+    /// Retain it as an execution failure while preserving every more specific
+    /// typed cause (including XPath, source and governor-adjacent refusals).
+    pub(crate) fn preserve_function_failure(self) -> Self {
+        match self {
+            Self::Function(message) => Self::FunctionOperational(message),
+            other => other,
+        }
+    }
+
     /// Preserve an operational source failure separately from RDF/type errors.
     pub(crate) fn source_read(error: impl core::fmt::Display) -> Self {
         // The typed root error remains in the fallible engine receipt. This
@@ -471,14 +487,12 @@ impl EvalError {
         }
     }
 
-    /// The stable, machine-readable diagnostic code for this error's unsupported-construct
-    /// classification, if it has one — `None` for every other error, INCLUDING an
-    /// unclassified [`EvalError::Unsupported`] (a genuine gap, not a classified
-    /// construct). [`crate::engine`]'s `SparqlEngine` boundary reads this to set
-    /// [`purrdf_core::RdfDiagnostic::code`] when reducing this typed error to a
-    /// diagnostic; a caller further downstream that needs to tell "a classified
-    /// unsupported construct" from "real regression" reads that `RdfDiagnostic::code` field —
-    /// never `Display` text.
+    /// The stable diagnostic code for a classified unsupported construct or a
+    /// distinct execution refusal. Request/data errors without a distinct code
+    /// return `None`, as does an unclassified [`Self::Unsupported`]; [`Self::code`]
+    /// also preserves dataset and service codes. The engine reads that code when
+    /// reducing this typed error to [`purrdf_core::RdfDiagnostic`], so consumers
+    /// can retain execution failures without inspecting `Display` text.
     #[must_use]
     pub fn diagnostic_code(&self) -> Option<&'static str> {
         match self {
@@ -494,10 +508,13 @@ impl EvalError {
             Self::WorkspaceUnpriced(_) => Some("native-sparql-workspace-unpriced"),
             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
             Self::AllocationFailed { .. } => Some(Self::ALLOCATION_FAILED_CODE),
+            Self::Internal(_) => Some(Self::INTERNAL_CODE),
+            Self::CompositeBound(_) => Some(Self::COMPOSITE_BOUND_CODE),
+            Self::FloatEnvironment(_) => Some(Self::FLOAT_ENVIRONMENT_CODE),
+            Self::FunctionOperational(_) => Some(Self::FUNCTION_OPERATIONAL_CODE),
             Self::Unsupported { kind, .. } => kind.map(UnsupportedKind::code),
             Self::Parse(_)
             | Self::Dataset(_)
-            | Self::Internal(_)
             | Self::Remote(_)
             | Self::ServiceUnconfigured(_)
             | Self::ServiceDenied(_)
@@ -507,9 +524,7 @@ impl EvalError {
             | Self::Function(_)
             | Self::FunctionAdmission(_)
             | Self::ExistsScopeCollision { .. }
-            | Self::Config(_)
-            | Self::CompositeBound(_)
-            | Self::FloatEnvironment(_) => None,
+            | Self::Config(_) => None,
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
             Self::StackExhausted { .. } => Some(Self::STACK_EXHAUSTED_CODE),
             Self::HostStackExhausted { .. } => Some(Self::HOST_STACK_EXHAUSTED_CODE),
@@ -537,6 +552,35 @@ impl EvalError {
             Self::ServiceUnconfigured(_) => Some(Self::SERVICE_UNCONFIGURED_CODE),
             other => other.diagnostic_code(),
         }
+    }
+
+    /// Whether a query diagnostic must survive a consumer's otherwise successful
+    /// alternative, such as SHACL's existential value check.
+    ///
+    /// Known request, data and configuration failures remain ordinary failures:
+    /// the consumer's own rules decide whether another alternative supersedes
+    /// them. Execution, storage, resource and invariant failures must propagate.
+    /// Unknown codes also propagate, including diagnostics supplied by a dataset;
+    /// a newly introduced refusal cannot silently become a successful answer.
+    /// This classifies stable codes, never diagnostic message text.
+    #[must_use]
+    pub fn diagnostic_requires_propagation(code: &str) -> bool {
+        !matches!(
+            code,
+            "native-sparql-query-parse"
+                | "native-sparql-query-eval"
+                | "native-sparql-query-explain"
+                | "native-sparql-algebra"
+                | "native-sparql-property-function"
+                | "native-sparql-aggregate-function"
+                | "native-sparql-execution-parameter"
+                | "native-sparql-bnode-mint-prefix"
+                | "native-sparql-subst-iri"
+                | "native-sparql-subst-langtag"
+                | "native-sparql-subst-literal-datatype"
+                | "native-sparql-subst-triple-predicate"
+                | Self::UNSUPPORTED_CODE
+        ) && !UnsupportedKind::ALL.iter().any(|kind| kind.code() == code)
     }
 
     /// The stable, machine-readable code [`Self::ServiceDenied`] carries to the
@@ -573,6 +617,18 @@ impl EvalError {
 
     /// The stable diagnostic code for a failed solution-storage reservation.
     pub const ALLOCATION_FAILED_CODE: &'static str = "native-sparql-allocation-failed";
+
+    /// The stable diagnostic code for an evaluator invariant violation.
+    pub const INTERNAL_CODE: &'static str = "native-sparql-internal";
+
+    /// The stable diagnostic code for a composite value exceeding its resource bound.
+    pub const COMPOSITE_BOUND_CODE: &'static str = "native-sparql-composite-bound";
+
+    /// The stable diagnostic code for an unsafe floating-point execution environment.
+    pub const FLOAT_ENVIRONMENT_CODE: &'static str = "native-sparql-float-environment";
+
+    /// The stable diagnostic code for a function's operational execution failure.
+    pub const FUNCTION_OPERATIONAL_CODE: &'static str = "native-sparql-function-operational";
 
     /// The stable, machine-readable diagnostic code
     /// [`Self::RelationIncomplete`] maps to at the `SparqlEngine` boundary.
@@ -660,7 +716,9 @@ impl core::fmt::Display for EvalError {
                 "{intro} ?{variable} inside EXISTS is already in scope on the row being \
                  filtered: the substitution semantics define no answer for a rebinding"
             ),
-            Self::Function(msg) => write!(f, "host function error: {msg}"),
+            Self::Function(msg) | Self::FunctionOperational(msg) => {
+                write!(f, "host function error: {msg}")
+            }
             Self::FunctionAdmission(error) => write!(f, "host function error: {error}"),
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
             Self::CompositeBound(msg) => write!(
@@ -780,15 +838,121 @@ mod tests {
         }
     }
 
-    /// Every other variant is likewise unclassified.
+    /// Ordinary request/data failures retain the boundary's generic code.
     #[test]
-    fn non_unsupported_variants_have_no_diagnostic_code() {
-        assert_eq!(EvalError::internal("x").diagnostic_code(), None);
+    fn ordinary_request_variants_have_no_diagnostic_code() {
         assert_eq!(EvalError::remote("x").diagnostic_code(), None);
         assert_eq!(EvalError::data("x").diagnostic_code(), None);
         assert_eq!(EvalError::function("x").diagnostic_code(), None);
         assert_eq!(EvalError::config("x").diagnostic_code(), None);
         assert_eq!(EvalError::Parse("x".to_owned()).diagnostic_code(), None);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn execution_refusals_keep_distinct_codes_at_diagnostic_boundaries() {
+        use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
+
+        let environment = FloatEnvironmentError::RoundingMode {
+            evidence: FloatEnvironmentEvidence::Probe {
+                operation: "frozen test evidence",
+                expected: 1,
+                observed: 2,
+            },
+        };
+        for (error, expected) in [
+            (EvalError::internal("row width"), EvalError::INTERNAL_CODE),
+            (
+                EvalError::composite_bound("element ceiling"),
+                EvalError::COMPOSITE_BOUND_CODE,
+            ),
+            (
+                EvalError::FloatEnvironment(environment),
+                EvalError::FLOAT_ENVIRONMENT_CODE,
+            ),
+            (
+                EvalError::function_operational("callee panicked"),
+                EvalError::FUNCTION_OPERATIONAL_CODE,
+            ),
+        ] {
+            assert_eq!(error.diagnostic_code(), Some(expected));
+            assert_eq!(error.code(), Some(expected));
+            for fallback in [
+                "native-sparql-query-eval",
+                "native-sparql-query-explain",
+                "native-sparql-update-eval",
+                "native-sparql-algebra",
+            ] {
+                assert_eq!(
+                    crate::engine::eval_diagnostic_code(&error, fallback),
+                    expected
+                );
+            }
+            assert!(EvalError::diagnostic_requires_propagation(expected));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn query_diagnostic_propagation_preserves_execution_and_unknown_failures() {
+        use purrdf_core::xsd_regex::xpath::Resource;
+
+        for code in [
+            "native-sparql-query-parse",
+            "native-sparql-query-eval",
+            "native-sparql-algebra",
+            "native-sparql-property-function",
+            "native-sparql-aggregate-function",
+            "native-sparql-execution-parameter",
+            "native-sparql-bnode-mint-prefix",
+            "native-sparql-subst-iri",
+            "native-sparql-subst-langtag",
+            "native-sparql-subst-literal-datatype",
+            "native-sparql-subst-triple-predicate",
+            EvalError::UNSUPPORTED_CODE,
+        ] {
+            assert!(!EvalError::diagnostic_requires_propagation(code), "{code}");
+        }
+        for kind in UnsupportedKind::ALL {
+            assert!(!EvalError::diagnostic_requires_propagation(kind.code()));
+        }
+        for code in [
+            "native-sparql-source-read",
+            "native-sparql-exchange-id-exhausted",
+            "native-sparql-workspace-unpriced",
+            "native-sparql-workspace-bound-overflow",
+            "native-sparql-xpath-operational",
+            EvalError::ALLOCATION_FAILED_CODE,
+            EvalError::RELATION_INCOMPLETE_CODE,
+            EvalError::STACK_EXHAUSTED_CODE,
+            EvalError::HOST_STACK_EXHAUSTED_CODE,
+            EvalError::INTERNAL_CODE,
+            EvalError::COMPOSITE_BOUND_CODE,
+            EvalError::FLOAT_ENVIRONMENT_CODE,
+            EvalError::FUNCTION_OPERATIONAL_CODE,
+            EvalError::SERVICE_DENIED_CODE,
+            EvalError::SERVICE_HOST_DENIED_CODE,
+            EvalError::HOST_FAULT_CODE,
+            EvalError::SERVICE_FAILED_CODE,
+            EvalError::SERVICE_UNCONFIGURED_CODE,
+            "caller-dataset-refusal",
+            "native-sparql-unrecognized-refusal",
+            "",
+        ] {
+            assert!(EvalError::diagnostic_requires_propagation(code), "{code}");
+        }
+        for resource in [
+            Resource::PatternBytes,
+            Resource::CompileSteps,
+            Resource::ProgramNodes,
+            Resource::CompileSlots,
+            Resource::MatchSteps,
+            Resource::MatchStates,
+            Resource::MatchSlots,
+            Resource::OutputBytes,
+        ] {
+            assert!(EvalError::diagnostic_requires_propagation(resource.code()));
+        }
     }
 
     /// A stack refusal carries its own code and names the construct it stopped at.

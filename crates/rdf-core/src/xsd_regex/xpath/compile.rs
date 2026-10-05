@@ -1015,6 +1015,33 @@ mod tests {
     }
 
     #[test]
+    fn surrogate_category_escapes_are_invalid_in_both_dated_grammars() {
+        for profile in [Profile::Xpath20, Profile::Xpath31] {
+            for source in [r"\p{Cs}", r"\P{Cs}", r"[\p{Cs}]", r"[\P{Cs}]"] {
+                assert!(
+                    matches!(
+                        compile(profile, source, "", Limits::new()),
+                        Err(Error::Syntax { .. })
+                    ),
+                    "{profile:?} {source}"
+                );
+            }
+            for source in [
+                r"\p{C}",
+                r"\p{Cc}",
+                r"\p{Cf}",
+                r"\p{Co}",
+                r"\p{Cn}",
+                r"\P{C}",
+                r"\p{IsHighSurrogates}",
+                r"\P{IsHighSurrogates}",
+            ] {
+                accepted(profile, source, "");
+            }
+        }
+    }
+
+    #[test]
     fn arbitrary_decimal_quantities_keep_order_without_syntax_overflow() {
         let large = "18446744073709551616";
         let program = accepted(Profile::Xpath31, &format!("a{{{large},{large}}}"), "");

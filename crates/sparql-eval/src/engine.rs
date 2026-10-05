@@ -170,9 +170,19 @@ impl PreparedQuery {
             ShaclPrebinding::None,
         )?;
         let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions())
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
-        let aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
-            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+            .map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-property-function"),
+                    e.to_string(),
+                )
+            })?;
+        let aggregates =
+            crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+                    e.to_string(),
+                )
+            })?;
         let source_schema = changed_source_schema(&query, planned.as_ref());
         Ok(Self::admitted(
             planned.unwrap_or(query),
@@ -533,10 +543,19 @@ impl PlanCache {
         // SAME cached `PreparedQuery` — whichever caller populated the cache first —
         // and the second caller's evaluation would then fail
         // `check_plan_matches_relations` against a plan it never actually prepared.
-        let fingerprint = crate::property_fn_plan::registry_fingerprint(relations)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
-        let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+        let fingerprint =
+            crate::property_fn_plan::registry_fingerprint(relations).map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-property-function"),
+                    e.to_string(),
+                )
+            })?;
+        let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+                e.to_string(),
+            )
+        })?;
         self.prepare_keyed(
             query,
             base_iri,
@@ -2628,10 +2647,16 @@ impl NativeSparqlEngine {
         // Complete IRI-sorted descriptors distinguish the declarations that priced
         // this run, independently of their registration order.
         let registered = relations.describe().map_err(|error| {
-            RdfDiagnostic::error("native-sparql-property-function", error.to_string())
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&error, "native-sparql-property-function"),
+                error.to_string(),
+            )
         })?;
         let registered_aggregates = aggregates.describe().map_err(|error| {
-            RdfDiagnostic::error("native-sparql-aggregate-function", error.to_string())
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&error, "native-sparql-aggregate-function"),
+                error.to_string(),
+            )
         })?;
         Ok(QueryExplanation::new(
             survey.orders,
@@ -3765,8 +3790,9 @@ where
 /// site's existing,
 /// unclassified generic code (`"native-sparql-query-eval"` for a query,
 /// `"native-sparql-update-eval"` for [`crate::update`]'s identical `WHERE`-clause
-/// evaluation seam), preserved for every genuine gap: an `Internal`, `Data`,
-/// `Function`, or `Config`. An unclassified `Unsupported` carries
+/// evaluation seam), preserved for ordinary `Data`, `Function`, or `Config`
+/// failures. Invariant and resource refusals retain their distinct codes.
+/// An unclassified `Unsupported` carries
 /// [`crate::EvalError::UNSUPPORTED_CODE`], and each `SERVICE` outcome its own
 /// `native-sparql-service-*` code. The
 /// single chokepoint every `EvalError -> RdfDiagnostic` reduction in this crate
@@ -4393,16 +4419,20 @@ fn check_plan_matches_relations(
 ///
 /// # Errors
 ///
-/// An [`RdfDiagnostic`] (`native-sparql-property-function` or
-/// `native-sparql-aggregate-function`) when either registry differs from the one this
-/// plan was admitted against, or when reading a registry's declarations to compute its
-/// fingerprint fails.
+/// An ordinary property-function or aggregate diagnostic when either registry
+/// differs from the one this plan was admitted against. A host failure while
+/// reading declarations retains its own execution diagnostic.
 fn check_prepared_registries_unchanged(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
 ) -> Result<(), RdfDiagnostic> {
     let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions())
-        .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-property-function"),
+                e.to_string(),
+            )
+        })?;
     if supplied != prepared.relations {
         return Err(RdfDiagnostic::error(
             "native-sparql-property-function",
@@ -4412,8 +4442,13 @@ fn check_prepared_registries_unchanged(
              evaluation uses, because the registry is what decides which predicates are calls",
         ));
     }
-    let supplied_aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
-        .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+    let supplied_aggregates =
+        crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+                e.to_string(),
+            )
+        })?;
     if supplied_aggregates != prepared.aggregates {
         return Err(RdfDiagnostic::error(
             "native-sparql-aggregate-function",
@@ -4534,7 +4569,12 @@ fn check_plan_matches_registries(
         ));
     }
     let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions())
-        .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-property-function"),
+                e.to_string(),
+            )
+        })?;
     if supplied != prepared.relations {
         return Err(RdfDiagnostic::error(
             "native-sparql-property-function",
@@ -4544,8 +4584,13 @@ fn check_plan_matches_registries(
              evaluation uses, because the registry is what decides which predicates are calls",
         ));
     }
-    let supplied_aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
-        .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+    let supplied_aggregates =
+        crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+                e.to_string(),
+            )
+        })?;
     if supplied_aggregates != prepared.aggregates {
         return Err(RdfDiagnostic::error(
             "native-sparql-aggregate-function",
@@ -4572,8 +4617,8 @@ fn check_plan_matches_registries(
 ///
 /// # Errors
 ///
-/// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a registered relation's
-/// declaration methods panic.
+/// The host's execution diagnostic if a registered relation's declaration
+/// methods panic.
 fn relation_identity(
     prepared: &PreparedQuery,
     relations: &crate::property_fn::PropertyFunctionRegistry,
@@ -4583,7 +4628,12 @@ fn relation_identity(
     } else {
         relations
             .describe()
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?
+            .map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-property-function"),
+                    e.to_string(),
+                )
+            })?
             .into_iter()
             .map(|descriptor| descriptor.iri)
             .collect()

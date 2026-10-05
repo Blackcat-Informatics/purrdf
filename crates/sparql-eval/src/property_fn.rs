@@ -1872,15 +1872,16 @@ pub trait PropertyFunction: Send + Sync {
 /// 1. **Fail-fast arity.** A call whose argument vectors do not match the declared
 ///    [`PfArity`] never reaches the relation.
 /// 2. **Panic containment.** A panicking relation becomes a clean
-///    [`EvalError::Function`] rather than aborting a rayon worker. The message is
+///    [`EvalError::FunctionOperational`] rather than aborting a rayon worker. The message is
 ///    fixed and payload-free, so it is identical no matter which worker panicked —
 ///    the same treatment [`crate::user_fn`]'s native-function entry gives a native
 ///    closure, for the same determinism reason.
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on an arity mismatch or a caught panic; otherwise the
-/// relation's own error, propagated unchanged.
+/// [`EvalError::Function`] on an arity mismatch, and [`EvalError::FunctionOperational`]
+/// on a caught panic or opaque caller-returned failure. More specific typed causes
+/// propagate unchanged.
 pub fn open_contained(
     relation: &dyn PropertyFunction,
     iri: &str,
@@ -1895,8 +1896,8 @@ pub fn open_contained(
         )));
     }
     match catch_unwind(AssertUnwindSafe(|| relation.open(args, ceiling))) {
-        Ok(opened) => opened,
-        Err(_) => Err(EvalError::function(format!(
+        Ok(opened) => opened.map_err(EvalError::preserve_function_failure),
+        Err(_) => Err(EvalError::function_operational(format!(
             "property function <{iri}> panicked while opening an invocation"
         ))),
     }
@@ -1909,12 +1910,12 @@ pub fn open_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise the cursor's own error,
-/// propagated unchanged.
+/// [`EvalError::FunctionOperational`] on a caught panic or opaque caller-returned
+/// failure. More specific typed causes propagate unchanged.
 pub fn next_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<Option<PfRow>, EvalError> {
     match catch_unwind(AssertUnwindSafe(|| cursor.next())) {
-        Ok(row) => row,
-        Err(_) => Err(EvalError::function(format!(
+        Ok(row) => row.map_err(EvalError::preserve_function_failure),
+        Err(_) => Err(EvalError::function_operational(format!(
             "property function <{iri}> panicked while producing a row"
         ))),
     }
@@ -1926,15 +1927,15 @@ pub fn next_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<Option<PfR
 /// thing a cursor can be asked. [`PfCursor::take_work`] is host code exactly as `next`
 /// is — a counter that overflows an index, an assertion left in by mistake — and its
 /// answer is *spent* against the caller's fuel, so it crosses the same boundary. A panic
-/// becomes a clean, payload-free [`EvalError::Function`] rather than aborting a worker.
+/// becomes a clean, payload-free [`EvalError::FunctionOperational`] rather than aborting a worker.
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the reported count.
+/// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the reported count.
 pub fn take_work_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<u64, EvalError> {
     match catch_unwind(AssertUnwindSafe(|| cursor.take_work())) {
         Ok(units) => Ok(units),
-        Err(_) => Err(EvalError::function(format!(
+        Err(_) => Err(EvalError::function_operational(format!(
             "property function <{iri}> panicked while reporting its work"
         ))),
     }
@@ -1952,7 +1953,7 @@ pub fn take_work_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<u64, 
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the declared generation.
+/// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the declared generation.
 pub fn generation_contained(
     cursor: &dyn PfCursor,
     iri: &str,
@@ -1969,7 +1970,7 @@ pub fn generation_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the declared service
+/// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the declared service
 /// level.
 pub fn service_level_contained(
     cursor: &dyn PfCursor,
@@ -1993,7 +1994,7 @@ pub fn service_level_contained(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of `read`'s result.
+/// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of `read`'s result.
 pub fn declaration_contained<T>(
     iri: &str,
     what: &str,
@@ -2368,7 +2369,7 @@ impl PropertyFunctionRegistry {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] if any registered relation's declaration methods panic.
+    /// [`EvalError::FunctionOperational`] if any registered relation's declaration methods panic.
     pub fn describe(&self) -> Result<Vec<PfDescriptor>, EvalError> {
         let mut out: Vec<PfDescriptor> = Vec::with_capacity(self.relations.len());
         for (iri, relation) in &self.relations {
@@ -3531,6 +3532,7 @@ mod tests {
             error.to_string().contains("panicked while opening"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         assert!(
             !error.to_string().contains("exploded"),
             "the payload must not leak into the deterministic message: {error}"
@@ -3552,6 +3554,7 @@ mod tests {
             error.to_string().contains("panicked while producing a row"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         assert!(
             !error.to_string().contains("exploded"),
             "the payload must not leak into the deterministic message: {error}"
@@ -3596,6 +3599,7 @@ mod tests {
                 .contains("panicked while reporting its work"),
             "got {error}"
         );
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         assert!(
             !error.to_string().contains("exploded"),
             "the payload must not leak into the deterministic message: {error}"
@@ -3618,6 +3622,86 @@ mod tests {
             !error.to_string().contains("panicked"),
             "the check must run before the host code: {error}"
         );
+        assert!(matches!(error, EvalError::Function(_)));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    mod returned_failure_tests {
+        use super::*;
+        use purrdf_core::xsd_regex::xpath::{Error, Resource};
+
+        #[derive(Debug)]
+        struct ReturnedError(EvalError);
+
+        impl PropertyFunction for ReturnedError {
+            fn volatility(&self) -> Volatility {
+                Volatility::Stable
+            }
+
+            fn arity(&self) -> PfArity {
+                PfArity::new(1, 1)
+            }
+
+            fn modes(&self) -> &[BindingPattern] {
+                &[]
+            }
+
+            fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+                1
+            }
+
+            fn open(
+                &self,
+                _args: &PfArgs<'_>,
+                _ceiling: Option<u64>,
+            ) -> Result<Box<dyn PfCursor>, EvalError> {
+                Err(self.0.clone())
+            }
+        }
+
+        impl PfCursor for ReturnedError {
+            fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+                Err(self.0.clone())
+            }
+        }
+
+        #[test]
+        fn open_and_next_preserve_returned_failure_identity() {
+            let subject = [None];
+            let object = [None];
+            let args = PfArgs::new(&subject, &object);
+            for (expected, code) in [
+                (
+                    EvalError::function("opaque host refusal"),
+                    EvalError::FUNCTION_OPERATIONAL_CODE,
+                ),
+                (
+                    EvalError::source_read("source refused"),
+                    "native-sparql-source-read",
+                ),
+                (
+                    EvalError::XPathRegex(Error::Allocation {
+                        resource: Resource::MatchSlots,
+                        units: 1,
+                    }),
+                    Resource::MatchSlots.code(),
+                ),
+            ] {
+                let mut host = ReturnedError(expected.clone());
+                let open_error = open_contained(&host, EX_SPLIT, &args, None)
+                    .err()
+                    .expect("host open refused");
+                let next_error =
+                    next_contained(&mut host, EX_SPLIT).expect_err("host next refused");
+                for actual in [open_error, next_error] {
+                    assert_eq!(actual.code(), Some(code));
+                    assert_eq!(actual.to_string(), expected.to_string());
+                    if code != EvalError::FUNCTION_OPERATIONAL_CODE {
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
     }
 
     // ---- declaration-read panic containment --------------------------------

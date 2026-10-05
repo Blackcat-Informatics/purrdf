@@ -2366,6 +2366,9 @@ fn xpath() -> String {
         );
         categories.insert(kind.to_owned(), spans);
     }
+    // XML Schema Second Edition Appendix F's closed IsCategory grammar excludes
+    // Cs. Keep its ranges in the major C union before removing the named escape.
+    categories.remove("Cs");
     let blocks: BTreeMap<String, Spans> = records("Blocks.txt")
         .into_iter()
         .map(|(low, high, f)| {

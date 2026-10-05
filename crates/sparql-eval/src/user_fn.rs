@@ -1337,9 +1337,10 @@ fn matches_node_kind(value: &TermValue, nk: NodeKind) -> bool {
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on an arity or type-constraint violation, or on exceeding the
-/// user-function recursion bound during an ungoverned execution; propagates body evaluation
-/// errors. During a governed execution, fuel and depth exhaustion are recorded on the
+/// [`EvalError::Function`] on an arity or type-constraint violation, and
+/// [`EvalError::FunctionOperational`] on exceeding the user-function recursion bound
+/// during an ungoverned execution; propagates body evaluation errors. During a
+/// governed execution, fuel and depth exhaustion are recorded on the
 /// expression truncation channel and return `Ok(None)` here so they cannot masquerade as a
 /// function failure.
 pub(crate) fn eval_user_function<D: DatasetView + Sync>(
@@ -1533,11 +1534,10 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on an arity violation, on a panic inside the closure
-/// (converted to a fixed, payload-free error so the message is identical
-/// regardless of which worker thread panicked â mirrors the `native-codec-panic`
-/// guard in `purrdf_rdf::native_codecs::parse`), or propagated straight through
-/// from the closure's own `Err`. An arity violation stays hard on purpose: the call
+/// [`EvalError::Function`] on an arity violation, and [`EvalError::FunctionOperational`]
+/// on a caught panic or opaque host-returned failure. Panic messages stay fixed and
+/// payload-free across worker threads; more specific typed causes propagate unchanged.
+/// An arity violation stays hard on purpose: the call
 /// as written cannot be evaluated at all, which is a defect in the query text
 /// rather than a value this row happens not to have.
 pub(crate) fn eval_native_function(
@@ -1573,8 +1573,8 @@ pub(crate) fn eval_native_function(
     // payload-free so it is identical no matter which worker panicked. Mirrors
     // `purrdf_rdf::native_codecs::parse`'s `native-codec-panic` guard.
     match catch_unwind(AssertUnwindSafe(|| (native.body)(&values))) {
-        Ok(inner_result) => inner_result,
-        Err(_) => Err(EvalError::function(format!(
+        Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
+        Err(_) => Err(EvalError::function_operational(format!(
             "native function <{iri}> panicked"
         ))),
     }
@@ -1611,9 +1611,9 @@ pub(crate) fn eval_native_function(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on an arity violation, an absent focus graph, a depth-bound
-/// breach, or a panic inside the closure (converted to a fixed, payload-free error, as
-/// on the native path); propagates the closure's own `Err` unchanged.
+/// [`EvalError::Function`] on an arity violation or an absent focus graph, and
+/// [`EvalError::FunctionOperational`] on a depth-bound breach, a caught panic or an
+/// opaque host-returned failure. More specific typed causes propagate unchanged.
 pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     func: &ExprFunction,
     iri: &str,
@@ -1636,7 +1636,7 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     };
     let depth = ctx.udf_depth.saturating_add(1);
     if depth > crate::eval::MAX_UDF_DEPTH {
-        return Err(EvalError::function(format!(
+        return Err(EvalError::function_operational(format!(
             "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
             crate::eval::MAX_UDF_DEPTH
         )));
@@ -1653,8 +1653,8 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // closure must not abort a worker or surface nondeterministically, and the
     // message is fixed and payload-free so it does not depend on which thread ran.
     let result = match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
-        Ok(inner_result) => inner_result,
-        Err(_) => Err(EvalError::function(format!(
+        Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
+        Err(_) => Err(EvalError::function_operational(format!(
             "expression-bodied function <{iri}> panicked"
         ))),
     };
@@ -3108,6 +3108,7 @@ mod tests {
             err.to_string().contains("recursion"),
             "expected recursion-bound error, got {err}"
         );
+        assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
     }
 
     #[test]
@@ -3574,6 +3575,7 @@ mod tests {
         }
         let err = run(crate::eval::MAX_UDF_DEPTH).expect_err("the ceiling must be enforced");
         assert!(err.to_string().contains("depth bound"), "got: {err}");
+        assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
     }
 
     /// One IRI cannot be two function kinds at once: registering an
@@ -3760,10 +3762,74 @@ mod tests {
             err.to_string().contains("boom"),
             "expected the closure's own message to propagate, got {err}"
         );
+        assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_and_expression_bodies_preserve_returned_failure_identity() {
+        use purrdf_core::xsd_regex::xpath::{Error, Resource};
+
+        let ds = empty_dataset();
+        let query = format!("SELECT (<{EX_NATIVE_ERR}>() AS ?v) WHERE {{}}");
+        for (expected, code) in [
+            (
+                EvalError::function("opaque host refusal"),
+                EvalError::FUNCTION_OPERATIONAL_CODE,
+            ),
+            (
+                EvalError::source_read("source refused"),
+                "native-sparql-source-read",
+            ),
+            (
+                EvalError::XPathRegex(Error::Allocation {
+                    resource: Resource::MatchSlots,
+                    units: 1,
+                }),
+                Resource::MatchSlots.code(),
+            ),
+        ] {
+            for expression_body in [false, true] {
+                let mut registry = UserFunctionRegistry::default();
+                let body_error = expected.clone();
+                if expression_body {
+                    registry.register_expr(
+                        EX_NATIVE_ERR,
+                        Arity::Exact(0),
+                        Arc::new(move |_call: &ExprFnCall<'_>| Err(body_error.clone())),
+                    );
+                } else {
+                    registry.register_native(
+                        EX_NATIVE_ERR,
+                        Arity::Exact(0),
+                        Volatility::Stable,
+                        Arc::new(move |_args: &[&TermValue]| Err(body_error.clone())),
+                    );
+                }
+                let functions = BoundFunctionRegistry::bound_for_test(registry);
+                let error = NativeSparqlEngine::new()
+                    .query_with_options_view(
+                        &ds,
+                        SparqlRequest {
+                            query: &query,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        QueryOptions {
+                            functions: &functions,
+                            focus_graph: Some(&ds),
+                            ..QueryOptions::EMPTY
+                        },
+                    )
+                    .expect_err("host refusal aborts the query");
+                assert_eq!(error.code, code, "expression body: {expression_body}");
+                assert_eq!(error.message, expected.to_string());
+            }
+        }
     }
 
     /// A panic inside a native closure is caught and converted to a clean,
-    /// deterministic [`EvalError::Function`] â the query fails cleanly rather than
+    /// deterministic [`EvalError::FunctionOperational`] â the query fails cleanly rather than
     /// aborting the test process.
     #[test]
     fn native_function_panic_is_a_clean_error() {
@@ -3799,6 +3865,7 @@ mod tests {
 
         std::panic::set_hook(default_hook);
 
+        assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
         assert!(
             err.to_string().contains("panicked"),
             "expected a clean 'panicked' error, got {err}"
@@ -3839,6 +3906,7 @@ mod tests {
                 },
             )
             .expect_err("arity mismatch must fail");
+        assert_eq!(err.code, "native-sparql-query-eval");
         assert!(
             err.to_string().contains("expects"),
             "expected arity error, got {err}"

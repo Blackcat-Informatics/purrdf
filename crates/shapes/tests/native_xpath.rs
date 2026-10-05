@@ -432,6 +432,83 @@ fn native_operational_failure_aborts_nested_boolean_constraints() {
     }
 }
 
+fn some_value_preparation(query: &str) -> PreparedShapes {
+    PreparedShapes::new(Arc::new(turtle::loads(
+        PREFIXES,
+        &format!(
+            "ex:S a sh:NodeShape; sh:targetNode ex:n;
+                sh:property [ sh:path ex:p; sh:someValue [
+                    sh:or ( [ sh:class ex:Duck ] [ sh:sparql [
+                        sh:select '''{query}'''
+                    ] ] )
+                ] ] ."
+        ),
+    )))
+}
+
+#[test]
+fn some_value_query_failure_is_discarded_when_a_later_value_conforms() {
+    let data = turtle::data(
+        PREFIXES,
+        "ex:n ex:p ex:aBad, ex:zGood . ex:zGood a ex:Duck .",
+    );
+    let preparation = some_value_preparation(
+        "SELECT $this WHERE { FILTER(<http://example.org/missingFunction>($this)) }",
+    );
+    assert!(
+        preparation
+            .bind_shared_dataset(Arc::clone(&data))
+            .unwrap()
+            .validate()
+            .unwrap()
+            .conforms
+    );
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        let selected = preparation.clone().with_xpath_regex(profile, Limits::new());
+        let bound = selected.bind_shared_dataset(Arc::clone(&data)).unwrap();
+        assert!(
+            bound.term_id(&ex("aBad")).unwrap().term_id()
+                < bound.term_id(&ex("zGood")).unwrap().term_id()
+        );
+        let report = bound.validate().unwrap();
+        assert!(report.conforms && report.results.is_empty(), "{profile:?}");
+        let error = selected
+            .bind_dataset(&turtle::data(PREFIXES, "ex:n ex:p ex:aBad ."))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("native-sparql-custom-function"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn some_value_query_resource_refusal_survives_a_later_conforming_value() {
+    let data = turtle::data(
+        PREFIXES,
+        "ex:n ex:p ex:aBad, ex:zGood . ex:zGood a ex:Duck .",
+    );
+    let preparation =
+        some_value_preparation("SELECT $this WHERE { FILTER(REGEX(STR($this), \"bad\", \"i\")) }");
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        let selected = preparation.clone().with_xpath_regex(profile, Limits::new());
+        let bound = selected.bind_shared_dataset(Arc::clone(&data)).unwrap();
+        assert!(
+            bound.term_id(&ex("aBad")).unwrap().term_id()
+                < bound.term_id(&ex("zGood")).unwrap().term_id()
+        );
+        assert!(bound.validate().unwrap().conforms);
+        let low = selected.with_xpath_regex(profile, Limits::new().with(Resource::MatchSteps, 0));
+        assert!(
+            matches!(low.bind_dataset(&data).unwrap().validate(), Err(XPathValidationError::Query(diagnostic))
+                if diagnostic.code == Resource::MatchSteps.code()),
+            "{profile:?}"
+        );
+    }
+}
+
 #[test]
 fn target_binding_uses_the_selected_law_before_acquiring_focus_nodes() {
     let data = turtle::data(PREFIXES, r#"ex:n ex:p "a" ."#);

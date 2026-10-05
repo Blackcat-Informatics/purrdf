@@ -366,11 +366,17 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
     let assert_answer_or_stack_refusal =
         |answer: Result<_, purrdf_core::RdfDiagnostic>| match answer {
             Ok(answer) => assert!(matches!(answer, SparqlResult::Boolean(true)), "{answer:?}"),
-            Err(refused) => assert_eq!(
-                refused.code,
-                purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
-                "{refused}"
-            ),
+            Err(refused) => {
+                assert_eq!(
+                    refused.code,
+                    purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
+                    "{refused}"
+                );
+                assert!(
+                    refused.message.contains("evaluation stack exhausted"),
+                    "{refused}"
+                );
+            }
         };
     for prepared in [&text, &typed] {
         assert_answer_or_stack_refusal(engine.query_prepared(
