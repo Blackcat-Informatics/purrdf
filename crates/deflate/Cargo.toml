@@ -43,9 +43,8 @@ name = "gzip"
 harness = false
 
 # The round-trip, refusal and kernel-differential cases run on
-# purrdf_testkit's `harness = false` runner so the same named cases run natively
-# under `cargo test` and on wasm32-unknown-unknown in Node under
-# scripts/wasm-test-runner.sh (`make wasm-test`), baseline and +simd128.
+# purrdf_testkit's `harness = false` runner natively. `make wasm-test` selects
+# actual WASM backend dispatch and explicit simd128 kernel comparisons.
 [[test]]
 name = "deflate_conformance"
 harness = false

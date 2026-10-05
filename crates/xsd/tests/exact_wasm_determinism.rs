@@ -8,9 +8,12 @@
 //! inline fast path, every `u64` carry lane of the limb arithmetic and the
 //! `u128` binary-rounding step of the float conversions are lowered through
 //! narrower operations there. A lowering bug would not crash; it would produce a
-//! different digit or a different last bit. So the same named cases run natively
-//! under `cargo test` and on wasm32 in Node through `scripts/wasm-test-runner.sh`
-//! (`make wasm-test`), on `purrdf_testkit`'s `harness = false` runner:
+//! different digit or a different last bit. The pinned answers are numeric
+//! expectations, which native Rust owns (`docs/WASM_TESTING.md`): `cargo test
+//! --workspace` runs these cases on every `make check`. The target is
+//! `harness = false` on `purrdf_testkit`'s runner, so the same named cases also
+//! run on wasm32 in Node through `scripts/wasm-test-runner.sh`, against the same
+//! pinned digest, when the lowering itself is in question:
 //!
 //! ```text
 //! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \

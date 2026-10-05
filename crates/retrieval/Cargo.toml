@@ -61,8 +61,8 @@ purrdf-stack = { workspace = true }
 # Path-only and unpublished, so it is stripped from the packaged manifest;
 # std-only and dependency-free, so it is wasm32-clean and needs no target gate.
 purrdf-alloc-probe = { workspace = true }
-# The `harness = false` runner `tests/wasm_determinism.rs` runs on, natively and on
-# wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped from
+# The shared `harness = false` runner for native fusion expectations. Path-only
+# and unpublished, so it is stripped from
 # the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 
@@ -73,13 +73,8 @@ purrdf-testkit = { workspace = true }
 name = "text_relevance"
 test = true
 
-# The one test in this crate that must EXECUTE on wasm32-unknown-unknown rather
-# than merely compile for it. A fused score is a sum of truncated reciprocals and
-# the whole ordering claim rests on those being the same value everywhere; "the
-# same answer on every target" is a claim no number of runs on ONE target can
-# check. `harness = false` on the shared runner, so `make wasm-test` runs the same
-# named cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs
-# natively.
+# Complete native semantic expectations on the shared harness.
+# Actual WASM behaviors are selected separately in `make wasm-test`.
 [[test]]
 name = "wasm_determinism"
 harness = false

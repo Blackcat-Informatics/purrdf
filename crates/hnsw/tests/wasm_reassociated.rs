@@ -28,11 +28,9 @@
 //! * an image recorded on the OTHER wasm path is refused by name with
 //!   [`HnswError::ArithmeticPathUnavailable`], while the unaltered image beside it decodes.
 //!
-//! `make wasm-test` runs it twice on wasm32: on the baseline build, whose path is
-//! `wasm-scalar`, and on a `+simd128` build, whose path is `wasm-simd128`, each time in
-//! Node through `scripts/wasm-test-runner.sh`. The target is `harness = false` on
-//! `purrdf_testkit::harness`, so natively the same named cases run under `cargo test`,
-//! along whatever path the host resolves.
+//! `make wasm-test` selects build-shape/path recording and foreign-path refusal
+//! on both scalar and simd128 builds. Full decode, rebuild and search semantics
+//! run natively under `cargo test` on the shared harness.
 //!
 //! ```text
 //! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
