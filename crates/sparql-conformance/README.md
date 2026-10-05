@@ -37,6 +37,7 @@ passing ledgered fixture fails as XPASS. Only manifests explicitly declaring
 ## Checks
 
 ```bash
-make rust-test
-make rust-docs
+cargo test --locked -p purrdf-sparql-conformance
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p purrdf-sparql-conformance
+make conformance
 ```

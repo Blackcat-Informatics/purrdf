@@ -182,7 +182,11 @@ pub const XFAIL: &[Xfail] = &[
     // literal oracle verifies all 64 binary type pairs and eight unary rows,
     // including promoted result types and verbatim echoed source bindings.
     // Keep exact literal comparison: do not normalize source or result terms
-    // merely to make these six representation expectations match.
+    // merely to make these six representation expectations match. The DAWG
+    // test-suite contract grades result graphs as equivalent only when they
+    // "have identical IRI and literal nodes", so value comparison is not a
+    // permitted reading of these fixtures:
+    // https://www.w3.org/2001/sw/DataAccess/tests/README.html
     Xfail {
         iri_tail: "data-r2/expr-ops/manifest#add-numbers-cast",
         reason: XfailReason::RepresentationDifference,

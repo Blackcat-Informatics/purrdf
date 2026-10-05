@@ -188,8 +188,13 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   located loss profiles, corruption failures, fixed resource limits, and
   arbitrary-input panic guards. `crates/shapes/examples/schema_reverse.rs`
   exercises the public facade end to end.
-- `crates/sparql-conformance/` — the W3C SPARQL 1.1 harness plus first-party
-  extension-function and standpoint suites.
+- `crates/sparql-conformance/` — the native W3C SPARQL 1.0/1.1/1.2 harness
+  plus first-party extension-function and standpoint suites. The frozen
+  `suite/w3c-sparql10/` tree includes all 29 data-r2 groups and the separate
+  sort extension: 483 cases across 30 leaf manifests. Its provenance records
+  the pinned upstream commit and the root manifest filename mapping;
+  native inventory tests compare the standard root closure with discovery
+  and require each case IRI exactly once.
 - `crates/sparql-conformance/corpus/construct/` and
   `crates/sparql-conformance/corpus/describe/` — the two first-party
   query-form corpora, run by `tests/construct_corpus.rs` and

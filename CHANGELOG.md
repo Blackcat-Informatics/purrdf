@@ -10,6 +10,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **SPARQL 1.0 conformance corpus:** the W3C data-r2 suite (all 29 groups
+  and the sort extension, 483 cases) is vendored byte-for-byte and graded in
+  `make conformance` beside the SPARQL 1.1 and 1.2 corpora. The conformance
+  harness now reads DAWG RDF result sets (ASK booleans, `rs:index` ordering,
+  unbound rows), honors `mf:LaxCardinality` for `REDUCED`, and loads
+  `FROM`/`FROM NAMED` documents under their query IRIs.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -61,6 +67,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **SPARQL `OPTIONAL` filters:** every `FILTER` written directly in an
+  `OPTIONAL` group now becomes part of the left-join condition, conjoined in
+  written order. Before, only the last one did, and the others filtered the
+  optional side alone. A `FILTER` inside a nested group stays in that group.
+- **SPARQL `=` and `!=`:** two literals with known but different values now
+  compare unequal when one is a language-tagged string, as with
+  `"xyz"@en = "xyz"` or `"xyz"@en != 7`, instead of raising an error. An
+  `xsd:dateTime` and an `xsd:date` compare unequal. Comparisons involving an
+  unknown datatype or an ill-typed literal still raise an error.
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
   with a non-ASCII character where the timezone suffix would be, such as
   `"2001-01-01€12345"`, is rejected as an invalid lexical form instead of

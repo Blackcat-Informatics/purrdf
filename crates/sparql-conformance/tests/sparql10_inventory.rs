@@ -62,12 +62,28 @@ fn a_missing_or_malformed_freeze_registry_is_refused() {
     let registry_dir = fixture.path().join("conformance-frozen");
     fs::create_dir(&registry_dir).expect("registry directory");
     let registry = registry_dir.join("roots.toml");
+    fs::write(&registry, "[roots]\n").expect("empty registry");
+    let empty = Command::new("python3")
+        .arg(&script)
+        .output()
+        .expect("run the production freeze guard");
+    assert!(
+        !empty.status.success(),
+        "an empty registry must not pass vacuously: {}",
+        String::from_utf8_lossy(&empty.stdout)
+    );
     // The valid neighbour observes an exact receipt from the same guard.
     fs::write(&registry, "[roots]\nfixture = \"receipt.sha256\"\n").expect("valid registry");
     let valid = loaded_receipt(&script, "fixture");
     assert!(valid.status.success());
     assert_eq!(valid.stdout, b"receipt.sha256\n");
-    for malformed in ["[roots\n", "unrelated = \"receipt.sha256\"\n"] {
+    for malformed in [
+        "[roots\n",
+        "unrelated = \"receipt.sha256\"\n",
+        "[roots]\nfixture = 1\n",
+        "[roots]\nfixture = \"\"\n",
+        "[roots]\n\"\" = \"receipt.sha256\"\n",
+    ] {
         fs::write(&registry, malformed).expect("malformed registry");
         assert!(!loaded_receipt(&script, "fixture").status.success());
     }

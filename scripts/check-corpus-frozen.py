@@ -66,6 +66,11 @@ from pathlib import Path
 GUARDED_ROOTS: dict[str, str] = tomllib.loads(
     (Path(__file__).resolve().parent / "conformance-frozen/roots.toml").read_text()
 )["roots"]
+if not isinstance(GUARDED_ROOTS, dict) or not GUARDED_ROOTS or any(
+    not root or not isinstance(receipt, str) or not receipt
+    for root, receipt in GUARDED_ROOTS.items()
+):
+    raise ValueError("conformance-frozen/roots.toml requires non-empty roots and receipt paths")
 
 
 def repo_root() -> Path:
