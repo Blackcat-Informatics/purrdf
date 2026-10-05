@@ -63,8 +63,14 @@
 //!
 //! Report-only, `cargo bench -p purrdf-core --bench xsd_regex` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
+//!
+//! The `native_xpath_*` groups measure the explicitly dated native program:
+//! cold compilation of the same grammar shapes, capture-producing matching,
+//! and replacement. Backreferences, nullable repetitions and finite work
+//! refusal have their own cases. All expectations are checked before timing;
+//! the compatibility and native programs retain their distinct contracts.
 
-use purrdf_core::xsd_regex::compile;
+use purrdf_core::xsd_regex::{compile, xpath};
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 use purrdf_testkit::rng::SplitMix64;
 use purrdf_testkit::text::lowercase_filler as filler;
@@ -199,5 +205,101 @@ fn bench_xsd_regex_match(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_xsd_regex_compile, bench_xsd_regex_match);
+fn bench_native_xpath_compile(c: &mut Bench) {
+    let mut group = c.benchmark_group("native_xpath_compile");
+    for (profile, name) in [
+        (xpath::Profile::Xpath20, "xpath20"),
+        (xpath::Profile::Xpath31, "xpath31"),
+    ] {
+        for &(label, pattern, flags) in CASES {
+            if profile == xpath::Profile::Xpath20 && flags == "q" {
+                continue;
+            }
+            xpath::compile(profile, pattern, flags, xpath::Limits::new())
+                .expect("native benchmark pattern compiles");
+            group.bench_function(BenchmarkId::new(name, label), |bencher| {
+                bencher.iter(|| {
+                    black_box(
+                        xpath::compile(
+                            black_box(profile),
+                            black_box(pattern),
+                            black_box(flags),
+                            xpath::Limits::new(),
+                        )
+                        .expect("native benchmark pattern compiles"),
+                    );
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+fn bench_native_xpath_execute(c: &mut Bench) {
+    let mut group = c.benchmark_group("native_xpath_execute");
+    let limits = xpath::Limits::new();
+    for (label, source, input, expected) in [
+        ("literal", "needle", "hay needle stack", true),
+        ("plain_ascii", "^[a-z0-9]+$", "abc123", true),
+        ("unicode_category", r"^\p{L}+$", "é𐀀", true),
+        ("class_subtraction", "^[a-z-[aeiou]]+$", "rhythm", true),
+        ("backreference", r"^([a-z]+)-\1$", "repeated-repeated", true),
+        (
+            "backreference_negative",
+            r"^([a-z]+)-\1$",
+            "repeated-repeatea",
+            false,
+        ),
+        (
+            "capture_repetition",
+            "^(a|b){1,16}$",
+            "abababababababab",
+            true,
+        ),
+        ("nullable", "^(a?)*b$", "aaaaab", true),
+    ] {
+        let program = xpath::compile(xpath::Profile::Xpath31, source, "", limits).unwrap();
+        assert_eq!(
+            program.is_match(input, limits).unwrap(),
+            expected,
+            "{label}"
+        );
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
+        });
+    }
+    let source = xpath::compile(xpath::Profile::Xpath31, "(a|b)", "", limits).unwrap();
+    let input = "abab".repeat(64);
+    assert_eq!(
+        source.replace_all(&input, "$1$1", limits).unwrap(),
+        "aabbaabb".repeat(64)
+    );
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("replacement", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                source
+                    .replace_all(black_box(&input), black_box("$1$1"), limits)
+                    .unwrap(),
+            )
+        });
+    });
+    let program = xpath::compile(xpath::Profile::Xpath31, "(a?){1000}", "", limits).unwrap();
+    let withheld = limits.with(xpath::Resource::MatchSteps, 100);
+    assert!(program.find("", withheld).unwrap_err().is_operational());
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("work_refusal", |bencher| {
+        bencher.iter(|| black_box(program.find(black_box(""), withheld).unwrap_err()));
+    });
+    group.finish();
+}
+
+bench_group!(
+    benches,
+    bench_xsd_regex_compile,
+    bench_xsd_regex_match,
+    bench_native_xpath_compile,
+    bench_native_xpath_execute
+);
 bench_main!(benches);

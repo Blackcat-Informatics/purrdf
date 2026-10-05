@@ -93,6 +93,10 @@ pub enum EvalError {
     /// The backing dataset failed to read a term or index. No partial answer is
     /// valid; fallible engine entry points retain the view's typed root cause.
     SourceRead(String),
+    /// A selected native XPath compiler, matcher or replacement operation was
+    /// refused. This carries the typed resource/allocation cause and aborts the
+    /// query; it never becomes an unbound expression or a negative match.
+    XPathRegex(purrdf_core::xsd_regex::xpath::Error),
     /// The asynchronous host has issued every logical exchange identifier.
     /// An execution refusal, never an invocation failure or an expression error.
     ExchangeIdExhausted,
@@ -475,6 +479,10 @@ impl EvalError {
     pub fn diagnostic_code(&self) -> Option<&'static str> {
         match self {
             Self::SourceRead(_) => Some("native-sparql-source-read"),
+            Self::XPathRegex(purrdf_core::xsd_regex::xpath::Error::Resource(refusal)) => {
+                Some(refusal.resource.code())
+            }
+            Self::XPathRegex(_) => Some("native-sparql-xpath-operational"),
             Self::ExchangeIdExhausted => Some("native-sparql-exchange-id-exhausted"),
             Self::WorkspaceUnpriced(_) => Some("native-sparql-workspace-unpriced"),
             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
@@ -597,6 +605,7 @@ impl core::fmt::Display for EvalError {
         match self {
             Self::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
             Self::SourceRead(msg) => write!(f, "dataset read failed: {msg}"),
+            Self::XPathRegex(error) => write!(f, "XPath operation refused: {error}"),
             Self::ExchangeIdExhausted => {
                 f.write_str("asynchronous exchange identifier space is exhausted")
             }
@@ -689,7 +698,14 @@ impl core::fmt::Display for EvalError {
     }
 }
 
-impl std::error::Error for EvalError {}
+impl std::error::Error for EvalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::XPathRegex(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<ParseError> for EvalError {
     /// A parse failure is [`EvalError::Parse`].

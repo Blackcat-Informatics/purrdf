@@ -75,6 +75,13 @@ and finite emoji recognition:
 - `https://www.unicode.org/Public/17.0.0/emoji/emoji-test.txt` — SHA-256
   `1d8a944f88d7952f7ef7c5167fef3c67995bcae24543949710231b03a201acda`
 
+Added 2026-10-05 for XPath's full lower/upper case-variant relation:
+
+- `https://www.unicode.org/Public/17.0.0/ucd/SpecialCasing.txt`, verbatim
+  Unicode 17.0.0 supplement to `UnicodeData.txt`, header
+  `SpecialCasing-17.0.0.txt`, dated 2025-07-31, SHA-256
+  `efc25faf19de21b92c1194c111c932e03d2a5eaf18194e33f1156e96de4c9588`.
+
 ## `16.0.0/` — Unicode 16.0.0
 
 From `https://www.unicode.org/Public/16.0.0/ucd/`:

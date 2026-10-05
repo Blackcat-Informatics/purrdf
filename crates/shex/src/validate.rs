@@ -33,6 +33,7 @@
 //! Iteration order is deterministic everywhere (arcs sort by [`TermId`],
 //! slots by document order), so failure reasons are reproducible.
 
+mod error;
 mod matcher;
 mod node;
 mod pattern;
@@ -50,8 +51,10 @@ use purrdf_lex::term_syntax;
 use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
 use crate::semact::{SemActContext, SemActRegistry};
 use crate::statement;
+use error::CheckError;
 use matcher::{ArcOptions, Assignment, CNode, Card, Compiled};
 use node::{FactKind, NodeFacts, RDF_LANG_STRING};
+use purrdf_core::xsd_regex::xpath;
 
 // ── public API ──────────────────────────────────────────────────────────────
 
@@ -291,6 +294,83 @@ pub fn validate_with(
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
 ) -> ResultShapeMap {
+    validate_using(
+        schema,
+        data,
+        map,
+        options,
+        &mut pattern::PatternCache::default(),
+    )
+    .expect("compatibility validation cannot produce a native XPath refusal")
+}
+
+/// A reusable schema whose selected native patterns retain successful programs.
+///
+/// The schema is borrowed immutably. Each validation takes an explicit dated law
+/// and current finite limits; only admitted programs survive between calls, never
+/// conformance findings, syntax verdicts, execution fuel or resource refusals.
+#[derive(Debug)]
+pub struct XPathValidator<'a> {
+    schema: &'a Schema,
+    patterns: pattern::PatternCache,
+}
+
+impl<'a> XPathValidator<'a> {
+    /// Prepare native pattern reuse for an immutable schema.
+    #[must_use]
+    pub fn new(schema: &'a Schema) -> Self {
+        Self {
+            schema,
+            patterns: pattern::PatternCache::default(),
+        }
+    }
+
+    /// Validate a fixed map under the explicitly selected native XPath law.
+    ///
+    /// Syntax and flag errors remain facet findings. Operational refusal aborts
+    /// the whole map, including previously computed associations. A later call
+    /// can use another law or larger bounds without inheriting that refusal.
+    ///
+    /// # Errors
+    /// Returns the actual typed native XPath resource or allocation cause.
+    pub fn validate(
+        &mut self,
+        data: &RdfDataset,
+        map: &[(TermValue, ShapeSelector)],
+        options: &ValidationOptions<'_>,
+        profile: xpath::Profile,
+        limits: xpath::Limits,
+    ) -> Result<ResultShapeMap, xpath::Error> {
+        self.patterns.select(profile, limits);
+        validate_using(self.schema, data, map, options, &mut self.patterns)
+    }
+}
+
+/// [`validate_with`] using an explicit native XPath law and finite limits.
+///
+/// This uses the same traversal as [`XPathValidator::validate`]. For repeated
+/// validations, keep an [`XPathValidator`] to reuse admitted programs.
+///
+/// # Errors
+/// A typed operational refusal; pattern-language errors remain findings.
+pub fn validate_with_xpath(
+    schema: &Schema,
+    data: &RdfDataset,
+    map: &[(TermValue, ShapeSelector)],
+    options: &ValidationOptions<'_>,
+    profile: xpath::Profile,
+    limits: xpath::Limits,
+) -> Result<ResultShapeMap, xpath::Error> {
+    XPathValidator::new(schema).validate(data, map, options, profile, limits)
+}
+
+fn validate_using(
+    schema: &Schema,
+    data: &RdfDataset,
+    map: &[(TermValue, ShapeSelector)],
+    options: &ValidationOptions<'_>,
+    patterns: &mut pattern::PatternCache,
+) -> Result<ResultShapeMap, xpath::Error> {
     // Resolve whole-declaration EXTERNALs up front so the resolved
     // expressions outlive the engine borrowing them.
     let externals: Vec<(String, ShapeExpr)> = match options.external_resolver {
@@ -315,7 +395,7 @@ pub fn validate_with(
             .sem_acts
             .dispatch_all(options.extern_start_acts, &start_ctx)
     {
-        return ResultShapeMap {
+        return Ok(ResultShapeMap {
             entries: map
                 .iter()
                 .map(|(value, selector)| ResultEntry {
@@ -325,24 +405,39 @@ pub fn validate_with(
                     reason: Some("start semantic action failed".to_owned()),
                 })
                 .collect(),
-        };
-    }
-
-    let mut engine = Engine::new(schema, data, &externals, &options.sem_acts);
-    let mut entries = Vec::with_capacity(map.len());
-    for (value, selector) in map {
-        let outcome = engine.check_association(value, selector);
-        entries.push(ResultEntry {
-            node: value.clone(),
-            shape: selector.clone(),
-            status: match outcome {
-                Ok(()) => ConformanceStatus::Conformant,
-                Err(_) => ConformanceStatus::Nonconformant,
-            },
-            reason: outcome.err(),
         });
     }
-    ResultShapeMap { entries }
+
+    let mut engine = Engine::new(
+        schema,
+        data,
+        &externals,
+        &options.sem_acts,
+        std::mem::take(patterns),
+    );
+    let result = map
+        .iter()
+        .map(|(value, selector)| {
+            let reason = match engine.check_association(value, selector) {
+                Ok(()) => None,
+                Err(CheckError::Violation(reason)) => Some(reason),
+                Err(CheckError::Operational(error)) => return Err(error),
+            };
+            Ok(ResultEntry {
+                node: value.clone(),
+                shape: selector.clone(),
+                status: if reason.is_none() {
+                    ConformanceStatus::Conformant
+                } else {
+                    ConformanceStatus::Nonconformant
+                },
+                reason,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|entries| ResultShapeMap { entries });
+    *patterns = engine.patterns;
+    result
 }
 
 // ── the engine ──────────────────────────────────────────────────────────────
@@ -469,6 +564,7 @@ impl<'a> Engine<'a> {
         data: &'a RdfDataset,
         externals: &'a [(String, ShapeExpr)],
         sem_acts: &'a SemActRegistry<'a>,
+        patterns: pattern::PatternCache,
     ) -> Self {
         let mut shape_map: FastMap<&'a str, &'a ShapeExpr> = schema
             .shapes
@@ -513,7 +609,7 @@ impl<'a> Engine<'a> {
             in_progress: FastSet::default(),
             used_assumptions: FastSet::default(),
             detached_in_progress: FastSet::default(),
-            patterns: pattern::PatternCache::default(),
+            patterns,
         }
     }
 
@@ -521,7 +617,7 @@ impl<'a> Engine<'a> {
         &mut self,
         value: &TermValue,
         selector: &ShapeSelector,
-    ) -> Result<(), String> {
+    ) -> Result<(), CheckError> {
         let focus = match self.data.term_id_by_value(value) {
             Some(id) => Focus::Id(id),
             None => Focus::Detached(value),
@@ -529,7 +625,7 @@ impl<'a> Engine<'a> {
         match selector {
             ShapeSelector::Start => {
                 let Some(start) = self.start else {
-                    return Err("schema declares no start shape".to_owned());
+                    return Err("schema declares no start shape".to_owned().into());
                 };
                 self.satisfies(focus, start)
             }
@@ -544,7 +640,7 @@ impl<'a> Engine<'a> {
 
     // ── shape expressions (§5.3) ────────────────────────────────────────────
 
-    fn satisfies(&mut self, focus: Focus<'_>, expr: &'a ShapeExpr) -> Result<(), String> {
+    fn satisfies(&mut self, focus: Focus<'_>, expr: &'a ShapeExpr) -> Result<(), CheckError> {
         match expr {
             ShapeExpr::And(parts) => parts
                 .iter()
@@ -554,14 +650,16 @@ impl<'a> Engine<'a> {
                 for part in parts {
                     match self.satisfies(focus, part) {
                         Ok(()) => return Ok(()),
-                        Err(reason) => reasons.push(reason),
+                        Err(CheckError::Violation(reason)) => reasons.push(reason),
+                        Err(error @ CheckError::Operational(_)) => return Err(error),
                     }
                 }
-                Err(format!("no OR branch matched: {}", reasons.join(" / ")))
+                Err(format!("no OR branch matched: {}", reasons.join(" / ")).into())
             }
             ShapeExpr::Not(inner) => match self.satisfies(focus, inner) {
-                Ok(()) => Err("NOT: negated expression matched".to_owned()),
-                Err(_) => Ok(()),
+                Ok(()) => Err("NOT: negated expression matched".to_owned().into()),
+                Err(CheckError::Violation(_)) => Ok(()),
+                Err(error @ CheckError::Operational(_)) => Err(error),
             },
             ShapeExpr::Node(nc) => {
                 let facts = match focus {
@@ -571,16 +669,18 @@ impl<'a> Engine<'a> {
                 node::check_node_constraint(nc, &facts, &mut self.patterns)
             }
             ShapeExpr::Shape(shape) => self.match_shape(focus, shape),
-            ShapeExpr::External => Err("EXTERNAL shape has no resolved definition".to_owned()),
+            ShapeExpr::External => Err("EXTERNAL shape has no resolved definition"
+                .to_owned()
+                .into()),
             ShapeExpr::Ref(label) => self.satisfies_label(focus, label),
         }
     }
 
     /// Resolve and check a labeled shape, with coinductive-assumption
     /// recursion handling and per-call memoization.
-    fn satisfies_label(&mut self, focus: Focus<'_>, label: &str) -> Result<(), String> {
+    fn satisfies_label(&mut self, focus: Focus<'_>, label: &str) -> Result<(), CheckError> {
         let Some((&interned_label, &expr)) = self.shape_map.get_key_value(label) else {
-            return Err(format!("reference to undeclared shape {label}"));
+            return Err(format!("reference to undeclared shape {label}").into());
         };
         let label_id = self.label_id(interned_label);
         let Focus::Id(id) = focus else {
@@ -595,7 +695,7 @@ impl<'a> Engine<'a> {
         };
         let key: Pair = (id, label_id);
         if let Some(settled) = self.memo.get(&key) {
-            return settled.clone();
+            return settled.clone().map_err(CheckError::Violation);
         }
         if self.in_progress.contains(&key) {
             // Coinductive assumption: a pair re-encountered while being
@@ -612,7 +712,15 @@ impl<'a> Engine<'a> {
         // Only a proof that leaned on no OTHER open assumption is settled;
         // one that did may be invalidated when the outer pair refutes.
         if used.is_empty() {
-            self.memo.insert(key, result.clone());
+            match &result {
+                Ok(()) => {
+                    self.memo.insert(key, Ok(()));
+                }
+                Err(CheckError::Violation(reason)) => {
+                    self.memo.insert(key, Err(reason.clone()));
+                }
+                Err(CheckError::Operational(_)) => {}
+            }
         }
         self.used_assumptions.extend(used);
         result
@@ -620,7 +728,7 @@ impl<'a> Engine<'a> {
 
     // ── shape / triple-expression matching (§5.2, §5.5) ─────────────────────
 
-    fn match_shape(&mut self, focus: Focus<'_>, shape: &'a Shape) -> Result<(), String> {
+    fn match_shape(&mut self, focus: Focus<'_>, shape: &'a Shape) -> Result<(), CheckError> {
         let prepared = self
             .prepared_shapes
             .get(&std::ptr::from_ref(shape))
@@ -659,7 +767,7 @@ impl<'a> Engine<'a> {
             if let Some((&interned, _)) = forward.get_key_value(pred) {
                 arcs.push((false, interned, o));
             } else if shape.closed == Some(true) {
-                return Err(format!("CLOSED shape does not mention predicate <{pred}>"));
+                return Err(format!("CLOSED shape does not mention predicate <{pred}>").into());
             }
         }
         if let Focus::Id(id) = focus {
@@ -694,10 +802,11 @@ impl<'a> Engine<'a> {
                     None => candidates.push(slot),
                     Some(ve) => match self.satisfies(Focus::Id(value), ve) {
                         Ok(()) => candidates.push(slot),
-                        Err(reason) => value_failures.push(format!(
+                        Err(CheckError::Violation(reason)) => value_failures.push(format!(
                             "value of {}<{pred}> fails: {reason}",
                             if inv { "^" } else { "" }
                         )),
+                        Err(error @ CheckError::Operational(_)) => return Err(error),
                     },
                 }
             }
@@ -707,9 +816,10 @@ impl<'a> Engine<'a> {
             // expression must be matched (and counts against cardinality).
             let extra_allowed = candidates.is_empty() && shape.extra.iter().any(|e| e == pred);
             if candidates.is_empty() && !extra_allowed {
-                return Err(value_failures.pop().unwrap_or_else(|| {
-                    format!("triple with predicate <{pred}> cannot be matched")
-                }));
+                return Err(value_failures
+                    .pop()
+                    .unwrap_or_else(|| format!("triple with predicate <{pred}> cannot be matched"))
+                    .into());
             }
             options.push(ArcOptions {
                 candidates,
@@ -738,13 +848,13 @@ impl<'a> Engine<'a> {
                 }
             }
             if !matcher::counts_match(compiled, &counts) {
-                return Err(cardinality_reason(compiled, &arcs, &value_failures));
+                return Err(cardinality_reason(compiled, &arcs, &value_failures).into());
             }
             (counts, assignment)
         } else {
             match matcher::assignment_search(compiled, &options)? {
                 Some(found) => found,
-                None => return Err(cardinality_reason(compiled, &arcs, &value_failures)),
+                None => return Err(cardinality_reason(compiled, &arcs, &value_failures).into()),
             }
         };
         // Per-slot matched value nodes, in arc order, for firing triple-
@@ -757,6 +867,7 @@ impl<'a> Engine<'a> {
         }
         // The neighbourhood matched; fire semantic actions (§5.5.2).
         self.fire_sem_acts(focus, shape, compiled, &counts, &matched_values)
+            .map_err(CheckError::from)
     }
 
     /// Dispatch the semantic actions that a successful shape match triggers:
