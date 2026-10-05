@@ -449,6 +449,83 @@ impl PreparedExecution {
         &self.parameters
     }
 
+    /// Refuse a declared parameter the prepared query never mentions.
+    ///
+    /// A parameter is bound by pre-binding: its value is joined under the query as a
+    /// one-row `VALUES` (see [`purrdf_sparql_algebra::substitute`]). A variable the query
+    /// never names is constrained by nothing, projected nowhere and read by no
+    /// expression, so binding it cannot change any answer — the declaration is a slot
+    /// that silently does nothing, usually a misspelt name. A host that hands callers
+    /// the parameter list (the Python `Store.prepare`) calls this after
+    /// [`NativeSparqlEngine::prepare_execution`](crate::NativeSparqlEngine::prepare_execution)
+    /// to refuse that instead.
+    ///
+    /// A mention is any occurrence [`purrdf_sparql_algebra::Query::for_each_variable`]
+    /// visits in the admitted query: a triple, path or quoted-triple term, a variable
+    /// predicate or graph name, an expression read (inside `EXISTS` too), a projection,
+    /// a `GROUP BY` key, a `BIND` or `VALUES` target, a property-function argument, a
+    /// `CONSTRUCT` template slot or a `DESCRIBE` target.
+    ///
+    /// `prepare_execution` does not run this check itself, and that is deliberate:
+    /// SHACL-SPARQL pre-binds `$this` in every constraint whether or not its body reads
+    /// it, which is valid SHACL, so the engine's own callers declare parameters a query
+    /// may legitimately leave unmentioned.
+    ///
+    /// # Errors
+    ///
+    /// [`RdfDiagnostic`] (`native-sparql-execution-parameter`, presentation
+    /// `sparql-prepared-parameter-unmentioned`) naming every unmentioned parameter, in
+    /// declaration order, as the `parameters` text argument.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    /// let engine = NativeSparqlEngine::new();
+    /// let query = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
+    /// let used = engine.prepare_execution(query, None, &["this"], QueryOptions::EMPTY)?;
+    /// assert!(used.check_parameters_mentioned().is_ok());
+    /// let misspelt = engine.prepare_execution(query, None, &["thsi"], QueryOptions::EMPTY)?;
+    /// assert!(misspelt.check_parameters_mentioned().is_err());
+    /// # Ok::<(), purrdf_core::RdfDiagnostic>(())
+    /// ```
+    pub fn check_parameters_mentioned(&self) -> Result<(), RdfDiagnostic> {
+        use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
+        let mut mentioned = vec![false; self.parameters.len()];
+        self.prepared.query().for_each_variable(|variable| {
+            for (seen, parameter) in mentioned.iter_mut().zip(&self.parameters) {
+                *seen |= parameter == variable;
+            }
+        });
+        let unmentioned: Vec<String> = self
+            .parameters
+            .iter()
+            .zip(&mentioned)
+            .filter(|(_, seen)| !**seen)
+            .map(|(parameter, _)| format!("{:?}", parameter.as_str()))
+            .collect();
+        if unmentioned.is_empty() {
+            return Ok(());
+        }
+        // Unreachable refusal: `DiagnosticPresentation::new` judges only the identity,
+        // the template and the parameter name, all literals here; the
+        // `prepared_parameter_mentions` tests build it.
+        let presentation = DiagnosticPresentation::new(
+            "sparql-prepared-parameter-unmentioned",
+            "the query never mentions the declared parameter(s) {parameters}, so no binding \
+             of them could change an answer",
+            vec![DiagnosticParameter::new(
+                "parameters",
+                DiagnosticValue::Text(unmentioned.join(", ")),
+            )],
+        )
+        .expect("the unmentioned-parameter template agrees with its argument");
+        Err(
+            RdfDiagnostic::error("native-sparql-execution-parameter", "")
+                .with_presentation(presentation),
+        )
+    }
+
     /// The slot of the parameter named `name`, if it was declared.
     ///
     /// # Resolve once, bind many: the point of taking a slot at all

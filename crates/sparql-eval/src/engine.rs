@@ -1411,7 +1411,7 @@ impl NativeSparqlEngine {
         // here — every value the materialised lane's single context would carry.
         let filtering = crate::property_fn_eval::FilterContext {
             options: self.eval_options,
-            xpath_regex: self.xpath_regex,
+            xpath_regex: options.xpath_regex.or(self.xpath_regex),
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
             base_iri: prepared
@@ -1905,7 +1905,7 @@ impl NativeSparqlEngine {
         let state = Arc::new(GovernorState::new(governors));
         let mut m = MutableDataset::new(Arc::clone(dataset));
         let cfg = crate::update::UpdateEvalConfig {
-            xpath_regex: self.xpath_regex,
+            xpath_regex: options.xpath_regex.or(self.xpath_regex),
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
             governors: Some(&state),
@@ -2008,7 +2008,7 @@ impl NativeSparqlEngine {
         // error drops `m` and leaves `*dataset` untouched.
         let mut m = MutableDataset::new(Arc::clone(dataset));
         let cfg = crate::update::UpdateEvalConfig {
-            xpath_regex: self.xpath_regex,
+            xpath_regex: options.xpath_regex.or(self.xpath_regex),
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
             // Exactly ungoverned, exactly as this seam was before governors existed —
@@ -4004,6 +4004,8 @@ pub struct QueryOptions<'a> {
     /// with whatever the evaluation fans out to, and a field that made it `!Sync`
     /// would silently narrow every entry that takes one.
     pub load: Option<&'a (dyn GraphResolver + Sync)>,
+    /// The explicit dated pattern law for this request, overriding engine configuration.
+    pub(crate) xpath_regex: Option<Selection>,
 }
 
 // The trait-object fields are not `Debug`, so derive cannot apply; they are reported by
@@ -4023,6 +4025,7 @@ impl std::fmt::Debug for QueryOptions<'_> {
             .field("call_depth", &self.call_depth)
             .field("remote", &self.remote.is_some())
             .field("load", &self.load.is_some())
+            .field("xpath_regex", &self.xpath_regex)
             .finish()
     }
 }
@@ -4064,6 +4067,7 @@ impl QueryOptions<'_> {
         call_depth: 0,
         remote: None,
         load: None,
+        xpath_regex: None,
     };
 
     /// Configure nothing — identical to [`Self::EMPTY`] and to
@@ -4083,6 +4087,31 @@ impl Default for QueryOptions<'_> {
 }
 
 impl<'a> QueryOptions<'a> {
+    /// Select the dated native XPath law and finite limits for this request.
+    ///
+    /// This overrides the engine's selection across ordinary, prepared, governed
+    /// and UPDATE execution. Unset options retain the engine's configuration.
+    #[must_use]
+    pub const fn with_xpath_regex(
+        mut self,
+        profile: purrdf_core::xsd_regex::xpath::Profile,
+        limits: purrdf_core::xsd_regex::xpath::Limits,
+    ) -> Self {
+        self.xpath_regex = Some(Selection::new(profile, limits));
+        self
+    }
+
+    /// The native pattern law explicitly selected for this request, if any.
+    #[must_use]
+    pub const fn xpath_regex(
+        &self,
+    ) -> Option<(
+        purrdf_core::xsd_regex::xpath::Profile,
+        purrdf_core::xsd_regex::xpath::Limits,
+    )> {
+        Selection::parts(self.xpath_regex)
+    }
+
     /// Set which substitution rewrite applies (see [`ShaclPrebinding`]).
     #[must_use]
     pub const fn with_prebinding(mut self, prebinding: ShaclPrebinding) -> Self {
@@ -4625,6 +4654,7 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
     options: QueryOptions<'d>,
 ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
+    ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
     ctx = ctx
         .with_user_functions(options.functions)
         .with_user_function_admission(options.user_function_admission)

@@ -1053,6 +1053,7 @@ pub struct AmbientContext {
     cached_env: Option<CachedEnv>,
     call_depth: u32,
     query_law: Option<Arc<crate::query_law::Runtime>>,
+    native_xpath: Option<crate::xpath::Runtime>,
 }
 
 impl std::fmt::Debug for AmbientContext {
@@ -1067,6 +1068,7 @@ impl std::fmt::Debug for AmbientContext {
             .field("cached_env", &self.cached_env.is_some())
             .field("call_depth", &self.call_depth)
             .field("query_law", &self.query_law.is_some())
+            .field("native_xpath", &self.native_xpath.is_some())
             .finish()
     }
 }
@@ -1082,6 +1084,7 @@ impl AmbientContext {
             && self.aggregates.is_none()
             && self.governors.is_none()
             && self.sources.is_none()
+            && self.native_xpath.is_none()
             && self.call_depth == 0
             && self.query_law.is_none()
     }
@@ -1101,6 +1104,7 @@ pub fn replace_ambient_context(next: AmbientContext) -> AmbientContext {
         cached_env: CACHED_ENV.with(|slot| slot.replace(next.cached_env)),
         call_depth: CURRENT_CALL_DEPTH.with(|slot| slot.replace(next.call_depth)),
         query_law: crate::query_law::replace(next.query_law),
+        native_xpath: crate::xpath::replace(next.native_xpath),
     }
 }
 
@@ -1200,14 +1204,14 @@ fn run_query_view<
     let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
             .with(|engine| engine.query_interned_view(dataset, request, options, visit))
-            .map_err(|e| format!("query evaluation error: {e}"))?;
+            .map_err(crate::xpath::query_error)?;
     };
 
     let outcome = SPARQL_ENGINE
         .with(|engine| {
             engine.query_governed_interned_in_operation(dataset, request, options, state, visit)
         })
-        .map_err(|e| format!("query evaluation error: {e}"))?;
+        .map_err(crate::xpath::query_error)?;
     certify_governed(outcome)
 }
 
@@ -1300,6 +1304,7 @@ struct AmbientScopes {
     call_depth: u32,
     query_law: Option<Arc<crate::query_law::Runtime>>,
     function_admission: Option<Arc<dyn purrdf_sparql_eval::UserFunctionAdmission>>,
+    native_xpath: Option<crate::xpath::Configuration>,
 }
 
 impl AmbientScopes {
@@ -1335,6 +1340,7 @@ impl AmbientScopes {
             call_depth: current_call_depth(),
             query_law,
             function_admission,
+            native_xpath: crate::xpath::current(),
         })
     }
 
@@ -1387,6 +1393,9 @@ impl AmbientScopes {
             .with_call_depth(self.call_depth)
             .with_remote(remote)
             .with_load(load);
+        let options = self.native_xpath.as_ref().map_or(options, |configuration| {
+            options.with_xpath_regex(configuration.profile, configuration.limits)
+        });
         self.function_admission
             .as_ref()
             .map_or(options, |admission| {
@@ -1560,7 +1569,7 @@ impl ShaclExecution {
             .with_env(&scopes.env);
         let execution = SPARQL_ENGINE
             .with(|engine| engine.prepare_execution(query, None, parameters, options))
-            .map_err(|e| format!("query evaluation error: {e}"))?;
+            .map_err(crate::xpath::query_error)?;
         Ok(Self {
             execution,
             prepared_under: scopes.plan_configuration(),
@@ -1669,7 +1678,7 @@ fn run_bound_view<
     let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
             .with(|engine| engine.execute(&mut handle.execution, dataset, options, visit))
-            .map_err(|e| format!("query evaluation error: {e}"))?;
+            .map_err(crate::xpath::query_error)?;
     };
 
     let outcome = SPARQL_ENGINE
@@ -1682,7 +1691,7 @@ fn run_bound_view<
                 visit,
             )
         })
-        .map_err(|e| format!("query evaluation error: {e}"))?;
+        .map_err(crate::xpath::query_error)?;
     certify_governed(outcome)
 }
 

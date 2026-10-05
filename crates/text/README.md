@@ -71,6 +71,13 @@ separate from ranking identity. The pure `PreparedCorpus` and `PreparedQuery`
 APIs expose the same scoring implementation for other stores, binding cached
 IDFs to validated corpus statistics and the immutable profile.
 
+For sparse fields, select `RankingProfile::with_field_populations()` and supply
+per-field carrier counts to `PreparedCorpus::with_field_populations`. Lengths
+then normalize against the mean of the field's carriers; IDF remains
+corpus-wide. `TextIndex` derives these counts per partition when that profile
+is selected. The mode changes ranking identity; existing dense profiles keep
+their fingerprints and scores.
+
 The maximum score is exactly `65_536 * 10^12` raw units and needs 56 bits.
 Scores above that exact maximum are refused even if they fit in 56 bits.
 See [the ranking contract](RANKING.md) for the bound proof, operation order,

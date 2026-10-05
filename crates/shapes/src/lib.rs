@@ -80,6 +80,7 @@ pub mod text_ingest;
 pub mod typescript;
 pub(crate) mod unique_values;
 pub mod validator_alternatives;
+pub mod xpath;
 
 pub use error::{
     IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, ShaclJsRefusal, ShapesError,

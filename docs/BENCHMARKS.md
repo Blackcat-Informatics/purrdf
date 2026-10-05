@@ -49,7 +49,7 @@ The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
 They live under `crates/*/benches/`. The workspace registers 104 `[[bench]]`
-targets in total; this section and the inventory table below document 31 of
+targets in total; this section and the inventory table below document 32 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -104,6 +104,9 @@ simply not narrated here:
   composite and pack carriers.
 - `crates/shapes/benches/graph_membership.rs` — per-row named-graph membership
   through the SHACL data view on native and mutation-snapshot carriers.
+- `crates/shapes/benches/pattern_validate.rs` — matched compatibility and dated
+  native XPath pattern validation over shared preparations and data bindings,
+  with cold and warm programs, current finite limits and long-literal neighbors.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
   LinkML import/lowering throughput and one-operation allocation traffic,
   including the change path's conforming-versus-violating contrast over one
@@ -227,7 +230,7 @@ here.
 | Bench | What it measures |
 | --- | --- |
 | `crates/rdf-core/benches/ir_layout.rs` | AoS / SoA / predicate-adjacency IR layout trade-offs (latency, allocations, peak RSS). |
-| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration (`mut_snapshot_graphs`): removals spread over many graphs, a `DROP` of a one-quad graph beside a large annotated base, and repeated snapshots after a `DROP` of a large graph. |
+| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration (`mut_snapshot_graphs`): removals spread over many graphs, a `DROP` of a one-quad graph beside a large annotated base, and repeated snapshots after a `DROP` of a large graph; a mutable-layer declared graph drained row by row at 1k and 10k rows (`mut_declared_graph_removal`); and snapshot publication of a delta of 1k, 20k and 200k added rows, retention check and freeze included (`snapshot_with_delta`). |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
@@ -244,6 +247,7 @@ here.
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/sparql-eval/benches/graph_constant_membership.rs` | Addressing named graphs by constant over 10,000 graphs: a graph that exists (`GRAPH <g> { ?s ?p ?o }`, one row), a phantom IRI that names no graph (no row), and one membership probe per row of `?s ?p ?o LATERAL { GRAPH ?o { ... } }`, on the frozen dataset, a delta snapshot, a composite view and a pack. |
 | `crates/shapes/benches/graph_membership.rs` | The `LATERAL { GRAPH ?o { ... } }` membership-probe shape over 10,000 named graphs read through the SHACL data view, on a native source and a mutation snapshot. |
+| `crates/shapes/benches/pattern_validate.rs` | Compatibility and both dated native XPath laws over matched shapes and literals, cold and warm native programs under current finite limits, plus long-literal pattern neighbors. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
 | `crates/shapes/benches/srl_closure.rs` | SPARQL 1.2 RL transitive closure: parse-and-check of the closure program, then `srl::infer` over chains of 16, 64, and 128 `:link` edges, asserting the `n(n + 1)/2` inferred triples. |

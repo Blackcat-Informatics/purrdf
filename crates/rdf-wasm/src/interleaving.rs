@@ -159,6 +159,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: SHACL_CONTEXT,
     },
     ThreadLocal {
+        file: "crates/shapes/src/xpath.rs",
+        name: "CURRENT",
+        safety: Safety::Swapped,
+        reason: SHACL_CONTEXT,
+    },
+    ThreadLocal {
         file: "crates/shapes/src/sparql.rs",
         name: "SPARQL_ENGINE",
         safety: Safety::PerCall,
@@ -488,10 +494,14 @@ mod tests {
         assert_eq!(
             swapped
                 .iter()
-                .filter(|file| **file == "crates/shapes/src/sparql.rs"
-                    || **file == "crates/shapes/src/query_law.rs")
+                .filter(|file| matches!(
+                    **file,
+                    "crates/shapes/src/sparql.rs"
+                        | "crates/shapes/src/query_law.rs"
+                        | "crates/shapes/src/xpath.rs"
+                ))
                 .count(),
-            9
+            10
         );
     }
 }

@@ -4,6 +4,22 @@
 //! Bounded successful-program reuse for validation facets.
 
 use super::{CompiledPattern, Error, Limits, Profile, compile};
+use std::sync::Arc;
+
+#[derive(Debug)]
+enum Retained {
+    Owned(CompiledPattern),
+    Shared(Arc<CompiledPattern>),
+}
+
+impl Retained {
+    fn program(&self) -> &CompiledPattern {
+        match self {
+            Self::Owned(program) => program,
+            Self::Shared(program) => program,
+        }
+    }
+}
 
 /// Retain at most one successful native pattern, without retaining failures.
 ///
@@ -13,7 +29,7 @@ use super::{CompiledPattern, Error, Limits, Profile, compile};
 /// matching still requires that request's fresh finite limits.
 #[derive(Debug, Default)]
 pub struct PatternCache {
-    program: Option<CompiledPattern>,
+    program: Option<Retained>,
 }
 
 impl PatternCache {
@@ -33,18 +49,58 @@ impl PatternCache {
         flags: &str,
         limits: Limits,
     ) -> Result<&CompiledPattern, Error> {
-        limits.admit_pattern(pattern)?;
-        if let Some(program) = &self.program
-            && program.matches_source(profile, pattern, flags)
-        {
-            program.admit(limits)?;
-        } else {
-            self.program = Some(compile(profile, pattern, flags, limits)?);
-        }
+        self.admit(profile, pattern, flags, limits)?;
         Ok(self
             .program
             .as_ref()
-            .expect("successful admission stores a program"))
+            .expect("successful admission stores a program")
+            .program())
+    }
+
+    /// Compile or reuse a program whose ownership can outlive a cache borrow.
+    ///
+    /// Sharing promotes the retained owned program once. Ordinary [`Self::compiled`]
+    /// callers retain an owned program without an Arc allocation. A caller can release a
+    /// cache lock before matching, and every match still receives its current limits.
+    ///
+    /// # Errors
+    /// Returns the same current language or operational cause as [`Self::compiled`].
+    pub fn compiled_shared(
+        &mut self,
+        profile: Profile,
+        pattern: &str,
+        flags: &str,
+        limits: Limits,
+    ) -> Result<Arc<CompiledPattern>, Error> {
+        self.admit(profile, pattern, flags, limits)?;
+        if matches!(self.program, Some(Retained::Owned(_))) {
+            let Some(Retained::Owned(program)) = self.program.take() else {
+                unreachable!("the retained owned program was checked")
+            };
+            self.program = Some(Retained::Shared(Arc::new(program)));
+        }
+        let Some(Retained::Shared(program)) = &self.program else {
+            unreachable!("successful shared admission retains shared ownership")
+        };
+        Ok(Arc::clone(program))
+    }
+
+    fn admit(
+        &mut self,
+        profile: Profile,
+        pattern: &str,
+        flags: &str,
+        limits: Limits,
+    ) -> Result<(), Error> {
+        limits.admit_pattern(pattern)?;
+        if let Some(program) = &self.program
+            && program.program().matches_source(profile, pattern, flags)
+        {
+            program.program().admit(limits)?;
+        } else {
+            self.program = Some(Retained::Owned(compile(profile, pattern, flags, limits)?));
+        }
+        Ok(())
     }
 }
 
@@ -104,5 +160,38 @@ mod tests {
             matches!(cache.compiled(Profile::Xpath31, "[", "", Limits::new().with(Resource::CompileSteps, 0)), Err(Error::Resource(cause)) if cause.resource == Resource::CompileSteps)
         );
         assert!(cache.program.is_none());
+    }
+
+    #[test]
+    fn shared_ownership_reuses_current_admission_without_holding_the_cache() {
+        let mut cache = PatternCache::default();
+        cache
+            .compiled(Profile::Xpath31, "(?:a)", "", Limits::new())
+            .unwrap();
+        assert!(matches!(cache.program, Some(Retained::Owned(_))));
+        let warm = Limits::new().with(Resource::CompileSteps, 0);
+        let shared = cache
+            .compiled_shared(Profile::Xpath31, "(?:a)", "", warm)
+            .unwrap();
+        let again = cache
+            .compiled_shared(Profile::Xpath31, "(?:a)", "", warm)
+            .unwrap();
+        assert!(Arc::ptr_eq(&shared, &again));
+        assert!(
+            matches!(cache.compiled_shared(Profile::Xpath31, "(?:a)", "", warm.with(Resource::ProgramNodes, 0)), Err(Error::Resource(cause)) if cause.resource == Resource::ProgramNodes)
+        );
+        assert!(matches!(
+            cache.compiled_shared(Profile::Xpath20, "(?:a)", "", Limits::new()),
+            Err(Error::Syntax { .. })
+        ));
+        let recovered = cache
+            .compiled_shared(Profile::Xpath31, "(?:a)", "", warm)
+            .unwrap();
+        assert!(Arc::ptr_eq(&shared, &recovered));
+        drop(cache);
+        assert!(shared.is_match("a", Limits::new()).unwrap());
+        assert!(
+            matches!(shared.is_match("a", Limits::new().with(Resource::MatchSteps, 0)), Err(Error::Resource(cause)) if cause.resource == Resource::MatchSteps)
+        );
     }
 }

@@ -22,7 +22,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
-use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
+use super::io::{
+    PyRdfFormat, dataset_from_quads_verbatim, declare_loaded_graphs, parse_quads_and_prefixes,
+    read_input,
+};
 use super::presentation;
 use super::quad_store::PyQuadStore;
 use super::query::{
@@ -92,7 +95,7 @@ impl PyStore {
         // plain Rust data.
         py.detach(move || {
             let base_ref = base.as_deref();
-            let (quads, prefixes) =
+            let (quads, prefixes, declared) =
                 parse_quads_and_prefixes(&data, format.to_native(), base_ref)
                     .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?;
             for quad in quads {
@@ -100,6 +103,7 @@ impl PyStore {
                     .insert(rdf_quad_to_values_scoped(&quad, scope))
                     .map_err(|e| iri_value_error(&e))?;
             }
+            declare_loaded_graphs(inner, declared, scope)?;
             Ok(prefixes)
         })
     }
@@ -195,7 +199,11 @@ impl PyStore {
     /// `parameters` names the variables `run` will bind, without the `?`/`$` sigil.
     /// Each is pre-bound exactly as a `substitutions` entry is on
     /// [`query`](Self::query), so a parameter stays projectable and reaches inside
-    /// `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s by ordinary correlation.
+    /// `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s by ordinary correlation. A
+    /// parameter the query never mentions could bind nothing, so it raises `ValueError`
+    /// naming it (`message_id` `sparql-prepared-parameter-unmentioned`) — see
+    /// `purrdf_sparql_eval::PreparedExecution::check_parameters_mentioned` for what
+    /// counts as a mention.
     ///
     /// What is prepared here is the PLAN, not the data: the returned object holds a
     /// reference to THIS store and re-reads its current contents on every
@@ -394,14 +402,19 @@ impl PyStore {
         let buf: Vec<u8> = py.detach(move || {
             // Serialize natively: materialize the store's quads into the IR
             // verbatim (preserving literal lexical forms) and dispatch to the codec.
-            let (quads, selection) = match &graph_projection {
-                None => (store.collect_all_quads(), SerializeGraph::Dataset),
+            let (quads, declared, selection) = match &graph_projection {
+                None => (
+                    store.collect_all_quads(),
+                    store.declared_graphs(),
+                    SerializeGraph::Dataset,
+                ),
                 Some(graph) => (
                     store.collect_graph_quads(graph.as_ref()),
+                    Vec::new(),
                     SerializeGraph::DefaultGraph,
                 ),
             };
-            let dataset = dataset_from_quads_verbatim(&quads)
+            let dataset = dataset_from_quads_verbatim(&quads, &declared)
                 .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
             // ONE serialization call, not a configured/unconfigured pair: the JSON-LD
             // options are an axis of the same options value the base and the graph
