@@ -1,31 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Fixed-point ranking probes for `wasm32-unknown-unknown` integer lowering.
-//!
-//! WebAssembly has no `i128` instructions: the compiler lowers the scoring
-//! arithmetic, integer logarithm and decimal conversion through narrower
-//! operations. These three small cases pin their answers on that target against
-//! the same independently computed expectations used natively. Full linguistic,
-//! dictionary, Unicode, projection and budget conformance runs in native Rust.
-//!
-//! The probes cover the actual ranking and its decimal lexicals, the
-//! fixed-iteration integer logarithm and the fielded-scoring reference vectors.
-//! Release compilation alone cannot check the lowered module's answers.
-//!
-//! # How it runs on both
-//!
-//! One test body per case, one runner on both targets. The target is
-//! `harness = false`, and its `main` hands the named cases to
-//! `purrdf_testkit::harness`: natively they run under `cargo test --workspace`,
-//! and on `wasm32-unknown-unknown` the same named cases run in Node through
-//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` (and CI's
-//! wasm job) sets:
-//!
-//! ```text
-//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
-//!     cargo test -p purrdf-text --target wasm32-unknown-unknown --test wasm_determinism
-//! ```
+//! Native fixed-point ranking expectations: score lexicals, the integer
+//! logarithm and independent fielded-scoring references. The full target runs
+//! under `cargo test --workspace`; generic arithmetic remains native Rust.
 //!
 //! # Why the expectations are what they are
 //!
