@@ -11,7 +11,7 @@
 //! variable above the group must give the bound value, never an unbound cell.
 //!
 //! Each case runs on every lane that pre-binds — a prepared execution, a request's
-//! substitutions under the ordinary rewrite and under the SHACL pre-binding rewrite —
+//! substitutions naming either `ShaclPrebinding` value, which select the one rewrite —
 //! and checks the bound value appears in the grouped output, beside the aggregate it
 //! was grouped with. Fixture IRIs are `example.org`.
 

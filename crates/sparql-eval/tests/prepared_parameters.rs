@@ -453,36 +453,33 @@ fn a_call_after_a_data_atom_is_invoked_with_its_declared_parameter_bound() {
     }
 }
 
-/// **A declared parameter does not reach an `OPTIONAL`'s right arm, so a call there that
-/// needs it is refused at prepare — and the neighbouring calls it does reach are not.**
+/// **A declared parameter reaches an `OPTIONAL`'s right arm, so a call there that needs
+/// it is admitted and invoked bound — as are the neighbouring calls.**
 ///
-/// A run binds a parameter by joining it onto the core pattern and writing it into the
-/// leaves it may restrict, and an `OPTIONAL`'s right arm is not one of them: restricting
-/// it would change which left rows survive. A call there is invoked with the parameter
-/// free on every run, so admitting it on the promise would only move the refusal from
-/// prepare to every execution. All three are executed: the call on `?subject` inside the
-/// `OPTIONAL` is refused; the same call in the group itself is admitted and runs; and a
-/// call inside the `OPTIONAL` on a variable the arm binds for itself is admitted and runs
-/// too, so the refusal is about the parameter's reach and not about the arm.
+/// Every run binds a parameter through the one pre-binding rewrite, which writes it into
+/// every call in the query, an `OPTIONAL`'s right arm included: the parameter is one
+/// value at every depth. All three are executed: the call on `?subject` inside the
+/// `OPTIONAL`, the same call in the group itself, and a call inside the `OPTIONAL` on a
+/// variable the arm binds for itself — each invoked bound, never free.
 #[test]
-fn a_declared_parameter_does_not_reach_an_optional_arm_and_its_neighbours_still_run() {
+fn a_declared_parameter_reaches_an_optional_arm_and_its_neighbours_still_run() {
     let (registry, relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
     let options = QueryOptions::new().with_env(&env);
     let dataset = linked_dataset();
 
-    let unreached = format!(
+    let in_optional = format!(
         "SELECT ?o WHERE {{ ?s <{LINKED}> ?o OPTIONAL {{ ( ?subject ) <{RELATED}> ( ?x ) }} }}"
     );
-    let refused = engine
-        .prepare_execution(&unreached, None, &["subject"], options)
-        .expect_err("the declaration does not bind a parameter inside an OPTIONAL arm");
+    let mut execution = engine
+        .prepare_execution(&in_optional, None, &["subject"], options)
+        .expect("the declaration binds the parameter inside an OPTIONAL arm");
+    execution.bind_named("subject", iri("a")).expect("declared");
     assert_eq!(
-        refused.code, "native-sparql-property-function",
-        "refused as the infeasible call it is: {refused}"
+        run(&engine, &mut execution, &dataset, options).expect("and it runs bound"),
+        1
     );
-    assert!(refused.to_string().contains(RELATED_MODE), "{refused}");
 
     let in_group =
         format!("SELECT ?o WHERE {{ ?s <{LINKED}> ?o . ( ?subject ) <{RELATED}> ( ?x ) }}");
@@ -508,7 +505,7 @@ fn a_declared_parameter_does_not_reach_an_optional_arm_and_its_neighbours_still_
             .expect("and it runs, driven by the arm's own row"),
         1
     );
-    assert_eq!(relation.bound_invocations(), 2);
+    assert_eq!(relation.bound_invocations(), 3);
 }
 
 /// **A `FILTER EXISTS` over the core sees the declared parameter bound, because the rows
@@ -857,21 +854,16 @@ fn a_blank_node_the_dataset_does_not_hold_is_still_bound_into_the_call() {
 // Admitted under the SHACL pre-binding rewrite
 // ---------------------------------------------------------------------------
 
-/// **Prepared for the SHACL pre-binding rewrite, a call in an `OPTIONAL` arm is admitted
-/// with the parameter bound and invoked bound — for a blank node too — and the handle
-/// refuses to run under the ordinary rewrite, which would invoke it free.**
+/// **A call in an `OPTIONAL` arm is admitted with the parameter bound and invoked bound
+/// — for a blank node too — whichever pre-binding lane the request names.**
 ///
-/// The SHACL rewrite binds a parameter in every property-function call in the query,
-/// an `OPTIONAL`'s right arm included; the ordinary rewrite stops at that arm. So the
-/// same text is refused when prepared for the ordinary rewrite (it would be invoked
-/// free on every run) and admitted when prepared for the SHACL one. Every run then
-/// answers with the row the bound blank node owns, and a different blank node answers
-/// differently. The handle's one refusal is executed beside its neighbours: run under
-/// the ordinary rewrite it is refused, by the parameter code; run under the SHACL one
-/// it answers; and a handle prepared for the ordinary rewrite still runs under the
-/// SHACL one, whose reach contains it.
+/// Every lane takes the one pre-binding rewrite, which binds a parameter in every
+/// property-function call in the query, an `OPTIONAL`'s right arm included. So the text
+/// is admitted under both lanes, and a handle prepared under one runs under the other:
+/// every run answers with the row the bound blank node owns, and a different blank node
+/// answers differently.
 #[test]
-fn a_call_in_an_optional_arm_is_bound_under_the_shacl_rewrite_and_only_there() {
+fn a_call_in_an_optional_arm_is_bound_on_every_lane() {
     let relation = Arc::new(Owns::new());
     let registered: Arc<dyn PropertyFunction> = Arc::<Owns>::clone(&relation);
     let mut registry = PropertyFunctionRegistry::new();
@@ -883,53 +875,25 @@ fn a_call_in_an_optional_arm_is_bound_under_the_shacl_rewrite_and_only_there() {
     let dataset = blank_dataset();
     let text = format!("SELECT ?x WHERE {{ OPTIONAL {{ ( ?subject ) <{OWNS}> ( ?x ) }} }}");
 
-    let refused = engine
-        .prepare_execution(&text, None, &["subject"], ordinary)
-        .expect_err("the ordinary rewrite does not bind a parameter inside an OPTIONAL arm");
-    assert_eq!(refused.code, "native-sparql-property-function", "{refused}");
-    assert!(refused.to_string().contains(RELATED_MODE), "{refused}");
-
-    let mut execution = engine
-        .prepare_execution(&text, None, &["subject"], shacl)
-        .expect("the SHACL rewrite binds the parameter in the OPTIONAL arm's call");
-    let slot = execution.slot("subject").expect("declared");
-    for (label, owned) in [
-        ("b1", "owned by the first"),
-        ("b2", "owned by the second"),
-        ("b1", "owned by the first"),
-    ] {
-        execution
-            .bind_id(slot, &*dataset, blank_id(&dataset, label))
-            .expect("the id door binds a blank node");
-        let answered = answers(&engine, &mut execution, &dataset, shacl, 0)
-            .unwrap_or_else(|diagnostic| panic!("_:{label} under the SHACL rewrite: {diagnostic}"));
-        assert_eq!(answered.len(), 1, "_:{label}: {answered:?}");
-        assert!(answered[0].contains(owned), "_:{label}: {answered:?}");
-        assert_eq!(relation.seen().last(), Some(&label.to_owned()));
+    for (prepared_under, run_under) in [(ordinary, shacl), (shacl, ordinary), (ordinary, ordinary)]
+    {
+        let mut execution = engine
+            .prepare_execution(&text, None, &["subject"], prepared_under)
+            .expect("the rewrite binds the parameter in the OPTIONAL arm's call");
+        let slot = execution.slot("subject").expect("declared");
+        for (label, owned) in [
+            ("b1", "owned by the first"),
+            ("b2", "owned by the second"),
+            ("b1", "owned by the first"),
+        ] {
+            execution
+                .bind_id(slot, &*dataset, blank_id(&dataset, label))
+                .expect("the id door binds a blank node");
+            let answered = answers(&engine, &mut execution, &dataset, run_under, 0)
+                .unwrap_or_else(|diagnostic| panic!("_:{label}: {diagnostic}"));
+            assert_eq!(answered.len(), 1, "_:{label}: {answered:?}");
+            assert!(answered[0].contains(owned), "_:{label}: {answered:?}");
+            assert_eq!(relation.seen().last(), Some(&label.to_owned()));
+        }
     }
-    let invoked = relation.seen().len();
-
-    let wrong_lane = answers(&engine, &mut execution, &dataset, ordinary, 0)
-        .expect_err("a handle admitted for the SHACL rewrite does not run under the other one");
-    assert_eq!(
-        wrong_lane.code, "native-sparql-execution-parameter",
-        "{wrong_lane}"
-    );
-    assert_eq!(
-        relation.seen().len(),
-        invoked,
-        "the refused run never reached the relation"
-    );
-
-    let core = format!("SELECT ?x WHERE {{ ( ?subject ) <{OWNS}> ( ?x ) }}");
-    let mut plain = engine
-        .prepare_execution(&core, None, &["subject"], ordinary)
-        .expect("a call at the core is bound under the ordinary rewrite");
-    plain
-        .bind(0, TermValue::blank("b2"))
-        .expect("the value door binds a blank node");
-    let answered = answers(&engine, &mut plain, &dataset, shacl, 0)
-        .expect("a handle prepared for the ordinary rewrite runs under the SHACL one");
-    assert_eq!(answered.len(), 1, "{answered:?}");
-    assert!(answered[0].contains("owned by the second"), "{answered:?}");
 }

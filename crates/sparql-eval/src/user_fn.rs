@@ -1248,7 +1248,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
         crate::eval::query_pattern(body.query()),
     ));
     let copied = body.query().clone();
-    let substituted = crate::substitute::apply_substitutions(
+    let substituted = crate::substitute::apply_shacl_prebinding(
         copied,
         crate::substitute::Prebindings::Owned(&substitutions),
     )
@@ -1692,7 +1692,7 @@ mod tests {
     // ── the pre-binding soundness envelope at THIS call site ──────────────────
     //
     // [`eval_user_function`] pre-binds a call's arguments into the declared body
-    // through `crate::substitute::apply_substitutions`. It is the third of the
+    // through `crate::substitute::apply_shacl_prebinding`. It is the third of the
     // three pre-binding call sites, and it was the one with no envelope coverage:
     // the engine's `&str` query door (`crate::engine`'s `prebinding_*` tests) and
     // the prepared handle (`tests/prepared_execution.rs`) each pin this envelope
@@ -1717,7 +1717,7 @@ mod tests {
     // as a local and hands it straight to evaluation, exposing no algebra to assert
     // on, so an answer-shaped test for that clause here would pass whether or not
     // the rule held — a test that cannot fail for the reason it states. The clause
-    // is a property of `apply_substitutions` itself, and this site calls that very
+    // is a property of `apply_shacl_prebinding` itself, and this site calls that very
     // function, so it is pinned where it is observable and not restated where it is
     // not.
 
@@ -1813,17 +1813,12 @@ mod tests {
     }
 
     #[test]
-    fn a_user_function_argument_is_not_pushed_into_an_optional_right_arm() {
-        // `?s :p ?o OPTIONAL { ?s :p ?n }` with the argument :x.
-        //
-        // The right arm binds ?n to each subject's own object, so only :a's row
-        // carries ?n = :x and only it survives the seed join: ONE row.
-        //
-        // Restricting the right arm to `?s :p <x>` instead would leave it matching
-        // only :a; :b and the blank subject would become OPTIONAL MISSES, be
-        // null-padded with ?n UNBOUND, and an unbound cell is compatible with the
-        // seed — so all THREE rows would survive. Three against one: the divergence
-        // is the whole answer, not a rounding of it.
+    fn a_user_function_argument_reaches_an_optional_right_arm() {
+        // `?s :p ?o OPTIONAL { ?s :p ?n }` with the argument :x is
+        // `?s :p ?o OPTIONAL { ?s :p :x }` — the argument is one value at every depth,
+        // as every pre-binding lane binds it: :a matches the arm, :b and the blank
+        // subject are kept null-padded, so THREE rows. Reading ?n from the arm's data
+        // and joining the argument afterwards would keep one.
         let count = probe_count(
             &["n"],
             &format!(
@@ -1831,21 +1826,15 @@ mod tests {
             ),
             &format!("<{ENV}x>"),
         );
-        assert_eq!(
-            count, 1,
-            "only the subject whose object IS :x survives the seed join; 3 would mean \
-             the pushdown entered the OPTIONAL and turned matches into null-padded misses"
-        );
+        assert_eq!(count, 3, "every left row survives the OPTIONAL");
     }
 
     #[test]
-    fn a_user_function_argument_is_not_pushed_into_a_minus_right_arm() {
-        // `?s :p ?o MINUS { ?s :p ?n }` with the argument :x.
-        //
-        // The right arm produces one row per subject and shares ?s with the left, so
-        // MINUS removes EVERY left row: the count is zero. Restricting the right arm
-        // to `?s :p <x>` would leave it matching only :a, so :b and the blank subject
-        // would survive — two where the algebra says none.
+    fn a_user_function_argument_reaches_a_minus_right_arm() {
+        // `?s :p ?o MINUS { ?s :p ?n }` with the argument :x is
+        // `?s :p ?o MINUS { ?s :p :x }`: only :a has a compatible right row, so :b and
+        // the blank subject survive — TWO. Reading ?n from the arm's data would remove
+        // every row.
         let count = probe_count(
             &["n"],
             &format!(
@@ -1853,11 +1842,7 @@ mod tests {
             ),
             &format!("<{ENV}x>"),
         );
-        assert_eq!(
-            count, 0,
-            "every left row has a compatible right row, so MINUS removes all of them; \
-             a non-zero count would mean the pushdown narrowed the right arm"
-        );
+        assert_eq!(count, 2, "MINUS removes only :a");
     }
 
     #[test]

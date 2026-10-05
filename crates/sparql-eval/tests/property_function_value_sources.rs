@@ -2215,15 +2215,14 @@ fn a_group_by_keyed_by_the_substituted_variable_is_entered() {
     }
 }
 
-/// **A `GROUP BY` the substituted variable is not a key of is not entered.** An
-/// expression key `(STR(?q) AS ?k)` groups by `?k`, and two values of `?q` can share
-/// one; an aggregate `COUNT(?q)` folds every value into one row that does not carry
-/// `?q`; a key `?x` other than `?q` partitions by something else. In each the
-/// substitution cannot reach the call, so the relation serving only `bf` is refused at
-/// prepare and never invoked, and the free-capable one is invoked free and answers
-/// exactly the bottom-up reference — every group, joined with the seed afterwards.
+/// **A `GROUP BY` is reached by the substitution whatever its keys.** An expression key
+/// `(STR(?q) AS ?k)`, an aggregate `COUNT(?q)` and a key `?x` other than `?q` all sit
+/// over a call on `?q`, and the one pre-binding rewrite writes the substituted value
+/// into that call wherever it is — the variable is one value at every depth. So the
+/// relation serving only `bf` is admitted and invoked with `"alpha"` alone, and every
+/// group is computed over `"alpha"`'s pairs only.
 #[test]
-fn a_group_by_not_keyed_by_the_substituted_variable_is_not_entered() {
+fn a_group_by_is_reached_by_the_substitution_whatever_its_keys() {
     let call = format!("?q <{PAIRS}> ?x");
     let left = format!("?s <{EX}p> ?v");
     let times = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
@@ -2237,67 +2236,31 @@ fn a_group_by_not_keyed_by_the_substituted_variable_is_not_entered() {
                 "{left} {{ SELECT ?k (COUNT(?x) AS ?out) WHERE {{ {call} }} \
                  GROUP BY (STR(?q) AS ?k) }}"
             ),
-            times(&[("alpha", "2"), ("alpha", "1"), ("alpha", "1")]),
+            times(&[("alpha", "2")]),
         ),
         (
             format!("{left} {{ SELECT (COUNT(?q) AS ?out) WHERE {{ {call} }} }}"),
-            times(&[("alpha", "4")]),
+            times(&[("alpha", "2")]),
         ),
         (
             format!("{left} {{ SELECT ?x (COUNT(*) AS ?out) WHERE {{ {call} }} GROUP BY ?x }}"),
-            times(&[
-                ("alpha", "1"),
-                ("alpha", "1"),
-                ("alpha", "1"),
-                ("alpha", "1"),
-            ]),
+            times(&[("alpha", "1"), ("alpha", "1")]),
         ),
     ] {
-        let refused = run_pairs_with(
+        let bound = run_pairs_with(
             &["bf"],
             false,
             &body,
             &alpha_substitution(),
             ShaclPrebinding::None,
         );
-        let Err(message) = &refused.answer else {
-            panic!("{body}: the bound-only relation is refused, got {refused:?}");
-        };
-        assert!(
-            message.contains("no feasible evaluation order")
-                && message.contains(&format!("<{PAIRS}> reachable only as `ff`")),
-            "{body}: the refusal names the call and its free input: {message}"
-        );
-        assert_eq!(refused.invocations, Vec::<String>::new(), "{body}");
-
-        let reference = run_pairs_with(
-            &["ff"],
-            true,
-            &body,
-            &alpha_substitution(),
-            ShaclPrebinding::None,
-        );
+        assert_eq!(bound.answer.as_ref(), Ok(&expected), "{body}");
+        let mut invoked = bound.invocations;
+        invoked.dedup();
         assert_eq!(
-            reference.answer.as_ref(),
-            Ok(&expected),
-            "{body}: the reference"
-        );
-        let free = run_pairs_with(
-            &["bf", "ff"],
-            false,
-            &body,
-            &alpha_substitution(),
-            ShaclPrebinding::None,
-        );
-        assert_eq!(
-            free.answer.as_ref(),
-            Ok(&expected),
-            "{body}: the free-capable answer"
-        );
-        assert_eq!(
-            free.invocations,
-            calls(&["ff:-"]),
-            "{body}: the free-capable relation is invoked free"
+            invoked,
+            calls(&["bf:alpha"]),
+            "{body}: the relation is invoked with \"alpha\" only"
         );
     }
 }

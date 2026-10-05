@@ -20,11 +20,10 @@
 //!
 //! The design note states the soundness premise: the pushdown's boundary is *"a
 //! function of the query and the names of the pre-bound variables, both constant
-//! across focus nodes."* That is true of the ordinary pushdown boundary — its
-//! descent stops at an `OPTIONAL`'s and a `MINUS`'s right arm by matching on the
-//! `GraphPattern` variant, never on a value. SHACL completes leaves in every arm,
-//! and both lanes are keyed separately. Neither boundary is the whole story about
-//! which cells exist, and the difference is already live in the crate:
+//! across focus nodes."* That is true of the rewrite's boundary — it decides where to
+//! write by matching on the `GraphPattern` variant, never on a value. But the
+//! boundary is not the whole story about which cells exist, and the difference is
+//! already live in the crate:
 //! `term_pattern_from_ground` refuses a [`GroundTerm::BlankNode`], because a blank in
 //! a pattern is an anonymous variable rather than a request to match that blank. So a
 //! blank-node focus node is bound through `VALUES` rows alone — the seed, and the
@@ -33,7 +32,7 @@
 //! sets, and which positions exist depends on which of a small, closed set of
 //! *shapes* each value has.
 //!
-//! [`ValueShape`] is that closed set, and it is the memo's key alongside the lane.
+//! [`ValueShape`] is that closed set, and it is the memo's key.
 //! A run whose values have the memo's shapes writes into the retained tree; a run
 //! whose values do not takes the ordinary per-run rewrite, unchanged. That is how a
 //! focus set mixing IRI and blank-node nodes cannot corrupt the memo: the blank ones
@@ -59,10 +58,9 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_sparql_algebra::{Args, Child};
 
-use crate::engine::ShaclPrebinding;
 use crate::substitute::{
-    apply_probes, apply_shacl_probes, expression_from_ground, has_repeated_variable,
-    named_node_from_ground, term_pattern_from_ground,
+    apply_shacl_probes, expression_from_ground, has_repeated_variable, named_node_from_ground,
+    term_pattern_from_ground,
 };
 
 /// The already-grounded pre-binding list both halves of the rewrite consume.
@@ -106,7 +104,7 @@ pub(crate) enum ValueShape {
     /// position contains, and the memo's cell numbering counts term positions — so
     /// the numbering would become a function of the VALUE rather than of the query
     /// and the parameter names, which is the property the whole artifact rests on.
-    /// Such a run takes the ordinary rewrite and answers identically; it is a memo
+    /// Such a run takes the full rewrite and answers identically; it is a memo
     /// that is declined, not a query that is refused.
     NestedTriple,
 }
@@ -256,19 +254,12 @@ fn write_cell(cell: Cell<'_>, ground: &GroundTerm) {
     }
 }
 
-/// Run the pre-binding rewrite `lane` names, over already-grounded probes.
+/// Run the one pre-binding rewrite, over already-grounded probes.
 ///
 /// The memo calls THIS rather than a copy of it, so "what the memo stands in for" and
 /// "what the engine would otherwise have run" are the same two function calls.
-pub(crate) fn rewrite(
-    query: Query,
-    lane: ShaclPrebinding,
-    probes: Vec<(Variable, GroundTerm)>,
-) -> Query {
-    match lane {
-        ShaclPrebinding::Applied => apply_shacl_probes(query, probes),
-        ShaclPrebinding::None => apply_probes(query, probes),
-    }
+pub(crate) fn rewrite(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+    apply_shacl_probes(query, probes)
 }
 
 /// Visit every position in `query` a pre-binding rewrite can write a value into, in
@@ -838,10 +829,6 @@ fn moved_node(node: &NamedNode) -> NamedNode {
 /// The substituted algebra of one prepared execution, retained across its runs.
 #[derive(Debug)]
 pub(crate) struct PrebindMemo {
-    /// Which of the two rewrites produced [`Self::query`]. The SHACL lane and the
-    /// plain lane build DIFFERENT trees from the same query, so a run on the other
-    /// lane must not read this one.
-    lane: ShaclPrebinding,
     /// The [`ValueShape`] each parameter had when the tree was built, positionally.
     shapes: Box<[ValueShape]>,
     /// The rewritten query, holding the most recently bound values.
@@ -882,9 +869,9 @@ impl PrebindMemo {
                 .all(|(shape, (_, ground))| *shape == ValueShape::of(ground))
     }
 
-    /// Whether this memo answers for `lane` and `probes`.
-    pub(crate) fn matches(&self, lane: ShaclPrebinding, probes: &Probes) -> bool {
-        self.lane == lane && Self::shapes_match(&self.shapes, probes)
+    /// Whether this memo answers for `probes`.
+    pub(crate) fn matches(&self, probes: &Probes) -> bool {
+        Self::shapes_match(&self.shapes, probes)
     }
 
     /// The retained tree, with `probes`' values written into it.
@@ -921,8 +908,8 @@ impl PrebindMemo {
         &self.plan
     }
 
-    /// Build a memo for `prepared` under `lane` and the shapes of `probes`, or `None`
-    /// if this query, lane and shape list are outside what a memo can represent.
+    /// Build a memo for `prepared` under the shapes of `probes`, or `None` if this
+    /// query and shape list are outside what a memo can represent.
     ///
     /// # How the targets are found
     ///
@@ -945,7 +932,7 @@ impl PrebindMemo {
     /// VISIT some position the rewrite writes, no amount of differencing would ever
     /// have noticed, but the replayed tree would carry the first value set's term
     /// there and the comparison fails. A memo that fails it is discarded.
-    pub(crate) fn build(prepared: &Query, lane: ShaclPrebinding, probes: &Probes) -> Option<Self> {
+    pub(crate) fn build(prepared: &Query, probes: &Probes) -> Option<Self> {
         // A repeated pre-bound name keeps `apply_probes`' own per-variable path, which
         // builds a different tree; nothing on the prepared door can produce one
         // (`prepare_execution` refuses a repeated parameter), and a memo that assumed
@@ -958,7 +945,7 @@ impl PrebindMemo {
             return None;
         }
 
-        let mut base = rewrite(prepared.clone(), lane, probes.to_vec());
+        let mut base = rewrite(prepared.clone(), probes.to_vec());
         let base_cells = cell_snapshots(&mut base);
 
         let moved_probes: Vec<(Variable, GroundTerm)> = probes
@@ -970,7 +957,7 @@ impl PrebindMemo {
         for (parameter, (_, ground)) in moved_probes.iter().enumerate() {
             let mut one_moved = probes.to_vec();
             one_moved[parameter].1 = ground.clone();
-            let mut tree = rewrite(prepared.clone(), lane, one_moved);
+            let mut tree = rewrite(prepared.clone(), one_moved);
             let cells = cell_snapshots(&mut tree);
             if cells.len() != base_cells.len() {
                 return None;
@@ -998,7 +985,7 @@ impl PrebindMemo {
 
         let mut replayed = base.clone();
         let cells = write_values(&mut replayed, &targets, &moved_probes);
-        if replayed != rewrite(prepared.clone(), lane, moved_probes) {
+        if replayed != rewrite(prepared.clone(), moved_probes) {
             return None;
         }
         // `replayed` holds a different value in every cell `base` does, so an attached
@@ -1008,7 +995,6 @@ impl PrebindMemo {
             crate::eval::query_pattern(&replayed),
         );
         Some(Self {
-            lane,
             shapes,
             query: base,
             targets: targets.into_boxed_slice(),

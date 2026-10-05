@@ -45,6 +45,68 @@ use crate::ast::{GroundTerm, Variable};
 use crate::tree::Child;
 
 impl Query {
+    /// The first variable among `prebound` (named without their `?`/`$` sigil) that
+    /// this query ASSIGNS — the target of a `BIND`, of a `SELECT` or `GROUP BY` `(expr
+    /// AS ?v)`, or of an `UNFOLD`, anywhere in the query, `EXISTS` bodies and
+    /// sub-`SELECT`s included — or `None` when it assigns none of them.
+    ///
+    /// A pre-bound variable holds one value for the whole evaluation, so an
+    /// assignment of it either is ignored or silently overwrites the caller's binding:
+    /// the reassignment SHACL 1.2 SPARQL Extensions, Appendix A forbids for a pre-bound
+    /// variable. Every caller that pre-binds — a prepared execution's parameters, a
+    /// request's substitutions, a SHACL node expression's context — refuses a query
+    /// for which this answers `Some`, so the refusal has one definition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_sparql_algebra::SparqlParser;
+    ///
+    /// let query = SparqlParser::new()
+    ///     .parse_query("SELECT ?o WHERE { BIND(<http://example.org/b> AS ?this) ?this ?p ?o }")
+    ///     .unwrap();
+    /// assert_eq!(query.assigned_prebound(&["this"]).map(|v| v.as_str()), Some("this"));
+    /// // A fresh variable is no reassignment.
+    /// assert!(query.assigned_prebound(&["value"]).is_none());
+    /// ```
+    #[must_use]
+    pub fn assigned_prebound(&self, prebound: &[&str]) -> Option<&Variable> {
+        use crate::walk::{Flow, NodeRef, walk_pre_post};
+        if prebound.is_empty() {
+            return None;
+        }
+        let pattern = match self {
+            Self::Select { pattern, .. }
+            | Self::Construct { pattern, .. }
+            | Self::Describe { pattern, .. }
+            | Self::Ask { pattern, .. } => pattern,
+        };
+        let declared = |variable: &Variable| prebound.contains(&variable.as_str());
+        let mut found = None;
+        walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+            if visit == crate::walk::Visit::Exit {
+                return Flow::Descend;
+            }
+            let assigned = match node {
+                NodeRef::Pattern(GraphPattern::Extend { variable, .. }) => {
+                    declared(variable).then_some(variable)
+                }
+                NodeRef::Pattern(GraphPattern::Unfold {
+                    element, companion, ..
+                }) => std::iter::once(element)
+                    .chain(companion.as_ref())
+                    .find(|variable| declared(variable)),
+                _ => None,
+            };
+            if let Some(variable) = assigned {
+                found = Some(variable);
+                return Flow::Stop;
+            }
+            Flow::Descend
+        });
+        found
+    }
+
     /// Pre-bind `var` to `value` by injecting a single-row `VALUES { ?var value }`
     /// `JOIN` at the core `WHERE` pattern (see the module docs for the exact
     /// semantics). The query head (`SELECT`/`CONSTRUCT`/`DESCRIBE`/`ASK`) and every

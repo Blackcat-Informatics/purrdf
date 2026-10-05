@@ -229,36 +229,6 @@ impl<'a> Prebindings<'a> {
     }
 }
 
-/// Apply every `(name, value)` substitution to `query` as a pre-binding rewrite,
-/// returning the rewritten query. Each value is mapped to the algebra's
-/// [`GroundTerm`] (blank-node focus nodes ride the injection-only
-/// [`GroundTerm::BlankNode`]) and injected as a single-row `VALUES` join at the core
-/// `WHERE` pattern, beneath the solution-modifier stack but visible to the projected
-/// variable list.
-///
-/// # Errors
-///
-/// Returns a [`RdfDiagnostic`] if a literal substitution carries a datatype IRI that
-/// is not a syntactically valid IRI, or a language tag the RDF concrete syntaxes
-/// would not have lexed (the two ways a [`TermValue`] cannot become a
-/// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
-/// component that cannot be made into a term is reported to the caller rather than
-/// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
-pub(crate) fn apply_substitutions(
-    query: Query,
-    substitutions: Prebindings<'_>,
-) -> Result<Query, RdfDiagnostic> {
-    let probes = build_probes(substitutions)?;
-    if probes.is_empty() {
-        // Nothing to push and nothing to seed. [`push_probe_constants`] returns its
-        // argument untouched for an empty probe list and a `map_core_pattern` whose
-        // body is the identity rebuilds the query it was handed, so descending at all
-        // here would be a walk with no rewrite in it.
-        return Ok(query);
-    }
-    Ok(apply_probes(query, probes))
-}
-
 /// Take the pattern in `slot` out, leaving [`hole`] in its place.
 fn take_child(slot: &mut GraphPattern) -> GraphPattern {
     std::mem::replace(slot, GraphPattern::empty_bgp())
@@ -342,8 +312,11 @@ pub(crate) fn interned_variable(name: &str) -> Variable {
 ///
 /// # Errors
 ///
-/// As [`apply_substitutions`]: a datatype IRI that is not a valid IRI, or a language
-/// tag the concrete syntaxes would not have lexed.
+/// A datatype IRI that is not a valid IRI, or a language tag the concrete syntaxes
+/// would not have lexed (the two ways a [`TermValue`] cannot become a
+/// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
+/// component that cannot be made into a term is reported to the caller rather than
+/// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
 fn build_probes(
     substitutions: Prebindings<'_>,
 ) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
@@ -392,8 +365,11 @@ pub(crate) fn build_probes_into(
     Ok(())
 }
 
-/// [`apply_substitutions`]'s rewrite, over probes that are already grounded and
-/// already known to be non-empty.
+/// The first half of the one pre-binding rewrite ([`apply_shacl_probes`]), over
+/// probes that are already grounded and already known to be non-empty: every value is
+/// pushed into the leaves the pushdown reaches and injected as a single-row `VALUES`
+/// join at the core `WHERE` pattern, beneath the solution-modifier stack but visible
+/// to the projected variable list.
 pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     // ONE seed carrying every pre-binding, not one seed per pre-binding.
     //
@@ -414,17 +390,11 @@ pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) ->
     // descent, then one `substitute_variable` per pre-binding — so its behaviour is
     // unchanged rather than approximated.
     let mut query = query;
-    // The group keeps only its keys and aggregates, so a pre-bound variable read
-    // above it needs its value carried past it — see [`seed_above_group`]. Taken
-    // while the probes are still in hand, planted after the core seed: planted first,
-    // the new `Join` would stop the core descent above the group.
-    let above_group = group_seed(&mut query, &probes);
     if has_repeated_variable(&probes) {
         query.map_core_pattern_mut(|core| push_probe_constants(core, &probes));
         for (var, ground) in probes {
             query.substitute_variable_mut(&var, ground);
         }
-        seed_above_group(&mut query, above_group);
         return query;
     }
     // ONE descent doing both rewrites, in the order the two separate descents ran
@@ -457,97 +427,11 @@ pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) ->
             right: Child::new(core),
         });
     });
-    seed_above_group(&mut query, above_group);
     query
 }
 
-/// The query's top-level `GROUP BY`, when it has one: the group node beneath the
-/// solution modifiers, never a sub-`SELECT`'s.
-fn top_group_mut(query: &mut Query) -> Option<&mut GraphPattern> {
-    let (Query::Select { pattern, .. }
-    | Query::Construct { pattern, .. }
-    | Query::Describe { pattern, .. }
-    | Query::Ask { pattern, .. }) = query;
-    let mut node = pattern;
-    let mut projected = false;
-    loop {
-        match node {
-            // A second projection is a sub-`SELECT`'s: its group is not this query's.
-            GraphPattern::Project { .. } if projected => return None,
-            GraphPattern::Project { inner, .. } => {
-                projected = true;
-                node = inner;
-            }
-            GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner }
-            | GraphPattern::Slice { inner, .. }
-            | GraphPattern::OrderBy { inner, .. }
-            | GraphPattern::Extend { inner, .. }
-            | GraphPattern::Filter { inner, .. }
-            | GraphPattern::Unfold { inner, .. } => node = inner,
-            GraphPattern::Group { .. } => return Some(node),
-            _ => return None,
-        }
-    }
-}
-
-/// The single `VALUES` row [`seed_above_group`] plants: every pre-binding the query's
-/// top-level `GROUP BY` does not keep as a key, or `None` when there is no such group
-/// or nothing it drops.
-fn group_seed(
-    query: &mut Query,
-    probes: &[(Variable, GroundTerm)],
-) -> Option<(Vec<Variable>, Vec<Option<GroundTerm>>)> {
-    let Some(GraphPattern::Group {
-        variables: keys, ..
-    }) = top_group_mut(query)
-    else {
-        return None;
-    };
-    let mut variables = Vec::new();
-    let mut row = Vec::new();
-    for (var, ground) in probes {
-        if !group_key_carries(keys, var) && !variables.contains(var) {
-            variables.push(var.clone());
-            row.push(Some(ground.clone()));
-        }
-    }
-    (!variables.is_empty()).then_some((variables, row))
-}
-
-/// Join the pre-bindings a query's top-level `GROUP BY` does not keep onto the
-/// group's output, as one single-row `VALUES` ([`group_seed`]), so every solution
-/// modifier above the group — `HAVING`, a `SELECT` expression, `ORDER BY`, the
-/// projection — reads the bound value.
-///
-/// The seed [`apply_probes`] plants sits at the core `WHERE` pattern, beneath the
-/// group, and a `Group` outputs only its keys and its aggregates: a pre-bound variable
-/// that is not a key would otherwise be unbound in every grouped row. That variable
-/// holds one value for the whole evaluation — it is why the parser admits it in an
-/// aggregate projection (`SparqlParser::with_prebound_variables`) — so carrying it
-/// past the group as a constant column is exactly its meaning: every group reads the
-/// same value. A key needs nothing: the group keeps it, from the seed below.
-///
-/// Only the top-level wrapper stack is read. A sub-`SELECT`'s group belongs to that
-/// sub-query, whose projection decides what its pre-bound variables mean outside it.
-fn seed_above_group(query: &mut Query, seed: Option<(Vec<Variable>, Vec<Option<GroundTerm>>)>) {
-    let Some((variables, row)) = seed else {
-        return;
-    };
-    let Some(group) = top_group_mut(query) else {
-        return;
-    };
-    purrdf_sparql_algebra::substitute::take_and_replace(group, |group| GraphPattern::Join {
-        left: Child::new(GraphPattern::Values {
-            variables,
-            bindings: vec![row],
-        }),
-        right: Child::new(group),
-    });
-}
-
 /// Whether any variable is pre-bound twice, which is the one shape the combined
-/// seed in [`apply_substitutions`] cannot represent.
+/// seed in [`apply_probes`] cannot represent.
 ///
 /// Quadratic on purpose: a pre-binding list is the handful of variables one shape
 /// names (`$this`, `$value`, `$shapesGraph`, `$currentShape`, the component's
@@ -1753,11 +1637,17 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
     }
 }
 
-/// Apply SHACL-SPARQL pre-binding to `query`.
+/// Apply every `(name, value)` pre-binding to `query`: the ONE pre-binding rewrite,
+/// which every lane that binds variables before evaluation takes — a prepared
+/// execution's parameters, a request's substitutions, a SHACL-SPARQL constraint,
+/// validator, rule, target and node expression, and a SPARQL function body's
+/// arguments. A pre-bound variable means one value for the whole evaluation, at
+/// every depth, which is SHACL's pre-binding (SHACL 1.2 SPARQL Extensions, Appendix
+/// A) and what the parser's grouping exemption
+/// (`SparqlParser::with_prebound_variables`) assumes.
 ///
-/// First performs the ordinary VALUES-join rewrite via [`apply_substitutions`]
-/// (so triple-pattern positions and projectable variables work exactly like the
-/// generic pre-binding path). Then completes every BGP/path leaf at every depth,
+/// First performs the VALUES-join seed and pushdown via [`apply_probes`]. Then
+/// completes every BGP/path leaf at every depth,
 /// including OPTIONAL and MINUS right arms and nested EXISTS bodies. A leaf-local
 /// VALUES join constrains blank and blank-bearing quoted identities and restores
 /// columns replaced by constants. The full walk also, for every pre-bound variable
@@ -1775,7 +1665,9 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
 /// property-function call's arguments they are driven in too, wherever the call is, so
 /// the relation is invoked with them bound — see `drive_call_arguments`.
 ///
-/// Returns a diagnostic on the same error conditions as [`apply_substitutions`].
+/// # Errors
+///
+/// As [`build_probes`].
 pub(crate) fn apply_shacl_prebinding(
     query: Query,
     substitutions: Prebindings<'_>,
@@ -2422,15 +2314,63 @@ fn finish_own_expressions(frame: &mut SubstituteFrame, expr_subs: &ExprSubs) -> 
             expression: None, ..
         } => operand,
         GraphPattern::Group { variables, .. } => {
-            let carried = operand.kept(expr_subs, variables);
+            let keys = variables.clone();
+            let carried = operand.kept(expr_subs, &keys);
             drive_expression_reads(&mut frame.node, expr_subs, frame.scope, operand);
-            carried
+            carry_past_group(&mut frame.node, expr_subs, &keys, carried)
         }
         _ => {
             drive_expression_reads(&mut frame.node, expr_subs, frame.scope, operand);
             operand
         }
     }
+}
+
+/// Carry every pre-bound value a `GROUP BY` does not keep as a key past it, as one
+/// single-row `VALUES` joined onto the group's output, and report the columns the
+/// result carries: `carried`, plus each value restored.
+///
+/// A `Group` outputs only its keys and its aggregates, so a pre-bound variable that is
+/// not a key would be unbound in every grouped row — read as `None` by the projection
+/// and every solution modifier above (`SELECT $this (COUNT(*) AS ?c)`, `HAVING`, `ORDER
+/// BY`), at the top level and in a sub-`SELECT` alike. A pre-bound variable is one value
+/// for the whole evaluation, which is why the parser admits it above a group without
+/// grouping by it (`SparqlParser::with_prebound_variables`), so carrying it past the
+/// group as a constant column is exactly its meaning: every group reads the same value.
+///
+/// No schema changes where it matters: a group sits beneath its own `SELECT`'s
+/// projection, which keeps the restored column only when it projects the variable — a
+/// column it already named — and drops it otherwise.
+fn carry_past_group(
+    node: &mut GraphPattern,
+    expr_subs: &ExprSubs,
+    keys: &[Variable],
+    carried: SeedColumns,
+) -> SeedColumns {
+    let mut restored = carried.0;
+    let mut variables = Vec::new();
+    let mut row = Vec::new();
+    for (index, (var, ground)) in expr_subs.0.iter().enumerate() {
+        if keys.contains(var) || variables.contains(var) {
+            continue;
+        }
+        variables.push(var.clone());
+        row.push(Some(ground.clone()));
+        if index < 64 {
+            restored |= 1_u64 << index;
+        }
+    }
+    if variables.is_empty() {
+        return carried;
+    }
+    purrdf_sparql_algebra::substitute::take_and_replace(node, |group| GraphPattern::Join {
+        left: Child::new(GraphPattern::Values {
+            variables,
+            bindings: vec![row],
+        }),
+        right: Child::new(group),
+    });
+    SeedColumns(restored)
 }
 
 /// Which pre-bound values a node's output rows carry from the `VALUES` seed — a bit per
@@ -4273,14 +4213,15 @@ mod walk_tests {
                 aggregates,
             } => {
                 let operand = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
-                let carried = operand.kept(expr_subs, variables);
+                let keys = variables.clone();
+                let carried = operand.kept(expr_subs, &keys);
                 let taken = std::mem::take(aggregates);
                 *aggregates = taken
                     .into_iter()
                     .map(|(var, agg)| (var, reference_substitute_in_aggregate(agg, expr_subs)))
                     .collect();
                 reference_drive_expression_reads(pattern, expr_subs, scope, operand);
-                return carried;
+                return carry_past_group(pattern, expr_subs, &keys, carried);
             }
         };
         if reads_expressions {

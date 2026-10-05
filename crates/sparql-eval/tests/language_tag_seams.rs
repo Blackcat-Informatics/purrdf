@@ -247,7 +247,7 @@ fn prebind_purr_tagged(tag: &str) -> Result<usize, String> {
 /// [`prebind_purr_tagged`] over either pre-binding rewrite.
 ///
 /// `apply_shacl_prebinding` is the SHACL `$this` door, and it needs no gate of
-/// its own: it calls `apply_substitutions` first and then routes every value
+/// its own: it calls `apply_probes` first and then routes every value
 /// through `ground_term_from_value` a second time to build the expression-position
 /// constant, so both of its uses of a caller's `TermValue` pass the one ingress.
 /// Driving it here proves that rather than asserting it.
