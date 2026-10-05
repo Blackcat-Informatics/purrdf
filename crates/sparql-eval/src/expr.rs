@@ -42,9 +42,9 @@ use purrdf_sparql_algebra::{
     ArithmeticOperator, Expression, Function, GraphPattern, PurrdfFn, Variable,
 };
 use purrdf_xsd::{
-    XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_ceil, numeric_floor,
-    numeric_round, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div, value_equal,
-    value_mul, value_sub,
+    DecimalDigits, LiteralValue, XsdDatatype, XsdValue, effective_boolean_value, literal_cmp,
+    literal_equal, numeric_abs, numeric_ceil, numeric_floor, numeric_round, parse_by_iri,
+    parse_xsd10, value_add, value_cmp, value_div, value_equal, value_mul, value_sub,
 };
 use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
 
@@ -449,6 +449,55 @@ pub(crate) fn xsd_of(value: &TermValue) -> Option<XsdValue> {
     }
 }
 
+/// The exact value of an `xsd:integer`-family or `xsd:decimal` literal that lies past
+/// the bounded representation `xsd_of` parses into (`purrdf_xsd`'s documented numeric
+/// limits); `None` for every other literal and term. Such a literal is a perfectly good
+/// number — only arithmetic over it is refused — so comparison, equality, ordering,
+/// `isNumeric`, the effective boolean value and the conversions to `xsd:float`/
+/// `xsd:double` read it through here. Called only once the bounded parse has failed,
+/// so the bounded fast path pays nothing for it.
+pub(crate) fn unbounded_of_parts(lexical: &str, datatype_iri: &str) -> Option<LiteralValue> {
+    let datatype = XsdDatatype::from_iri(datatype_iri)
+        .filter(|d| *d == XsdDatatype::Decimal || d.is_integer_family())?;
+    DecimalDigits::parse_typed(lexical, datatype)
+        .ok()
+        .map(|digits| LiteralValue::Unbounded { digits, datatype })
+}
+
+/// [`unbounded_of_parts`] over an owned term value.
+fn unbounded_of(value: &TermValue) -> Option<LiteralValue> {
+    match value {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language: None,
+            ..
+        } => unbounded_of_parts(lexical_form, datatype),
+        _ => None,
+    }
+}
+
+/// The value of a term as [`LiteralValue`]: its bounded XSD value when [`xsd_of`] has
+/// one, else its exact value past the bounds ([`unbounded_of`]); `None` for a term with
+/// no XSD value at all.
+pub(crate) fn literal_value_of(value: &TermValue) -> Option<LiteralValue> {
+    xsd_of(value)
+        .map(LiteralValue::Bounded)
+        .or_else(|| unbounded_of(value))
+}
+
+/// Whether a term is a numeric literal — a value of the SPARQL numeric tower, past the
+/// bounded representation included (SPARQL §17.4.2.4 `isNumeric`: "a numeric value").
+pub(crate) fn is_numeric_term(value: &TermValue) -> bool {
+    literal_value_of(value).is_some_and(|v| v.is_numeric())
+}
+
+/// The effective boolean value of a numeric literal past the bounded representation:
+/// `false` exactly for zero (SPARQL §17.2.2; such a value is never `NaN`).
+fn unbounded_ebv(value: &LiteralValue) -> Option<bool> {
+    value.unbounded().map(|digits| !digits.is_zero())
+}
+
 /// The effective boolean value a constant `literal` evaluates to (`None` = type error)
 /// — [`ebv_term`]'s answer for it, reached without a dataset, for the prepare-time
 /// planner (`crate::property_fn_plan`'s `requires`). A language-tagged string has
@@ -457,9 +506,11 @@ pub(crate) fn constant_ebv(literal: &purrdf_sparql_algebra::Literal) -> Option<b
     if literal.language().is_some() {
         return None;
     }
-    xsd_of(&crate::convert::literal_to_value(literal))
-        .as_ref()
-        .and_then(effective_boolean_value)
+    let value = crate::convert::literal_to_value(literal);
+    match xsd_of(&value) {
+        Some(xv) => effective_boolean_value(&xv),
+        None => unbounded_of(&value).as_ref().and_then(unbounded_ebv),
+    }
 }
 
 /// The effective boolean value of a concrete term (`None` = type error).
@@ -491,9 +542,68 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
     if is_lang_tagged {
         return Ok(None);
     }
-    Ok(xsd_of_term(ctx, term)?
-        .as_ref()
-        .and_then(effective_boolean_value))
+    match xsd_of_term(ctx, term)? {
+        Some(xv) => Ok(effective_boolean_value(&xv)),
+        None => Ok(unbounded_of_term(ctx, term)?
+            .as_ref()
+            .and_then(unbounded_ebv)),
+    }
+}
+
+/// [`unbounded_of`] for a solution term, on the borrowed views — the slow path the
+/// comparison operators take only after [`xsd_of_term`] found no bounded value.
+fn unbounded_of_term<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Result<Option<LiteralValue>, EvalError> {
+    match term {
+        SolutionTerm::Existing(id) => ctx
+            .dataset
+            .with_term(id, |term| match term {
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language: None,
+                    ..
+                } => ctx.dataset.with_term(datatype, |term| match term {
+                    TermRef::Iri(iri) => unbounded_of_parts(lexical, iri),
+                    _ => None,
+                }),
+                _ => Ok(None),
+            })
+            .map_err(EvalError::source_read)?
+            .map_err(EvalError::source_read),
+        SolutionTerm::Computed(sid) => Ok(unbounded_of(ctx.scratch.computed_value(sid))),
+    }
+}
+
+/// The [`LiteralValue`] of both operands of a comparison once at least one of them
+/// has no bounded value (`ax`/`bx`, [`xsd_of_term`]'s answers): each side's bounded
+/// value, or its exact value past the bounds. `None` when either has no value at
+/// all. The caller takes the bounded pair's own path first, so the hot path pays
+/// nothing for this one.
+fn unbounded_pair<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    ta: SolutionTerm<D::Id>,
+    ax: Option<XsdValue>,
+    tb: SolutionTerm<D::Id>,
+    bx: Option<XsdValue>,
+) -> Result<Option<(LiteralValue, LiteralValue)>, EvalError> {
+    let a = match ax {
+        Some(ax) => LiteralValue::Bounded(ax),
+        None => match unbounded_of_term(ctx, ta)? {
+            Some(a) => a,
+            None => return Ok(None),
+        },
+    };
+    let b = match bx {
+        Some(bx) => LiteralValue::Bounded(bx),
+        None => match unbounded_of_term(ctx, tb)? {
+            Some(b) => b,
+            None => return Ok(None),
+        },
+    };
+    Ok(Some((a, b)))
 }
 
 /// The XSD value of a solution term, resolved through **borrowed** views — a
@@ -663,7 +773,9 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     let bx = xsd_of_term(ctx, tb)?;
     let ord = match (ax, bx) {
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
-        _ => None,
+        // A numeric literal past the bounded representation compares exactly
+        // (`purrdf_xsd::literal_cmp`); only this slow path reads one.
+        (ax, bx) => unbounded_pair(ctx, ta, ax, tb, bx)?.and_then(|(a, b)| literal_cmp(&a, &b)),
     };
     ord.map(|ord| intern_boolean(ctx, keep(ord))).transpose()
 }
@@ -723,9 +835,13 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     }
     let ax = xsd_of_term(ctx, ta)?;
     let bx = xsd_of_term(ctx, tb)?;
-    let eq = match (ax, bx) {
-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
-        _ => {
+    let pair = match (ax, bx) {
+        (Some(ax), Some(bx)) => Some((LiteralValue::Bounded(ax), LiteralValue::Bounded(bx))),
+        (ax, bx) => unbounded_pair(ctx, ta, ax, tb, bx)?,
+    };
+    let eq = match pair {
+        Some((a, b)) => sparql_literal_eq(&a, &b),
+        None => {
             if term_is_literal(ctx, ta)? && term_is_literal(ctx, tb)? {
                 // Two different literals neither side could value-compare.
                 None
@@ -810,8 +926,8 @@ fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
     if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
         return crate::cdt_fn::compare(crate::cdt_fn::CdtRelation::Equal, a, b);
     }
-    match (xsd_of(a), xsd_of(b)) {
-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
+    match (literal_value_of(a), literal_value_of(b)) {
+        (Some(ax), Some(bx)) => sparql_literal_eq(&ax, &bx),
         _ => {
             if a == b {
                 Some(true)
@@ -854,6 +970,16 @@ pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
         return Some(true);
     }
     value_equal(ax, bx)
+}
+
+/// [`sparql_value_eq`] over [`LiteralValue`]s: a numeric literal past the bounded
+/// representation is equal to another value exactly when `purrdf_xsd::literal_equal`
+/// says so (it is never `NaN`, so the carve-out never concerns it).
+pub(crate) fn sparql_literal_eq(a: &LiteralValue, b: &LiteralValue) -> Option<bool> {
+    match (a, b) {
+        (LiteralValue::Bounded(ax), LiteralValue::Bounded(bx)) => sparql_value_eq(ax, bx),
+        _ => literal_equal(a, b),
+    }
 }
 
 fn is_literal(v: &TermValue) -> bool {
@@ -3847,8 +3973,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
             matches!(vals.first(), Some(Some(TermValue::Literal { .. }))),
         )?)),
         Function::IsNumeric => {
-            let numeric =
-                matches!(arg(vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| xv.is_numeric()));
+            let numeric = arg(vals, 0).is_some_and(is_numeric_term);
             Ok(Some(intern_boolean(ctx, numeric)?))
         }
         Function::IsTriple => Ok(Some(intern_boolean(
@@ -4350,6 +4475,23 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         }
         _ => return Ok(None),
     };
+    // A numeric literal past the bounded representation casts by value too, wherever
+    // the target holds the result: exactly to `xsd:string` (its canonical form) and
+    // `xsd:boolean`, correctly rounded to `xsd:float`/`xsd:double`, and to a bounded
+    // integer or decimal target only when the value fits (`err:FOCA0003`/
+    // `err:FOCA0001` otherwise).
+    let unbounded = unbounded_of(source);
+    if let Some(digits) = unbounded.as_ref().and_then(LiteralValue::unbounded) {
+        if target == XsdDatatype::String {
+            return Ok(Some(string_term(ctx, &digits.canonical_lexical())?));
+        }
+        if target.is_numeric() || target == XsdDatatype::Boolean {
+            return match cast_unbounded(digits, target) {
+                Some(cast) => Ok(Some(xsd_to_term(ctx, &cast)?)),
+                None => Ok(None),
+            };
+        }
+    }
     if let Some(value) = xsd_of(source).filter(is_numeric_or_boolean) {
         if target == XsdDatatype::String {
             let Some(text) = numeric_or_bool_to_xpath_string(&value) else {
@@ -4506,6 +4648,31 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
                 value,
                 datatype: target,
             })
+        }
+        _ => None,
+    }
+}
+
+/// [`cast_numeric_value`] for a numeric literal past the bounded representation: the
+/// same F&O 3.1 §19.1.2 rules over its exact digits — `xsd:double`/`xsd:float` rounded
+/// once to nearest (ties to even), `xsd:boolean` `false` exactly for zero, an
+/// integer target the value with its fraction discarded and a decimal target the value
+/// itself, each only when the target's bounded value space holds it.
+fn cast_unbounded(digits: &DecimalDigits, target: XsdDatatype) -> Option<XsdValue> {
+    match target {
+        XsdDatatype::Double => Some(XsdValue::Double(digits.to_f64())),
+        XsdDatatype::Float => Some(XsdValue::Float(digits.to_f32())),
+        XsdDatatype::Boolean => Some(XsdValue::Boolean(!digits.is_zero())),
+        XsdDatatype::Decimal => digits.to_decimal().map(XsdValue::Decimal),
+        target if target.is_integer_family() => {
+            let value = digits.truncate_to_i128()?;
+            target
+                .integer_range()
+                .is_some_and(|(min, max)| (min..=max).contains(&value))
+                .then_some(XsdValue::Integer {
+                    value,
+                    datatype: target,
+                })
         }
         _ => None,
     }
@@ -5470,8 +5637,12 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     ta: SolutionTerm<D::Id>,
     tb: SolutionTerm<D::Id>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) else {
-        return Ok(None);
+    let (xa, xb) = match (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) {
+        (Some(xa), Some(xb)) => (xa, xb),
+        (xa, xb) => match promote_unbounded(ctx, ta, xa, tb, xb)? {
+            Some(pair) => pair,
+            None => return Ok(None),
+        },
     };
     let result = match op {
         ArithmeticOperator::Add => value_add(&xa, &xb),
@@ -5484,6 +5655,31 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
         .ok()
         .map(|result| xsd_to_term(ctx, &result))
         .transpose()
+}
+
+/// The operands of an arithmetic step where one is a numeric literal past the bounded
+/// representation: when the other is an `xsd:float`/`xsd:double`, the numeric tower
+/// promotes the exact one to that type — a correctly rounded conversion that needs no
+/// bounded exact representation — and the step proceeds in IEEE arithmetic. Any other
+/// pairing is exact arithmetic over an operand outside the bounded value space, a
+/// typed error (`err:FOCA0003`/`err:FOCA0001`) and so `None`.
+fn promote_unbounded<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    ta: SolutionTerm<D::Id>,
+    xa: Option<XsdValue>,
+    tb: SolutionTerm<D::Id>,
+    xb: Option<XsdValue>,
+) -> Result<Option<(XsdValue, XsdValue)>, EvalError> {
+    let ieee = |x: &XsdValue| matches!(x, XsdValue::Float(_) | XsdValue::Double(_));
+    Ok(match (xa, xb) {
+        (Some(xa), None) if ieee(&xa) => unbounded_of_term(ctx, tb)?
+            .and_then(|b| b.promoted(xa.datatype()))
+            .map(|xb| (xa, xb)),
+        (None, Some(xb)) if ieee(&xb) => unbounded_of_term(ctx, ta)?
+            .and_then(|a| a.promoted(xb.datatype()))
+            .map(|xa| (xa, xb)),
+        _ => None,
+    })
 }
 
 /// A unary numeric operator (`+` / `-`) over its evaluated operand: resolve it to an XSD

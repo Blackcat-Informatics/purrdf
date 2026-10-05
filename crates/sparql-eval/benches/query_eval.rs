@@ -79,6 +79,10 @@
 //!   recursive entry; this case is where that cost would show, and it is reported, not
 //!   asserted. The per-row correlated evaluation `LATERAL` guards is
 //!   `lateral_substitution`'s subject.
+//! - `t_decimal_sum_avg` — `SUM` and `AVG` over 30k `xsd:decimal` values in one
+//!   implicit group: the decimal tier of the numeric fold, an exact accumulator
+//!   that stays in a machine word while the total fits and grows past it rather
+//!   than overflowing, beside `e_group_aggregate`'s integer tier.
 //!
 //! A second, separate bench group — `value_dispatch` — isolates the value-space
 //! operator dispatch (`value_add`/`value_sub`) from operand extraction, at ns
@@ -395,6 +399,16 @@ SELECT ?p WHERE {
   FILTER NOT EXISTS { ?p ex:email ?e }
 }";
 
+/// (t) The decimal tier of the `SUM`/`AVG` fold: 30k `xsd:decimal` values (each
+/// age scaled by `1.25`) summed and averaged in one implicit group — the exact
+/// decimal accumulator, beside `e_group_aggregate`'s integer tier.
+const Q_T: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT (SUM(?d) AS ?s) (AVG(?d) AS ?m) WHERE {
+  ?p ex:age ?a .
+  BIND(?a * 1.25 AS ?d)
+}";
+
 /// The namespace the benchmark host configures for its one relation.
 const REL_NS: &str = "https://example.org/rel/";
 
@@ -438,6 +452,7 @@ const CASES: &[(&str, &str, usize)] = &[
     ("q_construct_blank_coref", Q_Q, 2 * PEOPLE),
     ("r_path_reverse_star", Q_R, PEOPLE),
     ("s_guarded_recursion", Q_S, PEOPLE - PEOPLE / 10),
+    ("t_decimal_sum_avg", Q_T, 1),
 ];
 
 /// Run one query end-to-end through the engine, returning its solution count.
@@ -717,7 +732,83 @@ fn bench_sort_order(c: &mut Bench) {
             });
         });
     }
+    bench_literal_order(
+        &mut group,
+        [&int_a, &int_b, &dec_a, &dec_b, &double_a, &double_b],
+    );
     group.finish();
+}
+
+/// The literal relations every comparison site — `ORDER BY`, `MIN`/`MAX`, the
+/// `<`/`=` operators — goes through: `purrdf_xsd::literal_total_cmp` and
+/// `purrdf_xsd::literal_cmp`, over `purrdf_xsd::LiteralValue`.
+///
+/// * `*_literal` rows wrap the same-representation pairs above as bounded literal
+///   values: beside the `*_total` rows they isolate the one extra enum dispatch the
+///   bounded hot path pays.
+/// * `unbounded_*` rows are the numeric literals past the bounded representation,
+///   which used to compare as opaque text and now compare exactly: digits against
+///   digits (no arithmetic), digits against an in-range integer (decided by the
+///   integer-digit count), and digits against a double — the exact comparison, and
+///   the promoted one through a correctly rounded conversion.
+fn bench_literal_order(
+    group: &mut purrdf_testkit::bench::BenchmarkGroup<'_>,
+    [int_a, int_b, dec_a, dec_b, double_a, double_b]: [&purrdf_xsd::XsdValue; 6],
+) {
+    use purrdf_xsd::{LiteralValue, XsdDatatype, literal_cmp, literal_total_cmp};
+
+    let bounded = |value: &purrdf_xsd::XsdValue| LiteralValue::Bounded(value.clone());
+    let unbounded = |lexical: &str, datatype: XsdDatatype| {
+        let value = LiteralValue::parse(lexical, datatype).expect("a numeral");
+        assert!(
+            value.unbounded().is_some(),
+            "{lexical} lies past the bounds"
+        );
+        value
+    };
+    let wide_a = unbounded(
+        "100000000000000000000000000000000000000000000000000000000017",
+        XsdDatatype::Integer,
+    );
+    let wide_b = unbounded(
+        "100000000000000000000000000000000000000000000000000000000025.5",
+        XsdDatatype::Decimal,
+    );
+    let wide_fine = unbounded("17.5000000000000000000000001", XsdDatatype::Decimal);
+    let pairs = [
+        ("int_vs_int_literal", bounded(int_a), bounded(int_b)),
+        ("dec_vs_dec_literal", bounded(dec_a), bounded(dec_b)),
+        (
+            "double_vs_double_literal",
+            bounded(double_a),
+            bounded(double_b),
+        ),
+        ("unbounded_vs_unbounded", wide_a.clone(), wide_b),
+        ("unbounded_vs_int", wide_a, bounded(int_a)),
+        ("unbounded_vs_double", wide_fine, bounded(double_a)),
+    ];
+    for (label, a, b) in &pairs {
+        assert!(
+            literal_total_cmp(a, b).is_some() && literal_cmp(a, b).is_some(),
+            "bench operand pair must be comparable: {label}"
+        );
+        group.bench_function(format!("{label}_total"), |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(literal_total_cmp(
+                    std::hint::black_box(a),
+                    std::hint::black_box(b),
+                ))
+            });
+        });
+        group.bench_function(format!("{label}_promoted"), |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(literal_cmp(
+                    std::hint::black_box(a),
+                    std::hint::black_box(b),
+                ))
+            });
+        });
+    }
 }
 
 /// Parse one benchmark operand, outside every timed loop.

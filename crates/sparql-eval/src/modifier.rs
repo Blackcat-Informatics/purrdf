@@ -108,10 +108,10 @@ use purrdf_sparql_algebra::{
     OrderExpression, PropertyPathExpression, Variable,
 };
 use purrdf_xsd::{
-    BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
+    BigInt, LiteralValue, XsdDatatype, XsdValue, literal_total_cmp, numeric_add, numeric_div,
+    parse_by_iri,
 };
 
-use purrdf_xsd::datatype::XSD_DECIMAL;
 use purrdf_xsd::datatype::XSD_INTEGER;
 use purrdf_xsd::datatype::XSD_STRING;
 
@@ -119,7 +119,7 @@ use crate::agg_fn::AggregateAccumulator as _;
 use crate::convert::{ground_term_to_value, literal_to_value, named_node_to_value};
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
-use crate::expr::xsd_of;
+use crate::expr::literal_value_of;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
@@ -856,7 +856,7 @@ pub(crate) fn compare_keys(
 }
 
 /// A literal's value-space **comparability class** — the coarsest partition under
-/// which [`value_total_cmp`] is total throughout a block or undefined throughout it.
+/// which [`value_total_cmp`](purrdf_xsd::value_total_cmp) is total throughout a block or undefined throughout it.
 ///
 /// The obvious reading of §15.1 — "by value, else by a deterministic syntactic
 /// key" — is NOT a total order; it cycles. `"9"^^xsd:double` <
@@ -890,7 +890,7 @@ pub(crate) fn compare_keys(
 ///
 /// The fix is not another class — a class rank would have to separate values that
 /// genuinely compare — but an exact comparison, which is what
-/// [`value_total_cmp`] gives this block: every member of the numeric tower except
+/// [`value_total_cmp`](purrdf_xsd::value_total_cmp) gives this block: every member of the numeric tower except
 /// `NaN` (split out as [`ValueClass::NotANumber`]) is exactly a rational, the
 /// infinities included as its two ends, and comparing those rationals exactly is
 /// transitive by construction. That deliberately DIVERGES from the promotion-based
@@ -915,7 +915,7 @@ impl ValueClass {
     /// Classify a literal from its parsed value (`None` when its datatype models
     /// no value space, or its lexical does not parse), answering the class with
     /// the value it orders BY — `None` for the three value-less blocks, which
-    /// therefore never reach [`value_total_cmp`].
+    /// therefore never reach [`value_total_cmp`](purrdf_xsd::value_total_cmp).
     fn of(parsed: Option<XsdValue>, lexical: &str) -> (Self, Option<XsdValue>) {
         let Some(value) = parsed else {
             return (Self::Opaque, None);
@@ -987,7 +987,10 @@ impl ValueClass {
 /// matching §15.1's silence about it).
 pub(crate) struct LiteralKey<'a> {
     class: ValueClass,
-    value: Option<XsdValue>,
+    /// The value the class orders by — a bounded XSD value, or the exact value of a
+    /// numeric literal past the bounded representation, which sorts by value among
+    /// the other numbers rather than as an opaque lexical form.
+    value: Option<LiteralValue>,
     datatype: &'a str,
     language: Option<&'a str>,
     lexical: &'a str,
@@ -1155,8 +1158,16 @@ fn project_shallow(value: Option<&TermValue>) -> SortKey<'_> {
             {
                 return SortKey::Composite(composite);
             }
-            let parsed = parse_by_iri(lexical_form, datatype).ok().flatten();
-            let (class, value) = ValueClass::of(parsed, lexical_form);
+            let (class, value) = match parse_by_iri(lexical_form, datatype).ok().flatten() {
+                Some(parsed) => {
+                    let (class, value) = ValueClass::of(Some(parsed), lexical_form);
+                    (class, value.map(LiteralValue::Bounded))
+                }
+                None => match crate::expr::unbounded_of_parts(lexical_form, datatype) {
+                    Some(exact) if language.is_none() => (ValueClass::Numeric, Some(exact)),
+                    _ => (ValueClass::Opaque, None),
+                },
+            };
             SortKey::Literal(LiteralKey {
                 class,
                 value,
@@ -1227,7 +1238,7 @@ fn shallow_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
                 return x.class.cmp(&y.class);
             }
             if let (Some(av), Some(bv)) = (&x.value, &y.value)
-                && let Some(ord) = value_total_cmp(av, bv)
+                && let Some(ord) = literal_total_cmp(av, bv)
             {
                 return ord;
             }
@@ -2079,18 +2090,25 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
 /// a different expression — see [`fold_numeric`] for the fold that keeps the
 /// chain's value bit for bit while still chunking the exact tiers.
 ///
-/// A **pure-integer** running group ([`Self::Int`]) accumulates through
-/// [`BigInt`] — arbitrary precision, so it never overflows regardless of how
-/// large the true total gets; only a genuinely non-numeric value poisons it.
-/// The moment a `decimal`/`float`/`double` value joins the group, the fold
-/// promotes to [`Self::Ok`] and continues through `numeric_add`'s ordinary
-/// (bounded, spec-defined) promotion tower exactly as before — see
-/// [`int_sum_promote_base`] for the promotion step and why it is exact for
-/// `decimal` whenever `decimal`'s own `i128`-bounded mantissa could hold the
-/// value at all, and lossy-but-never-poisoning for `float`/`double` (IEEE,
-/// never exact anyway). [`Self::Ok`]'s own arithmetic is untouched by this
-/// module: `xsd:decimal` keeps its documented `i128`-mantissa bound and
-/// `xsd:float`/`xsd:double` keep IEEE semantics, inf/NaN included.
+/// The **exact** tiers accumulate through [`BigInt`] — arbitrary precision, so
+/// a running total never overflows however large it gets, and only a
+/// genuinely non-numeric value poisons it: a pure-integer group in
+/// [`Self::Int`], and once an `xsd:decimal` joins, the exact decimal total
+/// `sum / 10^scale` in [`Self::Dec`]. Each exact operand is folded in whole,
+/// including a numeric literal past the bounded representation, so the chain's
+/// value is the exact sum of its operands. The bounded `xsd:decimal`
+/// representation applies once, to the ANSWER: [`Self::finish_sum`] projects the
+/// exact total and [`Self::finish_avg`] the exact mean under `numeric_div`'s
+/// precision rule (`purrdf_xsd::decimal_mean`), and only an answer whose integer
+/// part exceeds the bounds is refused (`err:FOAR0002`). A running total that
+/// overflows on the way to a representable answer — `{i128::MAX, 1, −2}` — is
+/// therefore never refused, and `AVG` is one representable decimal that agrees
+/// with `SUM / COUNT` wherever that quotient is defined.
+///
+/// The moment a `float`/`double` value joins, the fold promotes to [`Self::Ok`]:
+/// the exact prefix is converted, correctly rounded, straight to the joining type
+/// ([`exact_promote_base`]), and the rest of the chain is IEEE through
+/// `numeric_add`, inf/NaN included.
 ///
 /// ## `SUM`/`AVG` over `xsd:duration` — a PurRDF extension
 ///
@@ -2126,10 +2144,19 @@ enum NumericFold {
         count: u64,
         datatype: XsdDatatype,
     },
-    /// A running sum plus the count of values folded so far (only `AVG` reads
-    /// the count) — at `decimal`/`float`/`double` tier or higher; promotion is
-    /// monotonic (`integer ⊂ decimal ⊂ float ⊂ double`), so once here the fold
-    /// never returns to [`Self::Int`].
+    /// Every value folded in so far has been exact (`xsd:integer` family or
+    /// `xsd:decimal`) and at least one a decimal: the exact running total
+    /// `sum / 10^scale`, `scale` the largest scale among the folded operands,
+    /// plus the folded row count.
+    Dec {
+        sum: Mantissa,
+        scale: u32,
+        count: u64,
+    },
+    /// A running IEEE sum plus the count of values folded so far (only `AVG`
+    /// reads the count) — at `float`/`double` tier; promotion is monotonic
+    /// (`integer ⊂ decimal ⊂ float ⊂ double`), so once here the fold never
+    /// returns to an exact tier.
     Ok { acc: XsdValue, count: u64 },
     /// A running duration sum, carried as its own RAW `(months, seconds)`
     /// components rather than as an already-validated `XsdValue::Duration` —
@@ -2219,35 +2246,38 @@ impl NumericFold {
     /// widening (see its own doc for why: widening THAT predicate, rather than
     /// gating here, would let a mixed numeric+duration group silently coerce
     /// through whichever other call site trusts it). A group that mixes the
-    /// two poisons: `Self::Int`/`Self::Ok` reject a duration value through
-    /// their own existing arithmetic (`int_sum_promote_base`'s `None` arm, or
-    /// `numeric_add`'s `TypeMismatch`, respectively — neither needed an edit),
-    /// and `Self::Dur` rejects a numeric value explicitly below.
+    /// two poisons: the numeric tiers reject a duration operand explicitly, and
+    /// `Self::Dur` rejects a numeric value explicitly below.
     ///
     /// A `false` return leaves `self` exactly as it was: every arm below
     /// computes its fallible result before assigning anything, which
     /// [`NumericSummary`] relies on to stop an exact fold at a refused row and
     /// hand that row to the sequential chain instead.
-    fn step_xsd(&mut self, xv: &XsdValue) -> bool {
-        if !xv.is_numeric() && !matches!(xv, XsdValue::Duration(_)) {
+    fn step_xsd(&mut self, xv: &LiteralValue) -> bool {
+        let Some(operand) = Operand::of(xv) else {
             return false;
-        }
+        };
         match self {
             Self::Empty => {
-                *self = match xv {
-                    XsdValue::Integer { value, datatype } => Self::Int {
-                        sum: BigInt::from_i128(*value),
+                *self = match operand {
+                    Operand::Integer { value, datatype } => Self::Int {
+                        sum: value.to_big(),
                         count: 1,
-                        datatype: *datatype,
+                        datatype,
                     },
-                    XsdValue::Duration(dur) => Self::Dur {
+                    Operand::Decimal { mantissa, scale } => Self::Dec {
+                        sum: mantissa,
+                        scale,
+                        count: 1,
+                    },
+                    Operand::Ieee(value) => Self::Ok {
+                        acc: value,
+                        count: 1,
+                    },
+                    Operand::Duration(dur) => Self::Dur {
                         months: i128::from(dur.months()),
                         seconds: XsdValue::Decimal(dur.seconds()),
                         datatype: dur.datatype(),
-                        count: 1,
-                    },
-                    other => Self::Ok {
-                        acc: other.clone(),
                         count: 1,
                     },
                 };
@@ -2257,15 +2287,28 @@ impl NumericFold {
                 sum,
                 count,
                 datatype,
-            } => match xv {
-                XsdValue::Integer { value, .. } => {
-                    sum.add_i128(*value);
+            } => match operand {
+                Operand::Integer { value, .. } => {
+                    match value {
+                        Mantissa::Small(value) => sum.add_i128(value),
+                        Mantissa::Big(value) => sum.add_assign(&value),
+                    }
                     *count += 1;
                     *datatype = XsdDatatype::Integer;
                     true
                 }
-                other => match int_sum_promote_base(sum, other) {
-                    Some(base) => match numeric_add(&base, other) {
+                Operand::Decimal { mantissa, scale } => {
+                    let mut total = Mantissa::from_big(sum.mul_pow10(scale));
+                    total.add(&mantissa);
+                    *self = Self::Dec {
+                        sum: total,
+                        scale,
+                        count: *count + 1,
+                    };
+                    true
+                }
+                Operand::Ieee(value) => {
+                    match numeric_add(&exact_promote_base(sum, 0, &value), &value) {
                         Ok(result) => {
                             *self = Self::Ok {
                                 acc: result,
@@ -2274,28 +2317,70 @@ impl NumericFold {
                             true
                         }
                         Err(_) => false,
-                    },
-                    None => false,
-                },
+                    }
+                }
+                Operand::Duration(_) => false,
             },
-            Self::Ok { acc, count } => match numeric_add(acc, xv) {
-                Ok(sum) => {
-                    *acc = sum;
+            Self::Dec { sum, scale, count } => match operand {
+                Operand::Integer { value, .. } => {
+                    sum.add(&value.scaled(*scale));
                     *count += 1;
                     true
                 }
-                Err(_) => false,
+                Operand::Decimal {
+                    mantissa,
+                    scale: operand_scale,
+                } => {
+                    if operand_scale > *scale {
+                        *sum = sum.scaled(operand_scale - *scale);
+                        *scale = operand_scale;
+                    }
+                    sum.add(&mantissa.scaled(*scale - operand_scale));
+                    *count += 1;
+                    true
+                }
+                Operand::Ieee(value) => {
+                    match numeric_add(&exact_promote_base(&sum.to_big(), *scale, &value), &value) {
+                        Ok(result) => {
+                            *self = Self::Ok {
+                                acc: result,
+                                count: *count + 1,
+                            };
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                }
+                Operand::Duration(_) => false,
             },
+            Self::Ok { acc, count } => {
+                // An exact operand joins an IEEE total through the promotion
+                // `numeric_add` applies; one past the bounded representation is
+                // promoted, correctly rounded, to the total's own type first.
+                let Some(joining) = xv.promoted(acc.datatype()) else {
+                    return false;
+                };
+                if matches!(operand, Operand::Duration(_)) {
+                    return false;
+                }
+                match numeric_add(acc, &joining) {
+                    Ok(sum) => {
+                        *acc = sum;
+                        *count += 1;
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
             Self::Dur {
                 months,
                 seconds,
                 datatype,
                 count,
             } => {
-                // The top-of-function gate admits only the numeric tower or a
-                // duration; a numeric value reaching an already-`Dur` fold is
-                // exactly the mixed-group case, and poisons.
-                let XsdValue::Duration(dur) = xv else {
+                // A numeric value reaching an already-`Dur` fold is exactly the
+                // mixed-group case, and poisons.
+                let Operand::Duration(dur) = operand else {
                     return false;
                 };
                 // Raw componentwise accumulation — no `Duration::new` call, no
@@ -2331,20 +2416,27 @@ impl NumericFold {
     /// SPARQL's `SUM(empty) = 0` requires regardless of the group's would-be
     /// type.
     ///
-    /// Returns `None` — poisoning to SPARQL unbound — in exactly one case:
-    /// [`Self::Dur`]'s raw `(months, seconds)` total fails
+    /// Returns `None` — poisoning to SPARQL unbound — in two cases: a
+    /// [`Self::Dec`] total whose integer part exceeds the bounded decimal
+    /// (`err:FOAR0002`), and [`Self::Dur`]'s raw `(months, seconds)` total failing
     /// [`purrdf_xsd::temporal::Duration::new`]'s validation (mixed-sign
     /// components, or a months total that no longer fits `i64`) — see that
     /// variant's own doc for why this single, order-independent check is
     /// deferred all the way to here rather than applied at every fold step.
-    /// `Self::Empty`/`Self::Int`/`Self::Ok` remain unconditionally infallible,
-    /// exactly as before [`Self::Dur`]'s raw-component representation existed:
-    /// nothing past `step_xsd`'s own poisoning (already handled by the chain,
-    /// see [`fold_numeric`]) can make one of those three unrepresentable.
+    /// `Self::Empty`/`Self::Int`/`Self::Ok` are infallible: nothing past
+    /// `step_xsd`'s own poisoning (already handled by the chain, see
+    /// [`fold_numeric`]) can make one of those three unrepresentable.
     fn finish_sum(self) -> Option<TermValue> {
         match self {
             Self::Empty => Some(TermValue::integer(0)),
             Self::Int { sum, datatype, .. } => Some(int_sum_value(&sum, datatype)),
+            // The exact total, projected once: unchanged where the bounded
+            // decimal holds it, truncated at the finest scale that does where
+            // only precision is lost, refused (`err:FOAR0002`) where the integer
+            // part overflows.
+            Self::Dec { sum, scale, .. } => purrdf_xsd::decimal_mean(&sum.to_big(), scale, 1)
+                .ok()
+                .map(|total| crate::expr::xsd_literal_value(&XsdValue::Decimal(total))),
             Self::Ok { acc, .. } => Some(crate::expr::xsd_literal_value(&acc)),
             Self::Dur {
                 months,
@@ -2365,38 +2457,44 @@ impl NumericFold {
     /// `AVG`'s finish: empty group → `0^^xsd:integer`; otherwise the running
     /// total divided by the folded count.
     ///
-    /// A pure-integer running total that still fits `i128` divides exactly as
-    /// before (unchanged `numeric_div` call, unchanged truncated-decimal
-    /// result). One that no longer fits `i128` divides through
-    /// [`purrdf_xsd::bigint_avg_decimal`] instead — an exact `BigInt`-scaled
-    /// division by the (always-small) folded row count, truncated to 18
-    /// fractional digits. That helper itself answers `None` when the resulting
-    /// MANTISSA does not fit `i128` — `xsd:decimal`'s `Decimal` representation
-    /// is deliberately `i128`-mantissa-bounded (this crate's documented design,
-    /// unmoved by this fold) — but THIS finish does not stop there: it falls
-    /// back to [`purrdf_xsd::bigint_avg_decimal_lexical`], which renders the
-    /// identical exact scale-18 quotient as raw lexical TEXT with no magnitude
-    /// bound at all, the same bypass [`Self::finish_sum`]'s `int_sum_value`
-    /// already uses for a pure-integer total that exceeds `i128`. So a `SUM`
-    /// that escaped `i128` never has to poison `AVG`, full stop — not only when
-    /// the quotient happens to still fit `i128` after scaling, but always. This
-    /// makes the `Self::Int` arm infallible; unlike [`Self::finish_sum`] this
-    /// function stays `Option`-returning only because [`Self::Ok`]'s
-    /// `numeric_div` call fails when the quotient's integer part exceeds the
-    /// `i128` mantissa (see `purrdf_xsd::numeric::decimal_div_raw`).
+    /// An exact total — [`Self::Int`] or [`Self::Dec`], of any magnitude —
+    /// answers ONE representable `xsd:decimal` under `numeric_div`'s precision
+    /// rule (truncated toward zero at the finest scale ≤ 18 whose mantissa
+    /// fits): `SUM / COUNT` wherever `SUM` answers, so the two always agree, and
+    /// the exact mean (`purrdf_xsd::decimal_mean`) where only the total
+    /// overflowed the bounds — `AVG` answers rather than over-refusing whenever
+    /// the mean is representable. An integer `SUM` is exact at any size, so for
+    /// [`Self::Int`] the two rules coincide. It never emits a numeral outside the
+    /// decimal value space: a mean whose integer part exceeds the bounds is
+    /// refused (`err:FOAR0002`, unbound). [`Self::Ok`] divides its IEEE total
+    /// through `numeric_div`.
     fn finish_avg(self) -> Option<TermValue> {
         match self {
             Self::Empty => Some(TermValue::integer(0)),
-            Self::Int { sum, count, .. } => {
-                Some(purrdf_xsd::bigint_avg_decimal(&sum, count).map_or_else(
-                    || TermValue::Literal {
-                        lexical_form: purrdf_xsd::bigint_avg_decimal_lexical(&sum, count),
-                        datatype: XSD_DECIMAL.to_owned(),
-                        language: None,
-                        direction: None,
-                    },
-                    |avg| crate::expr::xsd_literal_value(&avg),
-                ))
+            Self::Int { sum, count, .. } => purrdf_xsd::decimal_mean(&sum, 0, count)
+                .ok()
+                .map(|avg| crate::expr::xsd_literal_value(&XsdValue::Decimal(avg))),
+            // `AVG` is `SUM / COUNT` (SPARQL §18.5.1.4): where the bounded `SUM`
+            // answers — exactly, or truncated where it held more digits than the
+            // representation retains — the mean is that `SUM` divided by the count,
+            // so the two always agree. Where `SUM` itself overflows, the exact total
+            // still yields the mean whenever the mean is representable.
+            Self::Dec { sum, scale, count } => {
+                let sum = sum.to_big();
+                let mean = match purrdf_xsd::decimal_mean(&sum, scale, 1) {
+                    Ok(total) => numeric_div(
+                        &XsdValue::Decimal(total),
+                        &XsdValue::Integer {
+                            value: i128::from(count),
+                            datatype: XsdDatatype::Integer,
+                        },
+                    )
+                    .ok(),
+                    Err(_) => purrdf_xsd::decimal_mean(&sum, scale, count)
+                        .ok()
+                        .map(XsdValue::Decimal),
+                };
+                mean.map(|avg| crate::expr::xsd_literal_value(&avg))
             }
             Self::Ok { acc, count } => {
                 let count_val = XsdValue::Integer {
@@ -2446,8 +2544,8 @@ impl NumericFold {
 
     /// Merge `a` and `b` — `a` the earlier (in source/chunk order) partial
     /// fold, `b` the later one — returning `None` when the merge itself
-    /// poisons (a `decimal`-tier promotion or `numeric_add` failure; see
-    /// [`int_sum_promote_base`]).
+    /// poisons (a `numeric_add` failure, or a numeric partial meeting a
+    /// duration one).
     ///
     /// This is NOT, by itself, the SPARQL answer for the rows `a` and `b`
     /// cover. §18.5.1.3 defines `Sum(S)` as the chain `op:numeric-add(S1,
@@ -2455,18 +2553,17 @@ impl NumericFold {
     /// different expression tree: over `xsd:float`/`xsd:double` it rounds
     /// differently (over `{−3, −2^53, −1, −0.7}` every chain gives
     /// `−9007199254740996`, the tree `(a+b)+(c+d)` gives `−9007199254740998`),
-    /// and over `xsd:decimal` it can miss an `i128`-mantissa overflow a chain
-    /// prefix hits. The only caller,
+    /// and over a duration's bounded seconds it can miss an `i128`-mantissa
+    /// overflow a chain prefix hits. The only caller,
     /// [`NumericSummary::append`], therefore calls this solely where the
     /// merge provably equals the chain: `b` holds no `float`/`double` operand
     /// (the summary stops its exact fold at the first one), and either both
-    /// sides are pure-integer ([`BigInt`] addition is exact and cannot
-    /// overflow, so every order of it is the chain) or the
-    /// [`MagnitudeBound`] over every operand either side absorbed shows no
-    /// chain prefix, operand alignment or total can leave the `i128`
-    /// mantissa, in which case every decimal addition on the way was exact and
-    /// the merged value — mantissa AND scale, since `decimal_add`'s result
-    /// scale is the maximum of its operands' — is the chain's.
+    /// sides are exact integer or decimal totals (arbitrary-precision addition
+    /// is exact and cannot overflow, so every order of it is the chain — the
+    /// merged scale, too, is the maximum of the operands' either way) or the
+    /// [`MagnitudeBound`] over every duration operand either side absorbed
+    /// shows no chain prefix, operand alignment or total can leave the `i128`
+    /// mantissa, in which case every seconds addition on the way was exact.
     ///
     /// [`Self::Dur`]'s raw-component representation (see its own doc) sums
     /// the free abelian group `ℤ × Decimal`, so the same two conditions make
@@ -2501,6 +2598,48 @@ impl NumericFold {
                 })
             }
             (
+                Self::Dec {
+                    sum: sum1,
+                    scale: scale1,
+                    count: count1,
+                },
+                Self::Dec {
+                    sum: sum2,
+                    scale: scale2,
+                    count: count2,
+                },
+            ) => Some(exact_decimal_merge(
+                (sum1, scale1, count1),
+                (sum2, scale2, count2),
+            )),
+            (
+                Self::Int {
+                    sum: sum1,
+                    count: count1,
+                    ..
+                },
+                Self::Dec {
+                    sum: sum2,
+                    scale,
+                    count: count2,
+                },
+            )
+            | (
+                Self::Dec {
+                    sum: sum2,
+                    scale,
+                    count: count2,
+                },
+                Self::Int {
+                    sum: sum1,
+                    count: count1,
+                    ..
+                },
+            ) => Some(exact_decimal_merge(
+                (Mantissa::from_big(sum1), 0, count1),
+                (sum2, scale, count2),
+            )),
+            (
                 Self::Ok {
                     acc: acc1,
                     count: count1,
@@ -2524,8 +2663,29 @@ impl NumericFold {
                 Self::Int {
                     sum, count: count1, ..
                 },
-            ) => int_sum_promote_base(&sum, &acc)
-                .and_then(|base| numeric_add(&base, &acc).ok())
+            ) => numeric_add(&exact_promote_base(&sum, 0, &acc), &acc)
+                .ok()
+                .map(|result| Self::Ok {
+                    acc: result,
+                    count: count1 + count2,
+                }),
+            (
+                Self::Dec {
+                    sum,
+                    scale,
+                    count: count1,
+                },
+                Self::Ok { acc, count: count2 },
+            )
+            | (
+                Self::Ok { acc, count: count2 },
+                Self::Dec {
+                    sum,
+                    scale,
+                    count: count1,
+                },
+            ) => numeric_add(&exact_promote_base(&sum.to_big(), scale, &acc), &acc)
+                .ok()
                 .map(|result| Self::Ok {
                     acc: result,
                     count: count1 + count2,
@@ -2558,8 +2718,8 @@ impl NumericFold {
             // A duration chunk merged with a numeric chunk (either order) is
             // the cross-group mixing `step` already refuses within one
             // accumulator — a chunk boundary must not let it back in.
-            (Self::Dur { .. }, Self::Int { .. } | Self::Ok { .. })
-            | (Self::Int { .. } | Self::Ok { .. }, Self::Dur { .. }) => None,
+            (Self::Dur { .. }, Self::Int { .. } | Self::Dec { .. } | Self::Ok { .. })
+            | (Self::Int { .. } | Self::Dec { .. } | Self::Ok { .. }, Self::Dur { .. }) => None,
         }
     }
 }
@@ -2591,34 +2751,149 @@ fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
     i64::try_from(biased.div_euclid(doubled_denominator)).ok()
 }
 
-/// Convert a pure-integer running sum into the `XsdValue` `numeric_add` needs
-/// once a `decimal`/`float`/`double` value `joining` the fold promotes it out
-/// of [`NumericFold::Int`].
-///
-/// Exact (`XsdValue::Integer`) whenever the running sum still fits `i128` —
-/// the overwhelmingly common case, and identical to what the fold already did
-/// before it could exceed `i128` at all. Beyond that: `decimal`'s own mantissa
-/// is `i128`-bounded too (see `crates/xsd`'s module docs), so a `joining`
-/// decimal cannot be represented as a `Decimal` either — `None` (the caller
-/// poisons), exactly as today's overflow behavior already would have, just
-/// reached later. A `joining` float/double, however, is IEEE and never exact
-/// regardless of magnitude, so the sum is converted — correctly rounded, straight
-/// to the joining type ([`BigInt::to_f64`] for `double`, [`BigInt::to_f32`] for
-/// `float`, never `double` then narrowed, which would round twice), exactly as
-/// the `i128 → f64`/`f32` casts in `purrdf_xsd::numeric` round an in-range
-/// integer — with no representability question at all: this is the one case
-/// where a running total that has escaped `i128` still avoids poisoning.
-fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
-    if let Some(value) = sum.to_i128() {
-        return Some(XsdValue::Integer {
-            value,
-            datatype: XsdDatatype::Integer,
-        });
+/// An exact mantissa: a machine word while it fits, arbitrary precision past that —
+/// so the decimal tier adds bounded operands without allocating, and still never
+/// overflows.
+#[derive(Debug, Clone)]
+enum Mantissa {
+    /// A mantissa that fits `i128`.
+    Small(i128),
+    /// A mantissa of any size.
+    Big(BigInt),
+}
+
+impl Mantissa {
+    /// `value`, narrowed to the machine word when it fits.
+    fn from_big(value: BigInt) -> Self {
+        value.to_i128().map_or(Self::Big(value), Self::Small)
     }
-    match joining {
-        XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f32())),
-        XsdValue::Double(_) => Some(XsdValue::Double(sum.to_f64())),
-        _ => None,
+
+    /// The arbitrary-precision value.
+    fn to_big(&self) -> BigInt {
+        match self {
+            Self::Small(value) => BigInt::from_i128(*value),
+            Self::Big(value) => value.clone(),
+        }
+    }
+
+    /// `self × 10^exp`, exactly.
+    fn scaled(&self, exp: u32) -> Self {
+        if exp == 0 {
+            return self.clone();
+        }
+        if let Self::Small(value) = self
+            && let Some(scaled) = 10_i128
+                .checked_pow(exp)
+                .and_then(|factor| value.checked_mul(factor))
+        {
+            return Self::Small(scaled);
+        }
+        Self::Big(self.to_big().mul_pow10(exp))
+    }
+
+    /// `self += other`, exactly.
+    fn add(&mut self, other: &Self) {
+        if let (Self::Small(a), Self::Small(b)) = (&*self, other)
+            && let Some(sum) = a.checked_add(*b)
+        {
+            *self = Self::Small(sum);
+            return;
+        }
+        let mut sum = self.to_big();
+        sum.add_assign(&other.to_big());
+        *self = Self::Big(sum);
+    }
+}
+
+/// One operand of the `SUM`/`AVG` fold, classified by tier: an exact integer or
+/// decimal (as an arbitrary-precision mantissa, so a literal past the bounded
+/// representation folds in whole), an IEEE value, or a duration. `None` from
+/// [`Self::of`] for every other value, which poisons the fold.
+enum Operand {
+    /// An `xsd:integer`-family value and its datatype.
+    Integer {
+        value: Mantissa,
+        datatype: XsdDatatype,
+    },
+    /// An `xsd:decimal` value, `mantissa / 10^scale`.
+    Decimal { mantissa: Mantissa, scale: u32 },
+    /// An `xsd:float` or `xsd:double` value.
+    Ieee(XsdValue),
+    /// An `xsd:duration` value (the PurRDF extension; see [`NumericFold::Dur`]).
+    Duration(purrdf_xsd::temporal::Duration),
+}
+
+impl Operand {
+    fn of(value: &LiteralValue) -> Option<Self> {
+        Some(match value {
+            LiteralValue::Bounded(XsdValue::Integer { value, datatype }) => Self::Integer {
+                value: Mantissa::Small(*value),
+                datatype: *datatype,
+            },
+            LiteralValue::Bounded(XsdValue::Decimal(d)) => Self::Decimal {
+                mantissa: Mantissa::Small(d.mantissa()),
+                scale: u32::from(d.scale()),
+            },
+            LiteralValue::Bounded(v @ (XsdValue::Float(_) | XsdValue::Double(_))) => {
+                Self::Ieee(v.clone())
+            }
+            LiteralValue::Bounded(XsdValue::Duration(dur)) => Self::Duration(dur.clone()),
+            LiteralValue::Unbounded { digits, datatype } => {
+                let scale = u32::try_from(digits.fraction_digits()).ok()?;
+                let mantissa = Mantissa::from_big(BigInt::from_digits(
+                    &digits.canonical_lexical().replace('.', ""),
+                )?);
+                if datatype.is_integer_family() {
+                    Self::Integer {
+                        value: mantissa,
+                        datatype: *datatype,
+                    }
+                } else {
+                    Self::Decimal { mantissa, scale }
+                }
+            }
+            _ => return None,
+        })
+    }
+}
+
+/// Merge two exact partial totals `(sum, scale, count)` exactly: align the scales
+/// and add. Exact addition is associative and commutative, so every merge of exact
+/// partials is the chain's total.
+fn exact_decimal_merge(
+    (sum1, scale1, count1): (Mantissa, u32, u64),
+    (sum2, scale2, count2): (Mantissa, u32, u64),
+) -> NumericFold {
+    let scale = scale1.max(scale2);
+    let mut sum = sum1.scaled(scale - scale1);
+    sum.add(&sum2.scaled(scale - scale2));
+    NumericFold::Dec {
+        sum,
+        scale,
+        count: count1 + count2,
+    }
+}
+
+/// The exact running total `sum / 10^scale` as the value `numeric_add` needs once
+/// a `float`/`double` value `joining` the fold promotes it to that type: rounded
+/// once, correctly, straight to the joining type — never `double` then narrowed,
+/// which would round twice — whatever its magnitude, exactly as the numeric tower
+/// promotes a bounded exact value (SPARQL §17.3, F&O §19.1.2.2).
+fn exact_promote_base(sum: &BigInt, scale: u32, joining: &XsdValue) -> XsdValue {
+    let float = matches!(joining, XsdValue::Float(_));
+    if scale == 0 {
+        return if float {
+            XsdValue::Float(sum.to_f32())
+        } else {
+            XsdValue::Double(sum.to_f64())
+        };
+    }
+    let exact = purrdf_xsd::DecimalDigits::parse(&sum.to_decimal_lexical(scale))
+        .expect("a BigInt's decimal rendering is a decimal numeral");
+    if float {
+        XsdValue::Float(exact.to_f32())
+    } else {
+        XsdValue::Double(exact.to_f64())
     }
 }
 
@@ -2766,10 +3041,10 @@ enum NumericAggregate {
 /// chain is exactly what runs. Above it, [`crate::parallel::par_chunk_reduce_init`]
 /// folds each chunk into a [`NumericSummary`] and appends the summaries in
 /// chunk order; [`NumericSummary`]'s doc proves the appended summary finishes
-/// to the chain's state. What stays parallel is everything that is exact: a
-/// pure-integer group ([`BigInt`]) and a decimal/duration group whose
-/// [`MagnitudeBound`] rules out every `i128`-mantissa overflow merge chunk
-/// partials exactly, while a `float`/`double` operand switches the rest of the
+/// to the chain's state. What stays parallel is everything that is exact: an
+/// integer or decimal group (exact, arbitrary-precision totals) and a duration
+/// group whose [`MagnitudeBound`] rules out every `i128`-mantissa overflow merge
+/// chunk partials exactly, while a `float`/`double` operand switches the rest of the
 /// group onto the chain — its operands parsed in parallel, its additions
 /// replayed one by one in source order.
 fn fold_numeric(
@@ -2806,7 +3081,7 @@ fn fold_numeric(
 fn numeric_chain(values: &[TermValue]) -> Option<NumericFold> {
     let mut fold = NumericFold::Empty;
     for value in values {
-        if !xsd_of(value).is_some_and(|xv| fold.step_xsd(&xv)) {
+        if !literal_value_of(value).is_some_and(|xv| fold.step_xsd(&xv)) {
             return None;
         }
     }
@@ -2821,10 +3096,11 @@ fn numeric_chain(values: &[TermValue]) -> Option<NumericFold> {
 /// When the bound [`fits`](Self::fits) `i128`, no step of ANY left-to-right
 /// chain over those operands can overflow: every prefix sum, every operand
 /// scaled up by `align_decimals` to the running scale, and every aligned
-/// running total has magnitude at most `Σ |x| × 10^scale`. So each
-/// `decimal_add` on the way is exact, a pure-integer prefix promoted through
-/// `int_sum_promote_base` fits `i128`, and the chain equals the exact sum at
+/// running total has magnitude at most `Σ |x| × 10^scale`. So each bounded
+/// seconds addition on the way is exact, and the chain equals the exact sum at
 /// the maximum scale — which is what [`NumericFold::combine_owned`] computes.
+/// Only the duration tier needs it: the integer and decimal tiers are exact
+/// arbitrary-precision totals, whose merges are always the chain's.
 /// When it does not fit, nothing is concluded: the rows are replayed through
 /// the chain instead.
 #[derive(Clone, Copy, Debug, Default)]
@@ -2850,15 +3126,21 @@ impl MagnitudeBound {
     }
 
     /// Account for one absorbed operand (never a `float`/`double` — an exact
-    /// fold stops before those).
-    fn add(&mut self, xv: &XsdValue) {
+    /// fold stops before those). A value past the bounded representation is
+    /// "not provably small" by definition, so it saturates the bound.
+    fn add(&mut self, xv: &LiteralValue) {
         match xv {
-            XsdValue::Integer { value, .. } => self.add_parts(value.unsigned_abs(), 0),
-            XsdValue::Decimal(d) => self.add_parts(d.mantissa().unsigned_abs(), d.scale()),
-            XsdValue::Duration(dur) => {
+            LiteralValue::Bounded(XsdValue::Integer { value, .. }) => {
+                self.add_parts(value.unsigned_abs(), 0);
+            }
+            LiteralValue::Bounded(XsdValue::Decimal(d)) => {
+                self.add_parts(d.mantissa().unsigned_abs(), d.scale());
+            }
+            LiteralValue::Bounded(XsdValue::Duration(dur)) => {
                 let seconds = dur.seconds();
                 self.add_parts(seconds.mantissa().unsigned_abs(), seconds.scale());
             }
+            LiteralValue::Unbounded { .. } => self.magnitude = u128::MAX,
             _ => {}
         }
     }
@@ -2928,7 +3210,7 @@ struct NumericSummary {
     /// Whether the exact fold has stopped; from then on rows go to `tail`.
     stopped: bool,
     /// Every row after the stop, parsed, in source order.
-    tail: Vec<Option<XsdValue>>,
+    tail: Vec<Option<LiteralValue>>,
 }
 
 impl Default for NumericSummary {
@@ -2966,11 +3248,20 @@ fn merge_exact(
     match (&a, &b) {
         (_, NumericFold::Empty) => ExactMerge::Merged(a, a_bound),
         (NumericFold::Empty, _) => ExactMerge::Merged(b, b_bound),
-        (NumericFold::Dur { .. }, NumericFold::Int { .. } | NumericFold::Ok { .. })
-        | (NumericFold::Int { .. } | NumericFold::Ok { .. }, NumericFold::Dur { .. }) => {
-            ExactMerge::Poisoned
-        }
-        (NumericFold::Int { .. }, NumericFold::Int { .. }) => {
+        (
+            NumericFold::Dur { .. },
+            NumericFold::Int { .. } | NumericFold::Dec { .. } | NumericFold::Ok { .. },
+        )
+        | (
+            NumericFold::Int { .. } | NumericFold::Dec { .. } | NumericFold::Ok { .. },
+            NumericFold::Dur { .. },
+        ) => ExactMerge::Poisoned,
+        // Exact integer and decimal totals are arbitrary-precision sums, and exact
+        // addition reassociates, so every merge of them IS the chain.
+        (
+            NumericFold::Int { .. } | NumericFold::Dec { .. },
+            NumericFold::Int { .. } | NumericFold::Dec { .. },
+        ) => {
             let bound = a_bound.merge(b_bound);
             NumericFold::combine_owned(a, b).map_or(ExactMerge::Unproven, |merged| {
                 ExactMerge::Merged(merged, bound)
@@ -2996,15 +3287,18 @@ impl NumericSummary {
 
     /// Fold one row of the chunk this summary is folding.
     fn step(&mut self, value: &TermValue) {
-        self.push(xsd_of(value));
+        self.push(literal_value_of(value));
     }
 
     /// Fold one parsed row: absorb it exactly if the fold has not stopped and
     /// the value is exact-tier and accepted, else stop and record it.
-    fn push(&mut self, parsed: Option<XsdValue>) {
+    fn push(&mut self, parsed: Option<LiteralValue>) {
         if !self.stopped {
             if let Some(xv) = &parsed
-                && !matches!(xv, XsdValue::Float(_) | XsdValue::Double(_))
+                && !matches!(
+                    xv,
+                    LiteralValue::Bounded(XsdValue::Float(_) | XsdValue::Double(_))
+                )
                 && self.head.step_xsd(xv)
             {
                 self.bound.add(xv);
@@ -3026,7 +3320,7 @@ impl NumericSummary {
         let start = self.rows();
         let next_absorbed = &values[start..start + next.absorbed];
         if self.stopped {
-            self.tail.extend(next_absorbed.iter().map(xsd_of));
+            self.tail.extend(next_absorbed.iter().map(literal_value_of));
             #[cfg(test)]
             note_numeric_replay(next.absorbed);
         } else {
@@ -4273,18 +4567,11 @@ mod tests {
     }
 
     /// `AVG` over a total that genuinely exceeds `i128`, where the scale-18
-    /// quotient mantissa ALSO exceeds `i128` (`bigint_avg_decimal` alone would
-    /// answer `None` here — see `purrdf_xsd::numeric`'s doc on it): must still
-    /// answer exactly rather than go unbound.
-    /// `AVG({i128::MAX, i128::MAX})` = `i128::MAX` exactly (the two `i128::MAX`
-    /// values sum to `2 × i128::MAX`, divided by a count of 2), rendered through
-    /// [`purrdf_xsd::bigint_avg_decimal_lexical`]'s TEXT bypass — the same shape
-    /// [`sum_overflow_exceeding_i128_answers_exact_total`] pins for `SUM`. This
-    /// is the exact fixture the crate's public rustdoc worked example describes
-    /// (`(i128::MAX + i128::MAX) / 2 == i128::MAX`); before the lexical-text
-    /// fallback existed this answered unbound instead, because `Decimal`'s own
-    /// `i128`-mantissa bound rejects the scale-18 quotient even though the
-    /// value itself is an ordinary integer.
+    /// quotient mantissa ALSO exceeds `i128`: must still answer exactly rather
+    /// than go unbound. `AVG({i128::MAX, i128::MAX})` = `i128::MAX` exactly (the
+    /// two values sum to `2 × i128::MAX`, divided by a count of 2): one
+    /// representable `xsd:decimal`, at scale 0 — the finest scale whose mantissa
+    /// fits, `numeric_div`'s precision rule (`purrdf_xsd::decimal_mean`).
     #[test]
     fn avg_overflow_exceeding_i128_answers_exact_total() {
         let max = i128::MAX.to_string();
@@ -4348,22 +4635,29 @@ mod tests {
     }
 
     /// Once a pure-integer running sum has escaped `i128`, a `decimal` value
-    /// joining the group DOES poison — `xsd:decimal`'s mantissa is `i128`-bounded
-    /// by this crate's own documented design (`crates/xsd`'s module docs), so an
-    /// out-of-`i128`-range integer sum cannot be represented as a `Decimal`
-    /// either. This is the "genuinely unrepresentable in the result type" case
-    /// the fix explicitly does not claim to have closed, and it is no worse than
-    /// before: this exact group already poisoned prior to this change (on the
-    /// very first `i128` overflow), just for a different proximate reason.
+    /// joining the group continues the EXACT decimal total — so the group's
+    /// answer is decided by its total alone: `2 × i128::MAX + 0.5` has an
+    /// integer part past the bounded decimal (`err:FOAR0002`, unbound), while the
+    /// neighbouring group whose total comes back inside the bounds answers.
     #[test]
-    fn sum_overflow_then_decimal_poisons_on_decimals_own_bound() {
+    fn sum_overflow_then_decimal_answers_by_its_total() {
         use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
         let max = i128::MAX.to_string();
+        let min_plus_one = (-i128::MAX).to_string();
         let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.5", XDEC)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        assert_eq!(result, None, "the total's integer part overflows");
+        let ds = numeric_fold_dataset(&[
+            ("a", &max, XINT),
+            ("b", &max, XINT),
+            ("c", "0.5", XDEC),
+            ("d", &min_plus_one, XINT),
+        ]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
         assert_eq!(
-            result, None,
-            "decimal cannot hold an out-of-i128 integer sum"
+            result.as_deref(),
+            Some(max.as_str()),
+            "MAX + 0.5 truncates toward zero at the finest scale that holds it"
         );
     }
 
@@ -6332,6 +6626,7 @@ mod tests {
 #[cfg(test)]
 mod numeric_chain_tests {
     use super::*;
+    use crate::expr::xsd_of;
     use purrdf_testkit::rng::splitmix64_next;
 
     use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION as XDTD;
@@ -6459,13 +6754,13 @@ mod numeric_chain_tests {
         );
     }
 
-    /// A decimal group whose chain overflows the `i128` mantissa at a prefix a
-    /// partial-sum tree steps around: `1e38 + 1e38` overflows, while the tree
-    /// `1e38 + (1e38 + −1e38)` does not. The chain poisons, so the parallel
-    /// fold must too; the neighbouring group without the second `1e38` is
-    /// valid and must still answer.
+    /// A decimal group whose running total overflows the `i128` mantissa at a
+    /// prefix — `1e38 + 1e38` — while its exact total `1e38` does not. The exact
+    /// tier sums in arbitrary precision, so neither the chain nor any chunking
+    /// refuses it: sequential and parallel both answer the exact total, and a
+    /// group whose TOTAL overflows is refused by both.
     #[test]
-    fn a_decimal_overflow_the_chain_hits_is_hit_in_parallel_too() {
+    fn a_decimal_running_overflow_is_not_a_refusal_sequentially_or_in_parallel() {
         const ROWS: usize = 2048;
         let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let big = "100000000000000000000000000000000000000";
@@ -6473,23 +6768,24 @@ mod numeric_chain_tests {
         group[chunk_size - 1] = lit(big, XDEC);
         group[chunk_size] = lit(big, XDEC);
         group[chunk_size + 1] = lit(&format!("-{big}"), XDEC);
-        assert_eq!(sequential(ValueAggregate::Sum, &group), None);
-        assert!(
-            partial_sum_tree(&group, chunk_size, ValueAggregate::Sum).is_some(),
-            "the tree dodges the overflow the chain hits"
-        );
+        let expected = Some(lit(big, XDEC));
+        assert_eq!(sequential(ValueAggregate::Sum, &group), expected);
         assert_eq!(
             fold_values(ValueAggregate::Sum, &group).expect("fold"),
-            None
+            expected
+        );
+        assert_eq!(
+            fold_values(ValueAggregate::Avg, &group).expect("fold"),
+            sequential(ValueAggregate::Avg, &group)
         );
 
-        let mut neighbour = group.clone();
-        neighbour[chunk_size] = lit("0", XDEC);
-        let expected = sequential(ValueAggregate::Sum, &neighbour);
-        assert_eq!(expected, Some(lit("0", XDEC)));
+        // The neighbour whose exact total itself overflows is refused, both ways.
+        let mut overflowing = group.clone();
+        overflowing[chunk_size + 1] = lit(big, XDEC);
+        assert_eq!(sequential(ValueAggregate::Sum, &overflowing), None);
         assert_eq!(
-            fold_values(ValueAggregate::Sum, &neighbour).expect("fold"),
-            expected
+            fold_values(ValueAggregate::Sum, &overflowing).expect("fold"),
+            None
         );
     }
 
@@ -6521,19 +6817,40 @@ mod numeric_chain_tests {
             }
         }
 
-        // 1e20 at scale 18 is 1e38: two of them overflow the bound (and the
-        // chain), so their chunks replay row by row.
+        // 1e20 at scale 18 is 1e38: magnitudes no i128 mantissa bound covers,
+        // which the exact tier still merges exactly — arbitrary-precision
+        // addition reassociates — so no row replays and the answer is the chain's.
         let mut huge = decimals;
         huge[ROWS - 1] = lit("100000000000000000000", XDEC);
         huge[ROWS - 2] = lit("-99999999999999999999.999999999999999999", XDEC);
         let expected = sequential(ValueAggregate::Sum, &huge);
         take_numeric_fold_trace();
         let observed = fold_values(ValueAggregate::Sum, &huge).expect("fold");
+        let (merges, replayed) = take_numeric_fold_trace();
+        assert_eq!(observed, expected);
+        assert_eq!(merges, chunks - 1, "every exact chunk merged");
+        assert_eq!(replayed, 0, "no exact row replays");
+
+        // A duration group is the one exact tier still bounded mid-fold (its
+        // seconds add through the bounded decimal), so magnitudes that defeat the
+        // bound replay through the chain — and still agree with it.
+        let mut durations: Vec<TermValue> = (0..ROWS)
+            .map(|i| lit(&format!("PT{}S", i % 97), XDTD))
+            .collect();
+        durations[ROWS - 1] = lit("PT100000000000000000000S", XDTD);
+        durations[ROWS - 2] = lit("-PT99999999999999999999.999999999999999999S", XDTD);
+        let expected = sequential(ValueAggregate::Sum, &durations);
+        assert!(
+            expected.is_some(),
+            "the duration fixture sums to a duration"
+        );
+        take_numeric_fold_trace();
+        let observed = fold_values(ValueAggregate::Sum, &durations).expect("fold");
         let (_, replayed) = take_numeric_fold_trace();
         assert_eq!(observed, expected);
         assert!(
             replayed > 0,
-            "the unprovable chunk replays through the chain"
+            "the unprovable duration chunk replays through the chain"
         );
     }
 

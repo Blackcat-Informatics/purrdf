@@ -734,6 +734,12 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# a fresh floor that many bytes below the caller, and the typed refusal of a
 	@# request larger than the stack left, beside a neighbour that fits.
 	@#
+	@# purrdf-xsd's bounded numeric contract runs there too: canonical forms, exact
+	@# comparisons and the correctly rounded f64/f32 conversions of numerals of any
+	@# size, decimal arithmetic under the precision rule and the mean of totals past
+	@# the bounds, each typed error by its code, folded into digests pinned from
+	@# the native run.
+	@#
 	@# Every target here is `harness = false` on purrdf_testkit's runner, so the
 	@# same named cases run natively under `cargo test` and here. Cargo hands each
 	@# wasm32 test binary to scripts/wasm-test-runner.sh, which generates its Node
@@ -818,6 +824,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-stack --test on_stack \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-xsd --test bounded_wasm \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo bench --locked --target wasm32-unknown-unknown \
 			-p purrdf-hash-conformance --bench hasher --bench digests -- --test \
