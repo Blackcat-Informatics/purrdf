@@ -110,12 +110,22 @@ harness = false
 name = "model_traits"
 harness = false
 
+[[test]]
+name = "dataset_state_digest"
+harness = false
+
 [[bench]]
 # IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
 # iteration + allocated-bytes/count/peak reporting. Satisfies the RFC gate
 # "Layout is chosen by benchmark, not asserted". `make bench` lane only — excluded
 # from `make check`.
 name = "ir_layout"
+harness = false
+
+[[bench]]
+# Complete-state identity construction over fixed native shapes. Report-only;
+# it does not alter or compare any preexisting identity's hot path.
+name = "dataset_state_digest"
 harness = false
 
 [[bench]]
