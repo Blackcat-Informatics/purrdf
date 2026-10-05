@@ -250,15 +250,27 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   a variable the `WHERE` clause never binds or binds only inside `MINUS`. The
   one exemption is a variable the caller binds before evaluation:
   `SparqlParser::with_prebound_variables` declares them, a prepared execution
-  declares its parameters, and SHACL-SPARQL declares `$this`, the shape
+  declares its parameters, `QueryOptions::with_declared_prebound` declares
+  names a caller binds per run, and SHACL-SPARQL declares `$this`, the shape
   context and the parameters of a component or target type. A SHACL node
-  expression's query may read `$this`, the shape context and the names its
-  context binds: `value` inside `sh:expression`, a custom function's arguments
-  inside its body, and `node-expr --scope` names. Any other variable is refused
-  when the shapes graph is loaded or packed, even in an expression no focus node
-  reaches. The evaluator carries a pre-bound variable past `GROUP BY` as a
-  constant column, so `SELECT $this (COUNT(*) AS ?c) … ` run as a prepared
-  query with `$this` bound answers the bound node, not an unbound cell.
+  expression's query may read `$this` and the names its context binds: `value`
+  inside `sh:expression`, a custom function's arguments inside its body, and
+  `node-expr --scope` names. A node expression never binds `$currentShape` or
+  `$shapesGraph`, so reading either — like any other variable — is refused when
+  the shapes graph is loaded or packed, even in an expression no focus node
+  reaches. Assigning a pre-bound name, by `BIND(… AS ?x)` or `(… AS ?x)` at any
+  depth, is refused on every lane.
+- **SPARQL pre-binding:** every lane that binds a variable before evaluation —
+  `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
+  node expression's scope and `sh:expression`'s `value` — now takes the one
+  pre-binding rewrite, so they answer every query alike. The value reaches the
+  right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s and `EXISTS`, as SHACL
+  pre-binding always did, and is carried past every `GROUP BY` at any depth as a
+  constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a
+  sub-`SELECT`, answers the bound node, an implicit group over no rows answers
+  `COUNT` 0 with the bound node, and `HAVING` and `ORDER BY` read it.
+  `ShaclPrebinding` is kept for compatibility; both of its values now select
+  the same rewrite.
 
 ## [3.0.1] - 2026-10-02
 

@@ -1380,6 +1380,10 @@ pub(crate) struct Parser<'s> {
     /// is checked against exactly these at load (see
     /// `crate::sparql::node_expression_prebound_names`).
     node_expr_scope: Vec<String>,
+    /// Further names the node expression being parsed MAY find bound — a custom
+    /// function's optional arguments, absent when a call omits them. Never read as
+    /// pre-bound by the grouping check; a query may still not assign one.
+    node_expr_optional: Vec<String>,
     /// The base the source document's relative IRI references were resolved
     /// against, carried only so [`Shapes::provenance`] can report it; `None` when
     /// the caller supplied none or entered with an already-resolved dataset.
@@ -1560,6 +1564,7 @@ impl<'s> Parser<'s> {
             node_by_expr_constants: Vec::new(),
             current_shape: None,
             node_expr_scope: Vec::new(),
+            node_expr_optional: Vec::new(),
             closed_type_index: None,
             annotation_index: parser::annotations::AnnotationIndex::build(data),
             annotations_applied: FastSet::default(),

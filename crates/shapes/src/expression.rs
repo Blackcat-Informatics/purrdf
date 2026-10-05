@@ -2304,8 +2304,21 @@ fn eval_node_expr_at_depth(
                     }
                 }
             }
-            crate::sparql::eval_select_nodes_view(store.sparql_view(), query, variable, &bindings)
-                .map_err(|e| format!("{key} node expression: {e}"))
+            // Every name the context binds, valued or not: `$this`, the scope's
+            // bindings and the call's argument names.
+            let declared: Vec<String> = std::iter::once("this".to_owned())
+                .chain(scope.bindings().iter().map(|(name, _)| (*name).to_owned()))
+                .chain(scope.args().iter().map(|(key, _)| key.variable_name()))
+                .collect();
+            let declared: Vec<&str> = declared.iter().map(String::as_str).collect();
+            crate::sparql::eval_select_nodes_view(
+                store.sparql_view(),
+                query,
+                variable,
+                &bindings,
+                &declared,
+            )
+            .map_err(|e| format!("{key} node expression: {e}"))
         }
         // §6.3 Arg expression: look the key up in the argument scope and evaluate
         // the bound NODE EXPRESSION there, in the empty scope —

@@ -75,7 +75,7 @@ pub(crate) fn eval_target_view<
             value: term.to_term_value(),
         })
         .collect();
-    let mut nodes = run_select_generic_view(dataset, select, &subs, |solutions| {
+    let mut nodes = run_select_generic_view(dataset, select, &subs, &[], |solutions| {
         let this_index = solutions.column("this");
         let mut nodes: Vec<Term> = Vec::with_capacity(solutions.len());
         for row in solutions.rows() {
@@ -403,7 +403,7 @@ pub(crate) fn eval_scalar_query_view<
             value: term.to_term_value(),
         })
         .collect();
-    run_select_generic_view(dataset, select, &subs, project_scalar)
+    run_select_generic_view(dataset, select, &subs, &[], project_scalar)
         .map_err(|e| format!("scalar expression {e}"))
 }
 
@@ -430,6 +430,7 @@ pub(crate) fn eval_scalar_query_view_minting<
         select,
         &subs,
         ShaclPrebinding::None,
+        &[],
         Some(bnode_mint_prefix),
         |outcome| project_solutions(outcome, project_scalar),
     )
@@ -503,6 +504,12 @@ pub(crate) fn eval_cached_scalar_query_view<
 /// query's result header does not carry `variable` at all (a shapes-load check
 /// already established the projection, so this can only mean the header and the
 /// projection disagree).
+///
+/// `declared` is every name the expression's context binds — `$this`, its scope
+/// bindings and its function arguments — whether or not this call has a value for it
+/// (an argument that produced no node is left unbound). It is what the grouping check
+/// reads as pre-bound, the same set the load-time parse declared
+/// ([`node_expression_prebound_names`]), so a query the load admitted is admitted here.
 pub(crate) fn eval_select_nodes_view<
     D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
 >(
@@ -510,6 +517,7 @@ pub(crate) fn eval_select_nodes_view<
     select: &str,
     variable: &str,
     bindings: &[(String, Term)],
+    declared: &[&str],
 ) -> Result<Vec<Term>, String> {
     let subs: Vec<Prebinding<'_>> = bindings
         .iter()
@@ -518,7 +526,7 @@ pub(crate) fn eval_select_nodes_view<
             value: term.to_term_value(),
         })
         .collect();
-    run_select_generic_view(dataset, select, &subs, |solutions| {
+    run_select_generic_view(dataset, select, &subs, declared, |solutions| {
         let index = solutions.column(variable).ok_or_else(|| {
             format!("SELECT result has no ?{variable} column, but that is the projected variable")
         })?;
@@ -1053,6 +1061,7 @@ fn run_query_view<
     query: &str,
     substitutions: &[Prebinding<'_>],
     prebind: ShaclPrebinding,
+    declared_prebound: &[&str],
     bnode_mint_prefix: Option<&str>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
@@ -1062,7 +1071,7 @@ fn run_query_view<
         base_iri: None,
         substitutions,
     };
-    let options = scopes.options(dataset, prebind, bnode_mint_prefix);
+    let options = scopes.options(dataset, prebind, declared_prebound, bnode_mint_prefix);
 
     let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
@@ -1213,6 +1222,7 @@ impl AmbientScopes {
         &'a self,
         dataset: &'a D,
         prebinding: ShaclPrebinding,
+        declared_prebound: &'a [&'a str],
         bnode_mint_prefix: Option<&'a str>,
     ) -> QueryOptions<'a> {
         let functions = self.functions();
@@ -1246,6 +1256,7 @@ impl AmbientScopes {
             .with_call_depth(self.call_depth)
             .with_remote(remote)
             .with_load(load)
+            .with_declared_prebound(declared_prebound)
     }
 
     /// The configuration a prepared plan's admission depends on, held so a handle
@@ -1514,7 +1525,7 @@ fn run_bound_view<
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
     let scopes = AmbientScopes::snapshot()?;
-    let options = scopes.options(dataset, prebind, bnode_mint_prefix);
+    let options = scopes.options(dataset, prebind, &[], bnode_mint_prefix);
 
     let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
@@ -2308,18 +2319,19 @@ pub(crate) fn push_shape_context(
 /// grouping check reads them as the constants they are during evaluation.
 pub(crate) const THIS_AND_SHAPE_CONTEXT: [&str; 3] = ["this", "shapesGraph", "currentShape"];
 
-/// The names a node expression's query may find pre-bound when it runs: `$this`,
-/// the shape context, and `scope` — the names the expression's context binds
-/// (`value` inside an `sh:expression` constraint, a custom function's argument
-/// names inside its body, a free evaluation's caller scope; see
-/// `Parser::node_expr_scope`).
+/// The names a node expression's query finds pre-bound when it runs: `$this` (the
+/// focus node), and `scope` — the names the expression's context binds (`value` inside
+/// an `sh:expression` constraint, a custom function's argument names inside its body,
+/// a free evaluation's caller scope; see `Parser::node_expr_scope`).
 ///
-/// A load-time parse declares exactly these to the grouping check
-/// (`SparqlParser::with_prebound_variables`), never every variable the text spells:
-/// a variable nothing can bind is a per-row value, and reading it outside an
-/// aggregate is refused at load exactly as it is in `sh:sparql`.
+/// Exactly the set the evaluation binds (`crate::expression`'s `NodeExpr::Select`
+/// arm): a node expression runs with no shape context, so `$shapesGraph` and
+/// `$currentShape` are not among them. A load-time parse declares exactly these to
+/// the grouping check (`SparqlParser::with_prebound_variables`), so a query the load
+/// admits is a query the evaluation admits, and one reading a name nothing binds is
+/// refused at load exactly as it would be at evaluation.
 pub(crate) fn node_expression_prebound_names(scope: &[String]) -> Vec<&str> {
-    let mut names: Vec<&str> = THIS_AND_SHAPE_CONTEXT.to_vec();
+    let mut names: Vec<&str> = vec![THIS_AND_SHAPE_CONTEXT[0]];
     names.extend(scope.iter().map(String::as_str));
     names
 }
@@ -2407,11 +2419,18 @@ fn run_select_view<
     select: &str,
     substitutions: &[Prebinding<'_>],
     prebind: ShaclPrebinding,
+    declared_prebound: &[&str],
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    run_query_view(dataset, select, substitutions, prebind, None, |outcome| {
-        project_solutions(outcome, project)
-    })
+    run_query_view(
+        dataset,
+        select,
+        substitutions,
+        prebind,
+        declared_prebound,
+        None,
+        |outcome| project_solutions(outcome, project),
+    )
 }
 
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path
@@ -2427,6 +2446,7 @@ pub(crate) fn run_select_generic_view<
     dataset: &D,
     select: &str,
     substitutions: &[Prebinding<'_>],
+    declared_prebound: &[&str],
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
     run_select_view(
@@ -2434,6 +2454,7 @@ pub(crate) fn run_select_generic_view<
         select,
         substitutions,
         ShaclPrebinding::None,
+        declared_prebound,
         project,
     )
 }
@@ -2457,6 +2478,7 @@ pub(crate) fn run_select_with_shacl_prebinding_view<
         select,
         substitutions,
         ShaclPrebinding::Applied,
+        &[],
         project,
     )
 }
@@ -2483,6 +2505,7 @@ pub(crate) fn run_ask_with_shacl_prebinding_view<
         ask,
         substitutions,
         ShaclPrebinding::Applied,
+        &[],
         None,
         project_boolean,
     )

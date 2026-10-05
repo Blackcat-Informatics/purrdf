@@ -16,7 +16,7 @@
 //!   so the constraint reports no violation.
 //! * **Load refuses every other variable** — in an expression no focus node reaches,
 //!   so nothing but the load-time check could see it — beside neighbours that read
-//!   `$this`, `$value`, `$currentShape`, a function argument and a `--scope` name in
+//!   `$this`, `$value`, a function argument and a `--scope` name in
 //!   aggregates and still load.
 
 mod support;
@@ -150,13 +150,13 @@ fn an_unreached_expression_reading_a_non_key_variable_is_refused_at_load_and_pac
     );
     assert!(!product.exists(), "a refused pack writes no product");
 
-    // The valid neighbour: `$this`, `$value` and `$currentShape` are bound by the
-    // expression's context, so reading them in an aggregate projection loads.
+    // The valid neighbour: `$this` and `$value` are bound by the expression's context,
+    // so reading them in an aggregate projection loads and packs.
     let good = write_file(
         dir.path(),
         "good.ttl",
         &unreached_expression(
-            "SELECT ((COUNT(?o) > 0 && BOUND($this) && BOUND($value) && BOUND($currentShape)) AS ?r) \
+            "SELECT ((COUNT(?o) > 0 && BOUND($this) && BOUND($value)) AS ?r) \
              WHERE { $this <http://example.org/p> ?o }",
         ),
     );
@@ -172,6 +172,83 @@ fn an_unreached_expression_reading_a_non_key_variable_is_refused_at_load_and_pac
         product.to_str().expect("utf-8 path"),
     ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
+}
+
+/// A node expression runs with no shape context, so `$currentShape` and `$shapesGraph`
+/// are not among the names it binds: a REACHED `sh:expression` reading one in an
+/// aggregate projection is refused when the shapes graph is loaded and when it is
+/// packed — never admitted and then aborted at evaluation. The neighbour reading
+/// `$this` and `$value` loads, packs, and answers the same from the restored product.
+#[test]
+fn a_reached_expression_reading_the_shape_context_is_refused_at_load_and_pack() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let reached = |select: &str| {
+        shapes(&format!(
+            "ex:S a sh:NodeShape ; sh:targetClass ex:T ;\n  sh:expression [ sh:select \"{select}\" ] .\n"
+        ))
+    };
+    for (name, variable) in [("shape", "$currentShape"), ("graph", "$shapesGraph")] {
+        let refused = write_file(
+            dir.path(),
+            &format!("{name}.ttl"),
+            &reached(&format!(
+                "SELECT ((BOUND({variable}) && COUNT(*) >= 0) AS ?r) WHERE {{ }}"
+            )),
+        );
+        let out = run(&["validate", "--shapes", &refused, &data]);
+        assert_ne!(
+            code(&out),
+            0,
+            "{variable}: validate must refuse the shapes graph"
+        );
+        assert!(
+            stderr(&out).contains("neither a GROUP BY key"),
+            "{variable}: {}",
+            stderr(&out)
+        );
+        let product = dir.path().join(format!("{name}.product"));
+        let out = run(&[
+            "shacl",
+            "pack",
+            "--shapes",
+            &refused,
+            "--out",
+            product.to_str().expect("utf-8 path"),
+        ]);
+        assert_ne!(
+            code(&out),
+            0,
+            "{variable}: pack must refuse the shapes graph"
+        );
+        assert!(
+            !product.exists(),
+            "{variable}: a refused pack writes no product"
+        );
+    }
+    let good = write_file(
+        dir.path(),
+        "good.ttl",
+        &reached(
+            "SELECT ((BOUND($this) && BOUND($value) && COUNT(*) = 2) AS ?r) \
+             WHERE { $this <http://example.org/p> ?o }",
+        ),
+    );
+    let out = run(&["validate", "--shapes", &good, &data]);
+    let verdict = stderr(&out);
+    assert_eq!(code(&out), 0, "{verdict}");
+    assert!(verdict.contains("shacl conforms true\n"), "{verdict}");
+    let product = dir.path().join("good.product");
+    let product = product.to_str().expect("utf-8 path");
+    let out = run(&["shacl", "pack", "--shapes", &good, "--out", product]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let out = run(&["validate", "--shapes-product", product, &data]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("shacl conforms true\n"),
+        "the restored product answers as the parsed shapes graph did: {}",
+        stderr(&out)
+    );
 }
 
 #[test]

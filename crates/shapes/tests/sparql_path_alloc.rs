@@ -58,7 +58,7 @@
 //! | `sh:sparql` constraint | 2,695 | 40 | 1,277,672 | 3,119 |
 //! | custom `sh:ask` component (2 value nodes) | 350 | 86 | 16,156 | 6,555 |
 //! | custom `sh:select` component | 2,738 | 48 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 101 | 13,393 | 6,744 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 97 | 13,393 | 6,744 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
@@ -582,8 +582,13 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 101,
-        governed_per_focus_node: 126,
+        per_focus_node: 97,
+        // 126 before every pre-binding lane took the one rewrite: the governed door
+        // now runs the full pre-binding walk (pushdown, expression walk and the
+        // carry past any `GROUP BY`) where it ran a bare seed join, which costs
+        // eight allocations per focus node and is what makes its answers those
+        // of every other lane.
+        governed_per_focus_node: 134,
         governed_entry: 41,
         footprint_is_boundable: true,
         results_per_violation: 1,

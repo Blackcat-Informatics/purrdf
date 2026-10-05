@@ -75,3 +75,65 @@ def test_a_group_keyed_by_the_parameter_is_unchanged() -> None:
         f"SELECT $this (COUNT(*) AS ?c) WHERE {{ $this <{EX}p> ?o }} GROUP BY $this"
     )
     assert rows == [(purrdf.NamedNode(f"{EX}a"), TWO)]
+
+
+def _values(query: str) -> set:
+    """The ``?value`` column of ``query`` run with ``$this`` bound to ``ex:a``."""
+    prepared = _store().prepare(query, parameters=["this"])
+    solutions = prepared.run(this=purrdf.NamedNode(f"{EX}a"))
+    column = list(solutions.variables).index("value")
+    return {row[column] for row in solutions if row[column] is not None}
+
+
+TRUE = purrdf.Literal(
+    "true", datatype=purrdf.NamedNode("http://www.w3.org/2001/XMLSchema#boolean")
+)
+
+
+def test_a_parameter_survives_a_sub_select_group() -> None:
+    # The same answers `crates/shapes/tests/prebinding_lanes.rs` requires of every lane.
+    assert _values(
+        f"SELECT ?value WHERE {{ {{ SELECT $this (COUNT(*) AS ?c) "
+        f"WHERE {{ $this <{EX}p> ?o }} }} "
+        f"BIND((sameTerm($this, <{EX}a>) && ?c = 2) AS ?value) }}"
+    ) == {TRUE}
+    assert _values(
+        f"SELECT (STR($this) AS ?value) WHERE {{ {{ SELECT $this ?o "
+        f"WHERE {{ $this <{EX}p> ?o }} GROUP BY ?o }} }}"
+    ) == {purrdf.Literal(f"{EX}a")}
+    assert _values(
+        f"SELECT ?value WHERE {{ {{ SELECT $this (COUNT(*) AS ?value) "
+        f"WHERE {{ $this <{EX}p> ?o }} }} FILTER(BOUND($this)) }}"
+    ) == {TWO}
+
+
+def test_having_order_by_and_an_empty_group_read_the_parameter() -> None:
+    assert _values(
+        f"SELECT (COUNT(*) AS ?value) WHERE {{ $this <{EX}p> ?o }} "
+        f"HAVING (sameTerm($this, <{EX}a>))"
+    ) == {TWO}
+    one = purrdf.Literal("1", datatype=XSD_INTEGER)
+    assert _values(
+        f"SELECT (COUNT(*) AS ?value) WHERE {{ $this <{EX}p> ?o }} GROUP BY ?o ORDER BY $this"
+    ) == {one}
+    assert _values(
+        f"SELECT ((sameTerm($this, <{EX}a>) && COUNT(?z) = 0) AS ?value) "
+        f"WHERE {{ $this <{EX}none> ?z }}"
+    ) == {TRUE}
+
+
+def test_reassigning_the_parameter_is_refused_and_a_fresh_variable_is_not() -> None:
+    store = _store()
+    for query in (
+        f"SELECT ?value WHERE {{ BIND(<{EX}b> AS $this) $this <{EX}p> ?value }}",
+        f"SELECT (COUNT(*) AS ?value) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}b> AS $this) }}",
+    ):
+        try:
+            store.prepare(query, parameters=["this"])
+        except Exception as error:  # noqa: BLE001 - the refusal's type is the binding's
+            assert "pre-bound" in str(error), error
+        else:
+            raise AssertionError(f"{query} must be refused")
+    assert _values(
+        f"SELECT ?value WHERE {{ BIND(<{EX}b> AS ?fresh) ?fresh <{EX}p> ?value }}"
+    ) == {purrdf.NamedNode(f"{EX}o3")}

@@ -33,10 +33,24 @@ impl Parser<'_> {
         names: Vec<String>,
         parse: impl FnOnce(&mut Self) -> T,
     ) -> T {
+        self.with_node_expr_scopes(names, Vec::new(), parse)
+    }
+
+    /// [`Self::with_node_expr_scope`], also adding `optional` — names the context may
+    /// leave unbound ([`Parser::node_expr_optional`]).
+    pub(crate) fn with_node_expr_scopes<T>(
+        &mut self,
+        names: Vec<String>,
+        optional: Vec<String>,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> T {
         let depth = self.node_expr_scope.len();
+        let optional_depth = self.node_expr_optional.len();
         self.node_expr_scope.extend(names);
+        self.node_expr_optional.extend(optional);
         let out = parse(self);
         self.node_expr_scope.truncate(depth);
+        self.node_expr_optional.truncate(optional_depth);
         out
     }
 
@@ -1749,14 +1763,28 @@ impl Parser<'_> {
                         "sh:sparqlExpr",
                     )
                 };
+                let prebound = crate::sparql::node_expression_prebound_names(&self.node_expr_scope);
                 let parsed = SparqlParser::new()
-                    .with_prebound_variables(crate::sparql::node_expression_prebound_names(
-                        &self.node_expr_scope,
-                    ))
+                    .with_prebound_variables(prebound.iter())
                     .parse_query(&query)
                     .map_err(|e| {
                         format!("{key} node expression on {node} has an unparsable query: {e}")
                     })?;
+                // The names the context binds — or may bind — are pre-bound: the query may
+                // read them, never assign them (the evaluation refuses that too).
+                let assignable_never: Vec<&str> = prebound
+                    .iter()
+                    .copied()
+                    .chain(self.node_expr_optional.iter().map(String::as_str))
+                    .collect();
+                if let Some(variable) = parsed.assigned_prebound(&assignable_never) {
+                    return Err(format!(
+                        "{key} node expression on {node} assigns ?{}, which is pre-bound: a \
+                         pre-bound variable holds one value for the whole evaluation and may \
+                         not be reassigned",
+                        variable.as_str()
+                    ));
+                }
                 if !matches!(parsed, Query::Select { .. }) {
                     return Err(format!(
                         "{key} node expression on {node} must be a SELECT query"
