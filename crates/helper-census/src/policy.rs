@@ -15,6 +15,10 @@ use std::process::{Command, ExitCode};
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use purrdf_lex::json::{self, Value};
+use purrdf_lex::walk::WorkList;
+use syn::parse::discouraged::Speculative;
+use syn::parse::{ParseStream, Parser};
+use syn::{Expr, Token};
 
 const PYTHON_SOURCE: &str = "bindings/python/src";
 const CAPI: &str = "purrdf-capi";
@@ -47,7 +51,7 @@ fn punct(token: Option<&TokenTree>, value: char) -> bool {
 /// Find the first actual predicate token in a cfg body. Literals and comments
 /// are never Rust predicates; qualified paths and named values are not `test`.
 fn predicate(body: TokenStream, feature: bool) -> Option<(usize, usize)> {
-    let mut pending = vec![body];
+    let mut pending: WorkList<TokenStream, 16> = WorkList::with(body);
     let mut found = BTreeSet::new();
     while let Some(body) = pending.pop() {
         let tokens: Vec<_> = body.into_iter().collect();
@@ -75,13 +79,52 @@ fn predicate(body: TokenStream, feature: bool) -> Option<(usize, usize)> {
     found.into_iter().next()
 }
 
+/// Only a cfg_select arm's header is a predicate. Its payload is Rust code,
+/// where a variable named `test` or an assignment to `feature` is ordinary data.
+fn cfg_select_headers(body: TokenStream) -> Result<Vec<TokenStream>, syn::Error> {
+    (|input: ParseStream<'_>| {
+        let mut headers = Vec::new();
+        while !input.is_empty() {
+            let mut header = TokenStream::new();
+            while !input.is_empty() && !input.peek(Token![=>]) {
+                header.extend([input.parse::<TokenTree>()?]);
+            }
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<Token![=>]>()?;
+            headers.push(header);
+            if input.peek(syn::token::Brace) {
+                input.parse::<TokenTree>()?;
+            } else {
+                let expression = input.fork();
+                if expression.parse::<Expr>().is_ok() {
+                    input.advance_to(&expression);
+                } else {
+                    // A macro transcriber can carry `$expression` rather than
+                    // a concrete Expr. Balanced token trees keep its commas
+                    // separate from the comma between cfg_select arms.
+                    while !input.is_empty() && !input.peek(Token![,]) {
+                        input.parse::<TokenTree>()?;
+                    }
+                }
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(headers)
+    })
+    .parse2(body)
+}
+
 /// Attributes and cfg! macros can occur inside macro bodies, so scan their
 /// token trees rather than only the item AST. This also handles inner attrs.
 fn token_findings(source: &str, feature: bool) -> Result<Vec<(usize, Rule)>, String> {
     let stream: TokenStream = source
         .parse()
         .map_err(|error| format!("Rust tokens: {error}"))?;
-    let mut pending = vec![stream];
+    let mut pending: WorkList<TokenStream, 16> = WorkList::with(stream);
     let mut found = BTreeSet::new();
     while let Some(stream) = pending.pop() {
         let tokens: Vec<_> = stream.into_iter().collect();
@@ -116,7 +159,6 @@ fn token_findings(source: &str, feature: bool) -> Result<Vec<(usize, Rule)>, Str
             if ident(Some(token), "cfg")
                 && punct(tokens.get(at + 1), '!')
                 && let Some(TokenTree::Group(body)) = tokens.get(at + 2)
-                && body.delimiter() == Delimiter::Parenthesis
                 && let Some((line, column)) = predicate(body.stream(), feature)
             {
                 found.insert((
@@ -128,6 +170,26 @@ fn token_findings(source: &str, feature: bool) -> Result<Vec<(usize, Rule)>, Str
                         Rule::CfgTest
                     },
                 ));
+            }
+            if ident(Some(token), "cfg_select")
+                && punct(tokens.get(at + 1), '!')
+                && let Some(TokenTree::Group(body)) = tokens.get(at + 2)
+            {
+                for header in cfg_select_headers(body.stream())
+                    .map_err(|error| format!("cfg_select tokens: {error}"))?
+                {
+                    if let Some((line, column)) = predicate(header, feature) {
+                        found.insert((
+                            line,
+                            column,
+                            if feature {
+                                Rule::Feature
+                            } else {
+                                Rule::CfgTest
+                            },
+                        ));
+                    }
+                }
             }
             if let TokenTree::Group(group) = token {
                 pending.push(group.stream());
@@ -308,6 +370,42 @@ const FEATURE_CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "braced feature macro",
+        "let x = cfg!{feature = \"x\"};",
+        true,
+    ),
+    ("braced macro valid neighbor", "let x = cfg!{unix};", false),
+    (
+        "bracketed feature macro",
+        "let x = cfg![feature = \"x\"];",
+        true,
+    ),
+    (
+        "bracketed macro valid neighbor",
+        "let x = cfg![unix];",
+        false,
+    ),
+    (
+        "cfg_select feature condition",
+        "let x = cfg_select! { unix => false, feature = \"x\" => true, _ => false };",
+        true,
+    ),
+    (
+        "cfg_select payload is not a feature condition",
+        "let x = cfg_select! { unix => { feature = \"x\"; }, _ => feature = \"y\" };",
+        false,
+    ),
+    (
+        "cfg_select macro transcriber feature condition",
+        "macro_rules! x { ($value:expr) => { cfg_select! { unix => $value, r#feature = \"x\" => {$value} _ => false } }; }",
+        true,
+    ),
+    (
+        "cfg_select macro transcriber valid neighbor",
+        "macro_rules! x { ($value:expr) => { cfg_select! { unix => $value, target_os = \"linux\" => {$value} _ => false } }; }",
+        false,
+    ),
+    (
         "feature in macro body",
         "macro_rules! x { () => { #[cfg(feature = \"x\")] fn f() {} }; }",
         true,
@@ -344,6 +442,38 @@ const TEST_CASES: &[(&str, &str, bool)] = &[
     (
         "test macro valid neighbor",
         "let x = cfg!(feature = \"test\");",
+        false,
+    ),
+    ("braced test macro", "let x = cfg!{test};", true),
+    (
+        "braced test macro valid neighbor",
+        "let x = cfg!{testing};",
+        false,
+    ),
+    ("bracketed test macro", "let x = cfg![test];", true),
+    (
+        "bracketed test macro valid neighbor",
+        "let x = cfg![testing];",
+        false,
+    ),
+    (
+        "cfg_select nested test condition",
+        "let x = cfg_select! { unix => false, any(r#test, windows) => true, _ => false };",
+        true,
+    ),
+    (
+        "cfg_select payload is not a test condition",
+        "let x = cfg_select! { unix => if x { test() } else { test }, _ => test() };",
+        false,
+    ),
+    (
+        "cfg_select bracketed test condition",
+        "let x = cfg_select![test => true, _ => false];",
+        true,
+    ),
+    (
+        "cfg_select parenthesized valid neighbor",
+        "let x = cfg_select!(feature = \"test\" => test(), _ => \"test\");",
         false,
     ),
     ("bare test attribute", "#[test] fn f() {}", true),
@@ -442,6 +572,11 @@ mod tests {
 
     #[test]
     fn all_policy_negative_vectors_and_valid_neighbors_hold() {
+        // These compile as cfg! invocations, independently of our token reader.
+        const {
+            assert!(cfg![test]);
+            assert!(cfg! { test });
+        }
         for (name, held) in self_test_cases() {
             assert!(held, "{name}");
         }
