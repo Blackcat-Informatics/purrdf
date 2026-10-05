@@ -1551,6 +1551,59 @@ mod tests {
         }
     }
 
+    /// A premise IRI that is not absolute is refused by every conclusion-directed service on
+    /// this host, naming it, through the shared boundary's one premise-IRI check; the
+    /// neighbour call, differing only in an absolute premise IRI, answers.
+    #[test]
+    fn wasm_entail_refuses_a_premise_iri_that_is_not_absolute() {
+        let document =
+            "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n";
+        let pattern = "<https://example.org/x> <https://example.org/p> ?o .\n";
+        type Service = fn(
+            &str,
+            &str,
+            &str,
+            &[String],
+            &[String],
+            &[String],
+            &MaterializeLimits,
+        ) -> Result<ReasoningAnswer, String>;
+        let services: [(Service, &str); 3] = [
+            (graph_entails_impl, document),
+            (verify_entailment_impl, document),
+            (certain_answers_impl, pattern),
+        ];
+        for (service, question) in services {
+            for bad in ["::bad", "lib", ""] {
+                let refused = service(
+                    "simple",
+                    document,
+                    question,
+                    &[],
+                    &[],
+                    &[bad.to_owned()],
+                    &wasm_limits(None, None),
+                )
+                .expect_err("a premise IRI that is not absolute");
+                assert!(
+                    refused.contains("premise IRI") && refused.contains(&format!("{bad:?}")),
+                    "{refused}"
+                );
+            }
+            let answered = service(
+                "simple",
+                document,
+                question,
+                &[],
+                &[],
+                &["http://example.org/onto".to_owned()],
+                &wasm_limits(None, None),
+            )
+            .expect("an absolute premise IRI");
+            assert!(answered.answer().starts_with("mechanism "));
+        }
+    }
+
     /// Every conclusion-directed service on this host refuses an import-table entry the
     /// premise's closure never names, naming it; the neighbour premise that imports it
     /// answers from it.

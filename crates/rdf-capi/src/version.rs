@@ -186,7 +186,17 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
 /// and never sees an enumerator's value move. The discriminants are therefore pinned
 /// separately, by `the_status_enum_is_append_only` in `tests/abi.rs`.
-pub const PURRDF_ABI_MINOR: u32 = 8;
+///
+/// # `0.8.0` → `0.9.0`: one added symbol
+///
+/// `0.8.0` shipped as the ABI of the `3.0.x` libraries. This bump adds
+/// `purrdf_serialize_empty_named_graphs_dropped` — the count of declared empty named
+/// graphs a whole-dataset `purrdf_serialize` to a given target drops — and changes no
+/// existing prototype, struct layout or status number, so a host built against `0.8.0`
+/// keeps calling everything it called before unchanged. It bumps for the reason the
+/// `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
+/// answer `purrdf_abi_version` the way `0.8.0` does.
+pub const PURRDF_ABI_MINOR: u32 = 9;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

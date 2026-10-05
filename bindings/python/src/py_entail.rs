@@ -62,6 +62,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use purrdf_validate::check_premise_iris;
 use purrdf_validate::regime::{
     MaterializeLimits, PROOF_SERVICE_NAMES, REGIME_NAMES, ReasonerSession, RegimeHost,
     certain_answers_to_string, check_dl_proof, classify_to_string, consistency_to_string,
@@ -248,6 +249,7 @@ fn materialize(
     // BEFORE the GIL is released.
     let native = native_regime(regime)?;
     let name = regime_name(native);
+    let premise_iris = premise_iri_refs(&premise_iris)?;
     let data = dataset.dataset();
     // Chase + report rendering run detached (GIL released); the Python objects
     // are built after the GIL is reacquired.
@@ -257,7 +259,6 @@ fn materialize(
             // so the dataset path and the text path cannot come to mean different things
             // by the same regime spelling.
             let table = import_list(&imports);
-            let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
             let map = premise_import_map(&table, &premise_iris)?;
             let rules = regime_rule_set(native, name, program)?;
             let (closure, report) = materialize_with_imports(
@@ -327,7 +328,7 @@ fn materialize_nt(
     // Parse + chase + canonical serialization + report rendering run detached
     // (GIL released).
     let table = import_list(&imports);
-    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    let premise_iris = premise_iri_refs(&premise_iris)?;
     let closure = py
         .detach(|| {
             materialize_to_nquads_string_with(name, data, program, &table, &premise_iris, &limits)
@@ -450,7 +451,7 @@ fn consistency(
     work_cap: u32,
 ) -> PyResult<(String, String)> {
     let table = import_list(&imports);
-    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    let premise_iris = premise_iri_refs(&premise_iris)?;
     let answer = py
         .detach(|| consistency_to_string(data, &table, &premise_iris, step_cap, work_cap))
         .map_err(PyValueError::new_err)?;
@@ -708,8 +709,28 @@ pub(crate) fn entailment_import_map(
 ) -> PyResult<crate::entail::ImportMap> {
     let imports = imports.unwrap_or_default();
     let premise_iris = premise_iris.unwrap_or_default();
-    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    let premise_iris = premise_iri_refs(&premise_iris)?;
     premise_import_map(&import_list(&imports), &premise_iris).map_err(PyValueError::new_err)
+}
+
+/// The caller's premise IRIs, borrowed for the shared boundary, once
+/// [`check_premise_iris`] accepts every one.
+///
+/// The boundary runs the same check itself and refuses with the same message; this runs
+/// it first so the `ValueError` also carries the refusal's typed presentation
+/// (`message_id` `premise-iri-not-absolute`, the IRI parser's `iri-*` condition as its
+/// `detail`), which a `String` error cannot. It runs where the boundary would: after the
+/// regime is read and before the import table, so the same one of two bad arguments is
+/// reported here as on every other host.
+fn premise_iri_refs(premise_iris: &[String]) -> PyResult<Vec<&str>> {
+    let borrowed: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    check_premise_iris(&borrowed).map_err(|error| {
+        crate::py_store::presentation::presented_value_error(
+            error.to_string(),
+            Some(&error.presentation()),
+        )
+    })?;
+    Ok(borrowed)
 }
 
 /// The CERTAIN ANSWERS of a basic graph pattern over `data` under `regime`.
@@ -771,6 +792,12 @@ pub(crate) fn entailment_import_map(
 /// such IRI, and `[]` is that ordinary case; like `imports` the argument is required rather
 /// than defaulted, in the same position on all four hosts.
 ///
+/// Each must be an absolute IRI, since only an absolute IRI can equal an `owl:imports`
+/// object. Any other string — one the IRI parser refuses, a relative reference, the empty
+/// string — raises `ValueError` naming it, with `message_id` `premise-iri-not-absolute`
+/// and the IRI parser's `iri-*` condition as its presentation's `detail`. Every function
+/// here that takes `premise_iris` refuses the same way.
+///
 /// # `max_stored_facts`, `max_join_steps` — the evaluation limits
 ///
 /// Keyword-only, and [`materialize`]'s: they bound every evaluation the question is answered
@@ -807,7 +834,7 @@ fn certain_answers(
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
-    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    let premise_iris = premise_iri_refs(&premise_iris)?;
     let answer = py
         .detach(|| {
             certain_answers_to_string(
@@ -869,7 +896,7 @@ fn graph_entails(
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
-    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    let premise_iris = premise_iri_refs(&premise_iris)?;
     let answer = py
         .detach(|| {
             graph_entails_to_string(
@@ -923,7 +950,7 @@ fn verify_entailment(
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
-    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    let premise_iris = premise_iri_refs(&premise_iris)?;
     let answer = py
         .detach(|| {
             verify_entailment_to_string(

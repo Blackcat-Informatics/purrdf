@@ -58,9 +58,75 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   below `purrdf-core` can build presentations. `purrdf_core::diagnostic` and the
   `purrdf_core` crate root re-export the same types, so existing paths and
   matches keep compiling.
+- **Premise-IRI check:** `purrdf_validate::check_premise_iris` checks that
+  every premise IRI is an absolute IRI, using the workspace IRI parser. A
+  refusal is a `PremiseIriError`. It names the IRI and has a typed
+  `presentation()` (`premise-iri-not-absolute`) whose `detail` is the IRI
+  parser's own `iri-*` condition. A relative reference has the detail
+  `iri-not-absolute-by-grammar.absent`; the empty string has `iri-empty`.
+- **SPARQL query census and prepared parameters:**
+  `purrdf_sparql_algebra::Query::for_each_variable` visits every variable a
+  query mentions, including `CONSTRUCT` template slots and `DESCRIBE` targets.
+  `PreparedExecution::check_parameters_mentioned` refuses declared parameters
+  the query never mentions and names them, with presentation
+  `sparql-prepared-parameter-unmentioned`. `prepare_execution` itself still
+  admits such a parameter, because SHACL-SPARQL declares `$this` for
+  constraints that may not read it.
+
+- **core:** `loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED`, a runtime loss code. The
+  loss registry and `generated/transcode-loss-matrix.json` list it for every
+  syntax pair whose source can write an empty named graph and whose target
+  cannot. `pair_loss_ledger` never emits it as a contract entry.
+- **rdf:** `NativeRdfFormat::carries_empty_named_graphs` and
+  `empty_named_graphs_dropped(dataset, format, selection)`. The function lists
+  the declared empty named graphs that a whole-dataset serialization to a format
+  drops.
+- **Host loss reports:** each host now reports the number of declared empty
+  named graphs a whole-dataset serialization drops. Every existing field, key
+  and prototype is unchanged.
+  - Python: `SerializeLoss.empty_named_graphs_dropped` (also shown in its repr).
+  - wasm: `SerializeLoss.emptyNamedGraphsDropped`, with the TypeScript
+    declaration updated.
+  - C: the new function `purrdf_serialize_empty_named_graphs_dropped`. The C ABI
+    moves to 0.9.0 because a library exporting a new symbol must not report the
+    shipped 0.8.0.
+- **core:** `MutableDataset::declare_named_graph` and
+  `MutableDataset::declared_named_graphs`. A graph declared this way follows the
+  same withdrawal rules as an input declaration: `DROP` or `CLEAR` of the graph,
+  `DROP NAMED`/`DROP ALL`, or removing its last row withdraws it. A declaration
+  no operation touches survives. `declared_named_graphs` omits withdrawn base
+  declarations. `visit_blank_identities` visits a declared blank graph name, so
+  fresh blanks never reuse it, and `snapshot_view_with_limits` charges
+  declarations before it freezes the delta. Declaring a base graph again after
+  a mutation withdrew it restores the base's declaration, so the graph is listed
+  once.
+- **events:** `RdfEventSink::named_graph`, a method with a default
+  implementation that ignores the event. The frozen-dataset replay emits it for
+  each named graph, and `DatasetSink` keeps the declarations it receives.
+- **rdf:** `flat_dataset_from_quads_declaring`.
 
 ### Fixed
 
+- **Premise IRIs:** every entailment service that takes premise IRIs now
+  refuses one that is not an absolute IRI, such as `"::bad"`, `"lib"` or `""`,
+  and names it. Before, it was accepted silently and could never match an
+  `owl:imports` object. This applies to the shared `purrdf_validate` boundary
+  (`premise_import_map` and the string services), the C ABI, WebAssembly, and
+  Python's `purrdf.entail` functions and `Store.query_entailment_governed`. The
+  premise IRIs are checked before the import table. On Python the
+  `ValueError` carries `message_id` `premise-iri-not-absolute` and the typed
+  `presentation`.
+- **Python `Store.prepare`:** a declared parameter that the query never
+  mentions, such as `parameters=["zz"]`, raises `ValueError` naming it, with
+  `message_id` `sparql-prepared-parameter-unmentioned`. Before, it was
+  accepted and bound nothing. A declared parameter that the query uses still
+  prepares and runs. Mentions in filters, `EXISTS`, `CONSTRUCT` templates and
+  `DESCRIBE` targets all count.
+
+- **core:** `MutableDataset::snapshot_view_with_limits` no longer refuses a
+  snapshot because of terms whose rows were all removed. Its check before the
+  freeze now charges exactly the terms, payload bytes and auxiliary bytes the
+  frozen delta retains, so a limit the published snapshot meets is admitted.
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
   with a non-ASCII character where the timezone suffix would be, such as
   `"2001-01-01€12345"`, is rejected as an invalid lexical form instead of
@@ -194,6 +260,43 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `0.100000000000000006`, and `xsd:string("0.1"^^xsd:float)` is `0.1` instead
   of `0.100000001490116119`. `STR` still returns a literal's lexical form
   unchanged.
+- **rdf:** Serializing a named graph the dataset does not contain
+  (`SerializeGraph::Named` with an absent name) now emits no rows. Previously it
+  emitted the default graph's triples in place of the requested graph.
+- **rdf:** Declared empty named graphs survive JSON-LD, YAML-LD and TriX, as
+  they already did in TriG. The JSON-LD and YAML-LD writers emit
+  `{"@id": g, "@graph": []}` and their readers declare such a graph; the TriX
+  writer emits an empty named `<graph>` block and the reader declares it.
+  Documents for datasets without empty named graphs are byte-identical to
+  before; existing graph order is unchanged.
+- **core:** Packs keep declared empty named graphs, IRI- and blank-named.
+  `PackBuilder` writes each named graph that has no base quad, reifier row or
+  annotation row as a zero-row partition in the existing TRIPLES section.
+  `PackView::named_graphs`, `dataset_from_view`, `restore_pack`,
+  `SegmentedImage::from_pack_v1`, queries over a pack and
+  `purrdf convert --from pack` all return these graphs. The pack format version
+  (1) and section count (3) are unchanged. Existing packs read as before, and
+  3.0.x readers open the new packs and list their declared graphs. A dataset
+  with no declaration-only graph writes byte-identical pack bytes. The canonical
+  `rdfc_digest` never changes, because canonical N-Quads has no empty graph.
+  `PackView::named_graphs` now also lists graphs that hold only reifier or
+  annotation rows, matching the frozen dataset.
+- **cli:** `--loss-ledger` records one `empty-named-graph-dropped` entry for each
+  declared empty named graph dropped by a target that cannot write one: N-Quads,
+  HexTuples, and every single-graph syntax. Before, this loss produced an empty
+  ledger. Conversions of datasets without such graphs, and conversions to TriG,
+  TriX, JSON-LD, YAML-LD or a pack, record no entry.
+- **python:** `Store.load` and `MutableDataset.load` keep the named graphs a
+  document declares with no row. Before, the load dropped them silently. A
+  later `dump` writes them where the format allows (TriG, TriX, JSON-LD,
+  YAML-LD). A store that loaded no such graph dumps exactly as before.
+- **capi:** `purrdf_parse` keeps declared empty named graphs. Its event replay
+  used to drop them.
+- **rdf:** HexTuples now has the loss codec name `hextuples`. Its ledger entries
+  name the target instead of `unknown` and are classified against its
+  registered profile. The transcode matrix gains the HexTuples pairs:
+  quad-capable, no triple terms, so star-capable sources record
+  `rdf12-star-unrepresentable`.
 
 ## [3.0.1] - 2026-10-02
 

@@ -86,8 +86,9 @@ A caller that wants the view path opts in per call site:
    composite, delta or selection — through the one existing encoder
    (`build_bytes` over a frozen dataset is a delegation through it, so
    flat/view byte parity is structural), with the view's operational status
-   checkpointed before and after the drain. Declaration-only graphs are
-   row-derived out of a pack from either path, exactly as they always were;
+   checkpointed before and after the drain. Declaration-only graphs travel in
+   the pack from either path as zero-row named partitions of the existing
+   TRIPLES section, so the pack, unlike the frozen GTS payload below, keeps them;
    the boundary is stated on `build_view_bytes` itself.
 
 The two carriers convert in both directions at explicit, accounted boundaries:
