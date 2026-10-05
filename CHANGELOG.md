@@ -207,7 +207,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   one exemption is a variable the caller binds before evaluation:
   `SparqlParser::with_prebound_variables` declares them, a prepared execution
   declares its parameters, and SHACL-SPARQL declares `$this`, the shape
-  context and the parameters of a component or target type.
+  context and the parameters of a component or target type. A SHACL node
+  expression's query may read `$this`, the shape context and the names its
+  context binds: `value` inside `sh:expression`, a custom function's arguments
+  inside its body, and `node-expr --scope` names. Any other variable is refused
+  when the shapes graph is loaded or packed, even in an expression no focus node
+  reaches. The evaluator carries a pre-bound variable past `GROUP BY` as a
+  constant column, so `SELECT $this (COUNT(*) AS ?c) … ` run as a prepared
+  query with `$this` bound answers the bound node, not an unbound cell.
 
 ## [3.0.1] - 2026-10-02
 
