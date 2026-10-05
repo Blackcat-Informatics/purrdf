@@ -30,7 +30,7 @@ use purrdf::{
     ClosureRelations, EntailmentClosure, GovernedEntailment, JsonLdSerializeOptions,
     QueryEntailmentPlan, RdfDataset, ReasoningError, query_with_entailment_closure_governed,
 };
-use purrdf_core::{RdfDiagnostic, SparqlResult};
+use purrdf_core::{DiagnosticPresentation, RdfDiagnostic, SparqlResult};
 use purrdf_sparql_eval::protocol::{FailureCode, negotiate};
 use purrdf_sparql_eval::{
     GovernedOutcome, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
@@ -121,13 +121,17 @@ pub(crate) struct JobError {
     kind: JobErrorKind,
     diagnostic: RdfDiagnostic,
     text: ErrorText,
+    /// The engine diagnostic's typed presentation, when the failure carries one: a
+    /// SPARQL parse failure's `sparql-parse-*` condition, thrown as `presentation`.
+    presentation: Option<Box<DiagnosticPresentation>>,
 }
 
 impl JobError {
     /// An engine diagnostic, rendered as the engine renders it.
-    pub(crate) const fn diagnostic(diagnostic: RdfDiagnostic) -> Self {
+    pub(crate) fn diagnostic(diagnostic: RdfDiagnostic) -> Self {
         Self {
             kind: JobErrorKind::Error,
+            presentation: diagnostic.presentation().cloned().map(Box::new),
             diagnostic,
             text: ErrorText::Diagnostic,
         }
@@ -139,6 +143,7 @@ impl JobError {
             kind: JobErrorKind::Error,
             diagnostic: RdfDiagnostic::error(code, message),
             text: ErrorText::Message,
+            presentation: None,
         }
     }
 
@@ -148,6 +153,7 @@ impl JobError {
             kind: JobErrorKind::NotAcceptable,
             diagnostic: RdfDiagnostic::error(FailureCode::NotAcceptable.code(), message),
             text: ErrorText::Message,
+            presentation: None,
         }
     }
 
@@ -157,6 +163,7 @@ impl JobError {
             kind: JobErrorKind::Fault,
             diagnostic: RdfDiagnostic::error(FailureCode::HostFault.code(), message),
             text: ErrorText::Message,
+            presentation: None,
         }
     }
 
@@ -188,6 +195,7 @@ impl JobError {
             kind,
             diagnostic: RdfDiagnostic::error(failure.code(), message),
             text: ErrorText::Message,
+            presentation: None,
         }
     }
 
@@ -195,11 +203,17 @@ impl JobError {
     /// own failure is reported under [`ENTAILMENT_CODE`]; either reads as the reasoning
     /// layer renders it.
     fn reasoning(error: &ReasoningError) -> Self {
-        let code = match error {
-            ReasoningError::Query(diagnostic) => diagnostic.code.as_str(),
-            _ => ENTAILMENT_CODE,
+        let (code, presentation) = match error {
+            ReasoningError::Query(diagnostic) => (
+                diagnostic.code.as_str(),
+                diagnostic.presentation().cloned().map(Box::new),
+            ),
+            _ => (ENTAILMENT_CODE, None),
         };
-        Self::message(code, error.to_string())
+        Self {
+            presentation,
+            ..Self::message(code, error.to_string())
+        }
     }
 
     pub(crate) const fn kind(&self) -> JobErrorKind {
@@ -219,9 +233,28 @@ impl JobError {
         }
     }
 
-    /// The JavaScript error this failure is thrown as.
+    /// The failure's typed presentation as its JSON record (`messageId`, typed
+    /// `parameters` with exact integers as decimal strings, nested `detail`), or `None`
+    /// when it carries none.
+    pub(crate) fn presentation_json(&self) -> Option<String> {
+        self.presentation
+            .as_ref()
+            .map(|presentation| presentation.to_json().to_string())
+    }
+
+    /// The JavaScript error this failure is thrown as: its message, its `code`, and,
+    /// when it carries one, its typed `presentation`.
     pub(crate) fn to_js(&self) -> JsValue {
-        coded_error(&self.rendered(), self.code())
+        let error = CodedError::new(&self.rendered());
+        error.set_code(self.code());
+        // The record is this crate's own deterministic JSON, so `JSON.parse` accepts it;
+        // were it ever refused, the error is still thrown with its message and code.
+        if let Some(record) = self.presentation_json()
+            && let Ok(presentation) = json_parse(&record)
+        {
+            error.set_presentation(&presentation);
+        }
+        error.into()
     }
 }
 
@@ -236,6 +269,13 @@ extern "C" {
 
     #[wasm_bindgen(method, setter = code)]
     fn set_code(this: &CodedError, code: &str);
+
+    #[wasm_bindgen(method, setter = presentation)]
+    fn set_presentation(this: &CodedError, presentation: &JsValue);
+
+    /// The host's `JSON.parse`, which builds a presentation record as a plain object.
+    #[wasm_bindgen(catch, js_namespace = JSON, js_name = parse)]
+    fn json_parse(text: &str) -> Result<JsValue, JsValue>;
 
     /// The host's `TypeError` constructor, for an argument of the wrong type.
     #[wasm_bindgen(js_name = TypeError)]
@@ -779,6 +819,53 @@ impl OperationInput<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A parse failure keeps the parser's typed presentation on both the direct and the
+    /// entailment lane, with its message unchanged; a failure without one carries none.
+    #[test]
+    fn parse_failures_keep_their_typed_presentation() {
+        let engine = NativeSparqlEngine::new();
+        for (query, identity) in [
+            ("ASK {", "sparql-parse-syntax"),
+            ("ASK { ?s ?p \"unterminated", "sparql-parse-lex"),
+            ("SELECT * WHERE { <relative> ?p ?o }", "sparql-parse-iri"),
+        ] {
+            let original = engine
+                .prepare_query(query, None)
+                .expect_err("refused query");
+            let expected = original
+                .presentation()
+                .expect("parse presentation")
+                .to_json()
+                .to_string();
+            assert!(expected.contains(identity), "{expected}");
+            let direct = JobError::diagnostic(original.clone());
+            assert_eq!(
+                direct.presentation_json().as_deref(),
+                Some(expected.as_str())
+            );
+            assert_eq!(direct.rendered(), original.to_string());
+            let reasoning = JobError::reasoning(&ReasoningError::Query(original.clone()));
+            assert_eq!(
+                reasoning.presentation_json().as_deref(),
+                Some(expected.as_str())
+            );
+            assert_eq!(
+                reasoning.rendered(),
+                ReasoningError::Query(original).to_string()
+            );
+        }
+        assert!(
+            JobError::diagnostic(RdfDiagnostic::error("native-sparql-eval", "x"))
+                .presentation_json()
+                .is_none()
+        );
+        assert!(
+            JobError::message("purrdf-wasm-usage", "x")
+                .presentation_json()
+                .is_none()
+        );
+    }
 
     /// Every failure renders in its own words, the stack refusals included: the
     /// evaluator's shadow-stack refusal and the host-stack refusal read exactly as the
