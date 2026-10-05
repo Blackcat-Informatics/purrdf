@@ -189,7 +189,10 @@ impl Configuration {
         let _scope = enter(self.clone());
         let result = operation();
         match take_cause() {
-            Some(cause) => Err(RunError::Cause(cause)),
+            Some(cause) => Err(RunError::Cause {
+                cause,
+                execution: result.err().map(Box::new),
+            }),
             None => result.map_err(RunError::Execution),
         }
     }
@@ -218,15 +221,28 @@ impl Cause {
 
 #[derive(Debug)]
 pub(crate) enum RunError<E> {
-    Cause(Cause),
+    Cause {
+        cause: Cause,
+        // The paired caller payload is allocated only on this error path.
+        execution: Option<Box<E>>,
+    },
     Execution(E),
 }
 
 impl<E> RunError<E> {
-    fn into_public(self, map: impl FnOnce(E) -> XPathValidationError) -> XPathValidationError {
+    /// Let the caller resolve its actual typed payload and associated native cause.
+    pub(crate) fn into_parts(self) -> (Option<Cause>, Option<E>) {
         match self {
-            Self::Cause(cause) => cause.into_public(),
-            Self::Execution(error) => map(error),
+            Self::Cause { cause, execution } => (Some(cause), execution.map(|error| *error)),
+            Self::Execution(error) => (None, Some(error)),
+        }
+    }
+
+    fn into_public(self, map: impl FnOnce(E) -> XPathValidationError) -> XPathValidationError {
+        match self.into_parts() {
+            (Some(cause), _) => cause.into_public(),
+            (None, Some(error)) => map(error),
+            (None, None) => unreachable!("a refused run retains at least one actual error"),
         }
     }
 }

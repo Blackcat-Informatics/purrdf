@@ -18,6 +18,67 @@ const SHAPES: &str = r#"
 "#;
 
 #[test]
+fn query_refusal_retains_the_callers_execution_capsule_until_resolution() {
+    let data = crate::text_ingest::parse_turtle_to_dataset(
+        "<http://example.org/a> <http://example.org/p> \"a\" .",
+        None,
+    )
+    .unwrap();
+    let preparation = PreparedShapes::new(Arc::new(
+        crate::engine::parse_shapes(
+            r#"
+                @prefix sh: <http://www.w3.org/ns/shacl#> .
+                @prefix ex: <http://example.org/> .
+                ex:S a sh:NodeShape; sh:class ex:Missing;
+                    sh:target [ a sh:SPARQLTarget; sh:select '''
+                        SELECT ?this WHERE {
+                            ?this <http://example.org/p> ?value .
+                            FILTER(REGEX(?value, "a"))
+                        }
+                    ''' ] .
+            "#,
+            None,
+        )
+        .unwrap(),
+    ));
+    let configuration = preparation.xpath_configuration(
+        Profile::Xpath31,
+        Limits::new().with(Resource::MatchSteps, 0),
+    );
+    let capsule = Arc::new(());
+    let result = configuration.run(|| {
+        preparation
+            .bind_shared_dataset(Arc::clone(&data))
+            .map_err(|error| (error, Arc::clone(&capsule)))
+    });
+    assert!(result.is_err(), "the actual target query must be refused");
+    assert_eq!(
+        Arc::strong_count(&capsule),
+        2,
+        "the caller's actual execution capsule must survive its paired query diagnostic"
+    );
+    let error = result
+        .unwrap_err()
+        .into_public(|(error, _capsule)| XPathValidationError::Shapes(error));
+    assert!(
+        matches!(error, XPathValidationError::Query(diagnostic) if diagnostic.code == Resource::MatchSteps.code())
+    );
+    assert_eq!(Arc::strong_count(&capsule), 1);
+    assert!(current().is_none());
+    assert_eq!(
+        preparation
+            .with_xpath_regex(Profile::Xpath31, Limits::new())
+            .bind_shared_dataset(data)
+            .unwrap()
+            .validate()
+            .unwrap()
+            .results
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn temporary_pattern_cells_do_not_extend_the_declaration_cache() {
     let prepared =
         PreparedShapes::new(Arc::new(crate::engine::parse_shapes(SHAPES, None).unwrap()));
