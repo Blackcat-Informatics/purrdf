@@ -497,18 +497,12 @@ handle, so a round trip cannot be witnessed with `==`. The witness is the bytes.
 **This codec supplies the canonical form, and hence the equality relation the
 types themselves lack**: two values are equal exactly when they encode alike.
 
-Determinism across *targets* is asserted the same way the geometry crate asserts
-its own, and for the same reason — two runs on one target cannot tell a codec that
-is target-independent from one that merely agrees with whichever target it was
-last compiled for. One test body per case, on one `harness = false` runner: natively
-`cargo test` runs the named cases, and on `wasm32-unknown-unknown` the `make
-wasm-test` lane runs the same named cases in Node through
-`scripts/wasm-test-runner.sh`. Both runs assert against a golden byte string committed
-under `tests/fixtures/` and produced by a *native* build, so the native run is not
-a weaker version of the wasm one — it is the other half of the comparison. Nothing
-in that test opens a file; the shapes graph, the data graph and the golden product
-are compile-time constants, because a wasm32 test needing a filesystem would be
-proving something about the runner's shims rather than about the codec.
+Native Rust runs the complete prepared-product lifecycle, committed encoding
+and restoration goldens, and W3C SHACL conformance cases. `make wasm` builds the
+codec for the WASM target; `make wasm-pkg-test` exercises the actual JavaScript
+binding and identity ABI. General codec semantics remain native. The named
+WASM behaviors and native owners are in
+[WASM test ownership](../WASM_TESTING.md).
 
 The codec itself touches no filesystem, no clock, no thread and no source of
 randomness at any layer — envelope, identity, dataset section, model section — and

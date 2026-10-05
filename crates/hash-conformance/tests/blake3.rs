@@ -197,7 +197,7 @@ fn random_inputs_cover_irregular_trees_and_alignment() {
 }
 
 // A small independent-answer slice of the frozen corpus, suitable for Miri.
-// The full corpus above remains the native and wasm conformance requirement.
+// The full frozen corpus above remains the native conformance requirement.
 fn streaming_boundary_answers() {
     let data: Vec<u8> = (0..16385).map(|i| (i % 251) as u8).collect();
     let cases = [

@@ -190,10 +190,12 @@ path component (bytes outside `[A-Za-z0-9._-]`, and a leading `.`, are written
 | `outliers` | `low_severe`, `low_mild`, `high_mild`, `high_severe` counts |
 | `throughput` | `null`, or `{"kind": "bytes" \| "elements", "per_iteration": N}` |
 
-On `wasm32-unknown-unknown` a bench binary runs in Node under
-`scripts/wasm-test-runner.sh` (`make wasm-test` runs the hash benches that way
-under `--test`); there is no file system, so the store options are refused and
-estimates are printed, not written.
+On `wasm32-unknown-unknown` a bench binary can run in Node under
+`scripts/wasm-test-runner.sh`; there is no file system, so the store options are
+refused and estimates are printed, not written. `make wasm-test` selects the
+bench harness's host-clock and store-refusal probes. General benchmark routines,
+statistics, arguments and record semantics are tested natively. The exact
+target obligations and native owners are in [WASM test ownership](WASM_TESTING.md).
 
 ### Native benchmark inventory
 

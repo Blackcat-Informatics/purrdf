@@ -1,28 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The native half of `purrdf-hnsw`'s cross-target determinism proof.
+//! Native index determinism under one, two, four and eight worker threads.
 //!
-//! This crate claims that a build is a **pure function of its input**: the same corpus
-//! under the same parameters produces the same canonical byte image no matter how many
-//! rayon workers ran, and no matter whether the target is native or
-//! `wasm32-unknown-unknown`. That is an argument, and an argument is not evidence — the
-//! failure mode determinism exists to prevent produces no symptom at all. So the claim is
-//! made *observable*.
-//!
-//! [`GOLDEN_DIGEST`] is the one constant in the tree. This target is `harness = false` on
-//! the shared test runner, so the same named cases run natively under `cargo test` and on
-//! `wasm32-unknown-unknown` in Node under `scripts/wasm-test-runner.sh`, each asserting the
-//! same golden; natively it also pins the digest at four worker counts, which wasm32, with
-//! no threads, cannot run. Each case that computes a digest prints it on a
-//! `determinism-digest` line, and `scripts/check-hnsw-determinism.sh` runs the target
-//! natively, on wasm32 and on wasm32 with `+simd128`, reads the goldens out of this file,
-//! and fails unless every named case reports the same digest on every build and those
-//! digests are the goldens. The digests are computed inside [`without_host_clock_or_entropy`](purrdf_testkit::harness::without_host_clock_or_entropy),
-//! so on wasm32 a build that reached a host clock or entropy source fails by that source's
-//! name. The digest itself is FNV-1a ([`purrdf_hash::fnv`]) over the canonical payload
-//! bytes — see [`purrdf_hnsw::determinism`] — so a moved golden is a serialization defect
-//! and never a hasher change.
+//! The complete target runs under `cargo test` and pins canonical image bytes
+//! against committed FNV-1a digests. WASM selections exercise actual arithmetic
+//! paths, build-shape identity and foreign-path refusal separately.
 //!
 //! # Why a serial insert must differ
 //!
@@ -34,11 +17,8 @@
 //! # When this test fails
 //!
 //! A moved digest is not automatically a bug — a deliberate change to the builder or the
-//! canonical image will move it — but it is never nothing. Re-run
-//! `scripts/check-hnsw-determinism.sh`: if native and wasm still agree and only the golden
-//! is stale, the change is a behaviour change and the pull request must say WHICH output
-//! moved and why. If native and wasm DISAGREE, the portability guarantee has broken and
-//! the digest is the least interesting part of the problem.
+//! canonical image will move it. Identify which output changed and why before
+//! updating the golden, and explain a deliberate behavior change in review.
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
@@ -50,9 +30,7 @@ use rayon::ThreadPoolBuilder;
 
 /// The pinned digest of the profile-rule build.
 ///
-/// `scripts/check-hnsw-determinism.sh` reads this constant out of this file by name rather
-/// than restating it, so there is exactly one copy in the tree and the native assertion
-/// and the wasm assertion cannot drift apart.
+/// The complete native worker-count corpus shares this one committed constant.
 ///
 /// Moved when distances began folding in the sixteen-lane tree order and the image header
 /// began carrying the arithmetic field: every recorded distance bit and the header both
