@@ -135,5 +135,7 @@ def test_reassigning_the_parameter_is_refused_and_a_fresh_variable_is_not() -> N
         else:
             raise AssertionError(f"{query} must be refused")
     assert _values(
-        f"SELECT ?value WHERE {{ BIND(<{EX}b> AS ?fresh) ?fresh <{EX}p> ?value }}"
+        # Reads the parameter, so the binding refuses no unmentioned declaration.
+        f"SELECT ?value WHERE {{ BIND(<{EX}b> AS ?fresh) ?fresh <{EX}p> ?value "
+        f"FILTER(BOUND($this)) }}"
     ) == {purrdf.NamedNode(f"{EX}o3")}

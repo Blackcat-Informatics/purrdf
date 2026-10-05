@@ -195,7 +195,7 @@ const ROWS: &[Row] = &[
     Row {
         name: "BIND over a fresh variable (the valid neighbour)",
         query: "SELECT ?value WHERE { BIND(<http://example.org/b> AS ?fresh) \
-                ?fresh <http://example.org/p> ?value }",
+                ?fresh <http://example.org/p> ?value FILTER(BOUND($this)) }",
         engine_binds: &[],
         node_scope: &[],
         expected: || values(["<http://example.org/o3>".to_owned()]),
