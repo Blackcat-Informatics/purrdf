@@ -31,6 +31,7 @@ enum Rule {
 }
 
 impl Rule {
+    /// The stable diagnostic label and explanation for this refusal class.
     const fn message(self) -> &'static str {
         match self {
             Self::Feature => "[cfg-feature] Rust cfg(feature = ...) use is forbidden",
@@ -40,10 +41,12 @@ impl Rule {
     }
 }
 
+/// Match an identifier, including its equivalent raw-identifier spelling.
 fn ident(token: Option<&TokenTree>, name: &str) -> bool {
     matches!(token, Some(TokenTree::Ident(value)) if value.to_string().trim_start_matches("r#") == name)
 }
 
+/// Match one punctuation token without interpreting literals as source code.
 fn punct(token: Option<&TokenTree>, value: char) -> bool {
     matches!(token, Some(TokenTree::Punct(found)) if found.as_char() == value)
 }
@@ -202,6 +205,9 @@ fn token_findings(source: &str, feature: bool) -> Result<Vec<(usize, Rule)>, Str
         .collect())
 }
 
+/// Walk the governed Rust sources, returning deterministic diagnostics and the
+/// number read. Missing directories, read failures and invalid tokens refuse
+/// verification rather than silently omitting a source.
 fn source_findings(
     root: &Path,
     directory: &Path,
@@ -239,6 +245,8 @@ fn source_findings(
     Ok((findings, sources.len()))
 }
 
+/// Check workspace members' Cargo feature maps against their exact allowed
+/// declarations. External packages are outside this first-party policy.
 fn feature_maps(metadata: &Value) -> Result<Vec<String>, String> {
     let members = metadata["workspace_members"]
         .as_array()
@@ -298,6 +306,8 @@ fn feature_maps(metadata: &Value) -> Result<Vec<String>, String> {
     Ok(findings)
 }
 
+/// Verify Cargo's locked workspace metadata and every governed Rust source:
+/// only the empty cargo-c marker may be declared, and it gates no code.
 pub(crate) fn no_features(root: &Path) -> Result<ExitCode, String> {
     let output = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
@@ -322,6 +332,8 @@ pub(crate) fn no_features(root: &Path) -> Result<ExitCode, String> {
     ))
 }
 
+/// Refuse test predicates and test attributes below the Python extension's
+/// Rust source directory, whose extension-module library cannot run libtest.
 pub(crate) fn python_binding_tests(root: &Path) -> Result<ExitCode, String> {
     let (findings, count) = source_findings(root, &root.join(PYTHON_SOURCE), false)?;
     if findings.is_empty() {
@@ -333,6 +345,7 @@ pub(crate) fn python_binding_tests(root: &Path) -> Result<ExitCode, String> {
     ))
 }
 
+/// Emit the policy explanation and findings on refusal; success is silent.
 fn report(findings: &[String], meaning: &str) -> ExitCode {
     if findings.is_empty() {
         ExitCode::SUCCESS
@@ -504,10 +517,13 @@ const TEST_CASES: &[(&str, &str, bool)] = &[
     ),
 ];
 
+/// Build the two-member metadata fixture from the supplied feature-map JSON.
 fn metadata_with(features: &str, ordinary: &str) -> Value {
     json::read(&format!("{{\"workspace_members\":[\"capi\",\"ordinary\"],\"packages\":[{{\"id\":\"capi\",\"name\":\"purrdf-capi\",\"features\":{features}}},{{\"id\":\"ordinary\",\"name\":\"ordinary\",\"features\":{ordinary}}}]}}" )).expect("fixture JSON")
 }
 
+/// Run refusal vectors and their valid neighbors for the shared self-test,
+/// including malformed metadata and unbalanced-token hard failures.
 pub(crate) fn self_test_cases() -> Vec<(&'static str, bool)> {
     let mut cases = Vec::new();
     for (feature, fixtures) in [(true, FEATURE_CASES), (false, TEST_CASES)] {
@@ -571,6 +587,8 @@ mod tests {
     };
 
     #[test]
+    /// All scanner and feature-map vectors hold, and alternate cfg! delimiters
+    /// also compile independently of the scanner's token interpretation.
     fn all_policy_negative_vectors_and_valid_neighbors_hold() {
         // These compile as cfg! invocations, independently of our token reader.
         const {
@@ -583,11 +601,13 @@ mod tests {
     }
 
     #[test]
+    /// Preserve the former guard's four source anchors and refusal classes.
     fn lines_and_rules_match_the_former_dead_test_guard() {
         assert_eq!(token_findings("\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn f() {}\n}\n\n#[cfg(all(test, unix))]\nconst X: &str = \"x\";\n\n#[cfg_attr(test, derive(Debug))]\nstruct S;", false).expect("tokens"), [(2, Rule::CfgTest), (4, Rule::TestAttribute), (8, Rule::CfgTest), (11, Rule::CfgTest)]);
     }
 
     #[test]
+    /// A missing source boundary fails; an existing empty boundary is verified.
     fn missing_governed_directory_fails_and_empty_directory_passes() {
         let dir = purrdf_testkit::TempDir::for_unit_test().expect("temp dir");
         assert!(python_binding_tests(dir.path()).is_err());
@@ -599,6 +619,7 @@ mod tests {
     }
 
     #[test]
+    /// Build output and sibling worktrees cannot become feature-policy inputs.
     fn the_source_walk_excludes_build_and_sibling_trees() {
         let dir = purrdf_testkit::TempDir::for_unit_test().expect("temp dir");
         for path in ["target/a.rs", ".worktrees/b.rs", ".git/c.rs"] {
@@ -614,6 +635,7 @@ mod tests {
     }
 
     #[test]
+    /// Dependency-package features cannot be mistaken for workspace features.
     fn feature_maps_ignore_packages_outside_the_workspace() {
         let mut metadata = metadata_with("{\"capi\":[]}", "{}");
         let external =
@@ -627,6 +649,7 @@ mod tests {
     }
 
     #[test]
+    /// A directory named target inside the governed Python tree has no escape.
     fn python_sources_have_no_build_directory_exemption() {
         let dir = purrdf_testkit::TempDir::for_unit_test().expect("temp dir");
         let source = dir.path().join("bindings/python/src/target/hidden.rs");
