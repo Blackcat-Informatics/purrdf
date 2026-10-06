@@ -24,12 +24,18 @@ use purrdf_sparql_eval::{InternedOutcome, NativeSparqlEngine, QueryOptions, Shac
 
 const EX: &str = "http://example.org/";
 
-/// `ex:a ex:p ex:o1, ex:o2 . ex:b ex:p ex:o3 .`
+/// `ex:a ex:p ex:o1, ex:o2 ; ex:q ex:x . ex:b ex:p ex:o3 ; ex:q ex:y .`
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    for (s, o) in [("a", "o1"), ("a", "o2"), ("b", "o3")] {
+    for (s, p, o) in [
+        ("a", "p", "o1"),
+        ("a", "p", "o2"),
+        ("b", "p", "o3"),
+        ("a", "q", "x"),
+        ("b", "q", "y"),
+    ] {
         let s = builder.intern_iri(&format!("{EX}{s}"));
+        let p = builder.intern_iri(&format!("{EX}{p}"));
         let o = builder.intern_iri(&format!("{EX}{o}"));
         builder.push_quad(s, p, o, None);
     }
@@ -431,5 +437,146 @@ fn a_prepared_execution_honours_its_declared_pre_bound_names() {
             &["this"]
         ),
         None
+    );
+}
+
+fn iri(local: &str) -> TermValue {
+    TermValue::Iri(format!("{EX}{local}"))
+}
+
+/// The three `ex:p` rows as `(?x, ?o)`.
+fn every_p_row() -> Vec<Row> {
+    [("a", "o1"), ("a", "o2"), ("b", "o3")]
+        .into_iter()
+        .map(|(x, o)| vec![cell("x", iri(x)), cell("o", iri(o))])
+        .collect()
+}
+
+/// The request-substitution lanes answer `query` with exactly `expected`. For a
+/// query that never mentions `?this`, which a prepared execution refuses as
+/// declaring a parameter nothing reads.
+fn assert_every_substitution_lane(query: &str, expected: &[Row]) {
+    let expected = sorted(expected.to_vec());
+    for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+        assert_eq!(substituted(query, lane), expected, "{lane:?}: {query}");
+    }
+}
+
+/// The bound value is one value for the whole evaluation, so `MINUS` sees it on both
+/// operands: each side's rows carry `?this = ex:a`, whether the side assigns it, reads
+/// it, or neither. A right row compatible with the bound value therefore shares
+/// `?this` with every left row and subtracts it; a right side with no row, or one
+/// whose `?this` is incompatible, subtracts nothing. An assignment of the bound value
+/// on the left is a row carrying `?this` like any other.
+#[test]
+fn a_minus_subtracts_with_the_bound_value_on_both_sides() {
+    let p = format!("<{EX}p>");
+    let q = format!("<{EX}q>");
+    for (query, subtracts) in [
+        // Assigned on the left, a VALUES of the bound value on the right.
+        (
+            format!(
+                "SELECT ?x ?o WHERE {{ {{ ?x {p} ?o BIND(<{EX}a> AS ?this) }} \
+                 MINUS {{ VALUES ?this {{ <{EX}a> }} }} }}"
+            ),
+            true,
+        ),
+        (
+            format!(
+                "SELECT ?x ?o WHERE {{ {{ ?x {p} ?o BIND(<{EX}a> AS ?this) }} \
+                 MINUS {{ VALUES ?this {{ <{EX}b> }} }} }}"
+            ),
+            false,
+        ),
+        // Assigned on the right.
+        (
+            format!("SELECT ?x ?o WHERE {{ {{ ?x {p} ?o }} MINUS {{ BIND(<{EX}a> AS ?this) }} }}"),
+            true,
+        ),
+        (
+            format!("SELECT ?x ?o WHERE {{ {{ ?x {p} ?o }} MINUS {{ BIND(<{EX}b> AS ?this) }} }}"),
+            false,
+        ),
+        // Read on the right only, and read on both sides: the same answer.
+        (
+            format!(
+                "SELECT ?x ?o WHERE {{ ?x {p} ?o . <{EX}a> {q} ?any MINUS {{ ?this {q} ?w }} }}"
+            ),
+            true,
+        ),
+        (
+            format!("SELECT ?x ?o WHERE {{ ?x {p} ?o . ?this {q} ?any MINUS {{ ?this {q} ?w }} }}"),
+            true,
+        ),
+        // A VALUES of the bound value, and of another value, with no read on the left.
+        (
+            format!("SELECT ?x ?o WHERE {{ ?x {p} ?o MINUS {{ VALUES ?this {{ <{EX}a> }} }} }}"),
+            true,
+        ),
+        (
+            format!("SELECT ?x ?o WHERE {{ ?x {p} ?o MINUS {{ VALUES ?this {{ <{EX}b> }} }} }}"),
+            false,
+        ),
+    ] {
+        let expected = if subtracts { Vec::new() } else { every_p_row() };
+        assert_every_lane(&query, &expected);
+    }
+    // A right side that never mentions `?this` still carries it: any right row
+    // subtracts, and a right side with no row subtracts nothing.
+    assert_every_substitution_lane(
+        &format!("SELECT ?x ?o WHERE {{ ?x {p} ?o MINUS {{ ?s {q} ?w }} }}"),
+        &[],
+    );
+    assert_every_substitution_lane(
+        &format!("SELECT ?x ?o WHERE {{ ?x {p} ?o MINUS {{ <{EX}z> {q} ?w }} }}"),
+        &every_p_row(),
+    );
+    // Inside EXISTS, the same rule.
+    assert_every_lane(
+        &format!("SELECT ?this WHERE {{ FILTER EXISTS {{ ?x {p} ?o MINUS {{ ?s {q} ?w }} }} }}"),
+        &[],
+    );
+    assert_every_lane(
+        &format!(
+            "SELECT ?this WHERE {{ FILTER EXISTS {{ ?x {p} ?o MINUS {{ <{EX}z> {q} ?w }} }} }}"
+        ),
+        &[vec![cell("this", a())]],
+    );
+}
+
+/// A sub-`SELECT` that assigns `?this` without projecting it binds a variable of its
+/// own inside `EXISTS` too: `ex:z` there is not the bound `ex:a`, and the sub-`SELECT`
+/// has its row. Projected, the assigned `ex:z` joins with the bound `ex:a` and has none.
+#[test]
+fn an_unprojected_sub_select_inside_exists_binds_its_own_variable() {
+    let body = format!("WHERE {{ BIND(<{EX}z> AS ?this) <{EX}a> <{EX}q> ?x }}");
+    assert_every_lane(
+        &format!("SELECT ?this WHERE {{ FILTER EXISTS {{ {{ SELECT ?x {body} }} }} }}"),
+        &[vec![cell("this", a())]],
+    );
+    assert_every_lane(
+        &format!("SELECT ?this WHERE {{ FILTER NOT EXISTS {{ {{ SELECT ?x {body} }} }} }}"),
+        &[],
+    );
+    assert_every_lane(
+        &format!("SELECT ?this WHERE {{ FILTER EXISTS {{ {{ SELECT ?this ?x {body} }} }} }}"),
+        &[],
+    );
+}
+
+/// A query whose `WHERE` is a lone sub-`SELECT` that does not project `?this` still
+/// answers with the bound column, exactly as it does beside an unrelated pattern.
+#[test]
+fn a_where_of_a_lone_sub_select_carries_the_bound_column() {
+    let sub = format!("{{ SELECT ?x WHERE {{ <{EX}b> <{EX}p> ?x }} }}");
+    let row = || vec![cell("this", a()), cell("x", iri("o3"))];
+    assert_every_lane(&format!("SELECT ?this ?x WHERE {{ {sub} }}"), &[row()]);
+    assert_every_lane(
+        &format!("SELECT ?this ?x WHERE {{ ?s <{EX}q> ?q {sub} }}"),
+        &[row(), row()],
+    );
+    assert_every_lane(
+        &format!("SELECT ?this ?x WHERE {{ {sub} ?s <{EX}q> ?q }}"),
+        &[row(), row()],
     );
 }

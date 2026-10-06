@@ -396,34 +396,27 @@ def test_prepare_parameter_reaches_inside_optional() -> None:
 
     # Parity: `Store.query` given `?this` as an ordinary substitution must agree.
     direct_alice = _rows(
-        store.query(query, substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}alice")})
+        store.query(
+            query,
+            substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}alice")},
+        )
     )
     assert direct_alice == rows_alice
 
 
-def test_prepare_parameter_reaches_inside_minus_and_respects_domain_disjointness() -> (
+def test_prepare_parameter_reaches_inside_minus_and_sees_the_bound_value_on_both_sides() -> (
     None
 ):
-    """(h) `?this` reaches a `MINUS`'s right arm — and only when the fixture keeps
-    `MINUS`'s own domain-disjointness rule satisfied.
+    """(h) `?this` reaches a `MINUS`'s right arm, and both arms carry it.
 
-    `MINUS`'s right arm shares no columns with its output (unlike `OPTIONAL`'s):
-    `Minus{Omega1, Omega2}` keeps only `Omega1`'s schema, and the SPARQL spec says a
-    row of `Omega1` survives whenever it shares NO variable with `Omega2` at all — a
-    `MINUS` whose right arm is disjoint from the left removes nothing, no matter
-    what it says. So a parameter can only ever restrict a genuine `MINUS` by being
-    the SAME variable on both arms; that is not a workaround, it is what "the
-    parameter reaches inside `MINUS`" has to mean here.
-
-    Fixture: `c1`/`c2` are owned by `alice`, `c3` by `bob`; `alice` alone is
-    blocked. A genuine `MINUS` (right arm shares `?this` with left) removes every
-    candidate owned by the bound value when, and only when, that value is blocked —
-    `this=alice` empties the answer, `this=bob` keeps `c3`, two DIFFERENT specific
-    answers a dropped binding could not produce (it would answer the same set
-    either way). The SAME parameter value run through a VACUOUS `MINUS` (right arm
-    uses `?owner`, not `?this` — no shared variable) removes nothing regardless,
-    which is the control that shows the genuine case is doing real work and not
-    just returning fewer rows by coincidence.
+    A parameter is one value for the whole evaluation, so both arms of a `MINUS`
+    carry `?this = value` whether or not an arm mentions it: a right row that agrees
+    with the bound value removes every left row, and a right arm with no row for the
+    value removes nothing. `c1`/`c2` are owned by `alice`, `c3` by `bob`; `alice`
+    alone is blocked, so the right arm has a row for `alice` and none for `bob`.
+    Reading `?this` as the owner, `alice` empties the answer and `bob` keeps `c3`,
+    two answers a dropped binding could not produce. With a left arm that never
+    mentions `?this`, `alice` still removes every candidate and `bob` none.
     """
     store = purrdf.Store()
     store.load(
@@ -433,44 +426,24 @@ def test_prepare_parameter_reaches_inside_minus_and_respects_domain_disjointness
         f"<{EX}alice> <{EX}blocked> <{YES}> .\n",
         purrdf.RdfFormat.N_TRIPLES,
     )
-    genuine = f"""
-    SELECT ?candidate WHERE {{
-      ?candidate <{EX}ownedBy> ?this .
-      MINUS {{ ?this <{EX}blocked> <{YES}> }}
-    }}
-    """
-    vacuous = f"""
-    SELECT ?candidate WHERE {{
-      ?candidate <{EX}ownedBy> ?owner .
-      MINUS {{ ?this <{EX}blocked> <{YES}> }}
-    }}
-    """
-    prepared_genuine = store.prepare(genuine, parameters=["this"])
-    prepared_vacuous = store.prepare(vacuous, parameters=["this"])
-
-    # Genuine MINUS: owner alice is blocked, so every candidate alice owns is
-    # removed — the answer is EMPTY, not merely smaller.
-    assert _rows(prepared_genuine.run(this=purrdf.NamedNode(f"{EX}alice"))) == set()
-    # The neighbour: owner bob is not blocked, so bob's candidate survives.
-    assert _rows(prepared_genuine.run(this=purrdf.NamedNode(f"{EX}bob"))) == {
-        (f"{EX}c3",)
-    }
-
-    # Vacuous MINUS: `?this` shares no variable with the left arm, so the SAME
-    # blocked value removes NOTHING — all three candidates answer, including the
-    # ones a genuine `MINUS` over the same value emptied out above.
-    assert _rows(prepared_vacuous.run(this=purrdf.NamedNode(f"{EX}alice"))) == {
-        (f"{EX}c1",),
-        (f"{EX}c2",),
-        (f"{EX}c3",),
-    }
-
-    # Parity: `Store.query` with the same value as an ordinary substitution agrees
-    # on the genuine case.
-    direct = _rows(
-        store.query(genuine, substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}bob")})
-    )
-    assert direct == {(f"{EX}c3",)}
+    alice, bob = purrdf.NamedNode(f"{EX}alice"), purrdf.NamedNode(f"{EX}bob")
+    every = {(f"{EX}c1",), (f"{EX}c2",), (f"{EX}c3",)}
+    for owner, cases in [
+        ("?this", [(alice, set()), (bob, {(f"{EX}c3",)})]),
+        ("?owner", [(alice, set()), (bob, every)]),
+    ]:
+        query = f"""
+        SELECT ?candidate WHERE {{
+          ?candidate <{EX}ownedBy> {owner} .
+          MINUS {{ ?this <{EX}blocked> <{YES}> }}
+        }}
+        """
+        prepared = store.prepare(query, parameters=["this"])
+        for value, expected in cases:
+            assert _rows(prepared.run(this=value)) == expected, (owner, value)
+            # Parity: `Store.query` with the same value as a substitution agrees.
+            direct = store.query(query, substitutions={purrdf.Variable("this"): value})
+            assert _rows(direct) == expected, (owner, value)
 
 
 def test_prepare_parameter_reaches_inside_exists() -> None:
@@ -519,7 +492,10 @@ def test_prepare_parameter_reaches_inside_exists() -> None:
 
     # Parity: `Store.query` given `?this` as an ordinary substitution agrees.
     direct = _rows(
-        store.query(query, substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}carol")})
+        store.query(
+            query,
+            substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}carol")},
+        )
     )
     assert direct == {(f"{EX}alice",)}
 
@@ -570,7 +546,10 @@ def test_prepare_parameter_reaches_inside_a_sub_select() -> None:
 
     # Parity: `Store.query` given `?this` as an ordinary substitution agrees.
     direct = _rows(
-        store.query(query, substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}alice")})
+        store.query(
+            query,
+            substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}alice")},
+        )
     )
     assert direct == rows_alice
 
@@ -705,7 +684,9 @@ ex:a rel:walk ( ex:decoyEnd ex:decoyPath ex:decoyLen ex:decoyStep ex:decoyNode e
 def _walk_relations() -> dict[str, object]:
     """One `ex:p`-forward step, with every envelope field stated explicitly: there is
     no default `min_hops`, no default `max_hops` and no default guard."""
-    return {WALK: ([(purrdf.NamedNode(f"{EX}p"), "forward")], 1, 4, 1024, 100_000, "walk")}
+    return {
+        WALK: ([(purrdf.NamedNode(f"{EX}p"), "forward")], 1, 4, 1024, 100_000, "walk")
+    }
 
 
 def _walk_rows(solutions: object) -> list[tuple[str, str, str, str]]:
@@ -747,7 +728,9 @@ def test_a_from_graph_relation_is_rebuilt_from_the_store_on_every_run() -> None:
     from passing either.
     """
     store = _store_with_table_and_control_triple()
-    prepared = store.prepare(SELECT_MEMBERS, relations_from_graph=_from_graph_relations())
+    prepared = store.prepare(
+        SELECT_MEMBERS, relations_from_graph=_from_graph_relations()
+    )
 
     before = _pairs(prepared.run())
     assert before == _TABLE_FIRST_TWO_ROWS
@@ -763,7 +746,9 @@ def test_a_from_graph_relation_is_rebuilt_from_the_store_on_every_run() -> None:
     # Parity: a handle prepared AFTER the mutation, and `Store.query` itself, answer
     # the same rows — so "after" is the store's real content and not a third reading.
     assert (
-        _pairs(store.query(SELECT_MEMBERS, relations_from_graph=_from_graph_relations()))
+        _pairs(
+            store.query(SELECT_MEMBERS, relations_from_graph=_from_graph_relations())
+        )
         == after
     )
 
@@ -797,7 +782,9 @@ def test_a_path_relation_traverses_the_stores_edges_as_they_are_on_every_run() -
     ]
 
     # Parity with the door that never held a snapshot at all.
-    assert _walk_rows(store.query(WALK_QUERY, path_relations=_walk_relations())) == after
+    assert (
+        _walk_rows(store.query(WALK_QUERY, path_relations=_walk_relations())) == after
+    )
 
 
 SELECT_TEAM_OF = f"SELECT ?team WHERE {{ ?this <{MEMBER_OF}> ?team }}"
@@ -818,7 +805,9 @@ def test_a_parameter_binds_against_the_rebuilt_relation_not_the_one_prepare_buil
     """
     store = _store_with_table_and_control_triple()
     prepared = store.prepare(
-        SELECT_TEAM_OF, parameters=["this"], relations_from_graph=_from_graph_relations()
+        SELECT_TEAM_OF,
+        parameters=["this"],
+        relations_from_graph=_from_graph_relations(),
     )
     assert prepared.parameters == ["this"]
 
@@ -862,7 +851,9 @@ def test_prepare_honours_relations_from_graph_against_a_control_row_that_would_d
     _append_third_table_row(store)
 
     honoured = _pairs(
-        store.prepare(SELECT_MEMBERS, relations_from_graph=_from_graph_relations()).run()
+        store.prepare(
+            SELECT_MEMBERS, relations_from_graph=_from_graph_relations()
+        ).run()
     )
     assert honoured == _HONOURED_ROWS
     assert _DROPPED_ROW not in honoured
@@ -887,7 +878,9 @@ def test_prepare_honours_path_relations_against_a_control_row_that_would_differ_
     store = purrdf.Store()
     store.load(_THREE_HOP_CHAIN_WITH_DECOY_TTL, purrdf.RdfFormat.TURTLE)
 
-    honoured = _walk_rows(store.prepare(WALK_QUERY, path_relations=_walk_relations()).run())
+    honoured = _walk_rows(
+        store.prepare(WALK_QUERY, path_relations=_walk_relations()).run()
+    )
     assert honoured == _SIX_WALK_ROWS
     assert _DECOY_WALK_ROW not in honoured
 
