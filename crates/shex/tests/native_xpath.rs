@@ -391,3 +391,108 @@ fn interned_labeled_verdicts_do_not_survive_into_a_request_with_less_fuel() {
             .all_conformant()
     );
 }
+
+/// Deterministic prose of at least `bytes` bytes: lowercase words, among them
+/// `node`, `graph` and `alpha`, joined by single spaces.
+fn prose(bytes: usize) -> String {
+    const WORDS: [&str; 10] = [
+        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+    ];
+    let mut text = String::with_capacity(bytes + 16);
+    let mut index = 0_usize;
+    while text.len() < bytes {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
+        index += 1;
+    }
+    text
+}
+
+#[test]
+fn adversary_patterns_conform_at_the_production_defaults_like_the_compatibility_engine() {
+    // Each shape was refused by the native matcher at a fraction of these sizes.
+    let data = empty_dataset();
+    let options = ValidationOptions::default();
+    let text = prose(1 << 20);
+    let pairs = "ab".repeat(1 << 19);
+    let forty = "a".repeat(40);
+    for (pattern, value, expected) in [
+        ("node.*graph.*zzz", text.clone(), false),
+        ("node.*graph.*zzz", format!("{text} zzz"), true),
+        ("alpha.*zzz", text.clone(), false),
+        ("alpha.*zzz", format!("{text} zzz"), true),
+        ("^([a-z]+ ?)+$", text.clone(), true),
+        ("^([a-z]+ ?)+$", format!("{text}!"), false),
+        (r"^(\w+\s)*\w+$", text.clone(), true),
+        (r"^(\w+\s)*\w+$", format!("{text} "), false),
+        ("^(a|b)*$", pairs.clone(), true),
+        ("^(a|b)*$", format!("{pairs}c"), false),
+        ("^(ab)*$", pairs.clone(), true),
+        ("^(ab)*$", format!("{pairs}a"), false),
+        ("^(?:ab)*$", pairs.clone(), true),
+        ("^(?:ab)*$", format!("{pairs}a"), false),
+        ("^(a|aa)*$|^(a*)*b$", format!("{forty}b"), true),
+        ("^(a|aa)*$|^(a*)*b$", format!("{forty}c"), false),
+    ] {
+        let parsed = schema(&node(pattern, ""));
+        let map = [association(&value)];
+        assert_eq!(
+            validate(&parsed, &data, &map).all_conformant(),
+            expected,
+            "compatibility {pattern}"
+        );
+        for profile in Profile::ALL {
+            if profile == Profile::Xpath20 && pattern.contains("(?:") {
+                continue;
+            }
+            let result =
+                validate_with_xpath(&parsed, &data, &map, &options, profile, Limits::new())
+                    .unwrap_or_else(|error| panic!("{profile:?} {pattern}: {error}"));
+            assert_eq!(result.all_conformant(), expected, "{profile:?} {pattern}");
+        }
+    }
+}
+
+#[test]
+fn a_backreference_blowup_pattern_still_refuses_beside_a_conformant_neighbour() {
+    let data = empty_dataset();
+    let options = ValidationOptions::default();
+    let parsed = schema(&node(r"^(a|aa)*c\1$", ""));
+    let forty = "a".repeat(40);
+    for profile in Profile::ALL {
+        let error = validate_with_xpath(
+            &parsed,
+            &data,
+            &[association(&forty)],
+            &options,
+            profile,
+            Limits::new(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::Resource(cause) if matches!(
+                    cause.resource,
+                    Resource::MatchSteps | Resource::MatchStates | Resource::MatchSlots
+                )
+            ),
+            "{profile:?}: {error}"
+        );
+        assert!(
+            validate_with_xpath(
+                &parsed,
+                &data,
+                &[association(&format!("{forty}ca"))],
+                &options,
+                profile,
+                Limits::new(),
+            )
+            .unwrap()
+            .all_conformant(),
+            "{profile:?}"
+        );
+    }
+}

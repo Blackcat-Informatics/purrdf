@@ -11,6 +11,7 @@ mod terms;
 mod turtle;
 
 use std::error::Error as _;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::xsd_regex::xpath::{Error, Limits, Profile, Resource};
@@ -1357,4 +1358,147 @@ fn text_graphs_validate_under_each_selected_law() {
         Limits::new(),
     );
     assert!(matches!(refused, Err(XPathValidationError::Shapes(_))));
+}
+
+/// Deterministic prose of at least `bytes` bytes: lowercase words, among them
+/// `node`, `graph` and `alpha`, joined by single spaces.
+fn prose(bytes: usize) -> String {
+    const WORDS: [&str; 10] = [
+        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+    ];
+    let mut text = String::with_capacity(bytes + 16);
+    let mut index = 0_usize;
+    while text.len() < bytes {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
+        index += 1;
+    }
+    text
+}
+
+/// The property shapes that fail, in order: one `sh:pattern` shape `ex:P{i}` per case.
+fn failing_pattern_shapes(report: &purrdf_shapes::report::ValidationReport) -> Vec<String> {
+    let mut failing: Vec<String> = report
+        .results
+        .iter()
+        .map(|result| format!("{:?}", result.source_shape))
+        .collect();
+    failing.sort();
+    failing.dedup();
+    failing
+}
+
+#[test]
+fn adversary_pattern_shapes_validate_at_the_production_defaults_like_the_compatibility_engine() {
+    // Each shape was refused by the native matcher at a fraction of these sizes.
+    let text = prose(1 << 20);
+    let pairs = "ab".repeat(1 << 19);
+    let forty = "a".repeat(40);
+    let values = [
+        ("prose", text.clone()),
+        ("zzz", format!("{text} zzz")),
+        ("bang", format!("{text}!")),
+        ("spaced", format!("{text} ")),
+        ("pairs", pairs.clone()),
+        ("pairs_c", format!("{pairs}c")),
+        ("pairs_a", format!("{pairs}a")),
+        ("forty_b", format!("{forty}b")),
+        ("forty_c", format!("{forty}c")),
+    ];
+    let mut body = String::new();
+    for (subject, value) in &values {
+        writeln!(body, "ex:{subject} ex:p \"{value}\" .").unwrap();
+    }
+    let data = turtle::data(PREFIXES, &body);
+    let cases = [
+        ("node.*graph.*zzz", "prose", false),
+        ("node.*graph.*zzz", "zzz", true),
+        ("alpha.*zzz", "prose", false),
+        ("alpha.*zzz", "zzz", true),
+        ("^([a-z]+ ?)+$", "prose", true),
+        ("^([a-z]+ ?)+$", "bang", false),
+        (r"^(\w+\s)*\w+$", "prose", true),
+        (r"^(\w+\s)*\w+$", "spaced", false),
+        ("^(a|b)*$", "pairs", true),
+        ("^(a|b)*$", "pairs_c", false),
+        ("^(ab)*$", "pairs", true),
+        ("^(ab)*$", "pairs_a", false),
+        ("^(?:ab)*$", "pairs", true),
+        ("^(?:ab)*$", "pairs_a", false),
+        ("^(a|aa)*$|^(a*)*b$", "forty_b", true),
+        ("^(a|aa)*$|^(a*)*b$", "forty_c", false),
+    ];
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        // XPath 2.0 has no non-capturing group, so its graph omits those shapes.
+        let selected: Vec<_> = cases
+            .iter()
+            .enumerate()
+            .filter(|(_, (pattern, ..))| profile == Profile::Xpath31 || !pattern.contains("(?:"))
+            .collect();
+        let mut shapes = String::new();
+        for (index, (pattern, subject, _)) in &selected {
+            writeln!(
+                shapes,
+                "ex:S{index} a sh:NodeShape; sh:targetNode ex:{subject}; sh:property ex:P{index} .
+                    ex:P{index} sh:path ex:p; sh:pattern \"{}\" .",
+                pattern.replace('\\', "\\\\")
+            )
+            .unwrap();
+        }
+        let shapes = Arc::new(turtle::loads(PREFIXES, &shapes));
+        let expected: Vec<String> = {
+            let mut failing: Vec<String> = selected
+                .iter()
+                .filter(|(_, (_, _, conforms))| !conforms)
+                .map(|(index, _)| format!("{:?}", ex(&format!("P{index}"))))
+                .collect();
+            failing.sort();
+            failing
+        };
+        let compatibility = PreparedShapes::new(Arc::clone(&shapes))
+            .bind_shared_dataset(Arc::clone(&data))
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert_eq!(
+            failing_pattern_shapes(&compatibility),
+            expected,
+            "compatibility"
+        );
+        let native = validate_dataset(&data, Arc::clone(&shapes), profile, Limits::new())
+            .unwrap_or_else(|error| panic!("{profile:?}: {error}"));
+        assert_eq!(failing_pattern_shapes(&native), expected, "{profile:?}");
+    }
+}
+
+#[test]
+fn a_backreference_blowup_pattern_shape_still_refuses_beside_a_conforming_neighbour() {
+    let forty = "a".repeat(40);
+    let data = turtle::data(
+        PREFIXES,
+        &format!("ex:refused ex:p \"{forty}\" .\nex:neighbour ex:p \"{forty}ca\" .\n"),
+    );
+    let shape = |subject: &str| {
+        Arc::new(turtle::loads(
+            PREFIXES,
+            &format!(
+                r#"ex:S a sh:NodeShape; sh:targetNode ex:{subject};
+                    sh:property [ sh:path ex:p; sh:pattern "^(a|aa)*c\\1$" ] ."#
+            ),
+        ))
+    };
+    for profile in Profile::ALL {
+        assert!(matches!(
+            validate_dataset(&data, shape("refused"), profile, Limits::new()),
+            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
+                if matches!(
+                    refusal.resource,
+                    Resource::MatchSteps | Resource::MatchStates | Resource::MatchSlots
+                )
+        ));
+        let report = validate_dataset(&data, shape("neighbour"), profile, Limits::new()).unwrap();
+        assert!(report.conforms && report.results.is_empty(), "{profile:?}");
+    }
 }

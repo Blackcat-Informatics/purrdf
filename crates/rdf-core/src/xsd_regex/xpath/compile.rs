@@ -178,6 +178,8 @@ pub struct CompiledPattern {
     /// Which start positions a search can skip without running the program.
     pub(super) lead: Leads,
     pub(super) captures: usize,
+    /// The parent table and nesting facts the matchers walk the arena with.
+    pub(super) links: super::pike::Links,
     admission: Admission,
 }
 
@@ -229,6 +231,12 @@ impl CompiledPattern {
                     .scalars
                     .capacity()
                     .saturating_mul(size_of::<(char, char)>()),
+            )
+            .saturating_add(
+                self.links
+                    .nodes
+                    .capacity()
+                    .saturating_mul(size_of::<super::pike::Link>()),
             )
     }
 
@@ -303,10 +311,6 @@ pub fn compile(
         parser.expression()?
     };
     let lead = parser.lead(root)?;
-    let admission = Admission {
-        nodes: parser.budget.used(Resource::ProgramNodes),
-        slots: parser.budget.peak_compile_slots,
-    };
     // No token cursor or construction-only frame survives in the artifact.
     let Parser {
         scanner,
@@ -318,6 +322,11 @@ pub fn compile(
     } = parser;
     drop(scanner);
     budget.release_compile_slots(scanner_slots);
+    let links = super::pike::analyze(&nodes, root, &mut budget)?;
+    let admission = Admission {
+        nodes: budget.used(Resource::ProgramNodes),
+        slots: budget.peak_compile_slots,
+    };
     Ok(CompiledPattern {
         profile,
         source,
@@ -328,6 +337,7 @@ pub fn compile(
         root,
         lead,
         captures,
+        links,
         admission,
     })
 }

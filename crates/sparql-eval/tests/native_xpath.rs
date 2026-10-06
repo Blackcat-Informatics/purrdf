@@ -567,3 +567,165 @@ fn explain_evaluates_under_the_requests_dated_law() {
             .unwrap();
     }
 }
+
+/// Deterministic prose of at least `bytes` bytes: lowercase words, among them
+/// `node`, `graph` and `alpha`, joined by single spaces.
+fn prose(bytes: usize) -> String {
+    const WORDS: [&str; 10] = [
+        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+    ];
+    let mut text = String::with_capacity(bytes + 16);
+    let mut index = 0_usize;
+    while text.len() < bytes {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
+        index += 1;
+    }
+    text
+}
+
+/// The SPARQL string literal spelling `pattern`, whose backslashes are escaped.
+fn sparql_string(pattern: &str) -> String {
+    format!("\"{}\"", pattern.replace('\\', "\\\\"))
+}
+
+/// `ex:{subject} ex:v "{text}"` for each named text.
+fn texts(values: &[(&str, &str)]) -> Arc<purrdf_core::RdfDataset> {
+    let mut builder = purrdf_core::RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("http://example.org/v");
+    for &(subject, text) in values {
+        let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
+        let value = builder.intern_literal(purrdf_core::RdfLiteral::simple(text));
+        builder.push_quad(subject, predicate, value, None);
+    }
+    builder.freeze().unwrap()
+}
+
+/// The single cell of `SELECT ?r WHERE { ex:{subject} ex:v ?t BIND({call} AS ?r) }`.
+fn bound(
+    engine: &NativeSparqlEngine,
+    data: &Arc<purrdf_core::RdfDataset>,
+    subject: &str,
+    call: &str,
+) -> Result<String, RdfDiagnostic> {
+    let query = format!(
+        "SELECT ?r WHERE {{ <http://example.org/{subject}> <http://example.org/v> ?t \
+         BIND({call} AS ?r) }}"
+    );
+    let (_, rows) = solutions(engine.query(
+        data,
+        SparqlRequest {
+            query: &query,
+            base_iri: None,
+            substitutions: &[],
+        },
+    )?);
+    assert_eq!(rows.len(), 1, "{query}");
+    Ok(render_cell(rows[0][0].as_ref()))
+}
+
+#[test]
+fn adversary_shapes_answer_at_the_production_defaults_like_the_compatibility_engine() {
+    // Each shape was refused by the native matcher at a fraction of these sizes:
+    // multiple unbounded runs at 8 KB, group repetition from 44 KB, a word
+    // repetition at 159 KB, and the nested nullable repetition at 41 bytes.
+    let text = prose(1 << 20);
+    let pairs = "ab".repeat(1 << 19);
+    let forty = "a".repeat(40);
+    let [zzz, bang, spaced, pairs_c, pairs_a, forty_b, forty_c] = [
+        format!("{text} zzz"),
+        format!("{text}!"),
+        format!("{text} "),
+        format!("{pairs}c"),
+        format!("{pairs}a"),
+        format!("{forty}b"),
+        format!("{forty}c"),
+    ];
+    let data = texts(&[
+        ("prose", &text),
+        ("zzz", &zzz),
+        ("bang", &bang),
+        ("spaced", &spaced),
+        ("pairs", &pairs),
+        ("pairs_c", &pairs_c),
+        ("pairs_a", &pairs_a),
+        ("forty_b", &forty_b),
+        ("forty_c", &forty_c),
+    ]);
+    let compatibility = NativeSparqlEngine::new();
+    let laws = [Profile::Xpath20, Profile::Xpath31]
+        .map(|profile| NativeSparqlEngine::new().with_xpath_regex(profile, Limits::new()));
+    for (pattern, subject, expected) in [
+        ("node.*graph.*zzz", "prose", "false"),
+        ("node.*graph.*zzz", "zzz", "true"),
+        ("alpha.*zzz", "prose", "false"),
+        ("alpha.*zzz", "zzz", "true"),
+        ("^([a-z]+ ?)+$", "prose", "true"),
+        ("^([a-z]+ ?)+$", "bang", "false"),
+        (r"^(\w+\s)*\w+$", "prose", "true"),
+        (r"^(\w+\s)*\w+$", "spaced", "false"),
+        ("^(a|b)*$", "pairs", "true"),
+        ("^(a|b)*$", "pairs_c", "false"),
+        ("^(ab)*$", "pairs", "true"),
+        ("^(ab)*$", "pairs_a", "false"),
+        ("^(?:ab)*$", "pairs", "true"),
+        ("^(?:ab)*$", "pairs_a", "false"),
+        ("^(a|aa)*$|^(a*)*b$", "forty_b", "true"),
+        ("^(a|aa)*$|^(a*)*b$", "forty_c", "false"),
+    ] {
+        let call = format!("REGEX(?t, {})", sparql_string(pattern));
+        assert_eq!(
+            bound(&compatibility, &data, subject, &call).unwrap(),
+            expected,
+            "compatibility {pattern} on {subject}"
+        );
+        for (engine, profile) in laws.iter().zip([Profile::Xpath20, Profile::Xpath31]) {
+            if profile == Profile::Xpath20 && pattern.contains("(?:") {
+                continue;
+            }
+            assert_eq!(
+                bound(engine, &data, subject, &call)
+                    .unwrap_or_else(|error| panic!("{profile:?} {pattern}: {}", error.code)),
+                expected,
+                "{profile:?} {pattern} on {subject}"
+            );
+        }
+    }
+    // A replacement keeps the last iteration's capture over the whole input.
+    for engine in std::iter::once(&compatibility).chain(&laws) {
+        assert_eq!(
+            bound(engine, &data, "pairs", r#"REPLACE(?t, "^(a|b)+$", "[$1]")"#).unwrap(),
+            "[b]"
+        );
+    }
+}
+
+#[test]
+fn backreference_blowups_still_refuse_beside_an_answered_neighbour() {
+    let forty = "a".repeat(40);
+    let neighbour = format!("{forty}ca");
+    let data = texts(&[("refused", &forty), ("neighbour", &neighbour)]);
+    let call = format!("REGEX(?t, {})", sparql_string(r"^(a|aa)*c\1$"));
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        let engine = NativeSparqlEngine::new().with_xpath_regex(profile, Limits::new());
+        let refusal = bound(&engine, &data, "refused", &call).unwrap_err();
+        assert!(
+            [
+                Resource::MatchSteps,
+                Resource::MatchStates,
+                Resource::MatchSlots
+            ]
+            .iter()
+            .any(|resource| refusal.code == resource.code()),
+            "{profile:?}: {}",
+            refusal.code
+        );
+        assert_eq!(
+            bound(&engine, &data, "neighbour", &call).unwrap(),
+            "true",
+            "{profile:?}"
+        );
+    }
+}

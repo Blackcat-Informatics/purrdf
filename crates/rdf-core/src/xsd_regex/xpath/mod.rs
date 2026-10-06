@@ -15,6 +15,7 @@ mod compile;
 mod dated_blocks;
 mod dated_names;
 mod r#match;
+mod pike;
 mod replace;
 mod unicode_tables;
 
@@ -75,11 +76,15 @@ pub enum Resource {
     ProgramNodes,
     /// Cells retained during construction of the program.
     CompileSlots,
-    /// Matcher operations, including search advances and compared code points.
+    /// Matcher operations, including search advances, compared code points
+    /// and program transitions.
     MatchSteps,
-    /// Simultaneously pending alternative states.
+    /// Simultaneously pending alternative states: the backtracking machine's
+    /// pending alternatives, or the thread machine's distinct control states
+    /// at one input position.
     MatchStates,
-    /// Cells in all live states, captures and continuations.
+    /// Cells in all live states, captures and continuations, including the
+    /// thread machine's thread lists, control-state table and work list.
     MatchSlots,
     /// UTF-8 bytes of replacement output.
     OutputBytes,
@@ -132,16 +137,30 @@ impl Limits {
     ///
     /// Compilation is linear in the source, so the program and construction
     /// bounds admit every source the 64 KiB source bound admits: the largest
-    /// measured requirement is about 3 nodes and 20 construction cells per
-    /// source byte, for a literal under the x flag. An oversized pattern is
-    /// refused by its source bytes, before any parsing.
+    /// measured requirement is about 3 nodes and 28 construction cells per
+    /// source byte, for a literal under the x flag, including the parent table
+    /// the matchers walk the program with. An oversized pattern is refused by
+    /// its source bytes, before any parsing.
     ///
-    /// A literal or first-character search spends about one step per scanned
-    /// character, and ordinary patterns without such a lead about 5 to 25, so
-    /// the step bound admits searches over tens of megabytes. A greedy
-    /// single-character run of any admitted length keeps one pending state.
-    /// Matching costs roughly 1 to 30 nanoseconds per step, so exponential
-    /// backtracking is refused within a few seconds of work.
+    /// Matching first runs the backtracking machine: a literal or
+    /// first-character search spends about one step per scanned character, and
+    /// a greedy single-character run of any admitted length keeps one pending
+    /// state. A program without a backreference whose attempt spends more
+    /// than 16 steps per search start it has passed, 8 per input byte it has
+    /// examined and 16 per program node, or exceeds a live-storage bound,
+    /// continues on the linear-time thread machine, which spends about
+    /// 10 to 50 steps per byte whatever its repetition structure, and keeps a
+    /// few states and a few hundred cells for ordinary patterns independent of
+    /// the input length; the state and storage bounds therefore admit any
+    /// ordinary input. Only stored repetition counts multiply states: a
+    /// counted group repeated from many unanchored starts keeps one thread per
+    /// distinct count, and is refused by the state bound.
+    ///
+    /// The step bound is calibrated against the thread machine, at about 3 to
+    /// 6 ns per step: it admits such searches over 5 to 25 MB within a second
+    /// or two. A backtracking step costs about 10 to 13 ns, so exponential
+    /// backtracking, which only a backreference can still reach, is refused
+    /// within about three seconds of work.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -150,7 +169,7 @@ impl Limits {
                 4_000_000,
                 256 * 1024,
                 2 * 1024 * 1024,
-                100_000_000,
+                250_000_000,
                 64 * 1024,
                 1024 * 1024,
                 64 * 1024 * 1024,
@@ -248,7 +267,17 @@ impl Budget {
     ///
     /// A typed [`Refusal`] when the exact accumulated requirement exceeds the
     /// bound. Even `u64::MAX + 1` remains a refusal with its exact requirement.
+    #[inline]
     pub fn charge(&mut self, resource: Resource, amount: u64) -> Result<(), Refusal> {
+        let index = resource.index();
+        // The common admitted case, without the wide arithmetic of a refusal.
+        if resource != Resource::CompileSlots
+            && let Some(sum) = self.used[index].checked_add(amount)
+            && sum <= self.limits.bounds[index]
+        {
+            self.used[index] = sum;
+            return Ok(());
+        }
         self.charge_wide(resource, u128::from(amount))
     }
 

@@ -295,6 +295,24 @@ fn bench_native_xpath_execute(c: &mut Bench) {
     group.finish();
 }
 
+/// Deterministic prose of at least `bytes` bytes: ten lowercase words, among
+/// them `node`, `graph` and `alpha`, joined by single spaces.
+fn prose(bytes: usize) -> String {
+    const WORDS: [&str; 10] = [
+        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+    ];
+    let mut text = String::with_capacity(bytes + 16);
+    let mut index = 0_usize;
+    while text.len() < bytes {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
+        index += 1;
+    }
+    text
+}
+
 /// Ordinary large inputs at the production default limits.
 ///
 /// `run/*` and `general/*` match the same 32 KiB run of letters: `[a-z]+`
@@ -306,6 +324,13 @@ fn bench_native_xpath_execute(c: &mut Bench) {
 /// tries only the first start, and `leading_run` resumes after the run a
 /// failed start already covered. `no_lead` hides those facts behind an empty
 /// group, so the program runs from every start: the cost they avoid.
+///
+/// `adversary/*` are the shapes the backtracking machine alone refused far
+/// below these sizes, each over 1 MiB at the production defaults: searches
+/// with several unbounded runs that never match, repetitions of groups over
+/// prose and over `ab` pairs, and a nested nullable repetition. Every one now
+/// runs on the linear-time thread machine after a bounded backtracking
+/// attempt; `adversary/nested_nullable` is the 41-byte input that was refused.
 fn bench_native_xpath_large(c: &mut Bench) {
     let mut group = c.benchmark_group("native_xpath_large");
     let limits = xpath::Limits::new();
@@ -342,6 +367,48 @@ fn bench_native_xpath_large(c: &mut Bench) {
         group.throughput(Throughput::Bytes(haystack.len() as u64));
         group.bench_function(label, |bencher| {
             bencher.iter(|| black_box(program.is_match(black_box(&haystack), limits).unwrap()));
+        });
+    }
+    let text = prose(1024 * 1024);
+    let words = text.trim_end();
+    let pairs = "ab".repeat(512 * 1024);
+    let nested = format!("{}b", "a".repeat(40));
+    for (label, source, input, matched) in [
+        ("adversary/multi_run", "node.*graph.*zzz", words, false),
+        ("adversary/two_run", "alpha.*zzz", words, false),
+        ("adversary/word_group", "^([a-z]+ ?)+$", words, true),
+        ("adversary/word_space_group", r"^(\w+\s)*\w+$", words, true),
+        ("adversary/choice_group", "^(a|b)*$", pairs.as_str(), true),
+        ("adversary/pair_group", "^(ab)*$", pairs.as_str(), true),
+        (
+            "adversary/pair_noncapturing",
+            "^(?:ab)*$",
+            pairs.as_str(),
+            true,
+        ),
+        (
+            "adversary/nested_nullable",
+            "^(a|aa)*$|^(a*)*b$",
+            nested.as_str(),
+            true,
+        ),
+    ] {
+        let program = compiled(source);
+        let found = program.find(input, limits).unwrap();
+        assert_eq!(found.is_some(), matched, "{label}");
+        // The compatibility engine gives the same whole-match answer.
+        let compatibility = compile(source, "").unwrap();
+        assert_eq!(
+            found.and_then(|captures| captures.get(0)),
+            compatibility
+                .as_regex()
+                .find(input)
+                .map(|span| span.range()),
+            "{label}"
+        );
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
         });
     }
     let literal: String = ('a'..='z').cycle().take(30_000).collect();

@@ -20,6 +20,8 @@
 //! filter or a finding. All fixtures use `example.org`.
 
 mod support;
+use std::fmt::Write as _;
+
 use support::{code, run, stderr, stdout, write_file};
 
 /// The two stable dated-law names, oldest first.
@@ -912,5 +914,136 @@ fn every_covered_subcommand_documents_the_flag_and_its_names() {
                 "`{subcommand} --help` must mention {needle}; got:\n{help}"
             );
         }
+    }
+}
+
+// --- production-default scale ----------------------------------------------------------
+
+/// Deterministic prose of at least `bytes` bytes: lowercase words, among them `node`,
+/// `graph` and `alpha`, joined by single spaces.
+fn prose(bytes: usize) -> String {
+    const WORDS: [&str; 10] = [
+        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+    ];
+    let mut text = String::with_capacity(bytes + 16);
+    let mut index = 0_usize;
+    while text.len() < bytes {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
+        index += 1;
+    }
+    text
+}
+
+#[test]
+fn query_answers_the_adversary_shapes_at_the_production_defaults_like_the_compatibility_engine() {
+    // Each shape was refused by the native matcher at a fraction of these sizes:
+    // multiple unbounded runs at 8 KB, group repetition from 44 KB, a word repetition
+    // at 159 KB, and the nested nullable repetition at 41 bytes.
+    let text = prose(1 << 20);
+    let pairs = "ab".repeat(1 << 19);
+    let forty = "a".repeat(40);
+    let values = [
+        ("prose", text.clone()),
+        ("zzz", format!("{text} zzz")),
+        ("bang", format!("{text}!")),
+        ("spaced", format!("{text} ")),
+        ("pairs", pairs.clone()),
+        ("pairs_c", format!("{pairs}c")),
+        ("forty_b", format!("{forty}b")),
+        ("forty_c", format!("{forty}c")),
+    ];
+    let mut turtle = String::from("@prefix ex: <http://example.org/> .\n");
+    for (subject, value) in &values {
+        writeln!(turtle, "ex:{subject} ex:v \"{value}\" .").unwrap();
+    }
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", &turtle);
+    let subjects = |names: &[&str]| -> Vec<String> {
+        names
+            .iter()
+            .map(|name| format!("http://example.org/{name}"))
+            .collect()
+    };
+    // `\\` is the SPARQL escape of one backslash.
+    for (pattern, matching) in [
+        ("node.*graph.*zzz", subjects(&["zzz"])),
+        ("alpha.*zzz", subjects(&["zzz"])),
+        (
+            "^([a-z]+ ?)+$",
+            subjects(&[
+                "forty_b", "forty_c", "pairs", "pairs_c", "prose", "spaced", "zzz",
+            ]),
+        ),
+        (
+            r"^(\\w+\\s)*\\w+$",
+            subjects(&["forty_b", "forty_c", "pairs", "pairs_c", "prose", "zzz"]),
+        ),
+        ("^(a|b)*$", subjects(&["forty_b", "pairs"])),
+        ("^(?:ab)*$", subjects(&["pairs"])),
+        ("^(a|aa)*$|^(a*)*b$", subjects(&["forty_b"])),
+    ] {
+        assert_eq!(
+            query_matches(&data, None, pattern),
+            matching,
+            "compatibility {pattern}"
+        );
+        for law in [XPATH_20, XPATH_31] {
+            if law == XPATH_20 && pattern.contains("(?:") {
+                continue;
+            }
+            assert_eq!(
+                query_matches(&data, Some(law), pattern),
+                matching,
+                "{law} {pattern}"
+            );
+        }
+    }
+}
+
+#[test]
+fn query_backreference_blowup_fails_the_query_and_the_neighbour_answers() {
+    let forty = "a".repeat(40);
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let refused = write_file(
+        dir.path(),
+        "refused.ttl",
+        &format!("<http://example.org/a> <http://example.org/v> \"{forty}\" .\n"),
+    );
+    let neighbour = write_file(
+        dir.path(),
+        "neighbour.ttl",
+        &format!("<http://example.org/a> <http://example.org/v> \"{forty}ca\" .\n"),
+    );
+    let pattern = r"^(a|aa)*c\\1$";
+    for law in [XPATH_20, XPATH_31] {
+        let query = format!(
+            "SELECT ?s WHERE {{ ?s <http://example.org/v> ?v FILTER(REGEX(?v, \"{pattern}\")) }}"
+        );
+        let out = run_under(
+            &["query", "--data", &refused, "--results-format", "csv"],
+            Some(law),
+            &[&query],
+        );
+        assert_eq!(code(&out), 1, "{law}: stderr:\n{}", stderr(&out));
+        assert!(out.stdout.is_empty(), "{law}: {}", stdout(&out));
+        assert!(
+            [
+                "xpath-match-steps",
+                "xpath-match-states",
+                "xpath-match-slots"
+            ]
+            .iter()
+            .any(|resource| stderr(&out).contains(resource)),
+            "{law}: {}",
+            stderr(&out)
+        );
+        assert_eq!(
+            query_matches(&neighbour, Some(law), pattern),
+            [EX_A],
+            "{law}"
+        );
     }
 }

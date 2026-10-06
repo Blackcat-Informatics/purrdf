@@ -23903,11 +23903,11 @@ msgstr "`xpath-match-steps`"
 #: src/project/diagnostic-codes.md:226
 msgid ""
 "`Resource::MatchSteps`: matching needs more matcher operations, search "
-"advances and compared code points included, than the bound (100,000,000). "
+"advances and compared code points included, than the bound (250,000,000). "
 "Exponential backtracking stops here."
 msgstr ""
 "`Resource::MatchSteps`：匹配所需的匹配器操作（包括搜索"
-"推进与比较的码位）超过上限（100,000,000）。指数级回溯在此处停止。"
+"推进与比较的码位）超过上限（250,000,000）。指数级回溯在此处停止。"
 
 #: src/project/diagnostic-codes.md:226
 msgid ""

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 enum Retained {
-    Owned(CompiledPattern),
+    Owned(Box<CompiledPattern>),
     Shared(Arc<CompiledPattern>),
 }
 
@@ -77,7 +77,7 @@ impl PatternCache {
             let Some(Retained::Owned(program)) = self.program.take() else {
                 unreachable!("the retained owned program was checked")
             };
-            self.program = Some(Retained::Shared(Arc::new(program)));
+            self.program = Some(Retained::Shared(Arc::from(program)));
         }
         let Some(Retained::Shared(program)) = &self.program else {
             unreachable!("successful shared admission retains shared ownership")
@@ -98,7 +98,9 @@ impl PatternCache {
         {
             program.program().admit(limits)?;
         } else {
-            self.program = Some(Retained::Owned(compile(profile, pattern, flags, limits)?));
+            self.program = Some(Retained::Owned(Box::new(compile(
+                profile, pattern, flags, limits,
+            )?)));
         }
         Ok(())
     }
