@@ -241,41 +241,89 @@ fn substituted_refusal(query: &str) -> Option<String> {
         .map(|e| e.message)
 }
 
-/// A pre-bound variable is one value at every depth, so a sub-`SELECT` assigning it
-/// is refused on every engine lane even when that sub-`SELECT` does not project it —
-/// the pre-binding reaches inside the sub-`SELECT`, where the assignment would
-/// overwrite it. The neighbour assigning a fresh variable at the same depth answers.
+/// SPARQL scoping (§18.2.1) ends a variable at a sub-`SELECT`'s projection, so a
+/// sub-`SELECT` that assigns `?this` without projecting it binds a variable of its own:
+/// the caller's binding of the outer `?this` is not involved, and every row answers
+/// as it would with any other name there — on every engine lane, read inside a
+/// `SELECT` expression too. A sub-`SELECT` that DOES project its assigned `?this`
+/// hands the outer query that variable, which joins with the bound value like any
+/// other binding: `ex:b` against `ex:a` is no row.
 #[test]
-fn a_sub_select_assigning_the_pre_bound_variable_is_refused_even_unprojected() {
-    let refused = format!(
-        "SELECT ?o WHERE {{ {{ SELECT ?o WHERE {{ ?s <{EX}p> ?o BIND(?s AS ?this) }} }} }}"
-    );
-    for refusal in [
-        prepared_refusal(&refused, &[]),
-        substituted_refusal(&refused),
-    ] {
-        let refusal = refusal.unwrap_or_else(|| panic!("admitted: {refused}"));
-        assert!(refusal.contains("the query assigns ?this"), "{refusal}");
+fn a_sub_select_assigning_the_pre_bound_name_unprojected_binds_its_own_variable() {
+    let every_object = [
+        vec![cell("o", TermValue::Iri(format!("{EX}o1")))],
+        vec![cell("o", TermValue::Iri(format!("{EX}o2")))],
+        vec![cell("o", TermValue::Iri(format!("{EX}o3")))],
+    ];
+    for name in ["this", "fresh"] {
+        let query = format!(
+            "SELECT ?o WHERE {{ {{ SELECT ?o WHERE {{ ?s <{EX}p> ?o BIND(?s AS ?{name}) \
+             FILTER(?{name} = ?s) }} }} }}"
+        );
+        assert_eq!(prepared_refusal(&query, &[]), None, "{query}");
+        assert_eq!(substituted_refusal(&query), None, "{query}");
+        assert_every_lane(&query, &every_object);
     }
-    let fresh = format!(
-        "SELECT ?o WHERE {{ {{ SELECT ?o WHERE {{ ?s <{EX}p> ?o BIND(?s AS ?fresh) }} }} }}"
+    let read_in_projection = format!(
+        "SELECT ?t WHERE {{ {{ SELECT (STR(?this) AS ?t) WHERE {{ ?s <{EX}p> ?o \
+         BIND(<{EX}z> AS ?this) }} }} }}"
     );
-    assert_eq!(prepared_refusal(&fresh, &[]), None);
-    assert_eq!(substituted_refusal(&fresh), None);
+    let z = TermValue::Literal {
+        lexical_form: format!("{EX}z"),
+        datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+        language: None,
+        direction: None,
+    };
     assert_every_lane(
-        &fresh,
+        &read_in_projection,
+        &[
+            vec![cell("t", z.clone())],
+            vec![cell("t", z.clone())],
+            vec![cell("t", z)],
+        ],
+    );
+    let projected = format!(
+        "SELECT ?o WHERE {{ {{ SELECT ?this WHERE {{ BIND(<{EX}b> AS ?this) }} }} \
+         ?s <{EX}p> ?o }}"
+    );
+    assert_every_lane(&projected, &[]);
+}
+
+/// An assignment of a pre-bound name where it is not in scope binds that name for the
+/// rows the assignment produces, which then join with the bound value as SPARQL joins
+/// any two bindings: an `OPTIONAL` arm assigning `ex:z` is incompatible with the bound
+/// `ex:a`, so each row keeps its left side; a nested group assigning it joins no row;
+/// and an assignment no other pattern meets answers with the assigned value.
+#[test]
+fn an_assignment_of_the_pre_bound_name_out_of_its_scope_answers_by_join() {
+    let a_row = || vec![cell("this", a())];
+    assert_every_lane(
+        &format!("SELECT ?this WHERE {{ ?this <{EX}p> ?o OPTIONAL {{ BIND(<{EX}z> AS ?this) }} }}"),
+        &[a_row(), a_row()],
+    );
+    assert_every_lane(
+        &format!("SELECT ?this WHERE {{ ?this <{EX}p> ?o {{ BIND(<{EX}z> AS ?this) }} }}"),
+        &[],
+    );
+    assert_every_lane(
+        &format!("SELECT ?o WHERE {{ ?x <{EX}p> ?o BIND(<{EX}z> AS ?this) }}"),
         &[
             vec![cell("o", TermValue::Iri(format!("{EX}o1")))],
             vec![cell("o", TermValue::Iri(format!("{EX}o2")))],
             vec![cell("o", TermValue::Iri(format!("{EX}o3")))],
         ],
     );
+    // Where `?this` is already in scope, a `BIND` to it is no SPARQL query at all
+    // (§18.2.1), whether or not it is pre-bound.
+    let in_scope = format!("SELECT ?o WHERE {{ ?this <{EX}p> ?o BIND(<{EX}z> AS ?this) }}");
+    let refusal = prepared_refusal(&in_scope, &[]).expect("not a SPARQL query");
+    assert!(refusal.contains("already in scope"), "{refusal}");
 }
 
 /// A prepared execution reads `QueryOptions::declared_prebound` exactly as a request
 /// does: a declared name with no slot is a constant to the grouping check (unbound
-/// when it runs) and may not be assigned. Undeclared, the same read is the ordinary
-/// grouping error, and the same assignment is admitted.
+/// when it runs). Undeclared, the same read is the ordinary grouping error. An
+/// assignment of it where it is not in scope binds it, declared or not.
 #[test]
 fn a_prepared_execution_honours_its_declared_pre_bound_names() {
     let reads =
@@ -307,8 +355,7 @@ fn a_prepared_execution_honours_its_declared_pre_bound_names() {
         .expect("runs");
     assert_eq!(answer, Some(boolean(true)));
     let assigns = format!("SELECT ?o WHERE {{ $this <{EX}p> ?o BIND(?o AS ?ctx) }}");
-    let refusal = prepared_refusal(&assigns, &["ctx"]).expect("a declared ?ctx is pre-bound");
-    assert!(refusal.contains("the query assigns ?ctx"), "{refusal}");
+    assert_eq!(prepared_refusal(&assigns, &["ctx"]), None);
     assert_eq!(prepared_refusal(&assigns, &[]), None);
     // A declared name that is also a slot is just the slot.
     assert_eq!(

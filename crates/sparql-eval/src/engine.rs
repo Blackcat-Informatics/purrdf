@@ -664,10 +664,16 @@ impl PlanCache {
         if let Some(base) = base_iri {
             parser = parser.with_base_iri(base);
         }
-        let parsed = parser
+        let mut parsed = parser
             .parse_query_with(query, options)
             .map_err(|e| parse_diagnostic(&e, "native-sparql-query-parse"))?;
-        refuse_prebound_assignment(&parsed, parameters, exempt)?;
+        // An assignment of a pre-bound name where SPARQL scoping makes it the outer
+        // variable is already refused by the parser (§18.2.1: a `BIND` target may not
+        // be in scope). One inside a sub-`SELECT` that does not project the name binds
+        // a variable of the sub-`SELECT`'s own, so it is renamed apart before the
+        // pre-binding rewrite can reach it as the bound one.
+        let names: Vec<&str> = parameters.iter().chain(exempt).copied().collect();
+        crate::substitute::localize_unprojected_assignments(&mut parsed, &names);
         let planned = admit_algebra(
             &parsed,
             relations,
@@ -695,31 +701,6 @@ impl PlanCache {
             prepared.memory.retain();
         }
         Ok(prepared)
-    }
-}
-
-/// Refuse a query that assigns a variable the caller binds before evaluation — a
-/// declared parameter or a further declared pre-bound name
-/// ([`purrdf_sparql_algebra::Query::assigned_prebound`]): the assignment would either be
-/// ignored or silently overwrite the caller's binding.
-fn refuse_prebound_assignment(
-    query: &Query,
-    parameters: &[&str],
-    exempt: &[&str],
-) -> Result<(), RdfDiagnostic> {
-    let assigned = query
-        .assigned_prebound(parameters)
-        .or_else(|| query.assigned_prebound(exempt));
-    match assigned {
-        Some(variable) => Err(RdfDiagnostic::error(
-            "native-sparql-query-parse",
-            format!(
-                "the query assigns ?{}, which is pre-bound: a pre-bound variable holds one \
-                 value for the whole evaluation and may not be reassigned",
-                variable.as_str()
-            ),
-        )),
-        None => Ok(()),
     }
 }
 
@@ -2751,15 +2732,18 @@ impl NativeSparqlEngine {
     /// `options`' [`QueryOptions::declared_prebound`] names further variables the
     /// caller's context binds without a slot here — a name its context leaves unbound
     /// on this run, say. Exactly as on a request, the grouping check reads them as
-    /// pre-bound and a query may not assign one; they take no slot and no value.
+    /// pre-bound; they take no slot and no value.
     ///
     /// # Pre-bound variables on the engine lanes
     ///
     /// A parameter, like a request's substitution, is one value for the whole
-    /// evaluation, at every depth. A query that ASSIGNS one — `BIND(… AS ?p)` or
-    /// `(… AS ?p)`, at any depth — is refused here
-    /// ([`purrdf_sparql_algebra::Query::assigned_prebound`]). Every other construct
-    /// answers by join semantics: `VALUES ?p { … }` keeps only the rows that agree with
+    /// evaluation, at every depth. An assignment of one is not refused. Where the name
+    /// is already in scope a `BIND` to it is no SPARQL query (§18.2.1) and fails to
+    /// parse; elsewhere SPARQL scoping decides what it binds. A sub-`SELECT` that
+    /// assigns the name without projecting it binds a variable of its own, untouched by
+    /// the parameter; any other assignment binds the name for the rows it produces,
+    /// which join with the bound value. Every other construct answers by join
+    /// semantics: `VALUES ?p { … }` keeps only the rows that agree with
     /// the bound value (none, when it lists only others), and `MINUS` subtracts with
     /// `?p` bound on both sides. That is the answer rdflib's `initBindings` gives. The
     /// SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,

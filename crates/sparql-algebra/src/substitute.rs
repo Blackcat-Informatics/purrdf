@@ -50,12 +50,11 @@ impl Query {
     /// AS ?v)`, or of an `UNFOLD`, anywhere in the query, `EXISTS` bodies and
     /// sub-`SELECT`s included — or `None` when it assigns none of them.
     ///
-    /// A pre-bound variable holds one value for the whole evaluation, so an
-    /// assignment of it either is ignored or silently overwrites the caller's binding:
-    /// the reassignment SHACL 1.2 SPARQL Extensions, Appendix A forbids for a pre-bound
-    /// variable. Every caller that pre-binds — a prepared execution's parameters, a
-    /// request's substitutions, a SHACL node expression's context — refuses a query
-    /// for which this answers `Some`, so the refusal has one definition.
+    /// SHACL 1.2 SPARQL Extensions, Appendix A forbids an `AS ?var` for a potentially
+    /// pre-bound variable in a SHACL query, and the SHACL loaders refuse a query for
+    /// which this answers `Some` for the names they pre-bind. The engine's own lanes
+    /// (prepared parameters, request substitutions) do not refuse it: SPARQL scoping
+    /// decides what such an assignment binds.
     ///
     /// # Examples
     ///

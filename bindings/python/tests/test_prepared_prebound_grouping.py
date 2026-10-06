@@ -122,18 +122,19 @@ def test_having_order_by_and_an_empty_group_read_the_parameter() -> None:
     ) == {TRUE}
 
 
-def test_reassigning_the_parameter_is_refused_and_a_fresh_variable_is_not() -> None:
-    store = _store()
-    for query in (
-        f"SELECT ?value WHERE {{ BIND(<{EX}b> AS $this) $this <{EX}p> ?value }}",
-        f"SELECT (COUNT(*) AS ?value) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}b> AS $this) }}",
-    ):
-        try:
-            store.prepare(query, parameters=["this"])
-        except Exception as error:  # noqa: BLE001 - the refusal's type is the binding's
-            assert "pre-bound" in str(error), error
-        else:
-            raise AssertionError(f"{query} must be refused")
+def test_an_assignment_out_of_the_parameter_s_scope_answers_by_join() -> None:
+    # Where `$this` is not yet in scope a BIND to it is SPARQL (§18.2.1), and the
+    # assigned value joins with the bound one as any two bindings do: `ex:b` against
+    # `ex:a` is no row; after the triple pattern the group's COUNT reads 3 rows.
+    assert _values(f"SELECT ?value WHERE {{ BIND(<{EX}b> AS $this) $this <{EX}p> ?value }}") == set()
+    assert _values(
+        f"SELECT (COUNT(*) AS ?value) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}b> AS $this) }}"
+    ) == {purrdf.Literal("3", datatype=purrdf.NamedNode("http://www.w3.org/2001/XMLSchema#integer"))}
+    # A sub-SELECT assigning it without projecting it binds a variable of its own.
+    assert _values(
+        f"SELECT ?value WHERE {{ {{ SELECT ?value WHERE {{ ?s <{EX}p> ?value "
+        f"BIND(?s AS $this) FILTER(?s = $this) }} }} }}"
+    ) == {purrdf.NamedNode(f"{EX}o{n}") for n in (1, 2, 3)}
     assert _values(
         # Reads the parameter, so the binding refuses no unmentioned declaration.
         f"SELECT ?value WHERE {{ BIND(<{EX}b> AS ?fresh) ?fresh <{EX}p> ?value "

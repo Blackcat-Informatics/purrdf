@@ -150,9 +150,13 @@ every depth: an `OPTIONAL` or `MINUS` right arm, a sub-`SELECT` and an `EXISTS`
 body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
 (COUNT(*) AS ?c)` answers the bound node. Two rules follow.
 
-- **Assigning one is refused.** `BIND(… AS ?p)` or `(… AS ?p)` over a pre-bound
-  `?p`, at any depth, fails when the query is prepared. The assignment would
-  either be ignored or silently overwrite the caller's binding.
+- **An assignment follows SPARQL scoping.** Where `?p` is already in scope, a
+  `BIND(… AS ?p)` is no SPARQL query (§18.2.1) and fails to parse, bound or not.
+  A sub-`SELECT` that assigns `?p` without projecting it binds a variable of its
+  own, so `{ SELECT ?o WHERE { ?x :p ?o BIND(:z AS ?p) } }` answers every `?o`.
+  Any other assignment binds `?p` for the rows it produces, and those join with
+  the bound value: `OPTIONAL { BIND(:z AS ?p) }` beside a bound `:a` keeps each
+  left row unextended.
 - **Everything else answers by join semantics.** `VALUES ?p { … }` keeps the rows
   that agree with the bound value, so `VALUES $this { ex:b }` with `$this` bound to
   `ex:a` answers no row, and `MINUS` subtracts with `?p` bound on both sides. That
