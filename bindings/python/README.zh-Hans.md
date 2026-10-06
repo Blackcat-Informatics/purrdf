@@ -667,6 +667,54 @@ except ValueError as refusal:
 未知的蕴涵机制，或该蕴涵机制不接受的规则文档——在这两个属性上都为 `None`。类型错误的参数
 仍是普通的 `TypeError`。
 
+## 带日期的 XPath 正则表达式
+
+未选择时，SPARQL 的 `REGEX`/`REPLACE`、SHACL 的 `sh:pattern` 与 ShEx 的模式分面（facet）
+保持兼容正则表达式的行为。`xpath_regex` 关键字参数则按稳定名称选择一种带日期的原生 XPath 法则：
+
+```python
+purrdf.XPATH_REGEX_PROFILES
+# ('xpath-2.0-2010-12-14', 'xpath-3.1-2017-03-21')
+
+store.query(
+    'SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, "^(a)\\\\1$")) }',
+    xpath_regex="xpath-3.1-2017-03-21",
+)
+shapes.validate(my_shapes, my_data, xpath_regex="xpath-2.0-2010-12-14")
+shex.validate(my_schema, my_data, my_map, xpath_regex="xpath-3.1-2017-03-21")
+```
+
+`xpath-2.0-2010-12-14` 是 XPath F&O 2.0 第二版，`xpath-3.1-2017-03-21` 是 XPath F&O 3.1。
+两者都定义了反向引用；只有 3.1 接受 `(?:a)` 这样的非捕获组以及 `q` 标志。每个 SPARQL 入口都接受该
+关键字参数（`Store` 与 `MutableDataset` 上的 `query`、`query_governed`、
+`query_entailment_governed`、`update`、`update_governed`、`Store.prepare`，以及 rdflib 层的
+`Graph.query` / `Graph.update`），`shapes.validate`、`Shapes.validate_nt`、
+`Shapes.validate_store`、`PreparedShapes.validate_nt`、`PreparedShapes.validate_store_changes`
+与 `shex.validate` 也同样接受。预备好的查询会把它的法则带入每一次 `run`。会求值模式的 SHACL
+工具也接受它：`shapes.entail` 与 `shapes.apply_rules`（SHACL 规则、SHACL-AF 函数、节点表达式以及
+SPARQL 1.2 RL 过滤与赋值中的 `REGEX`/`REPLACE`，以及规则条件中的 `sh:pattern`），还有
+`shapes.eval_node_expr`（过滤形状的 `sh:pattern`，以及函数调用或基于 SPARQL 的
+`REGEX`/`REPLACE`）。`shapes.lint_shapes` 不编译也不匹配任何模式，因此不接受法则。
+
+名称须精确匹配。任何其他值，包括 `"xpath-3.1"` 或 `"XPATH-3.1-2017-03-21"`，都会抛出列出可接受
+名称的 `ValueError`。所选法则拒绝的模式或标志会走宿主普通的模式通道：SPARQL 把它当作表达式错误，
+因此 `FILTER` 会丢弃该行；SHACL 报告一条 `sh:pattern` 结果；ShEx 把该条目标为不符合。所选法则在
+有限的上限下运行，其中包括 64 KiB 的模式源码。对这些上限的拒绝会抛出携带其 `xpath-*` 代码（例如
+`xpath-pattern-bytes`）的 `ValueError`。它从不返回空的或为假的答案，被它中止的更新不会改变任何内容。
+
+每个入口都用该代码标识这一拒绝，就像它标识带类型的 SPARQL 解析失败一样：无论是 SPARQL 方法、
+SHACL 验证或工具（包括 SHACL-SPARQL 查询的拒绝），还是 `shex.validate`，该代码都是异常的
+`message_id`。这一拒绝没有带类型的参数：
+
+```python
+try:
+    shapes.validate(my_shapes, my_data, xpath_regex="xpath-3.1-2017-03-21")
+except ValueError as refusal:
+    refusal.message_id    # 'xpath-pattern-bytes'
+    refusal.presentation  # {'message_id': 'xpath-pattern-bytes',
+                          #  'parameters': {}, 'detail': None}
+```
+
 ## 基准 IRI
 
 拼写了相对 IRI 的文档需要一个基准（base）。每个解析入口点都接受可选的 `base=` 关键字
