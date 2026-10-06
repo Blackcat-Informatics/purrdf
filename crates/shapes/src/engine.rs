@@ -3757,13 +3757,37 @@ pub fn validate_graphs_with_shapes_graph(
     options: &ValidationOptions,
     imports: &ShapesImports,
 ) -> Result<ValidationReport, ShapesError> {
+    let (data, shapes) = parse_graphs_with_shapes_graph(
+        data_nt,
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        options,
+        imports,
+    )?;
+    validate_dataset(data.as_ref(), &shapes)
+}
+
+/// The two graphs [`validate_graphs_with_shapes_graph`] validates, parsed: the N-Triples
+/// data graph, and the shapes graph read over `imports` with the data graph's
+/// `sh:shapesGraph` links folded in and `options` set on it. The one parse both the
+/// compatibility validation and its selected-law twin
+/// ([`crate::xpath::validate_graphs_with_shapes_graph`]) run.
+pub(crate) fn parse_graphs_with_shapes_graph(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    options: &ValidationOptions,
+    imports: &ShapesImports,
+) -> Result<(Arc<RdfDataset>, Shapes), ShapesError> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
     let imports = linked_imports(data.as_ref(), imports)?;
     let mut shapes =
         parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, &imports)?;
     shapes.set_validation_options(options.clone());
-    validate_dataset(data.as_ref(), &shapes)
+    Ok((data, shapes))
 }
 
 /// `imports` with the `sh:shapesGraph` links of the data graph `data` folded in
