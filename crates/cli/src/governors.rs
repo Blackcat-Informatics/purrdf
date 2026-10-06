@@ -317,6 +317,34 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
     out
 }
 
+/// The banner line the expression-error block starts with, versioned as the governor
+/// report's is.
+pub(crate) const EXPRESSION_ERRORS_BANNER: &str = "purrdf-expression-errors 1";
+
+/// Render the XPath F&O errors a governed run absorbed into unbound values
+/// ([`GovernorEvidence::expression_errors`]): the banner, then one `absorbed CODE COUNT`
+/// line per code, in the evidence's order — or nothing at all when the run absorbed
+/// none, so a clean run writes no block.
+///
+/// A SPARQL expression error is not a query error (§17.2): `1/0` leaves its variable
+/// unbound and the query answers. The block is how a caller learns that it happened, and
+/// why, without reading the rows; like the governor report it goes to stderr, so the
+/// document on stdout stays well-formed.
+pub(crate) fn render_expression_errors(evidence: &GovernorEvidence) -> String {
+    use std::fmt::Write as _;
+
+    let errors = evidence.expression_errors();
+    if errors.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let _ = writeln!(out, "{EXPRESSION_ERRORS_BANNER}");
+    for (code, count) in errors {
+        let _ = writeln!(out, "absorbed {} {count}", code.qname());
+    }
+    out
+}
+
 /// Render a governed UPDATE trip. The request is atomic, so there is deliberately no
 /// partial-result vocabulary: `mutation none` is the complete mutation receipt.
 pub(crate) fn render_update_trip(tripped: TrippedGovernor, evidence: &GovernorEvidence) -> String {

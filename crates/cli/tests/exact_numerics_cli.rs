@@ -65,7 +65,7 @@ fn query_answers_past_machine_words_exactly() {
 }
 
 #[test]
-fn division_policy_is_selectable_and_refuses_only_a_non_terminating_quotient() {
+fn division_policy_is_selectable_and_leaves_only_a_non_terminating_quotient_unbound() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     // The default: eighteen digits, truncated.
     let out = query(dir.path(), &[], "SELECT (1 / 3 AS ?q) WHERE {}");
@@ -83,14 +83,20 @@ fn division_policy_is_selectable_and_refuses_only_a_non_terminating_quotient() {
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(stdout(&out).contains("0.125"), "{}", stdout(&out));
-    // …and refuses the run on a non-terminating one, by its F&O code.
+    // …and leaves a non-terminating one unbound, an expression error (SPARQL §17.2):
+    // the query answers, and a governed run names the F&O code on stderr.
     let out = query(
         dir.path(),
-        &["--division", "exact"],
-        "SELECT (1 / 3 AS ?q) WHERE {}",
+        &["--division", "exact", "--fuel", "1000000000"],
+        "SELECT (1 / 3 AS ?q) (COALESCE(1 / 3, \"caught\") AS ?c) WHERE {}",
     );
-    assert_eq!(code(&out), 1, "{}", stdout(&out));
-    assert!(stderr(&out).contains("FOAR0002"), "{}", stderr(&out));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("\"caught\""), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("purrdf-expression-errors 1\nabsorbed err:FOAR0002 2\n"),
+        "{}",
+        stderr(&out)
+    );
     // A scale and rounding.
     let out = query(
         dir.path(),
@@ -113,6 +119,38 @@ fn division_policy_is_selectable_and_refuses_only_a_non_terminating_quotient() {
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(stdout(&out).contains("0.6666"), "{}", stdout(&out));
+}
+
+/// A governed query reports the XPath F&O errors it absorbed into unbound values on
+/// stderr, one `absorbed CODE COUNT` line per code, while stdout keeps the rows; the
+/// same query without the failing expression writes no block.
+#[test]
+fn a_governed_query_names_the_errors_it_absorbed() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let governed = ["--fuel", "1000000000"];
+    let out = query(
+        dir.path(),
+        &governed,
+        "SELECT (1 / 0 AS ?q) (\"x\" + 1 AS ?s) (1 / 0 AS ?r) (2 AS ?k) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let report = stderr(&out);
+    assert!(report.contains("purrdf-expression-errors 1\n"), "{report}");
+    assert!(report.contains("absorbed err:FOAR0001 2\n"), "{report}");
+    assert!(report.contains("absorbed err:XPTY0004 1\n"), "{report}");
+    assert!(stdout(&out).contains('2'), "{}", stdout(&out));
+    // Neighbour: nothing fails, nothing is reported.
+    let out = query(
+        dir.path(),
+        &governed,
+        "SELECT (1 / 2 AS ?q) (2 AS ?k) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("purrdf-expression-errors"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]

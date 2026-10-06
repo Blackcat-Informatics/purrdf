@@ -64,6 +64,11 @@
 //! * the governor report to **stderr** — which governor stopped the run, what the rows
 //!   bound, and the whole consumption/ceiling vector — written FIRST, so that a trip is
 //!   announced even if serializing the rows then fails;
+//! * after it, and on a complete governed run too, the expression-error block
+//!   (`purrdf-expression-errors 1`, one `absorbed CODE COUNT` line per XPath F&O code)
+//!   when the run absorbed any expression error into an unbound value — the codes of
+//!   [`GovernorEvidence::expression_errors`](purrdf_sparql_eval::GovernorEvidence::expression_errors).
+//!   An ungoverned run keeps no evidence, so it writes no block;
 //! * the certified rows to **stdout**, through the same [`emit_result`] a complete result
 //!   goes through, in the requested `--results-format`.
 //!
@@ -1200,12 +1205,19 @@ fn emit_governed(
         )
     };
     match outcome {
-        GovernedOutcome::Complete { result, .. } => {
+        GovernedOutcome::Complete {
+            result, evidence, ..
+        } => {
+            eprint!("{}", governors::render_expression_errors(evidence));
             emit(result)?;
             Ok(CliOutcome::Complete)
         }
         GovernedOutcome::BudgetExhausted(exhausted) => {
             eprint!("{}", governors::render_trip(exhausted));
+            eprint!(
+                "{}",
+                governors::render_expression_errors(&exhausted.evidence)
+            );
             if let Some(partial) = exhausted.partial.result() {
                 emit(partial.result())?;
             }
