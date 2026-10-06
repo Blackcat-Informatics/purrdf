@@ -620,6 +620,7 @@ dependencies = [
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
+ "sha2",
 ]
 
 [[package]]

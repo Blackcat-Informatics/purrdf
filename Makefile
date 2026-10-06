@@ -51,7 +51,7 @@ CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 # merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
 PURRDF_RATCHET_BASE ?= origin/main
 
-.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help geodtest doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
 
 # The changelog generator is pinned so the detailed CHANGELOG.md history stays
@@ -671,6 +671,14 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 # portable wasm and SIMD wasm. This bounded corpus has its own runner gate.
 geo-determinism: ## Execute frozen geometry/geodesy bytes on native and both wasm paths.
 	cargo run --locked -p purrdf-geo-kernel --example qualify_determinism
+
+# Karney's public GeodTest (CC0, https://zenodo.org/records/32156, 500,000
+# rows) is not vendored. Point GEODTEST at GeodTest.dat; the runner refuses
+# any input whose SHA-256 differs from the published file's.
+GEODTEST ?= GeodTest.dat
+GEODTEST_SHA256 := c1cabdddbcd7d5cfc6e6111db4608fa55be292b15ba2c5bcd6372a178848c692
+geodtest: ## Qualify distance, inverse and direct on all 500,000 GeodTest rows, digest-checked (own gate, NOT part of `check`).
+	cargo run --locked --release -p purrdf-geo-kernel --example geodesic_corpus -- 500000 10000000 all portable $(GEODTEST_SHA256) < $(GEODTEST)
 
 SIMD_ASM_ARGS ?=
 simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).

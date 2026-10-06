@@ -35,6 +35,7 @@ purrdf-xsd = { workspace = true }
 purrdf-alloc-probe = { workspace = true }
 purrdf-stack = { workspace = true }
 purrdf-testkit = { workspace = true }
+sha2 = { workspace = true }
 
 [[test]]
 name = "cells_determinism"

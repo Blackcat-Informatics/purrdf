@@ -1,7 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Report-only streamed public GeodTest native geodesic qualification.
+//! Streamed public GeodTest native geodesic qualification.
+//!
+//! The corpus (Karney, CC0, <https://zenodo.org/records/32156>) is generated
+//! from exact `lat1`, `azi1` and `s12` by the direct problem; its printed
+//! endpoint `lat2`/`lon2` carries 18 decimals. The inverse here starts from
+//! that printed endpoint, so its azimuths and area are qualified against an
+//! allowance conditioned on the inverse problem's sensitivity to that endpoint
+//! rounding: an endpoint displacement `δp` moves the first azimuth by at most
+//! about `δp/|m12|` and the swept quadrilateral area by about
+//! `δazi·∫|m| ds <= δazi·s12·a`. Nominal disagreements are still reported. Any
+//! conditioned excess, distance mismatch, refusal or a wrong input digest
+//! fails the run.
 #![allow(missing_docs)]
 
 use purrdf_geo_kernel::{
@@ -10,6 +21,7 @@ use purrdf_geo_kernel::{
 };
 use purrdf_hash::Backend as _;
 use purrdf_xsd::math::FloatProductBackend;
+use sha2::{Digest as _, Sha256};
 use std::{
     io::{self, BufRead},
     time::Instant,
@@ -26,6 +38,7 @@ fn positive_maximum(maximum: u64) -> Result<(), &'static str> {
 fn read_rows(
     reader: impl BufRead,
     maximum: u64,
+    digest: &mut Sha256,
     mut visit: impl FnMut(u64, [Rat; 10]) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     positive_maximum(maximum)?;
@@ -34,6 +47,8 @@ fn read_rows(
         let line = lines
             .next()
             .ok_or("corpus input ended before maximum_rows")??;
+        digest.update(line.as_bytes());
+        digest.update(b"\n");
         let mut fields = line.split_whitespace();
         let mut values = std::array::from_fn(|_| Rat::zero());
         for value in &mut values {
@@ -94,8 +109,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or("unknown numerical backend")
         })
         .transpose()?;
+    let expected_digest = args.next();
     if !["distance", "inverse", "direct", "all"].contains(&mode.as_str()) || args.next().is_some() {
-        return Err("usage: geodesic_corpus [maximum_rows] [work_limit] [distance|inverse|direct|all] [portable|sse2|avx2|avx512|neon|simd128] < public-data".into());
+        return Err("usage: geodesic_corpus [maximum_rows] [work_limit] [distance|inverse|direct|all] [portable|sse2|avx2|avx512|neon|simd128] [expected_input_sha256] < public-data".into());
     }
     positive_maximum(maximum)?;
     let inverse = mode == "inverse" || mode == "all";
@@ -140,12 +156,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "0.02",
     ]
     .map(|text| Rat::parse_decimal(text).expect("exact nominal allowance"));
+    // Conditioned allowances. The printed endpoint is within half a unit of
+    // its 18th decimal in latitude and longitude: at most 1e-18 degrees of
+    // arc in total, below 2e-13 m on any ellipsoid with a <= 6.4e6 m.
+    let endpoint_quantum = Rat::parse_decimal("0.0000000000002").expect("exact quantum");
+    let degrees_per_radian = Rat::parse_decimal("57.29577951308232088").expect("exact bound");
+    let semimajor_bound = Rat::from_i64(6_400_000);
+    let mut metadata_conditioned_excesses = [0_u64; 5];
+    let mut metadata_conjugate_attributed = [0_u64; 5];
     let full_turn = Rat::from_i64(360);
     let direct_tolerance = Rat::parse_decimal("0.000001").expect("exact tolerance");
     let mut work_total = 0_u64;
     let mut workspace_peak = 0_u64;
     let started = Instant::now();
-    read_rows(io::stdin().lock(), maximum, |row, fields| {
+    let mut digest = Sha256::new();
+    read_rows(io::stdin().lock(), maximum, &mut digest, |row, fields| {
         let exact = |index: usize| fields[index].clone();
         let a = LonLat::new(exact(1), exact(0))?;
         let b = LonLat::new(exact(4), exact(3))?;
@@ -169,6 +194,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             )
                         })?;
                         inverse_rows += 1;
+                        let reduced = exact(8).abs();
+                        let first_azimuth = if reduced.is_zero() {
+                            None
+                        } else {
+                            // Four times the first-order bound covers the
+                            // second-order term near a conjugate point.
+                            Some(
+                                endpoint_quantum
+                                    .mul(&Rat::from_i64(4))
+                                    .div(&reduced)
+                                    .expect("nonzero reduced length"),
+                            )
+                        };
+                        // A printed zero reduced length is a conjugate
+                        // endpoint: the cusp of the cut locus, where the
+                        // shortest geodesic is not unique to first order. The
+                        // disagreement is attributed only when the corpus's
+                        // own construction (direct from exact azi1 and s12)
+                        // lands on the printed endpoint; this row's distance
+                        // and witness checks prove the same of our geodesic.
+                        let conjugate_consistent = if reduced.is_zero() {
+                            let construction = prepared
+                                .direct(&a, &exact(2), &Metres::new(exact(6)), &mut context)
+                                .and_then(|direct| {
+                                    prepared.distance(direct.endpoint(), &b, &mut context)
+                                });
+                            Some(construction.is_ok_and(|residual| {
+                                residual.value().exact() <= &direct_tolerance
+                            }))
+                        } else {
+                            None
+                        };
+                        let scale = result.scale21().abs().add(&Rat::one());
+                        let conditioned = |field: usize| -> Option<Rat> {
+                            let azimuth = first_azimuth.as_ref()?;
+                            Some(match field {
+                                0 => azimuth.mul(&degrees_per_radian),
+                                1 => azimuth.mul(&scale).mul(&degrees_per_radian),
+                                4 => azimuth
+                                    .mul(&exact(6))
+                                    .mul(&semimajor_bound)
+                                    .mul(&Rat::from_i64(2)),
+                                _ => Rat::zero(),
+                            })
+                        };
                         for (field, actual) in [
                             forward,
                             final_azimuth,
@@ -187,6 +257,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             metadata_nominal_excesses[field] +=
                                 u64::from(disagreement > metadata_nominal_allowances[field]);
+                            let excess = match conditioned(field) {
+                                Some(extra) => {
+                                    disagreement > metadata_nominal_allowances[field].add(&extra)
+                                }
+                                None => conjugate_consistent != Some(true),
+                            };
+                            metadata_conjugate_attributed[field] += u64::from(
+                                !excess
+                                    && conjugate_consistent == Some(true)
+                                    && disagreement > metadata_nominal_allowances[field],
+                            );
+                            if excess && disagreement > metadata_nominal_allowances[field] {
+                                metadata_conditioned_excesses[field] += 1;
+                                if metadata_conditioned_excesses[field] <= 16 {
+                                    eprintln!(
+                                        "row={rows} field={field} conditioned_excess={} m12={}",
+                                        disagreement.to_decimal_string(18),
+                                        exact(8).to_decimal_string(12)
+                                    );
+                                }
+                            }
                             metadata_maxima[field] =
                                 metadata_maxima[field].clone().max(disagreement);
                         }
@@ -311,12 +402,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enumerate()
         {
             println!(
-                "nominal_metadata={name} excesses={} maximum_disagreement={} allowance={}",
+                "nominal_metadata={name} excesses={} conjugate_attributed={} conditioned_excesses={} maximum_disagreement={} allowance={}",
                 metadata_nominal_excesses[field],
+                metadata_conjugate_attributed[field],
+                metadata_conditioned_excesses[field],
                 metadata_maxima[field].to_decimal_string(18),
                 metadata_nominal_allowances[field].to_decimal_string(18),
             );
         }
+    }
+    let input_digest: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    println!("input_sha256={input_digest}");
+    if let Some(expected) = &expected_digest
+        && expected != &input_digest
+    {
+        return Err("corpus input digest differs from the expected digest".into());
     }
     Completion {
         rows,
@@ -327,6 +431,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .validate(maximum, &mode)?;
     if refusals != 0
+        || metadata_conditioned_excesses
+            .iter()
+            .any(|count| *count != 0)
         || mismatches != 0
         || inverse_witness_mismatches != 0
         || direct_refusals != 0
@@ -346,16 +453,16 @@ mod tests {
         const ROW: &str = "0 0 90 0 1 90 111319.49079327357 1 111313.80114861293 0\n";
         let mut visited = 0;
         assert!(
-            read_rows(io::Cursor::new(ROW), 0, |_, _| {
+            read_rows(io::Cursor::new(ROW), 0, &mut Sha256::new(), |_, _| {
                 visited += 1;
                 Ok(())
             })
             .is_err()
         );
         assert_eq!(visited, 0);
-        assert!(read_rows(io::Cursor::new(""), 1, |_, _| Ok(())).is_err());
+        assert!(read_rows(io::Cursor::new(""), 1, &mut Sha256::new(), |_, _| Ok(())).is_err());
         assert!(
-            read_rows(io::Cursor::new(ROW), 2, |_, _| {
+            read_rows(io::Cursor::new(ROW), 2, &mut Sha256::new(), |_, _| {
                 visited += 1;
                 Ok(())
             })
@@ -368,7 +475,7 @@ mod tests {
             "0 0 90 0 1 90 111319 1 111313 0 extra\n",
         ] {
             assert!(
-                read_rows(io::Cursor::new(malformed), 1, |_, _| {
+                read_rows(io::Cursor::new(malformed), 1, &mut Sha256::new(), |_, _| {
                     panic!("malformed row reached a numerical entry")
                 })
                 .is_err()
@@ -376,12 +483,17 @@ mod tests {
         }
         let source = format!("{ROW}{ROW}invalid trailing data outside the requested prefix\n");
         visited = 0;
-        read_rows(io::Cursor::new(source), 2, |row, values| {
-            visited += 1;
-            assert_eq!(row, visited);
-            assert_eq!(values[6], Rat::parse_decimal("111319.49079327357").unwrap());
-            Ok(())
-        })
+        read_rows(
+            io::Cursor::new(source),
+            2,
+            &mut Sha256::new(),
+            |row, values| {
+                visited += 1;
+                assert_eq!(row, visited);
+                assert_eq!(values[6], Rat::parse_decimal("111319.49079327357").unwrap());
+                Ok(())
+            },
+        )
         .unwrap();
         assert_eq!(visited, 2);
     }
