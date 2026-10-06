@@ -492,20 +492,22 @@ impl GlobalDictionary {
     /// already, skipping the revalidation.
     ///
     /// This is deliberately not a bypass and not reachable outside this crate. It
-    /// exists for exactly two callers, both of which copy terms between two term
-    /// tables that have each already enforced the invariant:
+    /// serves copies between term tables that have already enforced the invariant:
     ///
     /// * [`PageTranslation::build`](super::paged::PageTranslation::build), whose input
     ///   values are read out of a frozen [`RdfDataset`] — and the only way to obtain
     ///   one is `RdfDatasetBuilder::freeze`, which refuses a relative IRI; and
     /// * [`PagedDataset::compact`](super::paged::PagedDataset::compact), whose input
     ///   values are read out of THIS type, where every IRI passed
-    ///   [`intern_iri`](Self::intern_iri) on the way in.
+    ///   [`intern_iri`](Self::intern_iri) on the way in; and
+    /// * [`PagedStack::snapshot`](super::paged::PagedStack::snapshot), which composes
+    ///   sealed dictionaries and a frozen head. Its by-value removals have also
+    ///   passed the native freeze boundary before they become retained metadata.
     ///
-    /// Both walk every term of every page on each call, so re-parsing IRIs that were
-    /// already parsed would be pure, repeated waste on the paged hot path. Any NEW
-    /// caller is by definition a fresh ingress and must use
-    /// [`intern`](Self::intern) instead.
+    /// These copies can walk whole dictionaries, so re-parsing IRIs that were
+    /// already parsed would be repeated waste on the paged hot path. A caller must
+    /// establish that every value already passed that boundary; fresh ingress uses
+    /// [`intern`](Self::intern).
     ///
     /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
     /// predicate and object, each fully before the next, then the triple itself.
@@ -537,12 +539,12 @@ impl GlobalDictionary {
                     } => {
                         let datatype_id =
                             dict.try_intern_lookup(GlobalTermLookup::Iri(datatype))?;
-                        dict.try_intern_lookup(GlobalTermLookup::Literal {
-                            lexical: lexical_form,
-                            datatype: datatype_id,
-                            language: language.as_deref(),
-                            direction: *direction,
-                        })?
+                        dict.try_intern_literal(
+                            lexical_form,
+                            datatype_id,
+                            language.as_deref(),
+                            *direction,
+                        )?
                     }
                     TermValue::Triple { s, p, o } => {
                         return Ok(Nested::Triple(&**s, &**p, &**o));
@@ -573,14 +575,31 @@ impl GlobalDictionary {
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
     ) -> GlobalTermId {
+        self.try_intern_literal(lexical, datatype, language, direction)
+            .expect("literal and referenced blanks fit resident capacity")
+    }
+
+    /// One literal registration home for ordinary and validated ingress. Every
+    /// embedded identity passes the same checked admission as the literal itself;
+    /// occurrence order and scopes come from the shared composite token scanner.
+    fn try_intern_literal(
+        &mut self,
+        lexical: &str,
+        datatype: GlobalTermId,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> Result<GlobalTermId, ()> {
         let blanks = match self.resolve(datatype) {
             TermRef::Iri(iri) => crate::cdt_blank::cdt_embedded_blanks(lexical, iri),
             _ => Vec::new(),
         };
         for (label, scope) in blanks {
-            self.intern_blank(&label, scope);
+            self.try_intern_lookup(GlobalTermLookup::Blank {
+                label: &label,
+                scope,
+            })?;
         }
-        self.intern_lookup(GlobalTermLookup::Literal {
+        self.try_intern_lookup(GlobalTermLookup::Literal {
             lexical,
             datatype,
             language,
@@ -1181,6 +1200,77 @@ mod tests {
         assert_eq!(dict.reintern_validated(&value), triple);
         assert_eq!(dict.term_id_by_value(&value), Some(triple));
         assert_eq!(dict.len(), count);
+    }
+
+    #[test]
+    fn cold_validated_reinterning_preserves_composite_registration() {
+        let scoped = BlankScope(7).qualify_label("same").into_owned();
+        let lexical = format!(
+            "[_:same, {{'scoped': _:{scoped}, 'deep': '[_:nested]'^^<{}>, \
+             'triple': <<( _:subject <http://example.org/p> _:object )>>, \
+             'opaque': '_:quoted'}}]",
+            purrdf_cdt::CDT_LIST
+        );
+        let literal = TermValue::typed_literal(&lexical, purrdf_cdt::CDT_LIST);
+        let map = TermValue::typed_literal(format!("{{'list': {lexical}}}"), purrdf_cdt::CDT_MAP);
+        let recursive = TermValue::Triple {
+            s: TermBox::new(TermValue::Triple {
+                s: TermBox::new(TermValue::iri("http://example.org/holder")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(literal.clone()),
+            }),
+            p: TermBox::new(TermValue::iri("http://example.org/outer")),
+            o: TermBox::new(TermValue::simple_literal("[_:opaque]")),
+        };
+        for value in [literal, map, recursive] {
+            let mut ordinary = GlobalDictionary::new();
+            let ordinary_id = ordinary.intern(&value).expect("absolute fixture");
+            let mut checked = GlobalDictionary::new();
+            let checked_id = checked
+                .try_reintern_validated(&value)
+                .expect("small resident fixture");
+            let mut validated = GlobalDictionary::new();
+            let validated_id = validated.reintern_validated(&value);
+            for dict in [&ordinary, &checked, &validated] {
+                for (label, scope) in [
+                    ("same", BlankScope::DEFAULT),
+                    ("same", BlankScope(7)),
+                    ("nested", BlankScope::DEFAULT),
+                    ("subject", BlankScope::DEFAULT),
+                    ("object", BlankScope::DEFAULT),
+                ] {
+                    let blank = TermValue::Blank {
+                        label: label.to_owned(),
+                        scope,
+                    };
+                    assert_eq!(
+                        dict.term_id_by_value(&blank),
+                        ordinary.term_id_by_value(&blank),
+                        "cold ingress retains the exact embedded identity {blank:?}"
+                    );
+                    assert!(dict.term_id_by_value(&blank).is_some());
+                }
+                for opaque in ["quoted", "opaque"] {
+                    assert_eq!(dict.term_id_by_value(&TermValue::blank(opaque)), None);
+                }
+            }
+            assert_eq!([checked_id, validated_id], [ordinary_id; 2]);
+            for dict in [&mut ordinary, &mut checked, &mut validated] {
+                assert_eq!(dict.term_value(ordinary_id), value);
+                let count = dict.len();
+                assert_eq!(dict.try_reintern_validated(&value), Ok(ordinary_id));
+                assert_eq!(dict.reintern_validated(&value), ordinary_id);
+                assert_eq!(dict.intern(&value).expect("repeated fixture"), ordinary_id);
+                assert_eq!(dict.len(), count, "all ingress paths are store-once");
+            }
+            assert_eq!(checked.len(), ordinary.len());
+            assert_eq!(validated.len(), ordinary.len());
+            for index in 0..ordinary.len() {
+                let id = GlobalTermId::from_index(u64::try_from(index).expect("small index"));
+                assert_eq!(checked.term_value(id), ordinary.term_value(id));
+                assert_eq!(validated.term_value(id), ordinary.term_value(id));
+            }
+        }
     }
 
     #[test]
