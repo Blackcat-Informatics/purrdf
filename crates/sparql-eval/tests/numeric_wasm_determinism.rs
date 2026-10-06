@@ -32,7 +32,7 @@ use support::{empty_dataset, numeric_cell as cell, squaring_chain_from};
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
 /// The transcript's FNV-1a digest, as both targets compute it.
-const GOLDEN_DIGEST: u64 = 0x3cbd_d7c8_51af_4156;
+const GOLDEN_DIGEST: u64 = 0xda39_00a9_3723_c4ac;
 
 /// `i128::MAX`.
 const MAX: &str = "170141183460469231731687303715884105727";
@@ -178,7 +178,8 @@ fn transcript() -> String {
             &QueryGovernors::METERED,
         ) {
             Ok(outcome) => outcome_text(&outcome),
-            // A policy that refuses a quotient refuses the query, with its F&O code.
+            // A query error is transcribed with its code (a quotient the policy cannot
+            // express is an expression error instead, unbound in the rows).
             Err(diagnostic) => format!("query error: {}: {}", diagnostic.code, diagnostic.message),
         };
         let _ = writeln!(text, "{policy}\n{answered}");
