@@ -19,11 +19,11 @@
 //! price — the matcher's join steps, the successor-subset enumerations a `≤n` clause body
 //! walks, the achiever closures every neighbourhood read takes, the branch-state clone each
 //! alternative starts from — while the number of rounds grows far more slowly. Measured
-//! UNCAPPED, this family costs six to eleven times as much work per added copy: 1.6 million
-//! units at three copies, 17.8 million at four, 138 million at five, 805 million at six. At ten
-//! copies it does not finish, and the failure it used to fail with was the dangerous kind — the run
-//! ground on while its certificate reported `steps` at a few percent of the round budget,
-//! which reads exactly like a search with plenty of room left.
+//! UNCAPPED, this family costs six to eleven and a half times as much work per added copy: 1.3
+//! million units at three copies, 15.1 million at four, 122 million at five, 731 million at
+//! six. At ten copies it does not finish, and the failure it used to fail with was the
+//! dangerous kind — the run ground on while its certificate reported `steps` at a few percent
+//! of the round budget, which reads exactly like a search with plenty of room left.
 //!
 //! # What this file asserts
 //!

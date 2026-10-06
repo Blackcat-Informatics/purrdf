@@ -14,11 +14,12 @@
 //!
 //! # Two references, because they fail differently
 //!
-//! Every generated knowledge base is decided FIVE times: by the hypertableau, by the
+//! Every generated knowledge base is decided SIX times: by the hypertableau, by the
 //! hypertableau again (determinism), by the hypertableau over the ALL-META encoding of the
 //! same terminology (the ENCODING differential — see [`check`]), by the hypertableau under a
 //! WEAKENED blocking condition (the BLOCKING differential — see [`blocking_differential`]),
-//! and by the concept-tree tableau. The oracle is exact and
+//! by the hypertableau re-matching every node every round (the DELTA differential — see
+//! [`delta_differential`]), and by the concept-tree tableau. The oracle is exact and
 //! shares nothing with either calculus, but it is bounded — over a knowledge base that can
 //! force an element beyond the named individuals it can only ever exhibit a model, never rule
 //! one out (see [`bounded_domain`]). The concept-tree tableau is not exact, but it is
@@ -1234,6 +1235,10 @@ struct Tally {
     /// predecessor-label half of the blocking signature rests on, and it is floored for the
     /// same reason the other two differentials are.
     blocking: u32,
+    /// Cases where the hypertableau finished both with delta saturation and with a FULL
+    /// re-match every round, so their verdicts were compared and agreed — the population the
+    /// delta region's completeness claim is measured over. Floored like the other three.
+    delta: u32,
     /// WORK units the hypertableau spent over EVERY case of this property, summed.
     work: u64,
     /// The most work any ONE case of this property spent.
@@ -1475,14 +1480,48 @@ fn blocking_differential(
     Ok(())
 }
 
+/// The DELTA DIFFERENTIAL: the same knowledge base decided with a full re-match every round
+/// must reach the verdict delta saturation reached.
+///
+/// Delta saturation re-matches only the nodes a change since the last round can reach, which
+/// is sound exactly when that region is measured the way a clause match travels. A verdict
+/// that moves under the full re-match is a node the region missed — a fixpoint reported that
+/// is not one — and it fails the run.
+fn delta_differential(
+    case: &mut Case,
+    shipped: &graph::Decision,
+    cap: graph::Budget,
+    tally: &RefCell<Tally>,
+) -> Result<(), TestCaseError> {
+    case.kb.full_rematch = true;
+    let full = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+    case.kb.full_rematch = false;
+    if shipped.exhausted || full.exhausted {
+        return Ok(());
+    }
+    if shipped.consistent != full.consistent {
+        return Err(TestCaseError::fail(format!(
+            "DELTA SATURATION MISSED A NODE: the delta region says {}, a full re-match says \
+             {}.\ndelta: {shipped:?}\nfull: {full:?}\naxioms:\n{}\n{}",
+            shipped.consistent,
+            full.consistent,
+            case.axioms_text(),
+            case.oracle_text()
+        )));
+    }
+    tally.borrow_mut().delta += 1;
+    Ok(())
+}
+
 /// Check one generated knowledge base, recording how it resolved.
 ///
-/// Nine things happen here: the hypertableau is asked twice and must answer identically; its
+/// Ten things happen here: the hypertableau is asked twice and must answer identically; its
 /// verdict is compared against the concept-tree tableau's, which must AGREE; BOTH cores' shape
 /// counters are held to [`counters_are_coherent`]; it is compared
 /// against ITSELF over the all-meta encoding of the same terminology, which must also agree;
 /// it is compared against ITSELF again under the label-only blocking mutation, which must
-/// agree too ([`blocking_differential`]); a case neither core could finish is skipped; a case
+/// agree too ([`blocking_differential`]); it is compared against ITSELF re-matching every node
+/// every round, which must agree as well ([`delta_differential`]); a case neither core could finish is skipped; a case
 /// whose knowledge base reaches `Δ_D` is recorded as one the enumeration cannot speak to
 /// ([`Case::enumerable`]); where the oracle exhibits a model the hypertableau's `consistent`
 /// is asserted unconditionally; and where the oracle finds NO model and
@@ -1512,6 +1551,8 @@ fn check(
     // THE BLOCKING DIFFERENTIAL: the same knowledge base, the same encoding and the same
     // calculus, under a WEAKENED blocking condition.
     blocking_differential(&mut case, &first, cap, tally)?;
+    // THE DELTA DIFFERENTIAL: the same search, re-matching every node every round.
+    delta_differential(&mut case, &first, cap, tally)?;
     // THE DIFFERENTIAL. The concept-tree tableau decides the same fragment by a different
     // rule set, so where both finish their verdicts must be the same verdict. A divergence is
     // a soundness or completeness bug in one of the two — never a recorded difference.
@@ -1772,6 +1813,14 @@ fn run_property(
         tally.blocking * 20 >= cases * 19,
         "{name} compared the two blocking conditions on fewer than 95% of its cases, so the \
          claim that the pairwise condition changes no verdict rests on almost nothing: \
+         {tally:?}"
+    );
+    // The DELTA population, floored on the same argument: the delta region's completeness
+    // claim is measured over it.
+    assert!(
+        tally.delta * 20 >= cases * 19,
+        "{name} compared delta saturation with a full re-match on fewer than 95% of its \
+         cases, so the claim that the delta region misses no node rests on almost nothing: \
          {tally:?}"
     );
     // The ORACLE direction, in whichever of its three forms this property has — see [`Bound`],

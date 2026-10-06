@@ -142,6 +142,168 @@ pub(crate) struct Seen {
     value_class: Option<u32>,
 }
 
+/// Elements per [`PVec`] chunk: a clone copies one pointer per chunk, a write copies one chunk.
+const CHUNK: usize = 256;
+
+/// A persistent vector: chunks behind [`Rc`](std::rc::Rc), copy-on-write.
+///
+/// A search keeps the state of every open level, and a chain of choices that never backtracks
+/// opens one level per choice: 6,893 on one production class model. A level that deep-cloned
+/// the graph's vectors cost the whole graph — ten to twelve megabytes on a 95,000-node ABox —
+/// so memory grew with depth times graph and ran out within two minutes. Here a clone copies
+/// one pointer per chunk and a write copies only the chunk it lands in, so a level costs what
+/// it changed. Values and their order are those of a plain vector.
+#[derive(Clone)]
+pub(crate) struct PVec<T> {
+    chunks: Vec<std::rc::Rc<Vec<T>>>,
+    len: usize,
+}
+
+impl<T> Default for PVec<T> {
+    fn default() -> Self {
+        Self {
+            chunks: Vec::new(),
+            len: 0,
+        }
+    }
+}
+
+impl<T: Clone> PVec<T> {
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&T> {
+        if index >= self.len {
+            return None;
+        }
+        self.chunks[index / CHUNK].get(index % CHUNK)
+    }
+
+    pub(crate) fn push(&mut self, value: T) {
+        if self.len.is_multiple_of(CHUNK) {
+            self.chunks
+                .push(std::rc::Rc::new(Vec::with_capacity(CHUNK)));
+        }
+        let last = self.chunks.last_mut().expect("a chunk holds the next slot");
+        std::rc::Rc::make_mut(last).push(value);
+        self.len += 1;
+    }
+
+    /// Every element, in index order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+        self.chunks.iter().flat_map(|chunk| chunk.iter())
+    }
+
+    pub(crate) fn resize_with(&mut self, len: usize, mut fill: impl FnMut() -> T) {
+        while self.len < len {
+            self.push(fill());
+        }
+    }
+}
+
+impl<T> std::ops::Index<usize> for PVec<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        assert!(
+            index < self.len,
+            "PVec index {index} out of bounds of {}",
+            self.len
+        );
+        &self.chunks[index / CHUNK][index % CHUNK]
+    }
+}
+
+impl<T: Clone> std::ops::IndexMut<usize> for PVec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        assert!(
+            index < self.len,
+            "PVec index {index} out of bounds of {}",
+            self.len
+        );
+        &mut std::rc::Rc::make_mut(&mut self.chunks[index / CHUNK])[index % CHUNK]
+    }
+}
+
+/// Each node's blocked status, one bit per node: a stacked level keeps one of these.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct BlockedBits {
+    words: Vec<u64>,
+    len: usize,
+}
+
+impl BlockedBits {
+    pub(crate) fn from_flags(flags: &[bool]) -> Self {
+        let mut words = vec![0u64; flags.len().div_ceil(64)];
+        for (index, &flag) in flags.iter().enumerate() {
+            if flag {
+                words[index / 64] |= 1 << (index % 64);
+            }
+        }
+        Self {
+            words,
+            len: flags.len(),
+        }
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<bool> {
+        (index < self.len).then(|| self.words[index / 64] & (1 << (index % 64)) != 0)
+    }
+}
+
+/// A completion graph's nodes, SHARED between the states a search clones.
+///
+/// Every alternative of a case split starts from a clone of the state it splits, and the
+/// search keeps the state of every open level. A deep clone of a large ABox's nodes per level
+/// exhausted memory within seconds; here a clone copies one pointer per node, and a node is
+/// copied only when a branch writes to it ([`Rc::make_mut`] through [`IndexMut`]). Reads and
+/// writes are unchanged at every call site, so the search is the same search.
+///
+/// [`Rc::make_mut`]: std::rc::Rc::make_mut
+/// [`IndexMut`]: std::ops::IndexMut
+#[derive(Clone, Default)]
+pub(crate) struct NodeVec(PVec<std::rc::Rc<Node>>);
+
+impl NodeVec {
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn push(&mut self, node: Node) {
+        self.0.push(std::rc::Rc::new(node));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Node> {
+        (0..self.len()).map(|index| &self[index])
+    }
+}
+
+impl From<Vec<Node>> for NodeVec {
+    fn from(nodes: Vec<Node>) -> Self {
+        let mut out = Self::default();
+        for node in nodes {
+            out.push(node);
+        }
+        out
+    }
+}
+
+impl std::ops::Index<usize> for NodeVec {
+    type Output = Node;
+
+    fn index(&self, index: usize) -> &Node {
+        &self.0[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for NodeVec {
+    fn index_mut(&mut self, index: usize) -> &mut Node {
+        std::rc::Rc::make_mut(&mut self.0[index])
+    }
+}
+
 impl State {
     /// The current [`Seen`] signature of every node.
     pub(crate) fn signatures(&self) -> Vec<Seen> {
@@ -175,29 +337,50 @@ impl State {
         changed
     }
 
-    /// Every root within `radius` edges of a `changed` root, by undirected edge steps.
-    pub(crate) fn affected(&self, changed: &[bool], radius: usize) -> Vec<bool> {
-        let mut affected = changed.to_vec();
-        let mut frontier: Vec<usize> = (0..changed.len()).filter(|&x| changed[x]).collect();
-        for _ in 0..radius {
-            let mut next = Vec::new();
-            for &y in &frontier {
-                for &edge in self.class_edges(y) {
-                    let (from, to, _) = self.edges[edge];
-                    for z in [find(self, from), find(self, to)] {
-                        if !affected[z] {
-                            affected[z] = true;
-                            next.push(z);
+    /// Every root within `radius` READS of a `changed` root: undirected edge steps, where a
+    /// step over an edge of a `transitive` property costs nothing.
+    ///
+    /// The distance is the one a clause match actually travels. A body atom over a role reads
+    /// [`Graph::neighbors`], which follows a transitive property's edges to ANY length in one
+    /// read, so a chain of them is a single hop to the matcher however long it is — a region
+    /// counted in raw edges misses the start of a long transitive chain whose end changed,
+    /// and the delta round then reports a fixpoint that is not one. Every other edge is one
+    /// read. A 0-1 breadth-first search (zero-cost steps to the front of the queue) computes
+    /// that distance exactly, in one pass over the reachable edges.
+    pub(crate) fn affected(
+        &self,
+        changed: &[bool],
+        radius: usize,
+        transitive: &BTreeSet<u32>,
+    ) -> Vec<bool> {
+        let mut dist = vec![usize::MAX; changed.len()];
+        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+        for x in (0..changed.len()).filter(|&x| changed[x]) {
+            dist[x] = 0;
+            queue.push_back(x);
+        }
+        while let Some(y) = queue.pop_front() {
+            let here = dist[y];
+            for &edge in self.class_edges(y) {
+                let (from, to, property) = self.edges[edge];
+                let cost = usize::from(!transitive.contains(&property));
+                let there = here + cost;
+                if there > radius {
+                    continue;
+                }
+                for z in [find(self, from), find(self, to)] {
+                    if there < dist[z] {
+                        dist[z] = there;
+                        if cost == 0 {
+                            queue.push_front(z);
+                        } else {
+                            queue.push_back(z);
                         }
                     }
                 }
             }
-            if next.is_empty() {
-                break;
-            }
-            frontier = next;
         }
-        affected
+        dist.into_iter().map(|d| d <= radius).collect()
     }
 
     /// Append the edge `from → to` over `property`, indexing it under both endpoints' roots.
@@ -208,27 +391,29 @@ impl State {
         let to = find(self, to);
         for node in [from, to] {
             if self.adjacency.len() <= node {
-                self.adjacency.resize_with(node + 1, Vec::new);
+                self.adjacency.resize_with(node + 1, std::rc::Rc::default);
             }
         }
-        self.adjacency[from].push(edge);
+        std::rc::Rc::make_mut(&mut self.adjacency[from]).push(edge);
         if to != from {
-            self.adjacency[to].push(edge);
+            std::rc::Rc::make_mut(&mut self.adjacency[to]).push(edge);
         }
     }
 
     /// Fold `discard`'s indexed edges into `keep`'s, keeping the list ascending and unique.
     fn merge_adjacency(&mut self, keep: usize, discard: usize) {
-        let Some(folded) = self.adjacency.get_mut(discard).map(std::mem::take) else {
-            return;
-        };
-        if folded.is_empty() {
+        if discard >= self.adjacency.len() || self.adjacency[discard].is_empty() {
             return;
         }
+        let folded = std::mem::take(&mut self.adjacency[discard]);
         if self.adjacency.len() <= keep {
-            self.adjacency.resize_with(keep + 1, Vec::new);
+            self.adjacency.resize_with(keep + 1, std::rc::Rc::default);
         }
         let kept = std::mem::take(&mut self.adjacency[keep]);
+        let (kept, folded) = (
+            std::rc::Rc::unwrap_or_clone(kept),
+            std::rc::Rc::unwrap_or_clone(folded),
+        );
         let mut merged = Vec::with_capacity(kept.len() + folded.len());
         let (mut left, mut right) = (kept.into_iter().peekable(), folded.into_iter().peekable());
         loop {
@@ -245,12 +430,12 @@ impl State {
             };
             merged.extend(next);
         }
-        self.adjacency[keep] = merged;
+        self.adjacency[keep] = std::rc::Rc::new(merged);
     }
 
     /// The indices of every edge with an endpoint resolving to the root `x`, ascending.
     pub(crate) fn class_edges(&self, x: usize) -> &[usize] {
-        self.adjacency.get(x).map_or(&[], Vec::as_slice)
+        self.adjacency.get(x).map_or(&[], |edges| edges.as_slice())
     }
 }
 
@@ -290,8 +475,8 @@ impl AchieverCache {
     }
 
     #[cfg(test)]
-    pub(crate) fn contains_key(&self, role: &Role) -> bool {
-        self.get(*role).is_some()
+    pub(crate) fn contains_key(&self, role: Role) -> bool {
+        self.get(role).is_some()
     }
 
     #[cfg(test)]
@@ -309,10 +494,10 @@ fn realizes(achievers: &[(u32, bool)], pattern: (u32, bool)) -> bool {
 #[derive(Clone)]
 pub(crate) struct State {
     /// All nodes ever created (merged-away ones remain, forwarded via `merged`).
-    pub(crate) nodes: Vec<Node>,
+    pub(crate) nodes: NodeVec,
     /// Directed role edges `(from, to, property)`; endpoints resolved via [`find`]. Only
     /// [`State::push_edge`] appends here, so [`State::adjacency`] indexes every edge.
-    pub(crate) edges: Vec<(usize, usize, u32)>,
+    pub(crate) edges: PVec<(usize, usize, u32)>,
     /// Union-find root → the indices into [`State::edges`] of every edge with an endpoint
     /// resolving to it, in ascending order.
     ///
@@ -323,19 +508,19 @@ pub(crate) struct State {
     /// the edges the full scan would have kept for it. Walking it in ascending order visits
     /// them in the order the scan did, which keeps every neighbourhood — and so every search,
     /// verdict and proof — identical.
-    pub(crate) adjacency: Vec<Vec<usize>>,
+    pub(crate) adjacency: PVec<std::rc::Rc<Vec<usize>>>,
     /// Each node's [`Seen`] signature and blocked status when the last saturation round
     /// started: what that round matched against. A node whose neighbourhood still reads the
     /// same derives nothing new, so delta saturation revisits only what changed since.
     pub(crate) seen: Vec<Seen>,
-    pub(crate) seen_blocked: Vec<bool>,
+    pub(crate) seen_blocked: BlockedBits,
     /// Named individual term id → its root node index.
-    pub(crate) root_of: BTreeMap<u32, usize>,
+    pub(crate) root_of: std::rc::Rc<BTreeMap<u32, usize>>,
     /// Generated (nominal-introduction) root identity → its root node index. Kept separate
     /// from [`State::root_of`] because the two identity spaces are disjoint by type — see
     /// [`GeneratedRoot`]. A merged-away entry is forwarded through [`find`] on lookup, exactly
     /// as [`Graph::root`] forwards [`State::root_of`].
-    pub(crate) generated_root_of: BTreeMap<GeneratedRoot, usize>,
+    pub(crate) generated_root_of: std::rc::Rc<BTreeMap<GeneratedRoot, usize>>,
     /// A clash has been detected (e.g. a forced `≠` merge).
     pub(crate) clash: bool,
     /// A clique-work budget ran out mid-rule ([`max_clique`] returned `None`), so this
@@ -624,32 +809,37 @@ fn cap_base(kb: &Kb) -> u64 {
 ///
 /// * **the ledgered fixtures** (`crates/validate/tests/dl_step_ledger.rs`, pinned by
 ///   `every_ledgered_search_costs_exactly_what_it_is_pinned_to`). The equivalence-over-
-///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 2,544
+///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 2,312
 ///   units; its `rdfs:subClassOf` control — the same seventeen triples with BOTH
-///   restrictions moved off the equivalence — 206.
+///   restrictions moved off the equivalence — 182.
 /// * **the differential corpora** of [`crate::owl_dl::oracle`] — 9,800 generated,
 ///   deliberately adversarial knowledge bases (pinned by
 ///   `the_enumerated_search_spaces_are_pinned`). Their most expensive DECIDING case spends
-///   4,124,422 units, over a knowledge base whose completion graph reaches 87 nodes. That
+///   39,380,845 units, over a knowledge base whose completion graph reaches 87 nodes. That
 ///   case is what fixes the constant term: work is a function of the SEARCH rather than of
 ///   the input's size, so a size-derived cap has to carry a floor generous enough for a
-///   small ontology whose search is not, and 64 million keeps over fifteen times that
-///   measurement in hand. (Before delta saturation re-matched only around what a round
-///   changed, the same case spent 43,967,562 units, and the floor kept less than one and a
-///   half times it.)
+///   small ontology whose search is not. 64 million keeps only about 1.6 times that
+///   measurement in hand — SHORT of the criterion above, and the one population that is.
+///   The case is a transitive role every element needs a predecessor over, so its
+///   completion graph is one unbounded transitive chain: every node reads every other in a
+///   single neighbourhood read, and delta saturation is obliged to re-match all of it after
+///   every change (a full re-match every round spends 43,597,081 on it). A re-match region
+///   counted in raw edges spent 3,963,143 there, but only by skipping nodes whose matches
+///   the change had altered — that region was unsound, and the figure it produced is not a
+///   margin anyone had.
 /// * **the two block families** of this crate's consistency bench (`benches/consistency.rs`),
-///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 2,544 /
-///   11,752 / 82,809 / 841,183 / 10,634,203 units and decides at every size. The STACKED
+///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 2,312 /
+///   10,782 / 77,079 / 792,841 / 10,105,741 units and decides at every size. The STACKED
 ///   family — the same blocks co-typed on ONE individual, which is the shape this cap exists
-///   for — spends 2,544 / 91,883 / 17,800,826 at 1/2/4 blocks and decides them (the
+///   for — spends 2,312 / 77,230 / 15,134,524 at 1/2/4 blocks and decides them (the
 ///   two-block knowledge base is the same one the step ledger pins as
-///   `co-typed-equivalence-blocks`, at the same 91,883), and
+///   `co-typed-equivalence-blocks`, at the same 77,230), and
 ///   from five blocks on it reaches the cap: `unknown` under `completeness
 ///   budget-exhausted`, with `work` equal to `work-budget` in the certificate — the same
 ///   signature `crates/validate/tests/dl_work_budget.rs` pins at ten co-typed copies. Run
-///   UNCAPPED the same family spends 1,603,648 units at three blocks, 17,800,826 at four,
-///   138,048,744 at five and 805,460,809 at six — a factor of six to eleven per added block —
-///   so ten blocks is on the order of 10¹² units of grinding, which is what this class did
+///   UNCAPPED the same family spends 1,324,156 units at three blocks, 15,134,524 at four,
+///   121,676,024 at five and 730,998,982 at six — a factor of six to eleven and a half per
+///   added block — so ten blocks is on the order of 10¹² units of grinding, which is what this class did
 ///   before the cap existed while its round count sat at a few percent of the round budget.
 ///
 /// The base is [`cap_base`] — the same size the round cap is derived from — and the formula is
@@ -963,13 +1153,13 @@ impl<'a> Graph<'a> {
             fresh_types,
         } = *assumptions;
         let mut st = State {
-            nodes: Vec::new(),
-            edges: Vec::new(),
-            adjacency: Vec::new(),
+            nodes: NodeVec::default(),
+            edges: PVec::default(),
+            adjacency: PVec::default(),
             seen: Vec::new(),
-            seen_blocked: Vec::new(),
-            root_of: BTreeMap::new(),
-            generated_root_of: BTreeMap::new(),
+            seen_blocked: BlockedBits::default(),
+            root_of: std::rc::Rc::default(),
+            generated_root_of: std::rc::Rc::default(),
             clash: false,
             clique_exhausted: std::cell::Cell::new(false),
         };
@@ -1071,7 +1261,7 @@ impl<'a> Graph<'a> {
             concrete,
             value_class: self.kb.literal_class.get(&a).copied(),
         });
-        st.root_of.insert(a, idx);
+        std::rc::Rc::make_mut(&mut st.root_of).insert(a, idx);
         idx
     }
 
@@ -1108,7 +1298,7 @@ impl<'a> Graph<'a> {
             concrete: false,
             value_class: None,
         });
-        st.generated_root_of.insert(key, idx);
+        std::rc::Rc::make_mut(&mut st.generated_root_of).insert(key, idx);
         idx
     }
 
@@ -1265,7 +1455,7 @@ impl<'a> Graph<'a> {
         // assumption permits.
         let disc_nominals = st.nodes[discard].nominals.clone();
         for &a in &disc_nominals {
-            st.root_of.insert(a, keep);
+            std::rc::Rc::make_mut(&mut st.root_of).insert(a, keep);
         }
         st.nodes[keep].nominals.extend(disc_nominals);
         if st.nodes[discard].root {
@@ -1806,13 +1996,13 @@ mod tests {
     /// large enough that scanning every one of them is the cost these tests exist to bound.
     fn two_node_state_with_edges(n: usize, prop: u32) -> State {
         let mut st = State {
-            nodes: vec![bare_node(true), bare_node(true)],
-            edges: Vec::new(),
-            adjacency: Vec::new(),
+            nodes: NodeVec::from(vec![bare_node(true), bare_node(true)]),
+            edges: PVec::default(),
+            adjacency: PVec::default(),
             seen: Vec::new(),
-            seen_blocked: Vec::new(),
-            root_of: BTreeMap::new(),
-            generated_root_of: BTreeMap::new(),
+            seen_blocked: BlockedBits::default(),
+            root_of: std::rc::Rc::default(),
+            generated_root_of: std::rc::Rc::default(),
             clash: false,
             clique_exhausted: std::cell::Cell::new(false),
         };
@@ -2022,6 +2212,6 @@ mod tests {
             "the whole chain, once the walk is allowed to finish"
         );
         assert!(!ample.work().exhausted());
-        assert!(ample.achiever_cache.borrow().contains_key(&role));
+        assert!(ample.achiever_cache.borrow().contains_key(role));
     }
 }

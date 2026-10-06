@@ -110,7 +110,7 @@
 //! ordering is deliberately not the interner's: `Kb::order_disjuncts` states why the identity
 //! order and the search order must stay two orders.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_datalog::clause::HeadForm;
 
@@ -278,6 +278,17 @@ impl DlClause {
     ///
     /// A complete applicability filter, not a heuristic: matching always binds variable `0`
     /// first, so a clause whose first body atom is `C(x₀)` cannot match a node without `C`.
+    /// The role a node must realize through an incident edge for this clause to match there,
+    /// when the body opens with a role or successor atom on variable 0.
+    pub(crate) fn first_role(&self) -> Option<Role> {
+        match self.body.first() {
+            Some(&BodyAtom::Role { from: 0, role, .. } | &BodyAtom::Successors { role, .. }) => {
+                Some(role)
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn trigger(&self) -> Option<u32> {
         match self.body.first() {
             Some(&BodyAtom::Concept { var: 0, concept }) => Some(concept),
@@ -408,8 +419,10 @@ pub(crate) struct ClauseSet {
     clauses: Vec<DlClause>,
     /// Trigger concept id → the indices of the clauses it can make applicable, ascending.
     by_trigger: BTreeMap<u32, Vec<usize>>,
-    /// The clauses no CONCEPT triggers — a body that opens with a role atom, a `denotes` atom
-    /// or nothing at all — so they are tried at every node of every round.
+    /// The clauses neither a CONCEPT nor an EDGE triggers — a body that opens with a `denotes`
+    /// atom or nothing at all — so they are tried at every node of every round. A body that
+    /// opens with a role atom is indexed by the edges that can satisfy it instead: see
+    /// [`Self::by_edge`].
     ///
     /// # What lands here, and the bound that makes it affordable
     ///
@@ -435,11 +448,27 @@ pub(crate) struct ClauseSet {
     /// buys is a per-node cost independent of the ontology's CONCEPT count, not a per-node
     /// cost of zero.
     ///
-    /// An edge-driven index over these would need a role's ACHIEVERS — its sub-roles and its
-    /// inverse partners — resolved to find the clauses an edge could trigger, which is what
-    /// `neighbors` already does (and now caches). The bound above is what makes building a
-    /// second, edge-keyed index unnecessary rather than merely unmeasured.
+    /// The axiom-count bound did not make that per-node cost affordable at scale. gmeow's
+    /// production class model compiles to 37,245 clauses of which 4,725 opened with a role
+    /// atom (its `rdfs:domain` and `rdfs:range` axioms), over a completion graph of about
+    /// 89,000 nodes: 1.44 billion clause attempts in its first twenty rounds, nearly all at
+    /// nodes with no edge the clause could match. So role-first clauses are now indexed by
+    /// edge ([`Self::by_edge`]) and only the rest remain here.
     untriggered: Vec<usize>,
+    /// Edge pattern `(property, forward?)` → the role-first clauses an incident edge with that
+    /// pattern can satisfy, ascending.
+    ///
+    /// A clause body's first atom is matched from variable 0, the node being visited: a
+    /// `Role { from: 0, .. }` atom reads that node's neighbourhood over its role, and a
+    /// `Successors` atom counts that node's successors over its role. Both are empty unless
+    /// the node has an incident edge realizing the role — `(p, true)` with the node as source,
+    /// `(p, false)` as target, for `(p, ·)` in the role's closure under sub-roles and inverses —
+    /// and the transitive closure of a role is seeded from that same first step. So such a
+    /// clause is tried at a node exactly when one of the node's incident edge patterns indexes
+    /// it, and skipping the other nodes skips only attempts that match nothing.
+    by_edge: BTreeMap<(u32, bool), Vec<usize>>,
+    /// Role-first clauses awaiting [`Self::by_edge`] until the role axioms resolve them.
+    role_first: Vec<(Role, usize)>,
     /// Whether each clause is TBox-DERIVED, by clause index.
     ///
     /// A TBox clause is scoped to the OBJECT domain: a general concept inclusion quantifies
@@ -491,6 +520,13 @@ impl ClauseSet {
             + 1
     }
 
+    /// The role-first clauses an incident edge with `pattern` can satisfy, ascending.
+    pub(crate) fn edge_triggered(&self, pattern: (u32, bool)) -> &[usize] {
+        self.by_edge
+            .get(&pattern)
+            .map_or(&[] as &[usize], Vec::as_slice)
+    }
+
     pub(crate) fn untriggered(&self) -> &[usize] {
         &self.untriggered
     }
@@ -522,9 +558,10 @@ impl ClauseSet {
     /// Record one clause, indexing it by its trigger and noting its provenance.
     fn record(&mut self, clause: DlClause, tbox: bool) {
         let index = self.clauses.len();
-        match clause.trigger() {
-            Some(concept) => self.by_trigger.entry(concept).or_default().push(index),
-            None => self.untriggered.push(index),
+        match (clause.trigger(), clause.first_role()) {
+            (Some(concept), _) => self.by_trigger.entry(concept).or_default().push(index),
+            (None, Some(role)) => self.role_first.push((role, index)),
+            (None, None) => self.untriggered.push(index),
         }
         self.clauses.push(clause);
         self.tbox.push(tbox);
@@ -553,6 +590,8 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         clauses: Vec::new(),
         by_trigger: BTreeMap::new(),
         untriggered: Vec::new(),
+        by_edge: BTreeMap::new(),
+        role_first: Vec::new(),
         tbox: Vec::new(),
     };
     for id in 0..kb.table.len() {
@@ -645,6 +684,16 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             ],
             head: Vec::new(),
         });
+    }
+    // Resolve each role-first clause to the edge patterns that can satisfy its first atom.
+    // Clauses are recorded in ascending index order, so every list stays ascending.
+    for (role, index) in std::mem::take(&mut out.role_first) {
+        for pattern in role_patterns(kb, role) {
+            let clauses = out.by_edge.entry(pattern).or_default();
+            if clauses.last() != Some(&index) {
+                clauses.push(index);
+            }
+        }
     }
     out
 }
@@ -800,6 +849,30 @@ fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut C
         }],
         vec![vec![HeadAtom::EqualSomePair { first: 1, count }]],
     );
+}
+
+/// The `(property, forward?)` edge patterns that realize `role` under `kb`'s role hierarchy and
+/// inverse declarations — the closure [`Graph::achievers`](crate::owl_dl::graph::Graph) walks,
+/// computed here once per clause-set rather than charged per read.
+fn role_patterns(kb: &Kb, role: Role) -> BTreeSet<(u32, bool)> {
+    let start = match role {
+        Role::Named(p) => (p, true),
+        Role::Inv(p) => (p, false),
+    };
+    let mut patterns = BTreeSet::new();
+    let mut stack = vec![start];
+    while let Some((q, dir)) = stack.pop() {
+        if !patterns.insert((q, dir)) {
+            continue;
+        }
+        if let Some(subs) = kb.role_sub.get(&q) {
+            stack.extend(subs.iter().map(|&s| (s, dir)));
+        }
+        if let Some(inverses) = kb.inverses.get(&q) {
+            stack.extend(inverses.iter().map(|&s| (s, !dir)));
+        }
+    }
+    patterns
 }
 
 #[cfg(test)]
@@ -1013,9 +1086,11 @@ mod tests {
                 .iter()
                 .all(|&index| clauses.clause(index).head.is_empty())
         );
-        // The asymmetry clause is the untriggered one: it opens with a role atom.
-        assert_eq!(clauses.untriggered().len(), 1);
-        let asymmetry = clauses.clause(clauses.untriggered()[0]);
+        // The asymmetry clause opens with a role atom, so an incident edge over that role
+        // triggers it rather than every node.
+        assert_eq!(clauses.untriggered(), &[] as &[usize]);
+        assert_eq!(clauses.edge_triggered((21, true)).len(), 1);
+        let asymmetry = clauses.clause(clauses.edge_triggered((21, true))[0]);
         assert_eq!(asymmetry.trigger(), None);
         assert_eq!(asymmetry.arity(), 2);
         assert_eq!(asymmetry.head, [] as [Vec<HeadAtom>; 0]);
@@ -1123,7 +1198,7 @@ mod tests {
     /// been re-rooted onto a trigger is here, and in particular the concept table's own
     /// clauses — one per interned concept, the population that scales — are all triggered.
     #[test]
-    fn only_the_role_axioms_and_the_class_free_guards_are_untriggered() {
+    fn only_the_class_free_guards_are_untriggered_and_role_first_clauses_are_edge_indexed() {
         let mut kb = Kb::empty();
         // `⊤ ⊑ A` — an empty body.
         kb.push_gci(Concept::Top, Concept::Named(10));
@@ -1150,16 +1225,34 @@ mod tests {
         kb.disjoint_roles.insert((21, 20));
         kb.finalize();
         let clauses = derive(&kb);
+        // Only what nothing can trigger is tried everywhere: `⊤ ⊑ A` and the nominal guard.
         assert_eq!(
             clauses.untriggered().len(),
-            6,
-            "four class-free guards and the two role axioms: {:?}",
+            2,
+            "the empty body and the nominal guard: {:?}",
             clauses
                 .untriggered()
                 .iter()
                 .map(|&index| clauses.clause(index))
                 .collect::<Vec<&DlClause>>()
         );
+        // The range, the domain and the two role axioms open with a role atom, so each is
+        // reached through an edge over its role, and only through one.
+        let edge_indexed: std::collections::BTreeSet<usize> = [20, 21]
+            .into_iter()
+            .flat_map(|property| [(property, true), (property, false)])
+            .flat_map(|pattern| clauses.edge_triggered(pattern).iter().copied())
+            .collect();
+        assert_eq!(
+            edge_indexed.len(),
+            4,
+            "range, domain, asymmetry, disjointness"
+        );
+        for &index in &edge_indexed {
+            let clause = clauses.clause(index);
+            assert_eq!(clause.trigger(), None);
+            assert!(clause.first_role().is_some(), "{clause:?}");
+        }
         assert!(
             clauses.untriggered().len() < clauses.count(),
             "the population that scales with the concept table is the TRIGGERED one"

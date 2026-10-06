@@ -380,9 +380,10 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 11,
-        // Was 2,724 before delta saturation re-matched only around what changed; the same
-        // eleven rounds, nodes and branches.
-        work: 2544,
+        // Was 2,724 before delta saturation re-matched only around what changed, role-first
+        // clauses were tried only at nodes with a matching edge, and blocking looked up its
+        // candidates by signature; the same eleven rounds, nodes and branches.
+        work: 2312,
         peak_nodes: 4,
         disjunctions: 3,
         peak_depth: 3,
@@ -396,7 +397,8 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 3,
-        work: 243,
+        // Was 243 before role-first clauses were tried only at nodes with a matching edge.
+        work: 209,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -410,7 +412,8 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 3,
-        work: 206,
+        // Was 206 before role-first clauses were tried only at nodes with a matching edge.
+        work: 182,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -424,8 +427,9 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 71,
-        // Was 185,099 before delta saturation; the same 71 rounds, 15 nodes and 28 branches.
-        work: 91_883,
+        // Was 185,099 before delta saturation, the edge-indexed role-first clauses and the
+        // signature-indexed blocking; the same 71 rounds, 15 nodes and 28 branches.
+        work: 77_230,
         peak_nodes: 15,
         disjunctions: 28,
         peak_depth: 28,
@@ -439,7 +443,9 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 1,
-        work: 1048,
+        // Was 1,048 when every domain and range clause was tried at every node; an incident
+        // edge now selects the few that can match.
+        work: 16,
         peak_nodes: 3,
         disjunctions: 0,
         peak_depth: 0,

@@ -898,14 +898,18 @@ impl<'a> Hyper<'a> {
             }
             let blocked = self.blocking(st);
             for (x, &now_blocked) in blocked.iter().enumerate() {
-                if st.seen_blocked.get(x) != Some(&now_blocked) {
+                if st.seen_blocked.get(x) != Some(now_blocked) {
                     moved[x] = true;
                 }
             }
-            let affected = st.affected(&moved, self.radius);
+            let affected = if self.g.kb().rematches_everything() {
+                vec![true; moved.len()]
+            } else {
+                st.affected(&moved, self.radius, &self.g.kb().transitive)
+            };
             let changed = self.round(st, &blocked, &affected);
             st.seen = now;
-            st.seen_blocked = blocked;
+            st.seen_blocked = crate::owl_dl::graph::BlockedBits::from_flags(&blocked);
             self.observe(st);
             Self::check_clique(st)?;
             // A round whose enumerations stopped for want of budget derived less than the
@@ -978,6 +982,25 @@ impl<'a> Hyper<'a> {
         (0..st.nodes.len()).find(|&x| moved[x] && find(st, x) == x && self.g.data_clashes(st, x))
     }
 
+    /// The clauses no concept triggers that can match at the root `x`, in clause order: those
+    /// an incident edge of `x` can satisfy ([`ClauseSet::edge_triggered`]) and the few nothing
+    /// triggers ([`ClauseSet::untriggered`]).
+    fn untriggered_at(&self, st: &State, x: usize) -> Vec<usize> {
+        let mut open: Vec<usize> = self.clauses.untriggered().to_vec();
+        for &edge in st.class_edges(x) {
+            let (from, to, property) = st.edges[edge];
+            if find(st, from) == x {
+                open.extend_from_slice(self.clauses.edge_triggered((property, true)));
+            }
+            if find(st, to) == x {
+                open.extend_from_slice(self.clauses.edge_triggered((property, false)));
+            }
+        }
+        open.sort_unstable();
+        open.dedup();
+        open
+    }
+
     /// One derivation round: every non-disjunctive clause instance, applied once.
     ///
     /// Matches are collected before they are applied, because applying one — a merge, or a
@@ -1041,7 +1064,7 @@ impl<'a> Hyper<'a> {
                     }
                 }
             }
-            for &index in self.clauses.untriggered() {
+            for index in self.untriggered_at(st, x) {
                 self.g.work().charge(1);
                 if self.g.work().exhausted() {
                     break 'nodes;
@@ -1195,7 +1218,7 @@ impl<'a> Hyper<'a> {
                     }
                 }
             }
-            for &index in self.clauses.untriggered() {
+            for index in self.untriggered_at(st, x) {
                 self.g.work().charge(1);
                 if let Some(branch) = self.branch_of(st, index, x) {
                     return Some(branch);
@@ -1607,7 +1630,12 @@ impl<'a> Hyper<'a> {
     fn blocking(&self, st: &State) -> Vec<bool> {
         let n = st.nodes.len();
         let mut blocked = vec![false; n];
-        let mut candidates: Vec<usize> = Vec::new();
+        // Candidate blockers bucketed by their blocking signature's fingerprint, each bucket in
+        // insertion order. Every candidate sharing a node's signature shares its bucket, so the
+        // first exact match in the bucket is the first in the whole candidate order — the
+        // blocker the full scan found — while a node pays only its own bucket.
+        let mut candidates: std::collections::BTreeMap<u64, Vec<usize>> =
+            std::collections::BTreeMap::new();
         // The direct pairs, for a RECORDING run only — a `Vec` that stays empty and is never
         // pushed to when the run is not recording.
         let recording = self.trace.is_some();
@@ -1619,14 +1647,14 @@ impl<'a> Hyper<'a> {
             let Some(parent) = st.nodes[x].parent.map(|p| find(st, p)) else {
                 continue;
             };
-            // One unit per candidate blocker considered. Anywhere blocking compares a node
-            // against every earlier unblocked node, so this scan is quadratic in the graph
-            // and runs once per ROUND — work the round count reports as one.
-            self.g.work().charge(candidates.len() as u64 + 1);
-            // `find` rather than `any`: the same scan, the same short-circuit at the same
-            // candidate and the same charge — it just keeps the blocker it stopped on, which
-            // is the witness a countermodel needs and which `any` threw away.
-            let directly = candidates
+            let key = self.signature_key(st, x, parent);
+            let bucket = candidates.get(&key).map_or(&[] as &[usize], Vec::as_slice);
+            // One unit per candidate blocker considered: the bucket, not every earlier
+            // unblocked node. `find` keeps the blocker it stopped on, which is the witness a
+            // countermodel needs; `same_signature` decides, so a fingerprint collision can
+            // never block a node.
+            self.g.work().charge(bucket.len() as u64 + 1);
+            let directly = bucket
                 .iter()
                 .copied()
                 .find(|&y| self.same_signature(st, x, y, parent));
@@ -1634,7 +1662,7 @@ impl<'a> Hyper<'a> {
             if directly.is_some() || indirectly {
                 blocked[x] = true;
             } else {
-                candidates.push(x);
+                candidates.entry(key).or_default().push(x);
             }
             if let (true, Some(y)) = (recording, directly) {
                 pairs.push((x, y));
@@ -1644,6 +1672,30 @@ impl<'a> Hyper<'a> {
             self.record_blocking(st, &pairs);
         }
         blocked
+    }
+
+    /// A fingerprint of `x`'s blocking signature, `x`'s predecessor being `parent`: the parts
+    /// [`Self::same_signature`] compares, folded in a fixed order. Equal signatures have equal
+    /// fingerprints; a collision only costs a [`Self::same_signature`] check that refuses it.
+    fn signature_key(&self, st: &State, x: usize, parent: usize) -> u64 {
+        use purrdf_hash::fnv::{BASIS, fold};
+        let label = |state: u64, node: usize| {
+            st.nodes[node].label.iter().fold(
+                fold(state, &(st.nodes[node].label.len() as u64).to_le_bytes()),
+                |h, c| fold(h, &c.to_le_bytes()),
+            )
+        };
+        let mut key = label(BASIS, x);
+        if self.g.kb().labels_alone_block() {
+            return key;
+        }
+        key = match st.nodes[x].incoming {
+            Some((property, forward)) => {
+                fold(fold(key, &[1, u8::from(forward)]), &property.to_le_bytes())
+            }
+            None => fold(key, &[0]),
+        };
+        label(key, parent)
     }
 
     /// Whether `x` (whose predecessor is `parent`) has `y`'s blocking signature: same label,
@@ -1834,6 +1886,216 @@ mod tests {
         kb.individuals.insert(U);
         kb.finalize();
         kb
+    }
+
+    /// `x : ∀r.D` over a chain `x r y1 r … r yn` whose last node is `∃r.E`, with `E ⊑ ¬D`.
+    ///
+    /// With `r` transitive the fresh `r`-successor of `yn` is an `r`-neighbour of `x`, so it
+    /// is both `D` and `E`: INCONSISTENT at every length. With `r` not transitive, or without
+    /// `E ⊑ ¬D`, it is consistent. Built so `x` is as far from the change as the chain is long.
+    fn transitive_chain_kb(len: u32, transitive: bool, disjoint: bool) -> Kb {
+        const R: u32 = 60;
+        const D: u32 = 61;
+        const E: u32 = 62;
+        const X: u32 = 100;
+        let mut kb = Kb::empty();
+        if transitive {
+            kb.transitive.insert(R);
+        }
+        if disjoint {
+            kb.push_gci(Concept::Named(E), Concept::Not(Box::new(Concept::Named(D))));
+        }
+        let all_d = kb
+            .table
+            .intern(Concept::All(Role::Named(R), Box::new(Concept::Named(D))));
+        let d = kb.table.intern(Concept::Named(D));
+        let some_e = kb
+            .table
+            .intern(Concept::Some(Role::Named(R), Box::new(Concept::Named(E))));
+        kb.abox_types.push((X, all_d));
+        kb.individuals.insert(X);
+        for i in 1..=len {
+            let (prev, y) = (X + i - 1, X + i);
+            kb.abox_roles.push((prev, R, y));
+            kb.abox_types.push((y, d));
+            kb.individuals.insert(y);
+        }
+        kb.abox_types.push((X + len, some_e));
+        kb.finalize();
+        kb
+    }
+
+    /// DELTA SATURATION MUST SEE THROUGH A TRANSITIVE ROLE: a change at the end of an
+    /// `r`-chain re-matches the clauses at its start, however long the chain.
+    ///
+    /// A clause body atom over a transitive role reads that role's whole closure, so the
+    /// nodes whose matches a change can alter are not bounded by the body's hop count. The
+    /// chain lengths straddle every radius a clause set here can have; a re-match region
+    /// counted in raw hops answered CONSISTENT from length 3 on — a decided, wrong verdict.
+    #[test]
+    fn a_change_at_the_end_of_a_transitive_chain_reaches_its_start() {
+        for len in [1, 2, 3, 4, 8, 16] {
+            let clash = decide(
+                &transitive_chain_kb(len, true, true),
+                &Assumptions::of_kb(),
+                Budget::for_kb(&transitive_chain_kb(len, true, true)),
+            );
+            assert!(!clash.exhausted && !clash.stopped, "len {len}: {clash:?}");
+            assert!(
+                !clash.consistent,
+                "len {len}: transitive clash missed: {clash:?}"
+            );
+            for (transitive, disjoint) in [(true, false), (false, true)] {
+                let kb = transitive_chain_kb(len, transitive, disjoint);
+                let control = decide(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+                assert!(
+                    !control.exhausted && !control.stopped,
+                    "len {len}: {control:?}"
+                );
+                assert!(
+                    control.consistent,
+                    "len {len}, transitive {transitive}, disjoint {disjoint}: {control:?}"
+                );
+            }
+        }
+    }
+
+    /// THE DELTA DIFFERENTIAL OVER LONG CHAINS: delta saturation and a full re-match every
+    /// round reach the same verdict on chains longer than any match radius.
+    ///
+    /// The oracle corpus runs the same differential, but over a signature small enough to
+    /// enumerate, whose chains never outgrow the radius — which is how a region counted in raw
+    /// hops passed it. These knowledge bases are built to: a chain of 3 to 14 individuals
+    /// whose edges are mostly one of a transitive role, a second transitive role, a plain
+    /// sub-role of the first, or the first asserted backwards (read through its inverse), with
+    /// universals over each direction, existentials that create the late change, and an
+    /// optional disjointness that turns the late change into a clash at the chain's far end.
+    /// Generated by a fixed linear congruential sequence, so the corpus is the same every run.
+    #[test]
+    fn delta_saturation_agrees_with_a_full_rematch_over_long_role_chains() {
+        const R: u32 = 70;
+        const T: u32 = 71;
+        const S: u32 = 72;
+        const D: u32 = 73;
+        const E: u32 = 74;
+        const X: u32 = 200;
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = |bound: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % bound
+        };
+        let (mut compared, mut clashes) = (0_u32, 0_u32);
+        for case in 0..600 {
+            let mut kb = Kb::empty();
+            kb.transitive.insert(R);
+            kb.transitive.insert(T);
+            kb.role_sub.entry(R).or_default().insert(S);
+            if next(4) != 0 {
+                kb.push_gci(Concept::Named(E), Concept::Not(Box::new(Concept::Named(D))));
+            }
+            let fillers = [
+                Concept::Named(D),
+                Concept::All(Role::Named(R), Box::new(Concept::Named(D))),
+                Concept::All(Role::Inv(R), Box::new(Concept::Named(D))),
+                Concept::All(Role::Named(T), Box::new(Concept::Named(D))),
+                Concept::Some(Role::Named(R), Box::new(Concept::Named(E))),
+                Concept::Some(Role::Named(S), Box::new(Concept::Named(E))),
+                Concept::Some(Role::Inv(T), Box::new(Concept::Named(E))),
+                Concept::All(Role::Named(S), Box::new(Concept::Named(D))),
+            ];
+            let len = 3 + u32::try_from(next(12)).expect("below 12");
+            let main = next(4);
+            for i in 0..len {
+                let (a, b) = (X + i, X + i + 1);
+                kb.individuals.insert(a);
+                kb.individuals.insert(b);
+                // One dominant edge kind per chain, broken now and then: a transitive closure
+                // walks ONE property's edges, so a mixed chain rarely connects end to end.
+                match if next(8) == 0 { next(4) } else { main } {
+                    0 => kb.abox_roles.push((a, R, b)),
+                    1 => kb.abox_roles.push((a, T, b)),
+                    2 => kb.abox_roles.push((a, S, b)),
+                    _ => kb.abox_roles.push((b, R, a)),
+                }
+            }
+            // A universal at one end and an existential at the other, so the clash — when there
+            // is one — is as far from the late change as the chain is long. Half the time the
+            // pair is AIMED: the universal reads along the chain's dominant edge kind toward the
+            // end where the existential mints its successor. Then a few more anywhere.
+            let (first, last) = (X, X + len);
+            let place = |at: u32, c: Concept, kb: &mut Kb| {
+                let c = kb.table.intern(c);
+                kb.abox_types.push((at, c));
+            };
+            let all = |role: Role| Concept::All(role, Box::new(Concept::Named(D)));
+            let some = |role: Role| Concept::Some(role, Box::new(Concept::Named(E)));
+            if next(2) == 0 {
+                let (from, to, role) = match main {
+                    0 => (first, last, Role::Named(R)),
+                    1 => (first, last, Role::Named(T)),
+                    2 => (first, last, Role::Named(S)),
+                    _ => (last, first, Role::Named(R)),
+                };
+                if next(2) == 0 {
+                    place(from, all(role), &mut kb);
+                    place(to, some(role), &mut kb);
+                } else {
+                    let inverse = match role {
+                        Role::Named(p) => Role::Inv(p),
+                        Role::Inv(p) => Role::Named(p),
+                    };
+                    place(to, all(inverse), &mut kb);
+                    place(from, some(inverse), &mut kb);
+                }
+            } else {
+                let (near, far) = if next(2) == 0 {
+                    (first, last)
+                } else {
+                    (last, first)
+                };
+                let pick = [1, 2, 3, 7][usize::try_from(next(4)).expect("below 4")];
+                place(near, fillers[pick].clone(), &mut kb);
+                let pick = [4, 5, 6][usize::try_from(next(3)).expect("below 3")];
+                place(far, fillers[pick].clone(), &mut kb);
+            }
+            // A QUIESCENT middle, three times in four: every chain node already carries `D`, so
+            // the first round derives nothing along the chain and the existential's successor
+            // is the only change the next round sees. A middle that is still deriving moves
+            // every node between the two ends and drags the re-match region back to the
+            // universal by accident — the case that hides a region counted too short.
+            if next(4) != 0 {
+                for i in 0..=len {
+                    place(X + i, Concept::Named(D), &mut kb);
+                }
+            }
+            for _ in 0..next(3) {
+                let at = X + u32::try_from(next(u64::from(len) + 1)).expect("in range");
+                let pick = usize::try_from(next(fillers.len() as u64)).expect("in range");
+                place(at, fillers[pick].clone(), &mut kb);
+            }
+            kb.finalize();
+            let cap = Budget::for_kb(&kb);
+            let delta = decide(&kb, &Assumptions::of_kb(), cap);
+            kb.full_rematch = true;
+            let full = decide(&kb, &Assumptions::of_kb(), cap);
+            assert!(
+                !delta.exhausted && !full.exhausted,
+                "case {case}: {delta:?} {full:?}"
+            );
+            assert_eq!(
+                delta.consistent, full.consistent,
+                "case {case}: delta {delta:?}, full {full:?}"
+            );
+            compared += 1;
+            clashes += u32::from(!full.consistent);
+        }
+        // Both verdicts must be well represented, or the agreement is about one of them only.
+        assert!(
+            clashes >= 60 && compared - clashes >= 60,
+            "{clashes} of {compared}"
+        );
     }
 
     /// A [`Decision`](crate::owl_dl::graph::Decision) is a pure function of the knowledge base:

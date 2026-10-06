@@ -90,6 +90,11 @@ pub(crate) fn class_concept(v: &parser::Vocab, class: u32) -> Concept {
 
 /// A Description-Logic knowledge base: the interned TBox/RBox/ABox plus the concept
 /// table needed to reason over it.
+///
+/// A shipped build holds one flag ([`Kb::encoded`]); the other three are `cfg(test)`
+/// mutations the differential corpus runs, each an independent switch, so the bool count is
+/// the honest shape rather than a state machine in disguise.
+#[cfg_attr(test, allow(clippy::struct_excessive_bools))]
 pub(crate) struct Kb {
     /// The RDF-term interner (class/property/individual IRIs → dense ids).
     pub(crate) interner: Interner,
@@ -235,6 +240,16 @@ pub(crate) struct Kb {
     /// the calculus rather than a setting somebody wanted.
     #[cfg(test)]
     pub(crate) label_only_blocking: bool,
+    /// Whether every hypertableau round must re-match EVERY node, not only the region a
+    /// change since the last round can reach.
+    ///
+    /// Compiled only under `cfg(test)`, for the reason [`Kb::label_only_blocking`] is: delta
+    /// saturation rests on a claim — a node farther than the clause set's match radius from
+    /// every change, counted in neighbourhood READS, already matched everything it can match
+    /// now — and the DELTA DIFFERENTIAL in [`crate::owl_dl::oracle`] runs the mutation that
+    /// claim names. A verdict that moves under it is a delta region that missed a node.
+    #[cfg(test)]
+    pub(crate) full_rematch: bool,
 }
 
 impl Kb {
@@ -274,6 +289,7 @@ impl Kb {
             stop: None,
             internalize_only: false,
             label_only_blocking: false,
+            full_rematch: false,
         }
     }
 
@@ -572,6 +588,20 @@ impl Kb {
     #[cfg(not(test))]
     const fn encoding(&self) -> Encoding {
         Encoding::Absorbing
+    }
+
+    /// Whether every hypertableau round re-matches every node — see [`Kb::full_rematch`],
+    /// which the delta differential sets.
+    #[cfg(test)]
+    pub(crate) const fn rematches_everything(&self) -> bool {
+        self.full_rematch
+    }
+
+    /// Whether every hypertableau round re-matches every node. A shipped build re-matches
+    /// only the region a change can reach; the full re-match exists to be compared against.
+    #[cfg(not(test))]
+    pub(crate) const fn rematches_everything(&self) -> bool {
+        false
     }
 
     /// Whether the hypertableau's blocking signature is LABELS ALONE — see
