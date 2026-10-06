@@ -23,6 +23,8 @@
 //! - `xsd_exact_karatsuba/{schoolbook,karatsuba}/<limbs>` — the two product
 //!   algorithms on either side of `KARATSUBA_THRESHOLD`, the evidence for where
 //!   it sits.
+//! - `xsd_exact_fine_products/{bounded,tower}` — products of two bounded decimals
+//!   whose scales sum to eighteen (machine words) and to twenty (the tower).
 //!
 //! Each routine in `--test` mode runs its body once, so
 //! `perf stat -e instructions:u <bench binary> --test --exact <id>` minus the
@@ -312,5 +314,54 @@ fn bench_karatsuba(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_small, bench_growth, bench_karatsuba);
+/// Bounded decimal pairs of `scale` fractional digits each, coefficients of up to
+/// twelve digits.
+fn scaled_decimals(scale: usize) -> Vec<(XsdValue, XsdValue)> {
+    let mut state = 0xF1E5_CA1E_u64 ^ scale as u64;
+    let one = |state: &mut u64| {
+        let digits = digit_string(state, 12);
+        let (whole, fraction) = digits.split_at(12 - scale.min(12));
+        let fraction = format!("{fraction:0>scale$}");
+        let text = format!("{}.{fraction}", if whole.is_empty() { "0" } else { whole });
+        XsdValue::Decimal(parse_decimal(&text).expect("a bounded decimal"))
+    };
+    (0..SMALL_OPS)
+        .map(|_| (one(&mut state), one(&mut state)))
+        .collect()
+}
+
+/// `xsd_exact_fine_products/{bounded,tower}`: 1024 `numeric_mul` products of two
+/// bounded decimals. Nine fractional digits each keep the product at eighteen, inside
+/// the bounded decimal; ten each make it twenty, which only the tower holds exactly,
+/// so every product allocates its coefficient there. The pair is the cost of an exact
+/// product past eighteen fractional digits against the machine-word one beside it.
+fn bench_fine_products(c: &mut Bench) {
+    let at_eighteen = scaled_decimals(9);
+    let at_twenty = scaled_decimals(10);
+    let mut group = c.benchmark_group("xsd_exact_fine_products");
+    group.throughput(Throughput::Elements(SMALL_OPS as u64));
+    group.bench_function("bounded", |b| {
+        b.iter(|| {
+            for (x, y) in &at_eighteen {
+                black_box(numeric_mul(black_box(x), black_box(y)).expect("exact"));
+            }
+        });
+    });
+    group.bench_function("tower", |b| {
+        b.iter(|| {
+            for (x, y) in &at_twenty {
+                black_box(numeric_mul(black_box(x), black_box(y)).expect("exact"));
+            }
+        });
+    });
+    group.finish();
+}
+
+bench_group!(
+    benches,
+    bench_small,
+    bench_growth,
+    bench_karatsuba,
+    bench_fine_products
+);
 bench_main!(benches);
