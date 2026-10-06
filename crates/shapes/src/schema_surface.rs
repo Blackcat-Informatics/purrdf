@@ -1427,20 +1427,20 @@ impl<'a> ExpressionReader<'a> {
         // as their conjunction, as an OWL 1 restriction node carrying several
         // facets is. (The OWL 2 DL mapping reads a single pattern per node and
         // leaves the rest of the node's triples unparsed.)
+        // A node typed `rdfs:Datatype` (or `owl:DataRange`) is a data range, so
+        // an empty union or enumeration is the empty data range and an empty
+        // intersection is `rdfs:Literal`, not `owl:Nothing` and `owl:Thing`.
+        let data_range = take(rdf::TYPE).iter().any(|type_| {
+            matches!(type_, Term::NamedNode(node) if matches!(node.as_str(), RDFS_DATATYPE | OWL_DATA_RANGE))
+        });
         let mut readings: Vec<OntologyExpression> = Vec::new();
         for head in take(OWL_UNION_OF) {
-            readings.push(OntologyExpression::Union(self.boolean_members(
-                head,
-                depth + 1,
-                key,
-            )?));
+            let members = self.boolean_members(head, depth + 1, key)?;
+            readings.push(union_of(members, data_range));
         }
         for head in take(OWL_INTERSECTION_OF) {
-            readings.push(OntologyExpression::Intersection(self.boolean_members(
-                head,
-                depth + 1,
-                key,
-            )?));
+            let members = self.boolean_members(head, depth + 1, key)?;
+            readings.push(intersection_of(members, data_range));
         }
         for inner in take(OWL_COMPLEMENT_OF) {
             readings.push(OntologyExpression::Complement(Box::new(
@@ -1453,7 +1453,7 @@ impl<'a> ExpressionReader<'a> {
             )));
         }
         for head in take(OWL_ONE_OF) {
-            readings.push(self.one_of(head, key)?);
+            readings.push(self.one_of(head, key, data_range)?);
         }
         if declared.contains(&"a datatype restriction") {
             let (bases, heads) = (take(OWL_ON_DATATYPE), take(OWL_WITH_RESTRICTIONS));
@@ -1745,28 +1745,18 @@ impl<'a> ExpressionReader<'a> {
         for item in &items {
             members.push(self.expression(item, depth)?);
         }
-        if members.len() < 2 {
-            return Err(SchemaCompileError::InvalidOntology {
-                subject: owner.to_owned(),
-                reason: "owl:unionOf/owl:intersectionOf requires at least two members".to_owned(),
-            });
-        }
         members.sort();
         members.dedup();
-        if members.len() < 2 {
-            return Err(SchemaCompileError::InvalidOntology {
-                subject: owner.to_owned(),
-                reason: "owl:unionOf/owl:intersectionOf must contain two distinct members"
-                    .to_owned(),
-            });
-        }
         Ok(members)
     }
 
+    /// An `owl:oneOf` list. An empty one denotes nothing: the OWL 2 Mapping
+    /// (Table 18) reads `C owl:oneOf ()` as `C ≡ owl:Nothing`.
     fn one_of(
         &mut self,
         head: &Term,
         owner: &str,
+        data_range: bool,
     ) -> Result<OntologyExpression, SchemaCompileError> {
         let malformed = |reason: String| SchemaCompileError::InvalidOntology {
             subject: owner.to_owned(),
@@ -1774,9 +1764,11 @@ impl<'a> ExpressionReader<'a> {
         };
         let items = self.list_items(head, owner)?;
         if items.is_empty() {
-            return Err(malformed(
-                "owl:oneOf requires at least one member".to_owned(),
-            ));
+            return Ok(if data_range {
+                OntologyExpression::OneOf(Vec::new())
+            } else {
+                OntologyExpression::Named(OWL_NOTHING.to_owned())
+            });
         }
         let mut members = Vec::with_capacity(items.len());
         for item in items {
@@ -1810,12 +1802,9 @@ impl<'a> ExpressionReader<'a> {
             subject: owner.to_owned(),
             reason,
         };
+        // An empty `owl:withRestrictions` restricts nothing: the range is the
+        // base datatype itself.
         let items = self.list_items(head, owner)?;
-        if items.is_empty() {
-            return Err(malformed(
-                "owl:withRestrictions requires at least one facet restriction".to_owned(),
-            ));
-        }
         let mut facets = Vec::with_capacity(items.len());
         for item in items {
             if !matches!(item, Term::BlankNode(_)) {
@@ -1921,6 +1910,30 @@ fn is_data_range(expression: &OntologyExpression, datatypes: &BTreeSet<String>) 
     !expression.has_class_only_construct()
         && (expression.has_data_only_construct()
             || expression.all_named_members_match(&|iri| is_datatype(iri, datatypes)))
+}
+
+/// `owl:unionOf` over `members` (sorted and deduplicated), by its meaning
+/// under the OWL 2 RDF-Based Semantics: the union of no class is
+/// `owl:Nothing` (of no data range, the empty enumeration), and the union of
+/// one is that one.
+fn union_of(mut members: Vec<OntologyExpression>, data_range: bool) -> OntologyExpression {
+    match members.len() {
+        0 if data_range => OntologyExpression::OneOf(Vec::new()),
+        0 => OntologyExpression::Named(OWL_NOTHING.to_owned()),
+        1 => members.pop().expect("one member"),
+        _ => OntologyExpression::Union(members),
+    }
+}
+
+/// `owl:intersectionOf` over `members`: the intersection of no class is
+/// `owl:Thing` (of no data range, `rdfs:Literal`), and of one is that one.
+fn intersection_of(mut members: Vec<OntologyExpression>, data_range: bool) -> OntologyExpression {
+    match members.len() {
+        0 if data_range => OntologyExpression::Named(RDFS_LITERAL.to_owned()),
+        0 => OntologyExpression::Named(OWL_THING.to_owned()),
+        1 => members.pop().expect("one member"),
+        _ => OntologyExpression::Intersection(members),
+    }
 }
 
 /// One expression for the readings of one node: the reading itself, or the
