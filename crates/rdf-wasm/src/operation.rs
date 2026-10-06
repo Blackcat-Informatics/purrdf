@@ -30,6 +30,7 @@ use purrdf::{
     ClosureRelations, EntailmentClosure, GovernedEntailment, JsonLdSerializeOptions,
     QueryEntailmentPlan, RdfDataset, ReasoningError, query_with_entailment_closure_governed,
 };
+use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_core::{DiagnosticPresentation, RdfDiagnostic, SparqlResult};
 use purrdf_sparql_eval::protocol::{FailureCode, negotiate};
 use purrdf_sparql_eval::{
@@ -424,6 +425,16 @@ impl JobRun<'_> {
             )
     }
 
+    /// [`Self::options`] evaluating `REGEX`/`REPLACE` under `xpath_regex`, when a dated
+    /// law was selected.
+    fn selected_options<'o>(
+        &'o self,
+        env: &'o purrdf_sparql_eval::ExtensionEnv,
+        xpath_regex: Option<Profile>,
+    ) -> QueryOptions<'o> {
+        crate::xpath_regex::select(self.options(env), xpath_regex)
+    }
+
     /// The run's sources, for an ambient execution scope.
     pub(crate) fn sources(&self) -> purrdf_shapes::sparql::QuerySources {
         purrdf_shapes::sparql::QuerySources {
@@ -492,6 +503,9 @@ pub(crate) struct OperationInput<'a> {
     pub(crate) program: Option<String>,
     pub(crate) closure: ClosureInputs,
     pub(crate) accept: Option<String>,
+    /// The dated native XPath law `REGEX`/`REPLACE` evaluate under (`xpathRegex`);
+    /// `None` keeps the compatibility regex.
+    pub(crate) xpath_regex: Option<Profile>,
 }
 
 impl<'a> OperationInput<'a> {
@@ -518,6 +532,7 @@ impl<'a> OperationInput<'a> {
             program: None,
             closure: ClosureInputs::default(),
             accept: None,
+            xpath_regex: None,
         }
     }
 }
@@ -530,8 +545,9 @@ fn ungoverned_query(
     frozen: &Arc<RdfDataset>,
     sparql: &str,
     base: Option<&str>,
+    xpath_regex: Option<Profile>,
 ) -> Result<SparqlResult, JobError> {
-    let options = run.options(QueryOptions::EMPTY.env);
+    let options = run.selected_options(QueryOptions::EMPTY.env, xpath_regex);
     let Some(governors) = run.ungoverned_watch() else {
         // The engine's ungoverned entry, exactly as its `SparqlEngine::query` runs it:
         // the plan, then its evaluation with no governor state.
@@ -587,15 +603,21 @@ impl OperationInput<'_> {
             program,
             closure,
             accept,
+            xpath_regex,
         } = self;
         let base = base.as_deref();
         let request = sparql_request(&sparql, base);
         match kind {
             AsyncOperationKind::Query => Ok(JobOutcome::Query(ungoverned_query(
-                run, &engine, &frozen, &sparql, base,
+                run,
+                &engine,
+                &frozen,
+                &sparql,
+                base,
+                xpath_regex,
             )?)),
             AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
-                let result = ungoverned_query(run, &engine, &frozen, &sparql, base)?;
+                let result = ungoverned_query(run, &engine, &frozen, &sparql, base, xpath_regex)?;
                 let text = run.serialize(|| match (&jsonld, format.as_deref()) {
                     (Some(options), Some(format)) => {
                         serialize_configured_graph(result, format, options)
@@ -620,7 +642,12 @@ impl OperationInput<'_> {
                 );
                 let outcome = run
                     .evaluate(|| {
-                        engine.query_governed(&frozen, request, run.options(&env), &governors)
+                        engine.query_governed(
+                            &frozen,
+                            request,
+                            run.selected_options(&env, xpath_regex),
+                            &governors,
+                        )
                     })
                     .map_err(JobError::diagnostic)?;
                 run.record_silenced(outcome.evidence());
@@ -635,7 +662,12 @@ impl OperationInput<'_> {
                 );
                 let outcome = run
                     .evaluate(|| {
-                        engine.query_governed(&frozen, request, run.options(&env), &governors)
+                        engine.query_governed(
+                            &frozen,
+                            request,
+                            run.selected_options(&env, xpath_regex),
+                            &governors,
+                        )
                     })
                     .map_err(JobError::diagnostic)?;
                 run.record_silenced(outcome.evidence());
@@ -693,7 +725,7 @@ impl OperationInput<'_> {
                             request,
                             &EntailmentClosure::new(plan.entailment(), &imports)
                                 .with_limits(limits.eval_options()),
-                            run.options(&env),
+                            run.selected_options(&env, xpath_regex),
                             // This surface registers no relation, so there is none to
                             // re-derive over the closure.
                             &ClosureRelations::NONE,
@@ -723,7 +755,7 @@ impl OperationInput<'_> {
             AsyncOperationKind::Explain => {
                 // The measuring run — metered, never bounded — with the run's sources
                 // installed and its signal, when it has one, polled at every charge point.
-                let options = run.options(QueryOptions::EMPTY.env);
+                let options = run.selected_options(QueryOptions::EMPTY.env, xpath_regex);
                 let explanation = run
                     .evaluate(|| match &run.stop {
                         Some(stop) => engine.explain_query_with_stop_signal(
@@ -755,7 +787,7 @@ impl OperationInput<'_> {
                         engine.update_with_options(
                             &mut target,
                             request,
-                            run.options(QueryOptions::EMPTY.env),
+                            run.selected_options(QueryOptions::EMPTY.env, xpath_regex),
                         )
                     })
                     .map_err(JobError::diagnostic)?;
@@ -766,7 +798,7 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.options(QueryOptions::EMPTY.env),
+                            run.selected_options(QueryOptions::EMPTY.env, xpath_regex),
                             &governors,
                         )
                     })
@@ -793,7 +825,12 @@ impl OperationInput<'_> {
                 let mut target = Arc::clone(&frozen);
                 let outcome = run
                     .evaluate(|| {
-                        engine.update_governed(&mut target, request, run.options(&env), &governors)
+                        engine.update_governed(
+                            &mut target,
+                            request,
+                            run.selected_options(&env, xpath_regex),
+                            &governors,
+                        )
                     })
                     .map_err(JobError::diagnostic)?;
                 run.record_silenced(outcome.evidence());
