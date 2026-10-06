@@ -6202,7 +6202,11 @@ fn assigns(pattern: &GraphPattern, name: &str) -> bool {
             return Flow::Descend;
         }
         found = match node {
-            NodeRef::Pattern(GraphPattern::Extend { variable, .. }) => variable.as_str() == name,
+            NodeRef::Pattern(GraphPattern::Extend {
+                variable,
+                expression,
+                ..
+            }) => variable.as_str() == name && !is_rejoin(variable, expression),
             NodeRef::Pattern(GraphPattern::Group { aggregates, .. }) => aggregates
                 .iter()
                 .any(|(variable, _)| variable.as_str() == name),
@@ -6410,9 +6414,14 @@ fn join_assignments_in(
     names: &[&str],
     fresh: &mut usize,
 ) {
+    // (pattern, whether it lies on the seed's wrapper descent, whether every row it
+    // yields meets the seed by joins alone — the descent itself, and from the core
+    // down only `Join`, `Union` and `GRAPH` — so the seed's own join already joins a
+    // `VALUES` there with the bound value).
+    let joined = on_descent && !in_exists;
     let on_descent = on_descent || in_exists;
-    let mut pending: Vec<(&mut GraphPattern, bool)> = vec![(root, on_descent)];
-    while let Some((node, on_descent)) = pending.pop() {
+    let mut pending: Vec<(&mut GraphPattern, bool, bool)> = vec![(root, on_descent, joined)];
+    while let Some((node, on_descent, joined)) = pending.pop() {
         // An assignment inside an `EXISTS` body joins the same way; a body is a pattern
         // held in an expression, so it is taken in a pass of its own (one call per
         // `EXISTS` level, which the parser's nesting limit bounds).
@@ -6447,6 +6456,16 @@ fn join_assignments_in(
                     fresh_for(variable, &mut moved);
                 }
             }
+            // A `VALUES` row the seed's join meets is joined with the bound value
+            // already. Anywhere else — an `OPTIONAL` arm, a `MINUS` operand, a
+            // sub-`SELECT`, beneath a grouping, an `EXISTS` body — its rows are
+            // combined before that join, so the column joins here instead, exactly as
+            // an assignment does.
+            GraphPattern::Values { variables, .. } if !joined => {
+                for variable in variables.iter_mut() {
+                    fresh_for(variable, &mut moved);
+                }
+            }
             _ => {}
         }
         // The descent passes exactly the wrappers `map_core_pattern_mut` does; every
@@ -6464,6 +6483,15 @@ fn join_assignments_in(
                 | GraphPattern::Unfold { .. }
         );
         let child_on_descent = in_exists || (on_descent && wrapper);
+        let child_joined = !in_exists
+            && ((on_descent && wrapper)
+                || (joined
+                    && matches!(
+                        node,
+                        GraphPattern::Join { .. }
+                            | GraphPattern::Union { .. }
+                            | GraphPattern::Graph { .. }
+                    )));
         if !moved.is_empty() {
             let condition = moved
                 .iter()
@@ -6501,12 +6529,36 @@ fn join_assignments_in(
                 unreachable!("the assignment was just wrapped in a FILTER");
             };
             for_each_child_pattern_mut(inner, &mut |child| {
-                pending.push((child, child_on_descent));
+                pending.push((child, child_on_descent, child_joined));
             });
             continue;
         }
-        for_each_child_pattern_mut(node, &mut |child| pending.push((child, child_on_descent)));
+        for_each_child_pattern_mut(node, &mut |child| {
+            pending.push((child, child_on_descent, child_joined));
+        });
     }
+}
+
+/// Whether `BIND(expression AS ?variable)` is the re-extension
+/// [`join_assignments_in`] builds over a moved assignment or `VALUES` column:
+/// `COALESCE(?moved, ?variable)`, which hands the row the bound value back rather
+/// than assigning the name. A pass run again over a plan already rewritten — the
+/// localization a run repeats for a door that prepared without the names — must not
+/// read it as an assignment of the name.
+fn is_rejoin(variable: &Variable, expression: &Expression) -> bool {
+    let Expression::Coalesce(arguments) = expression else {
+        return false;
+    };
+    matches!(
+        &arguments[..],
+        [Expression::Variable(moved), Expression::Variable(name)]
+            if name == variable
+                && moved
+                    .as_str()
+                    .strip_prefix(ASSIGNED_PREFIX)
+                    .and_then(|rest| rest.split_once('_'))
+                    .is_some_and(|(_, moved_name)| moved_name == variable.as_str())
+    )
 }
 
 /// `!BOUND(?to) || sameTerm(?to, ?name)`: an assigned value compatible with the bound
