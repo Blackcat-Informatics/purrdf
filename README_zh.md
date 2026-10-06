@@ -2,8 +2,6 @@
 SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 -->
-<p align="center"><a href="./README.md">English</a></p>
-
 <p align="center">
   <a href="https://blackcatinformatics.ca/purrdf/">
     <img src="./docs/purrdf-logo.svg" alt="PurRDF logo — a black cat holding an RDF triple" width="128" height="128">
@@ -13,7 +11,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 <h1 align="center">PurRDF</h1>
 
 <p align="center">
-  <em>自带呼噜声的 RDF 1.2 工具包：图原语、编解码器、SPARQL、SHACL、ShEx、蕴涵、全文检索、GeoSPARQL 与图传输。</em>
+  <em>RDF 1.2、推理、检索与图传输——一个 Rust 引擎，为多种语言所共享。</em>
 </p>
 
 <p align="center">
@@ -34,123 +32,51 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   <a href="https://blackcat-informatics.github.io/purrdf/playground/"><img src="https://img.shields.io/badge/RDF--1.2%20playground-try%20it%20live-brightgreen" alt="Try the RDF-1.2 playground in your browser"></a>
 </p>
 
+<p align="center">
+  <a href="./README.md">English</a> · 简体中文 ·
+  <a href="https://blackcat-informatics.github.io/purrdf/">英文手册</a>
+</p>
+
 ---
 
-> 译注：本文是 [`README.md`](./README.md) 的简体中文译本，与当前的英文文档逐段对应。代码块、
-> 标识符、链接与一致性数字与英文原文逐字相同；《PurRDF 之书》的英文页面链接保持原样。
+> 译注：本文是 [`README.md`](./README.md) 的简体中文译本，与英文原文逐段对应。代码块、标识符、链接目标与一致性数字与英文原文逐字相同；如有出入，以英文原文（[English](./README.md)）为准。
 
-PurRDF 是一个 [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) 工具包——图原语、
-编解码器、SPARQL 1.1/1.2、SHACL、ShEx、蕴涵机制（entailment regime）与 GTS 图传输——
-以 Rust 实现一次，并原样带入 Python、WebAssembly/JavaScript 与 C，但有一处例外须先行
-说明：GTS 容器可从 Rust、CLI（作为输入格式）、Python 与 C 访问，而 wasm/JavaScript 包并不
-暴露它。每一个已发布的 crate 都能构建到 `wasm32-unknown-unknown`，因此在服务器上回答某条查询的引擎，也会在
-浏览器标签页中逐字节地给出同一答案。使同一张图行于诸语言之间而其义不移——此即吾辈所架之
-津梁。
+PurRDF 是一个用于围绕知识图谱构建应用的 Rust 工具包。它把 RDF 1.2、SPARQL、验证、
+推理、文本与向量检索、文档编解码器以及图传输汇聚到同一个引擎之中。Python、
+JavaScript / WebAssembly 与 C 调用这一引擎，而不是重新实现它。
 
-**它从架构中移除了什么。**通常让一个 PostgreSQL 实例伴随三元组存储运行的三项工作——
-带排名的全文检索、空间谓词与向量相似度——都在 PurRDF 内部得到回答：进程内、同一
-数据集、同一条 SPARQL 查询，没有第二个数据库，没有同步作业，也没有一半 SPARQL 一半
-SQL 的拆分提问。每个答案都是精确且确定的——同样的行、同样的顺序、同样的分数词法形式，
-原生与 wasm32 上皆然——这是 Postgres 技术栈跨机器时并不作出的保证。这不是一个设想：
-这些查询接口已经从一个 RDF 项目中移除了整个 PostgreSQL 依赖。经验证的能力表、每个
-接口的边界，以及架构上的前后对照，见
-[一个引擎取代三个数据库](#一个引擎取代三个数据库)。
+一张图可以承载关于陈述的陈述、多语言字面量、命名图、溯源以及所链接的二进制内容。
+PurRDF 在查询、验证以及能够表示这些区分的载体中始终保留它们；会丢失信息的投影则返回
+一份定位到具体位置的损失台账。
 
-## 文档即其自身的图
+**同一个 RDF 引擎。同一套行为。每一种语言。**各语言接口暴露的是工具包的不同部分，
+详见下文。每一个已发布的 Rust crate 也都能构建到 `wasm32-unknown-unknown`。
 
-PurRDF 附带一个 Markdown → RDF 1.2 的结构化切片器
-[`purrdf-markdown`](./crates/markdown/)，它遵循一份
-[已发布的规范](./crates/markdown/SPEC.md)，并指定了一个词汇表命名空间
-`https://w3id.org/purrdf/markdown#`。已注册的
-[w3id 重定向](https://w3id.org/purrdf/markdown) 解析到项目网站。随库发布的规范定义了
-词汇表与编解码器契约；解析、投影或重建一篇文档都不需要任何网络查找。
+[试用浏览器演练场](https://blackcat-informatics.github.io/purrdf/playground/)
+· [阅读《PurRDF 之书》](https://blackcat-informatics.github.io/purrdf/zh-Hans/)
+· [Rust API](https://docs.rs/purrdf)
+· [迁移到 3.0](./docs/MIGRATION-3.0.md)
 
-一篇文档由此成为一张图，图中是它自身的各级标题、编号节（verse）与段落：
-每个节点都逐字指名源文档中的一段字节区间。节点标识按
-内容寻址；而生成这些标识所依据的 profile，又按切片法则自身的内容寻址——因此法则一旦
-变更，标识随之重新生成，而不是就此漂移。同样的字节、同样的 profile，在每个目标上给出
-逐字节相同的输出；一张对照表（concordance table）则提升为 RDF 1.2 的具体化引用
-（reified citation）。这张图是**编解码器（codec）的输出，而不是索引**：输出的字节区间
-覆盖源文档的每一个字节——标题行、连续空行、分隔线与表格行都作为带类型的原文字面量，
-与编号章节一同写入图中——因此，按规范定义的解码规则，仅凭三元组即可逐字节重建文档，
-并可用图中自带的源摘要（source digest，即源文档的哈希值）校验重建结果。简单字面量
-（simple literal）只承载内容（编号章节的正文、标题的文字），字节则由带类型字面量承载；
-文本索引只索引简单字面量，因此每个词只被索引一次，其中不含任何结构字节。我们调研了将文档映射到 RDF 的各项标准，未发现有哪一项就 Markdown
-把三件事合于一处：确定性、字节区间可寻址，以及按法则内容寻址的标识。规范中的
-[相关工作](./crates/markdown/SPEC.md#12-related-work)一节列出了我们考察过的每一项标准，
-并逐项说明它未能提供这三者中的哪些；若有我们遗漏的标准同时具备这三者，我们更愿意听到
-究竟是哪一项，而不是断言没有任何标准做到。它切分的是这份规范写明的方言；
-它并非一个 CommonMark 实现。
+## 你可以构建什么
 
-## 它为何存在？
+| 任务 | PurRDF 提供 |
+| --- | --- |
+| 让 RDF 1.2 贯穿整个应用 | 驻留（interned）数据集、三元组项、具体化节点（reifier）、注解、基础方向字面量与命名图；原生文本编解码器、规范化、差异比较与同构判定。 |
+| 查询与修改图 | SPARQL 1.1/1.2 查询与 Update、预备执行、属性路径、宿主扩展、资源 governor（执行调控器）与解释回执（explain receipt）。 |
+| 验证与推导知识 | SHACL 1.2、ShEx 2.1、确定性 Datalog、RDF/RDFS/OWL-RL/D 物化、OWL-Direct 推理与 RIF-Core。 |
+| 跨多种信号检索 | 精确定点 BM25、GeoSPARQL 谓词、精确嵌入 k 近邻、确定性 HNSW，以及附带逐生产者（per-producer）证据的倒数排名融合（reciprocal-rank fusion）。 |
+| 让文档可被查询 | 结构化 Markdown 与有序 JSON 编解码器，带按字节寻址的出现（occurrence）、显式 profile 与精确重建。 |
+| 交换图数据 | 带二进制载荷的 GTS 容器；规范的五表 Parquet；带损失记录的图、表格与 Research Object（RO）投影。 |
+| 在预算之内读取不可变快照 | 经认证（certified）的分段存储、经鉴别（authenticated）的区间读取、钉住（pinned）的词项、稀疏缓存，以及经由普通数据集/求值器扩展点进行的共享工作区准入。 |
 
-RDF 工具沿两条轴线碎片化。
+在 Rust 中，从 [`purrdf`](./crates/purrdf/) 门面 crate 开始。它在根部暴露 RDF 接口，
+并把其他引擎作为模块暴露。应用自行提供其词汇表、扩展注册、网络传输与嵌入模型。标准
+RDF 词汇表中的词项是内置的；应用命名空间是显式配置。
 
-**跨语言**：每个生态都有自己的解析器，带着自己的缺陷、自己对边界情况的解读，以及自己
-所实现的规范子集。把一张图从 Rust 服务搬到 Python 流水线再搬到浏览器，数据的含义就已
-被悄悄改变了三次。
+## 查询、推理与检索协同进行
 
-**跨时间**：[RDF 1.2](https://www.w3.org/TR/rdf12-concepts/)——三元组项、具体化节点
-（reifier）、基础方向字面量——是标准的现行修订版，而几乎没有哪个现存的库承载它。
-
-PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张图**。它是一个从零实现、依赖
-极简的 Rust 核心——从解析器到 SPARQL 引擎到 SHACL 验证器再到二进制传输——原样带入
-Python、WebAssembly/JavaScript 与 C（二进制传输在 wasm 上除外，如上所述）。整个工作区刻意**没有任何 Cargo feature 标志**
-（CI 强制执行）：数据载体不得有可选行为，因此每个消费者得到的是同样的、字节级一致的
-语义。
-
-PurRDF 是 [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology) 技术栈的
-数据骨干，也是 [GTS](./docs/GTS-SPEC.md) 图传输引擎的参考实现所在，但它对调用方的本体或应用
-不作任何假设。
-
-## 一个引擎取代三个数据库
-
-需要带排名的文本检索、空间谓词或最近邻搜索的 RDF 项目，通常正是为了这三项工作而在
-三元组存储旁边运行一个 PostgreSQL。PurRDF 直接在已加载到内存的数据集上、通过求值器提供的属性函数（property function）与标量函数
-扩展点（extension seam，由调用方以自有 IRI 注册），用 SPARQL 回答全部三项。
-下面的每一项能力都是打开 crate 就能找到的；每一条边界都是其测试所固定的。
-
-| 所需能力 | 通常来自 | 如今在 PurRDF 之内 | 止步于何处 |
-| --- | --- | --- | --- |
-| 带排名的全文检索 | PostgreSQL `tsvector`/`tsquery` | [`purrdf-text`](./crates/text/)：一个覆盖 RDF 1.2 字面量（含注解层）的倒排索引，Unicode 大小写折叠与词边界切分，以及以精确的 `i128` 十进制定点数做的 BM25 排名，**crate 内没有浮点**（`#![deny(clippy::float_arithmetic)]`）。两个关系：`?doc <iri> ( "needle" ?score ?rank ?lang ?matched )` 用于带排名的检索，`?doc <iri> ( "term" ?lang ?position )` 用于词项出现位置，短语与邻近查询由此在普通 SPARQL 中组合而成。 | 是 BM25 排名，不是 Lucene：没有词干提取，没有停用词表，没有查询方言；`k1` 与 `b` 是固定常量；索引位于内存中，在冻结数据集上一次性构建（`TextIndex::from_dataset`）。 |
-| 空间谓词 | PostGIS | [`purrdf-geo`](./crates/geo/)：GeoSPARQL 1.1（OGC 22-047r1）——WKT 与 GeoJSON 字面量解析为精确有理数，Simple Features、Egenhofer 与 RCC8 的每一种关系都在精确的 DE-9IM 上判定，`geof:` 函数落在标量扩展点上，Query Rewrite 关系（要素之间的 `?a geo:sfWithin ?b`）落在属性函数扩展点上。没有 GEOS，没有 PROJ，没有浮点运算；唯一的浮点边界是 `xsd:double` 结果字面量。 | 是矢量几何上的拓扑谓词、访问器与可精确计算的度量和构造器，不是 PostGIS：`geof:transform` 按名称硬错误（没有 CRS 数据库），`metric*` 度量只在调用方声明为以米计量的 CRS 中作答（没有椭球大地测量），而 `buffer`、`concaveHull`、`boundingCircle`、叠加集合运算（`intersection`/`union`/`difference`/`symDifference`）与 GML/KML/DGGS 编码已注册但按名称硬错误。没有栅格，没有持久化空间索引。 |
-| 向量相似度 | pgvector | [`purrdf-sparql-eval`](./crates/sparql-eval/) 中的嵌入 k 近邻：`?neighbour <space> ( ?seed k ?distance )`，在 [PURREMB](./docs/PURREMB.md) 嵌入空间上（`EmbeddingSpace::from_artifact`、`EmbeddingKnnRelation`），按工件声明的度量做精确 top-k，binary64 且累加顺序固定、无融合乘加，并列按内容派生的行顺序打破。 | 精确搜索——每个候选都被评分，没有剪枝，没有近似索引——由调用方提供的 `KnnGuard` 限定（最大空间、最大 `k`；是拒绝，不是截断）。三种度量：余弦、负点积、平方欧氏距离。PurRDF 不计算嵌入，也不运行任何 ANN 载荷：向量来自由调用方填充的 PURREMB 工件——载体本身由 PurRDF 写出（内存中的 `EmbeddingBuilder`，流式的 `EmbeddingStreamWriter<W: Write + Seek>`，二者都在 `purrdf-core` 中且仅限 Rust），并以失败即关闭（fail-closed）的方式打开（`EmbeddingView::from_bytes`）；产出这些向量的模型是调用方的。 |
-
-本版本中还有两项能力落在同一扩展点上：**路径见证**（path witness），一个逐跳绑定遍历
-过程的属性函数，每条被遍历的陈述都是一个 RDF 1.2 三元组项；以及 **SEP-0009 复合数据
-类型**（`cdt:List`/`cdt:Map`，带 `FOLD` 与 `UNFOLD`）。后者有一处分歧被明确陈述而非
-隐藏：PurRDF 允许 RDF 1.2 三元组项与带方向的语言标签字面量作为复合元素，这是一个词法
-超集，符合 SEP-0009 的读取器会将其判为格式错误，且只在 SEP-0009 完全无法表达的值上
-才会发出。
-
-**确定，因而可移植。**Postgres 技术栈每个构建给出一种答案：`ts_rank` 与 pgvector 的
-距离是浮点数，PostGIS 谓词运行在 GEOS 的浮点几何上。PurRDF 的三个接口在每个目标上
-都是其输入的纯函数——BM25 用 `i128` 定点数配合固定迭代次数的整数对数，几何用精确
-有理数配合整数 DE-9IM 判定，k 近邻的精确运算（默认选项）用 binary64 配合单一固定
-的十六通道（sixteen-lane）累加顺序，这一顺序在每个目标上都成立；可选的重结合运算（reassociated arithmetic）
-以此保证换取速度，其最后几位可能随目标与构建而不同——并且每一种排序
-都是规范的：文档 id 在按 `(graph, subject, language)` 排序后分配，空间行按
-`TermValue` 的全序排序，k 近邻的并列按内容派生的 `TargetId` 打破。数值与序列化的预期结果由原生 Rust 测试固定。
-`make wasm` 为 `wasm32-unknown-unknown` 构建三个 crate；`make wasm-test`
-只运行实际 WASM 分派、SIMD 内核、影子栈与宿主接口测试。
-
-**在浏览器中。**三个 crate 都可为 `wasm32-unknown-unknown` 构建。
-它们是 Rust 宿主上的扩展点：宿主
-构建一个索引或打开一个空间，并在自己的 IRI 之下注册它，而该宿主本身也可以编译到
-wasm32。已发布的 `@blackcatinformatics/purrdf` npm 包与
-`purrdf` Python wheel 尚未暴露这三种关系；如今跨越这些边界的是数据形态的属性函数
-（冻结表、以图为数据源的表、路径见证）。
-
-**示意性的前后对照**（项目是真实的；此处不具名）：
-
-- *之前*——一个三元组存储放图，旁边一个 PostgreSQL 实例，用 `tsvector`/`tsquery`
-  处理标签与摘要，用 PostGIS 的 `ST_Within`/`ST_Intersects` 处理要素几何，用 pgvector
-  的 `<->` 处理文档嵌入：三份数据副本，一个让它们保持对齐的同步作业，以及每一个横跨
-  它们的问题都得一半写成 SPARQL、一半写成 SQL。
-- *之后*——一个 PurRDF 数据集；一个 `PropertyFunctionRegistry`，持有一个
-  `TextSearchRelation`、`geo:` 的 Query Rewrite 关系与一个 `EmbeddingKnnRelation`，
-  各自在项目自己的 IRI 之下；一条通过基本图模式把三者连接起来的 SPARQL 查询；没有
-  PostgreSQL。答案在服务器与浏览器中相同。
+Rust 宿主可以在同一个 SPARQL 求值器中，把图模式与文本检索、空间关系和嵌入近邻连接
+起来。每种关系都注册在由应用提供的谓词 IRI 之下：
 
 ```sparql
 PREFIX ex:  <https://example.org/>
@@ -165,287 +91,106 @@ SELECT ?doc ?score ?distance WHERE {
 ORDER BY ?rank
 ```
 
-上面的每个谓词都是调用方的：PurRDF 不自行定义任何词汇表，因此 `ex:search`、`ex:nearest`
-以及 `geo:sfWithin` 背后的 CRS 都是宿主提供的注册，而一条指名了无人注册的 IRI 的查询
-只是一个普通的三元组模式。
+该查询假定宿主已经注册了文本、空间与向量关系，并提供了坐标系配置。未注册的谓词仍然
+只是一个普通的 RDF 模式。
 
-## 里面有什么
+- **文本：**[`purrdf-text`](./crates/text/) 为 RDF 字面量（含注解层）建立索引，采用
+  Unicode 规范化、大小写折叠与切分。BM25 分数使用精确的定点算术。带排名的检索与词项
+  出现关系支持在 SPARQL 中组合短语与邻近查询。索引常驻内存，在冻结数据集上构建。默认
+  保留词法拼写；调用方可以选择英文词干提取。停用词词典与独立的查询方言不在其接口之内。
+- **几何：**[`purrdf-geo`](./crates/geo/) 在精确有理数的 WKT/GeoJSON 几何上实现
+  GeoSPARQL 1.1 拓扑谓词，外加访问器以及可精确计算的度量与构造器。坐标变换、椭球
+  大地测量、缓冲区与叠加集合运算均未实现；已注册但不受支持的函数按名称拒绝。宿主声明
+  CRS，以及哪些坐标系以米计量。
+- **向量：**[PURREMB](./docs/PURREMB.md) 承载调用方产出的嵌入（向量嵌入）、其坐标及其
+  派生同一性。精确 k 近邻支持余弦、负点积与平方欧氏距离。
+  [`purrdf-hnsw`](./crates/hnsw/) 增加了一个近似索引，在其默认算术下，层级、构建调度
+  与载荷字节都是确定的。近似候选绝不证明（certify）不存在更近的行。PurRDF 写出并读取
+  嵌入工件；它不运行模型来生成这些向量。
+- **融合：**[`purrdf-retrieval`](./crates/retrieval/) 规划一个带类型的请求，将其编译为
+  逐生产者的 SPARQL，执行它并融合各条带排名的流。精确定点的倒数排名融合携带计划、融合
+  法则与证据的同一性，逐层（stratum）溯源、索引代次证明（index-generation
+  attestation）以及所声明的检索保真度（search fidelity）。未得到服务的请求词项与不完整
+  的生产者在结果中保持可见。生产者、层与权重由调用方提供。
 
-- **RDF 1.2 图原语**——一个不可变的、按值驻留（interned）的数据集 IR（`TermId` 空间、
-  字符串存储区、写时复制的变更），带有宾语位置的三元组项、具体化节点/注解侧表（side table），以及
-  基础方向字面量（`rdf:dirLangString`）。
-- **Pack 容器**——整个 RDF 1.2 数据集的内容寻址、零拷贝快照（`purrdf-core` 中的
-  `PackBuilder`/`PackView`；CLI 上的 `--from pack`/`--to pack`、`pack verify` 与
-  `query --data x.purrpck`）：一个前端编码（front-coded）的值字典、带 FoQ 索引的位图
-  三元组（不解压任何一节即可回答全部八种 `(s, p, o)` 模式形态）、具体化节点/注解侧表、
-  每节一个 SHA-256，以及头部中的规范同一性摘要。`verify_pack` 重新驻留每一行，并把
-  重建结果对照该摘要重新规范化，CLI 对它打开的每个 pack 都会运行它，因此没有任何东西
-  能未经验证就进入流水线。止步于何处：只读——唯一的写入器重建整个数据集，`PackView`
-  没有写路径；内核读取借来的字节，从不自行映射文件（CLI 的 mmap 属于消费者的层级）；
-  仅限 Rust 与 CLI，不含 Python、wasm 或 C。
-- **分页数据集与可失败视图（fallible view）**（仅限 Rust）——`PagedDataset` 把来自某个
-  `PageProvider` 的冻结页组合成一个逻辑上的 `DatasetView`，共享同一个值字典；
-  `PagedQueryLimits`（页数、字节数）驱动求值器的 `query_*_fallible_view` 入口，它们
-  只从最终的就绪检查点返回完整结果：一次操作性的 `PageFault` 会丢弃全部行，而不是为
-  部分结果作认证——这正是把存储故障与 governor 触顶区分开来的地方。止步于何处：随库
-  发布的页提供者只有内存实现（`InMemoryPageProvider`、`SubsetPageProvider`）——按契约
-  （[`docs/design/purrdf-backend-contract.md`](./docs/design/purrdf-backend-contract.md)
-  中的 G5）不提供任何持久或磁盘支撑的层级——并且这些都不能从 CLI、Python、wasm 或 C
-  访问。
-- **原生编解码器**——**Turtle、TriG、N-Triples、N-Quads、RDF/XML、TriX、HexTuples、
-  JSON-LD (star) 与 YAML-LD** 的第一方解析器/序列化器，外加使用调用方提供词汇表的
-  双向 OKF Markdown 包；输出字节级确定。
-- **JSON-LD 1.1 上下文透镜（context lens）**——确定性的上下文编译
-  （`CompiledJsonLdContext`，基于一个以 IRI 为键的离线 `JsonLdContextRegistry`），
-  `JsonLdSerializeMode` 上有三种输出模式：展开、经由可复用的已编译上下文进行的压缩，
-  以及从数据集自身 IRI 中挖掘出的、与词汇表无关的派生前缀上下文，全部在每个宿主上由
-  一份带版本号的选项文档驱动（CLI 上的 `--jsonld-options`、Python 中的
-  `serialize_jsonld`、wasm 中的 `serializeConfigured`/`serializeWithContext`、C 中的
-  `purrdf_jsonld_context_compile` + `purrdf_serialize_jsonld_configured`）。止步于何处：
-  没有网络加载器，也没有远程上下文——上下文 IRI 与 `@import` 只经由调用方提供的注册表
-  解析——一个固定的、私有的资源包络（每个上下文 1 MiB、128 份注册表文档、4,096 个
-  词项、嵌套深度 64），并且没有 framing API：这是一个上下文透镜，不是完整的 JSON-LD 1.1
-  处理器。由 **73 / 73** 个适用的 W3C toRDF 向量与 **13 / 13** 个精确压缩向量把关，
-  修订版固定并附逐向量的 SHA-256。
-- **单一的基础解析层**——每个编解码器、SPARQL、ShEx 与 SHACL 都经由 `purrdf-iri` 中
-  唯一的 RFC 3986 实现（`BaseIri`/`BaseScope`）解析相对 IRI（国际化资源标识符）引用，遵循 RFC 3986 §5.1
-  的优先级链：文档内指令（`@base`/`BASE`/`xml:base`/`@context.@base`），否则调用方
-  提供的基础 IRI，否则文档的检索 IRI（CLI 所打开文件的 `file://` IRI），否则硬错误
-  `iri-relative-no-base`。相对 IRI 绝不会未经解析就进入图，而能够表达基础 IRI 的语法
-  （Turtle、TriG、RDF/XML、JSON-LD、YAML-LD）在输出时会写出一个基础 IRI 并相对于它
-  做相对化。参见 [基础 IRI 与相对引用](./docs/book/src/concepts/base-iris.md)。
-- **规范化**——W3C **RDFC-1.0** 数据集规范化，对照 W3C 夹具套件测试（SHA-256 与
-  SHA-384）。在 RDF 1.2 构造之上有两种规范形式，并以不同的名字区分：**扁平形式**
-  （`canonical_flat_nquads`；CLI 的 `--canonical` 与 wasm 的 `Dataset.canonicalize()`
-  所运行的形式）把具体化节点与注解改写为普通的 `rdf:reifies`/注解三元组，再在 RDFC-1.0
-  下将其规范化；而原生的 `purrdf::canonicalize` 是第一方的 **`purrdf-rdfc12` v2**
-  profile，它改为把它们降为保留的 `urn:purrdf:rdfc:` 命名空间，并拒绝任何已经携带该
-  命名空间的输入——除非其写法恰好是该 profile 自身输出所用的那两种形态，这两种形态会
-  被折回陈述层，因此对规范化文档再次规范化会原样返回它。该 profile 只在 RDF 1.1
-  子集上与 RDFC-1.0 逐字节一致，对其输出计算的
-  摘要不得标为 RDFC-1.0——见
-  [`docs/RDF12-CANON-PROFILE.md`](./docs/RDF12-CANON-PROFILE.md)。在二者之外，还有一种
-  **便于评审的规范 Turtle** 渲染（`purrdf-core` 中的 `render_canonical_turtle`、
-  `purrdf-rdf` 中的 `canonical_turtle`、Python 的 `canonicalize_turtle`，以及 rdflib
-  兼容层的 `turtle` 与 `longturtle` 序列化器所发出的内容）：它是图的纯函数，采用由内容
-  派生的排序、内联 `[ ]`、`( )` 集合、`a` 优先，且只为共享或成环的空节点使用结构性的
-  `_:bN` 标签，因此重新渲染是幂等的。止步于何处：仅限 Turtle，不表示图名，同构下的
-  稳定性只对非对称图作声称，它是评审形式而非上述两种同一性形式中的任何一种，且不在
-  CLI、wasm 或 C 上提供。
-- **投影与载体**——确定性的图、表格与 Research Object（RO）投影，十六个 profile 位于
-  同一个 `purrdf project` 动词之后（其中十个可用 `purrdf lift` 提升回来）：基于同一个
-  规范 LPG 模型的四种图数据库载体——通用 LPG CSV、**Neo4j** Admin Import CSV、
-  **openCypher** 与 **GraphML** 1.0——每一种都带有严格的读取器，以及一个从归档中携带的
-  精确 RDF 旁带（sideband）重建具体化节点、三元组项、命名图与空节点作用域的提升过程
-  （丢失的是这些构造在 LPG 原生形态下的可读性，从来不是数据）；由 W3C 把关的 CSVW
-  （**270/270** 个 RDF 转换，**282/282** 个验证用例）、OBO Graphs 与 SKOS 视图、原生的
-  DCAT/VoID 数据集描述，以及 RO-Crate 1.3 / Croissant 1.1 / DataCite 4.6 / DCAT 3 /
-  Frictionless 载体——每个有损步骤都经由定位到具体位置的损失台账报告，其代码集合是受
-  漂移门禁保护的
-  [`generated/transcode-loss-matrix.json`](./generated/transcode-loss-matrix.json)
-  ——外加 `purrdf-columnar` 中五表结构、字节级确定的 Parquet 编解码器。止步于何处：
-  每个 IRI 与上限都是调用方提供的 JSON，没有 `Default`（`ProjectionLimits`、
-  `LpgExecutionLimits`）；归档是单个字节级确定的 USTAR 文件；LPG 通道只由树内的往返
-  测试评分——没有外部的 Neo4j 或 openCypher 参照实现（oracle）。可从 Rust、CLI、Python
-  （`project`/`lift`，外加仅 Python 提供的、面向四种 LPG profile 的流式
-  `project_artifacts`）、wasm（`Dataset.project`、`liftProjection`）与 C
-  （`purrdf_project`、`purrdf_lift`）访问。
-- **RDF 1.2 可视化**——一个以陈述为中心的投影（`purrdf::viz`），为数据集做布局并渲染
-  静态 SVG，并把 RDF 1.2 画成 RDF 1.2 本来的样子：三元组项是一个有边界的陈述图元
-  （glyph）而不是一条箭头，具体化节点是一个经由 `reifies` 边与其所具体化的陈述相连的
-  节点、其注解就在旁边，已断言的出现与被引用的出现保持区分，命名图上下文与方言诊断
-  （dialect diagnostics，广义或对称位置）得以保留而不是被压平。同一模型之上有三种
-  模式——`compact`（资源图）、`incidence`（精确的陈述/关联图）与 `table`（陈述行）。
-  布局是确定的：id 由陈述键生成，每一种排序都是对陈述键的排序，破环方式固定，而绘图
-  所依据的完整带版本号导出 JSON（`purrdf-viz-export-1`）内嵌在 SVG 的 `<metadata>`
-  中，因此该文件既是一幅图，也是陈述模型的机器可读导出；`make check` 会重新渲染本书
-  的十五幅示例 SVG，任何一个字节的漂移都会失败。止步于何处：仅限静态 SVG，没有交互式
-  布局；一个由调用方设定的上限（`VizSpec::max_statements`，默认 500，以及
-  `max_terms`，默认 1,500），超出上限的输入以 `VizError::TooLarge` 拒绝而不是截断；
-  可从 Rust 与 JavaScript/wasm 包（`visualModel`、`visualExport`、`visualSvg`）访问，
-  尚不能从 Python、C 或 CLI 访问。参见
-  [RDF 1.2 可视化](./docs/book/src/concepts/visualization.md) 及其示例，例如
-  [asserted-reified-compact](./docs/book/src/assets/visualization/purrdf-viz2-asserted-reified-compact.svg)。
-- **SPARQL 1.1/1.2**——原生解析器 → 代数 → 驻留 IR 上的多重集求值器：全部四种查询
-  形式加完整的 SPARQL Update、属性路径、基于代价的 BGP 规划，以及强制的 `VERSION`
-  声明（含 `1.2-basic` profile）。`EXISTS`/`NOT EXISTS` 运行在 SEP-0007 可辩护的
-  代换语义上（`Replace`/`PrjMap`，是 JOIN 而非词项重写，外加其第 3 部分的赋值限制），
-  在准备期证明许可的情况下由带记忆化的存在性探测作答，否则按逐行定义作答。1.2 接口
-  包括时间算术（SEP-0002：时刻、时长与五种公历部分日期类型，外加时长的 `SUM`/`AVG`
-  与 `ADJUST`）与 `LATERAL`（SEP-0006，采用 Jena 的作用域规则）、SEP-0008 的 SHA-3
-  内建函数，以及 SEP-0009 复合数据类型（`cdt:List`/`cdt:Map`、十五个函数的函数库、
-  `FOLD` 聚合与 `UNFOLD` 图模式，在封闭叶 crate `purrdf-cdt` 中求值，并由随库固化（vendored）的
-  `awslabs/SPARQL-CDTs` 语料把关）。有一处刻意的分歧被明确陈述而非隐藏：PurRDF 允许
-  RDF 1.2 三元组项与带方向的语言标签字面量作为复合元素，这是一个词法超集，符合
-  SEP-0009 的读取器会将其判为格式错误，且只在 SEP-0009 完全无法表达的值上才会发出。
-  三个以调用方为键的扩展点——标量函数、属性函数（魔法谓词），以及经由
-  `AGG(<iri>, …)` 的自定义聚合，带一个封闭的十成员统计集合——`MEDIAN`、`PERCENTILE`
-  （`P=`）、`STDDEV`、`STDDEV_POP`、`VARIANCE`、`VAR_POP`、`MODE`、`FIRST`、`LAST`、
-  `TOPK`（`K=`）——在调用方提供的命名空间下注册（`--aggregate-namespace`、
-  `aggregate_namespace=`），在 XSD 提升塔上精确计算，唯 `STDDEV`/`STDDEV_POP` 最后的
-  `sqrt` 为 `xsd:double`，遇到非数值输入时把折叠毒化为未绑定而不是报错——外加一个
-  `SERVICE` 扩展点：一个宿主可注入的 `ServiceResolver`，携带**逐服务上下文**（请求头、
-  凭据、超时、能力；默认拒绝），发出的 SPARQL Protocol 请求由确定性的序列化器构造，
-  并在 823 项随库固化的语料上往返扫描（含更新请求）。止步于何处：PurRDF 不附带 HTTP
-  客户端——交换是一个由 Rust 宿主实现的 `HttpTransport` trait。CLI、Python 与 C 接口
-  不安装解析器，wasm 包的同步方法同样不安装，因此那里的 `SERVICE` 与 `LOAD` 会按名称
-  失败，除非写了 `SILENT`：此时成功而不抓取任何内容，并记录在受治理调用的证据上。wasm 包的异步方法接受宿主提供的解析器：作业经由 JSPI 挂起、
-  等待其应答的 JavaScript `resolveService`/`resolveLoad` 处理函数，或由其 Cloudflare
-  适配器构建的、基于 `fetch` 的处理函数。联邦查询是宿主的组合，而不是内置的网络客户端。原生扩展点上的宿主标量
-  函数携带 SPARQL 的表达式错误通道：逐解的定义域错误在 `FILTER` 下消去该行，在
-  `BIND`/`SELECT` 下让变量保持未绑定，而不是中止查询。由完整的 W3C SPARQL 1.1 + 1.2
-  求值语料把关：**862 个通过**，5 个入台账的上游勘误夹具。结果以 SPARQL
-  JSON/XML/CSV/TSV 给出。
-- **核心之外的 SPARQL 扩展**——经由那些扩展点、以兄弟 crate 形式到达的能力，每一个都在
-  调用方提供的 IRI 之下注册（PurRDF 不自行定义任何 IRI），并且在原生与
-  `wasm32-unknown-unknown` 上字节级一致：
-  - **全文检索**（`purrdf-text`）——一个覆盖 RDF 1.2 字面量（含注解层）的内存倒排
-    索引，先做 Unicode 规范化与完全大小写折叠（UAX 15、UAX 21），再做词边界切分
-    （UAX 29），以及以精确的十进制定点数做的 BM25 排名，**crate 内没有浮点**（由 lint
-    禁止），因此排名在每个目标上都是其输入的纯函数。两个属性函数：带排名的检索
-    （`?doc <iri> ( "needle" ?score ?rank ?lang ?matched )`）与词项出现位置
-    （`?doc <iri> ( "term" ?lang ?position )`），短语与邻近查询由此在普通 SPARQL 中
-    组合而成。
-  - **GeoSPARQL 1.1**（`purrdf-geo`，OGC 22-047r1）——WKT 与 GeoJSON 字面量解析为精确
-    有理数，Simple Features、Egenhofer 与 RCC8 三族的每一种拓扑关系都在精确的 DE-9IM
-    上判定，访问器以及可精确计算的度量与构造器，没有 GEOS，没有 PROJ，没有浮点运算
-    （唯一的浮点边界是 `xsd:double` 结果字面量）。`geof:` 函数族落在标量扩展点上，空间
-    关系经由属性函数扩展点重写；`geof:transform`、缓冲区、凹包、叠加集合运算与
-    GML/KML/DGGS 编码已注册但**按名称硬错误**，而不是回答一个默认值（`geof:convexHull` 已实现），并且 `metric*`
-    度量只在调用方声明为以米计量的 CRS 中作答（没有椭球大地测量）。
-  - **嵌入 k 近邻**——在 [PURREMB](./docs/PURREMB.md) 嵌入空间上、以属性函数形式
-    进行的最近邻搜索（`?neighbour <space> ( ?seed k ?distance )`）：按工件声明的度量
-    做精确搜索，binary64 且累加顺序固定，governor（执行调控器）的计费与实际扫描的候选
-    数成正比。
-  - **路径见证**——一个绑定遍历*推导过程*而不只是其端点的属性函数：
-    `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`，每跳一行，每条被遍历的
-    陈述都是一个可直接连接回数据集的 RDF 1.2 三元组项；可返回每一条简单前缀游走，
-    或每对端点只返回一条最短见证，一个由内容派生的路径标识符，以及调用方必须声明的跳数上限。可从 CLI
-    （`--path-relation`）与 Python（`path_relations`）访问；参考向量是在一个真实的
-    Virtuoso `OPTION(TRANSITIVE …)` 实例上重新执行得到的，而不是从其手册抄录的。
-- **受调控的执行**——每个查询/更新入口点都有一个对应的受调控版本，在调用方设定的
-  上限（燃料、答案行数、中间单元格数、暂存字节数、远程请求数、截止时间）下运行，触及
-  上限时返回经认证的行而不是错误答案，`--explain` 则在代价规划器的估计旁返回逐代数
-  节点的计费台账。触顶时返回 `PartialAnswers`，分类为 `Certain`（下界）、`AtMost`
-  （上界）或 `Unknown`（行不予返回，并附一个指名该算子的 `NonMonotoneBarrier`）；受调控
-  的 `UPDATE` 没有部分结果这一分支——它要么完整应用，要么完全不应用。取消是协作式的：
-  一个锁存的 `StopSignal`（`CancellationFlag`，或一个把 wasm32 上观察到的时钟回拨视为
-  超时的 `WallDeadline`），每 4,093 燃料轮询一次，在 wasm 与 Python 中暴露为
-  `CancellationToken`，在 C 中为 `purrdf_cancellation_*`，在 CLI 上为 `--deadline`。
-  在 CLI 上，触顶以退出码 **3** 退出，经认证的行输出到 stdout，回执输出到 stderr，而
-  `validate` 在触顶时完全不写报告。止步于何处：八个资源维度中有五个可由调用方设定
-  （`--fuel`、仅 `query` 上的 `--max-answers`、`--max-intermediate-cells`、
-  `--max-scratch-bytes`、`--max-remote-requests`）；UDF 深度上限是固定的且不能放宽，
-  页数与字节数维度只能经由 Rust 中的 `PagedQueryLimits` 触及。规范性的计费表与冻结的
-  50 例 governor 语料位于
-  [`docs/SPARQL-GOVERNOR-PROFILE.md`](./docs/SPARQL-GOVERNOR-PROFILE.md)。
-- **SHACL 验证**——面向 SHACL 1.2 的原生验证器与规则引擎：Core（SHACL 1.2 词汇表声明的
-  每个约束组件、SHACL 1.2 的目标、严重级别与一致性禁止集合）、运行于原生引擎的 SPARQL
-  扩展、按每种表达式所规定的顺序与重数求值的节点表达式、推理规则，以及 SPARQL 1.2 RL
-  规则语言；SHACL 规则与 SPARQL 1.2 RL 都运行在 `purrdf-datalog` 上。SHACL-AF 1.0 的
-  拼写解析为同一种表示；合并了 W3C SHACL 1.2 词汇表的形状图可以加载，其中每个内置项都
-  绑定到原生实现。在随库固化的 W3C SHACL 1.2 测试套件上 **538/544 通过**（其余 6 个经批准
-  的结果以非规范形式拼写计算所得的小数，按 XSD 1.1 规范拼写评分，单独计数），在随库固化的
-  W3C SHACL 1.0 测试套件上 **129/129 通过**，两者台账均为空。答案是作为冻结 RDF 数据集
-  的 W3C 验证报告（`ValidationReport::to_dataset()`），因此任何语法——以及 CLI 的
-  `validate --format`——都是该数据集的一次序列化而非文本往返，报告所生成的空节点与
-  数据图携带的每个空节点保持区分。SHACL-SPARQL 结果注解（`sh:resultAnnotation`）会被
-  复制到其查询产生的每一条结果中，SHACL-AF 1.1 的 `sh:minus` 节点表达式按 `shnex:remove`
-  求值。止步于何处：形状图用到而引擎不求值的术语，会引发点名指出该术语的加载错误。这些
-  术语是 SHACL JavaScript 扩展（它们不属于 SHACL 1.2），以及出现在形状、节点表达式、约束、
-  验证器或规则上的 `sh:describe` 与 `sh:update`——在这些位置上，没有任何 SHACL 1.2 规范
-  赋予它们含义。
-  形状图的 `owl:imports` 从不被
-  获取——由调用方提供 `--import IRI=FILE`，与 `entails` 和 `shex` 接受的形式相同，并从
-  该表出发传递地跟随导入闭包。只有位于形状文档自身 IRI 上、`owl:Ontology` 头上、
-  `sh:ShapesGraph`（包括 `sh:RulesGraph` 及其子类）上，或以其中之一作为其
-  `owl:versionIRI` 的节点上的 `owl:imports` 才是导入；在其他任何节点上——仅为
-  `sh:DataGraph` 的节点，以及 SHACL 的 `sh:prefixes/owl:imports*/sh:declare` 前缀边，
-  都在其中——它都是数据，`shapes lint` 会把它列在 `unanchored-imports` 下。蕴涵遵循
-  同一规则。对形状文档自身 IRI 的导入，或对形状图中已有的图
-  （`<X> a owl:Ontology`、`<X> a sh:ShapesGraph`，或某个 `owl:versionIRI` 指名它）的
-  导入，无需配对；其他任何未解析的导入都会被点名拒绝，而不是针对一个更小的形状图进行
-  验证。数据图的 `sh:shapesGraph` 链接（SHACL 1.2 Core §6.4，位于其 `sh:DataGraph`
-  节点或其自身 IRI 上）经由同一张表解析并并入形状图，否则被点名拒绝；预备好的产物会拒绝
-  它未持有的链接。
-- **模式通道：SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML / TypeScript / GraphQL**
-  （`purrdf-shapes`，**仅限 Rust**）——`compile_schema` 把一个形状图（可按需感知本体，
-  并附覆盖率报告）降为一份 JSON Schema draft 2020-12 文档和一份共享其 `$defs` 的
-  OpenAPI 3.1 文档，并由此发出 Pydantic v2、LinkML 1.11、TypeScript 7.0 与 GraphQL
-  （2025 年 9 月版）包；每条通道都有一个反向导入器（`purrdf::shapes::import_*`），把
-  工件降回形状并附带定位到具体位置的损失台账，受支持的、由本库发出的 SHACL 可逐字节
-  精确地重新编译。止步于何处：JSON Schema 与 LinkML 拥有可读取任意输入的原生读取器，
-  而 Pydantic、TypeScript 与 GraphQL 的导入器只反向处理完整的、由 PurRDF 发出的包
-  （这些语言中的任意源码没有唯一的接受关系）；命名空间与数据类型配置由调用方提供，
-  没有 `Default`；资源上限固定；并且这些都不能从 CLI、Python、wasm 或 C 访问。由
-  `cargo test` 中第一方的精确/有损/损坏/资源套件把关，并在 `make check` 之外由
-  `make pydantic-oracle` / `linkml-oracle` / `typescript-oracle` / `graphql-oracle`
-  把关，后者用真实的工具链执行所发出的包。
-- **ShEx 2.1**——从零实现的 ShExC + ShExJ 模式层与验证器，对照官方 shexTest 套件把关：
-  **1,105/1,105 个尝试的验证测试，零预期失败**（含 import 与语义动作），99/99 负例
-  语法，14/14 负例结构。参见 [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)。
-- **蕴涵**——在确定性的半朴素不动点上进行的 Simple/RDF/RDFS/OWL-RL/D 前向物化
-  （OWL 2 Profiles §4.3 表 4–9 的**全部 78 条 OWL 2 RL 规则**——这是*规则表覆盖率*，
-  与蕴涵一致性不是同一个声称：在这份随库固化的 W3C OWL 2 RL 蕴涵测试语料上，chase
-  的成绩是**正例 27/27、负例 23/23**，后者意味着未发现不可靠之处；全部 18 条
-  RDF + RDFS 模式，其中四条存在性模式经由受限 chase 触发，其代理空节点保留在物化边界之内，
-  不予输出）、一个开放世界的 OWL-Direct SHOIQ(D) hypertableau，以及 RIF-Core 规则。
-  **每次求闭包都附带一份推理报告**，说明触发了什么、没触发什么、触及了哪些边界、
-  消耗了多少预算，以及所运行演算的契约哈希——因此一个不完整的答案绝不可能被当作
-  完整答案交付。有一条规则会触发而没有任何规范表格陈述它——`ext-eq-diff-sym`，
-  `owl-rl` 下 `owl:differentFrom` 的对称性——它不在上面任一规则计数之内；
-  `extensions(regime)` 会指名它，每份报告都在 `extension` 行披露它。逐规则清单：
-  [`docs/book/src/entailment-rules.md`](./docs/book/src/entailment-rules.md)。
-- **OWL 2 DL 推理服务**——在一致性判定之外，同一知识库上的一个 `Reasoner` 会话可回答
-  类可满足性、分类、实现（realization）、实例检索与公理蕴涵（八种公理类型），旁边还有
-  两项语法性服务：OWL 2 profile 认证（EL/QL/RL/DL/Full）与基于局部性的模块抽取
-  （BOT/TOP/STAR）。每个答案都携带一个 `DlCertificate`；触及步数或工作量上限的搜索回答
-  `unknown`，绝不猜测，而这些上限只能收窄到由规模派生的预算之下，绝不能提高。`justify`
-  通过黑盒收缩返回一个最小的蕴涵子集，`explain_conclusion` 返回一份在返回之前已经过
-  检查的 chase 证明，一个可选装的证明项（`purrdf-dl-proof 1`，七项可携带证明的服务）
-  由独立的检查器对照消费者自己的子句集重放。`entails(premise, conclusion)` 对五种
-  规则表蕴涵机制回答 `entailed` / `not-entailed` / `undecided`，`verify` 在没有推理机
-  的情况下重新判定一份 warrant（担保），`certain_answers` 则回答基本图模式。止步于
-  何处：分类只在 EL++ 形态的 Horn 术语集内部是单次饱和（在此之外，每个残余的类对都要
-  付出一次 tableau 判定，计入证书）；profile 认证是单向的（干净通过证明成员资格，违反
-  只证明语法测试失败）；模块是可靠的，但不是最小的；`justify` 返回一个论证，而不是
-  全部；`entails` 按名称拒绝 OWL-Direct 与 RIF，并把匹配预算超限报告为错误，绝不是
-  裁决；`owl:imports` 从不被拉取——由调用方提供 `IRI=FILE`。可从 Rust、Python
-  （`entail.*`、`entail.Reasoner`）、wasm（`Reasoner`、`entail*`）与 C
-  （`purrdf_entail_*`、`purrdf_reasoner_*`）访问；CLI 只携带 `consistency`
-  （`--proof`/`--check-proof`）、`entails` 与 `query --entailment`；类可满足性仅限
-  Rust，C 会话不记录证明。
-- **蕴涵感知的 SPARQL**——`query_with_entailment` 及其受调控版本（CLI
-  `query --entailment REGIME`、Python `Store.query_entailment_governed`、wasm
-  `queryEntailmentGoverned`、C `purrdf_query_entailment_governed`）解析查询、在七种
-  蕴涵机制之一下求闭包、在闭包上求值，并把答案连同推理报告一起交回；路径关系
-  （`--path-relation`）从闭包重新派生，因此游走能看到推导出的边，而 OWL-Direct 通道在
-  求值之前把每个绑定叶子都包进一个对照 chase 见证列表的 `MINUS` 中。止步于何处：若向
-  一次 OWL-Direct 运行提供了闭包关系重建器（rebuilder，即从闭包重新派生路径关系的宿主
-  代码），而该运行的受限 chase 生成了存在性见证，这一组合会按名称被拒绝
-  （`reasoning-closure-relation-witness`）；
-  闭包阶段只遵守停止信号（取消或墙钟截止时间），而数值上限只作用于查询阶段；
-  `ClosureStopped` 结果不携带任何行，也不携带报告。
-- **GTS 图传输**——面向 RDF 1.2 图及其引用的二进制对象的单文件、内容寻址、仅追加
-  的容器：BLAKE3 链接的 CBOR 段、确定性的折叠、COSE 签名/加密、纯 Rust 密码学
-  （对 wasm 友好）。可从 Rust、CLI（`--from gts`，只读）、Python 与 C 访问；wasm/JavaScript
-  包并不暴露它。仅限 Rust 库的附加功能——可流式压缩（compaction）的证书、MMR 包含证明、内容链与
-  OpenPGP 密钥环验证——在 [本书的 GTS 一章](./docs/book/src/gts.md) 中描述而不在此处：
-  Rust 之外没有任何接口能触及它们，且该栈的一部分在本仓库中没有直接测试。规范见
-  [`docs/GTS-SPEC.md`](./docs/GTS-SPEC.md)，冻结的跨语言一致性向量见
-  [`vectors/`](./vectors/)。
-- **切片、映射与溯源**——一个基于清单的切片目录，带内容寻址的工件 ID，一份显式的
-  RDF↔GTS **损失台账**（[`generated/rdf-loss-matrix.json`](./generated/rdf-loss-matrix.json)），
-  SSSOM 映射 TSV 支持与一个 FnO 函数目录编解码器（二者都位于 `purrdf-core` 中，而非
-  slice crate）。
-- **第一方基础层**——`purrdf-hash`（BLAKE3、MD5、SHA-1、SHA-3 与 CRC-32 摘要，base16、
-  分帧与表哈希器）与 `purrdf-events`（对象安全的摄入扩展点，以及唯一的 RDF 1.2
-  基础方向类型）没有运行时依赖；`purrdf-lex`（每个 crate 共享的语法终结符、字节类扫描器、转义器，
-  以及 JSON、YAML、CBOR 与 XML 编解码器）仅依赖 `purrdf-hash`，`purrdf-xsd`（XSD 1.1
-  值空间）与 `purrdf-iri`（RFC 3987/3986）依赖 `purrdf-lex` 与 `purrdf-hash`，
-  `purrdf-ed25519`（RFC 8032 签名）依赖 `purrdf-hash` 与 `sha2`，而 `purrdf-cdt` 是建立在
-  `purrdf-events`、`purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash` 之上的
-  `no_std` 封闭叶。
+默认的距离算术在原生与 WASM 路径之间固定累加顺序。显式的 `Reassociated` 算术允许最后
+几位不同，以换取不同的代码生成；HNSW 工件把这一选择绑定到其所记录的构建与执行路径上。
+近似与算术是两份独立的契约。参见[嵌入 k 近邻](./docs/design/purrdf-embedding-knn.md)、
+[HNSW 的召回率与构建证据](./crates/hnsw/README.md)、
+[检索组合](./docs/design/purrdf-retrieval-ladder.md)以及
+[SIMD 与算术契约](./docs/design/purrdf-simd.md)。
+
+这些带排名生产者（ranked producer）的集成是 Rust API，编译到 WASM 的 Rust 宿主同样
+可以使用。已发布的 Python 与 npm 包暴露数据形态的属性函数与路径见证；它们不暴露文本、
+空间或向量生产者的注册。
+
+## 文档、载体与存储
+
+**文档可以成为其自身的图。**
+[`purrdf-markdown`](./crates/markdown/SPEC.md) 把一种经规范定义的 Markdown 方言投影为
+标题、段落及其他结构单元，各单元落在逐字对应的字节区间之上。
+[`purrdf-json`](./crates/json/SPEC.md) 记录有序的 JSON 出现及其字节覆盖（byte cover）。
+二者都要求显式 profile，把同一性绑定到 profile 的法则与源字节，并逐字节重建源文档。
+Markdown 方言由该编解码器自行规定；它并非 CommonMark 解析器。
+
+**转换对损失如实交代。**原生编解码器覆盖 Turtle、TriG、N-Triples、N-Quads、RDF/XML、
+TriX、HexTuples、JSON-LD 与 YAML-LD。JSON-LD 上下文透镜（context lens）编译可复用的
+离线上下文；它提供展开、压缩与派生前缀三种模式，上下文注册表由调用方提供，不含网络
+加载器，也没有 framing API。图与 Research Object 投影包括 Neo4j CSV、openCypher、
+GraphML、CSVW、OBO Graphs、SKOS、DCAT、VoID、RO-Crate、Croissant、DataCite 与
+Frictionless。受支持的可逆载体经由精确的边带（sideband）保留 RDF 1.2；有损视图报告
+丢失了什么。参见[投影](./docs/book/src/concepts/projections.md)与
+[生成的损失矩阵](./generated/transcode-loss-matrix.json)。
+
+**唯一一种规范的列式投影。**
+[`purrdf-columnar`](./crates/columnar/) 提供原生的五表 v1 契约：`terms`、`quads`、
+`reifiers`、`annotations` 与 `blobs`。Python 的 SQLite、DuckDB 与 Parquet 导出器使用
+其规范 ID 与表结构，保留带作用域的空节点、被引用的词项、方向、空的命名图以及经过验证的
+blob。GTS 按追加顺序分配的检视 ID 仍是另一套独立的权威。
+
+**两条不可变存储路径。**即时（eager）加载的 pack 快照提供前端编码（front-coded）的
+字典、位图索引与内容验证。新的 [`SegmentedSession`](./crates/rdf-core/STORAGE.md)
+通过宿主的区间提供者（range provider）读取一种经认证的持久表示，鉴别所准入的块，并在
+稀疏缓存、钉住、证据与算子工作区之间共享一份实时台账。它在封存与重新打开之间保持全局
+ID 不变；持久化的句柄标识确切的快照。
+
+常驻内存的数据集保留紧凑的四字节词项 ID、十六字节的四元组行以及借用式的词项访问。
+操作性读取经由同一个 `DatasetView` 扩展点，使用带类型的失败与钉住守卫。存储故障会在
+操作的最终检查点丢弃其结果。有界查询准入目前覆盖基于基本图模式、仅投影变量的普通
+`SELECT`；尚未定价的操作性形式返回带类型的拒绝。构建、完整认证、宿主缓冲区与调用方
+拥有的输出各有独立的内存义务。内核不执行任何文件系统或网络 I/O。确切边界见
+[存储契约](./crates/rdf-core/STORAGE.md)与 [3.0 迁移指南](./docs/MIGRATION-3.0.md)。
+
+Rust 的 `explain_query_fallible_view` 直接度量操作性视图，并连同最终的存储证据返回其
+解释。它的选项与停止信号变体共用查询准入规则；存储故障会丢弃整个解释，而仅发生停止时，
+停止会出现在解释的 governor 证据中。
+
+**图连同其载荷一起传输。**[GTS](./docs/GTS-SPEC.md) 是一种内容寻址、仅追加的容器，
+具备确定性折叠、二进制载荷、链式 CBOR 段、COSE 签名/加密与纯 Rust 密码学。其容器 API
+覆盖 Rust、Python 与 C，CLI 把它作为输入格式读取。npm / JavaScript 包不暴露它。冻结的
+传输向量与[权威的 GTS 项目](https://github.com/Blackcat-Informatics/gmeow-gts)共享。
+
+## 验证、推理与可问责的执行
+
+SHACL 1.2 涵盖 Core、SPARQL 扩展、节点表达式、推理规则与 SPARQL 1.2 RL，SHACL-AF 的
+拼写映射到同一种共享表示。报告是 RDF 数据集。ShEx 2.1 提供 ShExC/ShExJ 模式与验证，
+包括导入与语义动作。导入从显式的宿主注册表解析。Rust 模式编译器还把形状投影为
+JSON Schema、OpenAPI、Pydantic、LinkML、TypeScript 与 GraphQL，并附覆盖率与损失报告；
+这些模式通道仅限 Rust。
+
+蕴涵引擎实现了**全部 78 条 OWL 2 RL 规则**与全部 18 条 RDF + RDFS 模式。这是规则表
+覆盖率，有别于蕴涵一致性：在随库固化（vendored）的 W3C 语料上，chase 的成绩是
+**正例 27/27、负例 23/23**，后者记录的是未发现不可靠之处。额外的 `ext-eq-diff-sym`
+规则在推理报告中披露，且不计入上述规则数。OWL-Direct 提供开放世界的 SHOIQ(D) tableau
+以及附带证书的推理服务；被上限截停的搜索返回 `unknown`。RIF-Core 与蕴涵感知的 SPARQL
+与各物化机制并行运行。参见[规则清单](./docs/book/src/entailment-rules.md)与
+[推理服务](./docs/book/src/entailment.md)。
+
+查询 governor 约束执行，并在触顶时返回相关证据，包括在非单调算子之下哪些行可以得到
+认证。受调控的 Update 要么完整提交，要么完全不提交。预备执行与有作用域的回调复用同一个
+求值器。计费表与冻结的 50 例 governor 语料发布在
+[governor profile](./docs/SPARQL-GOVERNOR-PROFILE.md) 中。结构化诊断保留稳定的代码与
+可读的英文，并在 JSON、SARIF 与 C 诊断记录中带有具名参数与精确的逻辑锚点。
 
 ## 快速入门
 
@@ -456,24 +201,25 @@ cargo add purrdf
 ```
 
 ```rust
-use purrdf::{parse_dataset, serialize_dataset, RdfDatasetBuilder, RdfLiteral, SerializeGraph};
+use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
 
-// Build a dataset in interned TermId space.
-let mut b = RdfDatasetBuilder::new();
-let alice = b.intern_iri("https://example.org/alice");
-let knows = b.intern_iri("http://xmlns.com/foaf/0.1/knows");
-let bob = b.intern_iri("https://example.org/bob");
-let name = b.intern_iri("http://xmlns.com/foaf/0.1/name");
-let hi = b.intern_literal(RdfLiteral::simple("Alice"));
-b.push_quad(alice, knows, bob, None);
-b.push_quad(alice, name, hi, None);
-let ds = b.freeze().expect("freeze");
-
-// Serialize to any native codec and parse back, losslessly.
-let ttl = serialize_dataset(&ds, "text/turtle", SerializeGraph::Dataset).unwrap();
-let back = parse_dataset(&ttl, "text/turtle", None).unwrap();
-assert_eq!(back.quad_count(), 2);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+        @prefix ex: <https://example.org/> .
+        ex:alice ex:knows ex:bob .
+    "#;
+    let dataset = parse_dataset(source.as_bytes(), "text/turtle", None)?;
+    assert_eq!(dataset.quad_count(), 1);
+    let turtle = serialize_dataset(&dataset, "text/turtle", SerializeGraph::Dataset)?;
+    let restored = parse_dataset(&turtle, "text/turtle", None)?;
+    assert_eq!(restored.quad_count(), 1);
+    Ok(())
+}
 ```
+
+随着应用的增长，可使用门面 crate 的 `sparql`、`shapes`、`shex`、`entail`、`retrieval`、
+`columnar`、`json` 与 `markdown` 模块。
+[更多 Rust 示例](./docs/book/src/getting-started/rust.md)。
 
 ### Python
 
@@ -485,163 +231,117 @@ pip install purrdf
 import purrdf
 
 quads = purrdf.parse(
-    '<https://example.org/alice> <http://xmlns.com/foaf/0.1/name> "Alice" .',
+    '<https://example.org/alice> <https://example.org/name> "Alice" .',
     purrdf.RdfFormat.TURTLE,
 )
-
-from purrdf import shapes, shex
-
-report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
-print(report["conforms"])
-
-results = shex.validate(my_schema_shexc, my_data_ttl,
-                        [("https://example.org/alice", "https://example.org/PersonShape")])
-print(all(entry["conformant"] for entry in results))
+print(quads)
 ```
 
-每个解析入口点都为拼写了相对 IRI 的文档接受可选的 `base=`（`shapes.validate` 接受
-`shapes_base=`）；作用域内没有基础 IRI 时，相对引用会抛出异常，而不是被错误解析。
-`Store.query` 及其受调控与更新版本把属性函数当作数据来注册——冻结表、从存储
-自身的图中读取的表，以及 `path_relations` 遍历——并在整个求值期间释放 GIL。
+Python 3.13+ 的 wheel 携带原生扩展。`Store` 暴露 SPARQL 与 Update；`shapes`、`shex` 与
+`entail` 暴露验证与推理。数据集与 GTS 的列式导出使用原生投影。
+[Python 指南](./bindings/python/README.md)。
 
-Python 包还附带一个 [rdflib 兼容层](./bindings/python/python/src/purrdf/compat/rdflib/)
-（`from purrdf.compat.rdflib import Graph`）与一个 GTS 折叠视图
-（`GtsFoldViewNative`、`gts_relational_rows_from_bytes`），后者把容器读入内存中的关系型行
-字典（terms、quads、reifiers、annotations、blobs）。`gts_to_sqlite`、`gts_to_duckdb` 与
-`gts_to_parquet` 把这五张表写出——每个投影行写成一行，按投影自身的顺序排列，因此同一个
-容器两次导出得到相同的内容。SQLite 只需要标准库；另外两个需要 `[duckdb]` / `[parquet]`
-extra。
+`purrdf.compat.rdflib` 提供一个显式的兼容层。对于需要顶层 `rdflib` 导入名的应用：
 
-若需要逐字不改的 `import rdflib`，安装可选装的 extra：
-
-```bash
-pip install purrdf[rdflib]
+```sh
+pip install 'purrdf[rdflib]'
 ```
 
-这会拉入独立发行的 [`purrdf-rdflib`](./bindings/python-rdflib-shadow/) 分发包，其顶层
-`rdflib` 包重新导出兼容层的 API，于是现有第三方代码中的 `import rdflib` /
-`from rdflib.namespace import RDF` 便透明地运行在 `purrdf` 之上。**注意：**该影子包
-占用了 `rdflib` 这一导入名，绝不可与真正的
-[`rdflib`](https://pypi.org/project/rdflib/) 同时安装——二者无法共存于同一环境。它被
-刻意做成独立分发包（从不打进主 `purrdf` wheel），正是为了让需要真实 rdflib 的环境
-直接不装它即可。
+这会安装版本相匹配的独立 `purrdf-rdflib` 分发包。它的 `rdflib` 包与真正的 rdflib 不能
+共存于同一环境；请让真实 rdflib 的环境保持独立，并在那里省略这一影子 extra。
 
 ### JavaScript / WebAssembly
 
-同一引擎之上的 [RDF/JS](https://rdf.js.org/) 形态 API（`DataFactory` / `Dataset` /
-`Stream`），包括没有哪个现存 RDF/JS 库承载的 RDF 1.2 特性——引用三元组项与基础方向
-字面量：
-
-```js
-import { ready, DataFactory, Dataset } from "@blackcatinformatics/purrdf";
-
-await ready(); // one-time async wasm instantiation
-
-const f = new DataFactory();
-const rtl = f.directionalLiteral("مرحبا", "ar", "rtl");
-
-const ds = new Dataset();
-ds.add(f.quad(f.namedNode("https://ex/s"), f.namedNode("https://ex/says"), rtl));
-
-const nq = ds.serialize("nquads");           // directions survive the round-trip
-const reparsed = Dataset.parse(nq, "nquads"); // Dataset.parse(input, format, base?)
+```sh
+npm install @blackcatinformatics/purrdf
 ```
 
-同一个浏览器 bundle 还暴露 SHACL 验证（`shaclValidateToSarif`、`shaclEntail`，各接受
-可选的 `shapesBase`）、蕴涵机制物化、带解释回执的受调控 SPARQL，以及图同一性
-（`Dataset.canonicalize()`、`Dataset.isomorphic()`：在被扁平化为普通 `rdf:reifies`/注解
-三元组的陈述层之上运行 RDFC-1.0——即扁平形式，而非 `purrdf-rdfc12` profile）。参见
-[`crates/rdf-wasm`](./crates/rdf-wasm/)（`make wasm-pkg` 构建 ESM 包）。
+```javascript
+import { ready, DataFactory, Dataset } from "@blackcatinformatics/purrdf";
 
-### C
+await ready();
+const f = new DataFactory();
+const dataset = new Dataset();
+dataset.add(f.quad(
+  f.namedNode("https://example.org/alice"),
+  f.namedNode("https://example.org/greeting"),
+  f.directionalLiteral("مرحبا", "ar", "rtl"),
+));
+const restored = Dataset.parse(dataset.serialize("nquads"), "nquads");
+console.log(restored.size, dataset.id.toString());
+```
 
-`libpurrdf`（[`crates/rdf-capi`](./crates/rdf-capi/)）在一个 panic 安全的 C ABI 之后
-暴露解析、序列化、模式迭代、写时复制的变更、SPARQL、SHACL 验证/蕴涵与 GTS 往返，
-附带一份已提交、可复现的头文件（[`include/purrdf.h`](./crates/rdf-capi/include/purrdf.h)），
-CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
+RDF/JS 形态的 API 还暴露 SPARQL、SHACL、推理、投影与静态的 RDF 1.2 SVG 可视化。
+异步查询可经由 JSPI 使用宿主提供的 `SERVICE` / `LOAD` 解析器。在 3.0 中，数据集的
+同一性与代次（generation）为 `bigint`；在 JSON 中请使用十进制字符串。
+[JavaScript 指南](./crates/rdf-wasm/js/README.md)。
+
+### C 与 CLI
+
+[`libpurrdf`](./crates/rdf-capi/) 通过一个 panic 安全的 C ABI 暴露解析、序列化、迭代、
+变更、SPARQL、验证、推理与 GTS。`make capi-build` 用 cargo-c 构建该库；
+`make capi-bundle` 准备一个可重定位的头文件/库分发包，附带面向接收者的声明。已提交的
+[`purrdf.h`](./crates/rdf-capi/include/purrdf.h) 会对照生成输出进行检查。
+
+[CLI](./crates/cli/) 提供 `convert`、`query`、`update`、`reason`、`entails`、
+`consistency`、`validate`、`shex`、`describe`、`project`、`lift` 与 `pack verify`。
+请从本仓库构建它；CLI crate 未发布到 crates.io。参见 [CLI 用法](./crates/cli/README.md)。
+
+每个解析接口都接受一个显式的文档基准 IRI，用于解析相对 IRI。当既没有显式基准 IRI，
+也没有文档内基准 IRI 可用时，未解析的相对 IRI 会被诊断出来。网络访问由宿主提供：随库
+发布的同步接口不安装任何联邦解析器，核心也不附带 HTTP 客户端。
 
 ## Crate 一览
 
-| Crate | 它是什么 |
+| Crate | 角色 |
 | --- | --- |
-| [`purrdf`](./crates/purrdf/) | 门面 crate（umbrella crate）：根部是 RDF 接口，`slice` 与 `shapes` 作为模块。从这里开始。 |
-| [`purrdf-rdf`](./crates/rdf/) | RDF 1.2 实现：原生编解码器、GTS 适配器、describe、规范化入口点。 |
-| [`purrdf-core`](./crates/rdf-core/) | 内核：驻留 IR、诊断、存储 trait、溯源、损失台账、RDFC-1.0。 |
-| [`purrdf-columnar`](./crates/columnar/) | 面向 RDF 1.2 与内容寻址 blob 的双向、字节级确定的五表 Parquet 编解码器。 |
-| [`purrdf-gts`](./crates/gts/) | GTS 容器引擎：读取器、写入器、折叠、验证、COSE 签名/加密。 |
-| [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL 1.1/1.2 解析器 → 查询代数 AST。 |
-| [`purrdf-sparql-eval`](./crates/sparql-eval/) | 驻留 `TermId` 空间中的多重集 SPARQL 求值器，带有以调用方为键的扩展点（标量函数、属性函数——含路径见证与嵌入 k 近邻关系——自定义聚合，以及逐服务的 `ServiceResolver`）与执行 governor。 |
-| [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL 结果的 JSON/XML/CSV/TSV，外加一个携带溯源的扩展。 |
-| [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL 复合数据类型（`cdt:List`/`cdt:Map`）：值空间、一个迭代式的有界词法扫描器、规范拼写，以及十五个函数的函数库。建立在 `purrdf-events`、`purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash` 之上的 `no_std` 封闭叶；经由求值器访问，不由门面 crate 重新导出。 |
-| [`purrdf-stack`](./crates/stack/) | 当前线程还剩多少栈空间——原生平台读取操作系统给出的线程栈上限（通过按目标启用的 `libc`/`windows-sys` 声明，无需构建期 C 工具链），wasm32 则以宿主可安装的栈底衡量影子栈——以及 SPARQL 求值器据以拒绝请求（返回带类型的错误）而不致栈溢出的余量。 |
-| [`purrdf-shapes`](./crates/shapes/) | SHACL 1.2 验证与规则引擎（Core、SPARQL 扩展、节点表达式、推理规则、SPARQL 1.2 RL）。 |
-| [`purrdf-shex`](./crates/shex/) | ShEx 2.1：ShExC/ShExJ 模式与验证。 |
-| [`purrdf-entail`](./crates/entail/) | 蕴涵机制：RDF/RDFS/OWL-RL/D chase、OWL-Direct tableau 与 RIF-Core 规则——每次求闭包都返回推理报告。 |
-| [`purrdf-geo`](./crates/geo/) | GeoSPARQL 1.1：精确、无浮点的 WKT 与 GeoJSON 几何，标量扩展点上的 `geof:` 函数族，以及属性函数扩展点上的要素级查询重写——全部在调用方提供的 IRI 之下。 |
-| [`purrdf-datalog`](./crates/datalog/) | chase 之下的不动点基底：一个列式关系存储与 DL 子句 IR 上的确定性半朴素求值器。由门面 crate 重新导出为 `purrdf::datalog`，因为蕴涵机制接口带有它的类型。 |
-| [`purrdf-text`](./crates/text/) | RDF 1.2 字面量上的确定性全文检索：一个内存倒排索引与精确定点 BM25 排名，从 SPARQL 经由调用方提供的属性函数 IRI 调用。 |
-| [`purrdf-retrieval`](./crates/retrieval/) | 位于各带排名生产者（ranked producer）之上的组合层：一个请求经过规划、准入、执行与融合，在调用方于属性函数扩展点上注册的每一个带排名关系之间，得出一个有序答案。纯数据的计划，带规范的 BLAKE3 同一性；一条精确的、内容寻址的融合法则；逐行、逐层（stratum）的溯源，以及逐词项的未服务证据（unserved evidence）。生产者、层与权重均由调用方提供，不设任何默认值。由门面 crate 重新导出为 `purrdf::retrieval`。 |
-| [`purrdf-validate`](./crates/validate/) | 共享的宿主边界：SARIF 2.1.0 诊断，以及 Python/wasm/C 绑定所调用的蕴涵机制字符串接口。 |
-| [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化编解码器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址 Profile 之下——且这张图可逐字节解码还原为原文档，并以图中自带的源摘要（哈希）为证。由门面 crate 重新导出为 `purrdf::markdown`。 |
-| [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema 校验，支持 draft 2020-12、2019-09 与 07，每个 schema 资源按其自身方言处理：全部词汇表、`$dynamicRef`、`$recursiveRef`、`unevaluated*`、`$vocabulary`，以及 flag/basic/detailed 三种标准输出格式。数字保留精确十进制值。ECMA-262 `/u` 模式的常规部分由 `regex` 执行，前后查找、反向引用和局部修饰符由有资源上限的显式栈匹配器执行，并使用 Unicode 17 属性范围；匹配耗尽预算时，校验返回带类型的错误。以官方 JSON-Schema-Test-Suite 对三个草案逐一检验；仅依赖 `regex`、`purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash`，可构建到 wasm32。 |
-| [`purrdf-slice`](./crates/slice/) | 切片目录：清单、带类型的工件、所有权/依赖分析。 |
-| [`purrdf-lex`](./crates/lex/) | 由每种语法共享的词法基础层，仅依赖 `purrdf-hash`：精确的 Turtle/SPARQL/XML 终结符字符类、降低为打包比较指令的分块字节类扫描器、字面量与 IRI 转义器、RDF 1.2 词项语法、百分号编码、Unicode 规范化，以及唯一的 JSON 读取器/写出器、YAML 1.2 读取器/输出器（emitter）、CBOR 编解码器与 XML 读取器。 |
-| [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 签名（RFC 8032）：确定性签名与严格的无余因子（cofactorless）验证，建立在 `purrdf-hash` 与 `sha2` 之上。 |
-| [`purrdf-iri`](./crates/iri/) | IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
-| [`purrdf-xsd`](./crates/xsd/) | XSD 1.1 值空间，带 SPARQL 数值提升；运行时依赖为 `purrdf-lex` 与 `purrdf-hash`。 |
-| [`purrdf-events`](./crates/rdf-events/) | 零依赖、对象安全的 RDF 事件汇/源扩展点。 |
-| [`purrdf-hash`](./crates/hash/) | 零依赖的 BLAKE3、MD5、SHA-1、SHA-3 与 CRC-32 摘要，支持流式与一次性计算，另含 base16、长度分帧与已登记的哈希域；处理器具备 SHA 与 CRC 指令时，SHA-1 与 CRC-32 直接使用这些指令。 |
-| [`purrdf-deflate`](./crates/deflate/) | 原生 DEFLATE 与 gzip：推送式流解码器逐一解码每个 gzip 成员、校验每个尾部，并拒绝尾随垃圾字节或超出调用方上限的输出；确定性编码器的输出只取决于输入与压缩级别。匹配复制与比较在 SSE2/AVX2、NEON 与 wasm simd128 上向量化；仅依赖 `purrdf-hash`。 |
-| [`purrdf-wasm`](./crates/rdf-wasm/) | `purrdf` ESM 包背后的 wasm32 引擎。 |
-| [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI（不发布；经由 cargo-c 构建）。 |
-| [`purrdf-cli`](./crates/cli/) | `purrdf` 命令行工具：`convert`、`query`、`update`、`reason`、`entails`、`consistency`、`validate`、`shex`、`describe`、`project`、`lift`、`pack verify`（不发布）。`convert` 接受任意数量的 `--input` 源，按确定性的并集合并，每个源使用独立的空节点作用域；`--transport auto\|none\|gzip\|zstd` 先根据魔数检测 gzip 或 zstd 包装再参考后缀，并以全有或全无的方式解码；传输包装从不在输出时施加，对 pack 源则拒绝。 |
-| [`purrdf-sparql-conformance`](./crates/sparql-conformance/) | W3C SPARQL、蕴涵机制与 OWL 2 一致性测试框架（不发布）。 |
-| [`purrdf-envelope-probe`](./crates/envelope-probe/) | 微型硬件包络（micro-hardware envelope）的采集端（不发布）：一组固定的、确定性的工作负载，按每个具名 profile 在公共 API 与基石（keystone）夹具语料上运行，使一次发布能够证明某个受限的部署类别仍然处于其固定的上限之内。通过标准是运行完成与内存占用；墙钟时间作为证据记录，从不作为门禁。 |
-| [`purrdf-bench`](./crates/bench/) | 基准测试工具（不发布）：`bench-corpus`，确定性、可分片的规模语料生成器（`purrdf-scale-mixed-v1`）。每个 IRI 都在固定种子下纯粹由其索引生成，分布于五个刻意设计为对抗性的类别，因此没有任何单一的字典技巧能美化容量声称；把所有分片拼接起来，与一次完整运行的结果逐字节相同。由 `make scale-corpus` 驱动。 |
+| [`purrdf`](./crates/purrdf/) | 从这里开始：总括门面 crate。 |
+| [`purrdf-rdf`](./crates/rdf/) | 原生 RDF 编解码器、GTS 适配器、投影与规范化。 |
+| [`purrdf-core`](./crates/rdf-core/) | 驻留 IR、读取会话、分段存储、诊断、溯源、pack 与 PURREMB。 |
+| [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL 解析与代数。 |
+| [`purrdf-sparql-eval`](./crates/sparql-eval/) | Query/Update 求值、governor 与扩展点。 |
+| [`purrdf-sparql-results`](./crates/sparql-results/) | 结果的 JSON、XML、CSV 与 TSV。 |
+| [`purrdf-shapes`](./crates/shapes/) | SHACL 验证/规则与模式编译。 |
+| [`purrdf-shex`](./crates/shex/) | ShEx 模式与验证。 |
+| [`purrdf-datalog`](./crates/datalog/) | 确定性的半朴素规则基底。 |
+| [`purrdf-entail`](./crates/entail/) | 物化、OWL-Direct 与 RIF-Core。 |
+| [`purrdf-text`](./crates/text/) | 精确定点的全文检索。 |
+| [`purrdf-geo`](./crates/geo/) | 精确的 GeoSPARQL 几何与关系。 |
+| [`purrdf-hnsw`](./crates/hnsw/) | 确定性的近似最近邻索引。 |
+| [`purrdf-retrieval`](./crates/retrieval/) | 带类型的规划、执行以及附带证据的排名融合。 |
+| [`purrdf-columnar`](./crates/columnar/) | 规范的五表 Parquet 编解码器。 |
+| [`purrdf-gts`](./crates/gts/) | 容器、折叠、验证与密码学。 |
+| [`purrdf-markdown`](./crates/markdown/) | 结构化 Markdown 编解码器。 |
+| [`purrdf-json`](./crates/json/) | 有序 JSON 字节覆盖编解码器。 |
+| [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema，支持 draft 2020-12、2019-09 与 07。 |
+| [`purrdf-slice`](./crates/slice/) | 切片目录、工件所有权与依赖。 |
+| [`purrdf-validate`](./crates/validate/) | 共享的验证、governor 与诊断宿主边界。 |
+| [`purrdf-iri`](./crates/iri/) | IRI/URI、语言标签、基准 IRI 解析与标准词汇表。 |
+| [`purrdf-xsd`](./crates/xsd/) | XSD 值空间、精确数值与时间算术。 |
+| [`purrdf-cdt`](./crates/cdt/) | SPARQL 复合数据类型及其函数库。 |
+| [`purrdf-events`](./crates/rdf-events/) | 零依赖的摄入协议与文本方向。 |
+| [`purrdf-lex`](./crates/lex/) | 共享的终结符、Unicode，以及 JSON/YAML/CBOR/XML 编解码器。 |
+| [`purrdf-hash`](./crates/hash/) | 零依赖的哈希与共享的同一性内核。 |
+| [`purrdf-deflate`](./crates/deflate/) | 原生、确定性的 DEFLATE/gzip。 |
+| [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 签名与严格验证。 |
+| [`purrdf-stack`](./crates/stack/) | 原生/WASM 栈准入。 |
+| [`purrdf-wasm`](./crates/rdf-wasm/) | 面向 JavaScript 的引擎与 ESM 绑定。 |
 
-## 文档
+C ABI、CLI、Python 扩展以及测试/基准工具位于同一个工作区，但不作为 Cargo 包发布。
+共享的第一方词法、编解码、哈希与签名基础层缩小了外部依赖面；每项共享工作都有唯一一个
+强制执行的归属。没有任何语义性的 Cargo feature，因此安装时的 feature 选择无法改变
+载体的行为。
 
-- **[RDF-1.2 演练场](https://blackcat-informatics.github.io/purrdf/playground/)**——
-  零安装的浏览器控制台：解析、查询（SPARQL）、验证（SHACL）、序列化，以及 RDF-1.2
-  （引用三元组、方向字面量）的规范化/比较，完全在 wasm 构建之上、于客户端完成。
-  不需要工具链，不需要服务器。
-- **[PurRDF 之书](https://blackcat-informatics.github.io/purrdf/)**——用户指南：各语言
-  的入门、概念，以及每一个引擎（源码在 [`docs/book/`](./docs/book/)，`make book`
-  在本地构建）。
-- **API 参考**——门面 crate 见 [docs.rs/purrdf](https://docs.rs/purrdf)；每个成员
-  crate 都从上面的 crate 一览链接到各自的 docs.rs 页面。
-- **规范与报告**——[GTS 规范](./docs/GTS-SPEC.md)、
-  [RDF 1.2 规范化 profile](./docs/RDF12-CANON-PROFILE.md)、
-  [PURREMB 嵌入伴随件](./docs/PURREMB.md)、
-  [SPARQL 执行 governor profile](./docs/SPARQL-GOVERNOR-PROFILE.md)、
-  [一致性记分板](./docs/CONFORMANCE.md)、
-  [基准测试](./docs/BENCHMARKS.md)、[发布流程](./docs/RELEASE.md)。
-- **设计笔记**——`purrdf-core` 之外的兄弟引擎为何在每个目标上给出相同答案：
-  [全文评分](./docs/design/purrdf-text-scoring.md)、
-  [GeoSPARQL 精确性](./docs/design/purrdf-geo-exactness.md)、
-  [嵌入 k 近邻](./docs/design/purrdf-embedding-knn.md)、
-  [检索阶梯](./docs/design/purrdf-retrieval-ladder.md)；以及热路径如何在不放弃这一点的
-  前提下实现向量化，逐处说明，并在每个目标上度量实际生成的指令：
-  [SIMD 与算术契约](./docs/design/purrdf-simd.md)。
+## 证据与性能
 
-## 快，靠测量而非断言
+[一致性记分板](./docs/CONFORMANCE.md) 区分官方套件、第一方语料、经批准的分歧与未经
+测试的边界。SPARQL 求值有 **862 个通过**，5 个入台账的上游勘误夹具。SHACL 在随库固化的
+W3C SHACL 1.0 测试套件上 **129/129 通过**，0 例入账；在随库固化的 W3C SHACL 1.2 测试
+套件上 **538/544 通过**（6 个经批准的结果以非规范形式拼写计算所得的小数，按规范的 XSD
+拼写评分）。
 
-IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `NonZeroU32` id 寻址，在所有
-热点处用固定密钥的 `FixedHasher` 做哈希，并把数据集冻结为 `Box<[QuadRow]>` 表，带惰性的
-序数置换索引（每条四元组每个轴约 4 字节）。性能声称由基准测试而非形容词
-支撑——`crates/rdf-core/benches/ir_layout.rs` 度量结构数组、数组结构与谓词邻接三种
-布局（分配次数、高水位、端到端延迟），最终采用的布局就是胜出的那个。用 `make bench`
-运行它们。
 
-还有一个仅供报告的 Python 测试框架，把原生支撑的 `purrdf.compat.rdflib` 直接替换包
-与真实 `rdflib` 在解析、序列化、SPARQL 与三元组模式迭代上、于一个确定性的
-`example.org` 语料上计时对比（`make bench-python`）。方法论、运行方式与一份有
-代表性的（依宿主而异的）结果表见 [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md)。
-数字因宿主而异——请在本地复现，而不要相信一个固定的倍数。
-
-## 一致性
-
-每个引擎都由其官方测试套件把关，随库固化并冻结在仓库内——完整记分板与运行方法见
+一致性门禁区分官方套件、第一方冻结语料与明确记录的边界。完整记分板与运行命令见
 [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)：
 
 | 引擎 | 套件 | 结果 |
@@ -658,80 +358,63 @@ IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `No
 | SPARQL CDT（SEP-0009） | 随库固化的 `awslabs/SPARQL-CDTs`（`vectors/sparql-cdt/`） | **658 / 658**，0 例入账——词法空间分歧见 [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
 | SPARQL 执行 governor | 第一方冻结语料（`vectors/sparql-governors/`） | **50 / 50**，0 例入账 |
 | 蕴涵（SPARQL 蕴涵机制） | W3C sparql11 `entailment/` 组 | **70 / 70**，0 例入账 |
-| 蕴涵（OWL 2 DL 一致性） | 随库固化的 W3C OWL 2 套件 | **258 / 262** 一致，4 例入台账，0 未入台账 |
-| 蕴涵（OWL 2 RL，W3C 蕴涵测试） | 随库固化的 W3C OWL 2 蕴涵套件 | **50 / 50** 一致，0 例入账，0 未入台账——负例通道 **23 / 23**（未发现不可靠之处），正例通道 **27 / 27** |
+| 蕴涵（OWL 2 DL 相容性） | 随库固化的 W3C OWL 2 套件 | **258 / 262** 一致，4 例入台账，0 例未入台账 |
+| 蕴涵（OWL 2 RL，W3C 蕴涵测试） | 随库固化的 W3C OWL 2 蕴涵套件 | **50 / 50** 一致，0 例入账，0 例未入台账——负例通道 **23 / 23**（未发现不可靠之处），正例通道 **27 / 27** |
 | RDFC-1.0 | W3C 规范化夹具 | 绿 |
 | RDF 1.2 规范化 profile（`purrdf-rdfc12` v2） | 第一方向量（`vectors/rdf12-canon/`） | **12 / 12** |
 | GTS | 冻结的跨语言向量（`vectors/`） | **38 / 39** 逐字节折叠为其已提交的期望值，1 处入台账的分歧 |
 
-## 能力如何增长
+性能证据因工作负载与宿主而异。基准测试框架记录分布与分配证据；`make bench` 运行原生
+微基准。规模语料、LUBM 与 WatDiv 对比通道仅供报告，并需要其文档所述的输入。对比性
+运行需要受控的机器条件、匹配的构建以及保留下来的原始样本。浏览器内存上限、读取器台账
+与物理设备限制所确立的是不同的事实。参见[基准测试方法论](./docs/BENCHMARKS.md)。
 
-SPARQL 的广度经由以调用方为键的扩展点增长——标量函数、属性函数、自定义聚合，以及
-宿主注入的服务解析器——因此新能力总是以经由扩展点的组合落地，绝不是 Cargo feature
-标志，也绝不是 PurRDF 自行定义的词汇表。四元组形式的 `CONSTRUCT`、SEP-0008 的 SHA-3
-内建函数、SEP-0009 复合数据类型、确定性全文检索、路径见证、嵌入 k 近邻与 GeoSPARQL 1.1
-都是这样到达的：在 `purrdf-core` 之外、在调用方提供的 IRI 之下、在每个目标上字节级一致，并接受与上述
-一切相同的一致性纪律。
+## 发展方向
 
-## 开发
+PurRDF 正在成长为一个基础，供在各种部署规模下结合图推理、检索与文档数据的应用使用。
+下一步的进展应当使这些能力更易于组合，并能带入更多工作流，同时保持同一性、资源上限与
+证据的显式性。公共契约以及上述已实现的接口是这一成长的基础。
+
+## 文档与开发
+
+- [PurRDF 之书](https://blackcat-informatics.github.io/purrdf/zh-Hans/)：各语言指南、
+  概念与引擎契约；另有[英文原版](https://blackcat-informatics.github.io/purrdf/)。
+- [浏览器演练场](https://blackcat-informatics.github.io/purrdf/playground/)：
+  在浏览器中本地解析、查询、验证、序列化与比较图。
+- [迁移到 3.0](./docs/MIGRATION-3.0.md)与[变更日志](./CHANGELOG.md)。
+- [GTS](./docs/GTS-SPEC.md)、[PURREMB](./docs/PURREMB.md)、
+  [RDF 1.2 规范化](./docs/RDF12-CANON-PROFILE.md)、
+  [存储契约](./crates/rdf-core/STORAGE.md)与
+  [发布流程](./docs/RELEASE.md)。
 
 ```sh
-make metadata   # regenerate + verify generated artifacts
-make check      # fmt, build, tests, hygiene gates
-make bench      # purrdf_testkit::bench benchmarks
-make scale-corpus  # the deterministic scale corpus, across shards
-make lubm       # the LUBM comparison workload, per entailment regime
-make watdiv     # the WatDiv comparison workload over a frozen dataset
+make metadata      # regenerate and verify projections and license bundles
+make check         # formatting, clippy, build, tests and hygiene
+make bench         # report-only microbenchmarks
+make scale-corpus  # deterministic corpus generation
+make lubm          # comparison lane; pinned network inputs and a JRE
+make watdiv        # comparison lane; frozen network dataset
 ```
 
-后三项是**对比通道（comparison lane）**，而不是门禁：它们打印的任何内容都不会在任何
-地方被断言，而 `lubm`/`watdiv` 在使用时才通过网络拉取各自固定版本的工件（没有随库固化
-任何内容——LUBM 生成器采用 GPL-2.0-or-later 许可，WatDiv 则要求使用者引用
-（citation-ware））。`lubm` 另外需要 JRE。参见 [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md)。
+使用者需要 stable Rust **1.98** 或更新版本。贡献者使用 `rust-toolchain.toml` 中声明的
+nightly 分析工具链；源码不使用任何 nightly 独有特性。CI 单独强制执行 stable MSRV，并为
+WASM 构建每一个已发布的 crate。发布工件使用 stable Rust 构建。
 
-发布由标签驱动，采用 OIDC 可信发布（crates.io 与 PyPI），附带构建溯源证明与 SPDX
-SBOM——见 [`docs/RELEASE.md`](./docs/RELEASE.md)。
+Cargo 套件、Python 分发包与 npm 包共享同一个协调一致的版本，并遵循语义化版本。C ABI
+单独编号，当前为 **0.8**，带有签名检查，并可在运行时经由 `purrdf_abi_version` 读取。
+经过验证的提交工作流见[贡献指南](./CONTRIBUTING.md)。
 
-## 版本与 MSRV
-
-**自 1.0.0 起的 semver。**自 1.0.0 起，本套件完整遵循语义化版本：**破坏性**变更提升
-**主版本**——携带 `!` 或 `BREAKING CHANGE:` 的提交是主版本提升的触发条件，变更日志会把
-每一条这样的条目标记为 **BREAKING**——**次版本**提升只做加法且 API 兼容，**修订版**提升
-只含缺陷修复。这是版本号所承诺的内容；它并不是超出 semver 含义之外的稳定性声称。全部
-三个已发布的包——crates.io 的 crate 套件、PyPI 的 `purrdf` 包与 npm 的
-`@blackcatinformatics/purrdf` 包——共享**同一个**工作区版本并同步发布，CI 中的版本
-一致性检查会在各版本来源（`Cargo.toml`、`pyproject.toml`、`package.json`、
-`CITATION.cff`）不一致时让构建失败。唯一的例外是 C ABI。`libpurrdf` 的
-[`purrdf.h`](./crates/rdf-capi/include/purrdf.h) 携带自己的
-`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（当前为 **0.9**），在每次导出签名变更时提升，由
-`crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时经由 `purrdf_abi_version`
-读回。它与工作区分开编号，并保持 `0.x`：它并未冻结，工作区的 1.0.0 对它不作任何承诺。
-
-**MSRV 政策。**支持的最低 Rust 版本是根 `Cargo.toml` 中的 `rust-version`（当前为
-**1.98**），位于 **stable** 通道，由专门的 CI MSRV 作业强制执行，发布工件也在 stable
-上构建。提高 MSRV 是一项记入变更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。
-README 中的 MSRV 徽章由人工维护，必须与 `rust-version` 一同更新。
-
-贡献者使用 nightly（`rust-toolchain.toml`）以获得更锐利的 clippy 与 rustdoc
-lint 覆盖面，以及更强的默认借用检查器，但工作区**不含任何 nightly 独有特性**——MSRV 作业正是在每次变更上
-证明这一点的手段。构建 PurRDF 只需要 stable 1.98，不需要其他任何东西。
-
-## GMEOW 家族
-
-PurRDF 是一小族关联数据项目的库层：
-
-- [`gmeow-ontology`](https://github.com/Blackcat-Informatics/gmeow-ontology)——GMEOW
-  以推理为核心的超级词汇表及其发布工具链（PurRDF 的主要消费者）。
-- [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts)——GTS 规范及其
-  多语言引擎；PurRDF 承载其中的 Rust 引擎。
-
-抽取历史与源提交：[`PROVENANCE.md`](./PROVENANCE.md)。
-品牌资产与使用规范：[`docs/BRAND.md`](./docs/BRAND.md)。
+PurRDF 由 Blackcat Informatics® Inc. 开发，是
+[GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology) 的库骨干。
+[抽取历史与溯源](./PROVENANCE.md)记录了它与
+[GTS 项目](https://github.com/Blackcat-Informatics/gmeow-gts)的关系。
 
 ## 许可
 
-以 [MIT](./LICENSE-MIT)、[Apache-2.0](./LICENSE-APACHE) 或
-[MulanPSL-2.0](./LICENSE-MULAN) 三种开源许可发布，由使用者任选其一，详见
-[`LICENSING.md`](./LICENSING.md)。
+第一方代码以 [MIT](./LICENSE-MIT)、[Apache License 2.0](./LICENSE-APACHE) 或
+[MulanPSL-2.0](./LICENSE-MULAN) 提供，由你任选其一。单独许可的文档与第三方材料保留其
+各自的条款。实际的分发归档包含适用的完整文本、面向接收者的声明与溯源清单。
+[许可指南](./LICENSING.md)说明其适用范围，并
+[提供中文说明](./docs/LICENSING.zh-Hans.md)。
 
-若在研究中使用 PurRDF，请引用它——见 [`CITATION.cff`](./CITATION.cff)。
+若在研究中使用 PurRDF，请引用 [CITATION.cff](./CITATION.cff)。
