@@ -869,6 +869,9 @@ pub struct GovernorState {
     /// Sorted when [`Self::evidence`] reads it, so the report does not depend on how a
     /// forked evaluation was scheduled.
     silenced: Mutex<Vec<SilencedInvocation>>,
+    /// How many numeric expression errors of each XPath F&O code the evaluation
+    /// absorbed into unbound values, by [`purrdf_xsd::ErrorCode::ALL`] position.
+    expression_errors: [AtomicU64; purrdf_xsd::ErrorCode::ALL.len()],
 }
 
 impl GovernorState {
@@ -884,6 +887,18 @@ impl GovernorState {
             stop: governors.stop.clone(),
             pending_work: AtomicU64::new(0),
             silenced: Mutex::new(Vec::new()),
+            expression_errors: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+
+    /// Count one numeric expression error of `code` the evaluation absorbed into an
+    /// unbound value.
+    pub(crate) fn record_expression_error(&self, code: purrdf_xsd::ErrorCode) {
+        if let Some(slot) = purrdf_xsd::ErrorCode::ALL
+            .iter()
+            .position(|candidate| *candidate == code)
+        {
+            self.expression_errors[slot].fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1138,6 +1153,14 @@ impl GovernorState {
             .clone();
         silenced.sort();
         evidence.silenced = silenced;
+        evidence.expression_errors = purrdf_xsd::ErrorCode::ALL
+            .iter()
+            .zip(&self.expression_errors)
+            .filter_map(|(code, count)| {
+                let count = count.load(Ordering::Relaxed);
+                (count > 0).then_some((*code, count))
+            })
+            .collect();
         evidence
     }
 

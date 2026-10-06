@@ -4414,7 +4414,10 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
             // A failed cast is an expression error; failed interning is operational.
             return match cast_numeric_value(&value, target) {
                 Some(cast) => governed_xsd_to_term(ctx, &cast),
-                None => Ok(None),
+                None => {
+                    ctx.record_expression_error(Some(cast_error_code(&value)));
+                    Ok(None)
+                }
             };
         }
     }
@@ -4446,7 +4449,29 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
     match parse_xsd10(lexical, target) {
         Ok(value) => governed_xsd_to_term(ctx, &value),
-        Err(_) => Ok(None),
+        Err(error) => {
+            if target.is_numeric() {
+                ctx.record_expression_error(error.code());
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// The XPath F&O error a refused by-value numeric cast of `source` is:
+/// `err:FOCA0002` for `NaN` or an infinity, which has no exact value, and
+/// `err:FORG0001` for a value outside the target's value space (`xsd:byte` of
+/// `300`) — the only two ways [`cast_numeric_value`] refuses a numeric source.
+fn cast_error_code(source: &XsdValue) -> purrdf_xsd::ErrorCode {
+    let not_finite = match source {
+        XsdValue::Float(value) => !value.is_finite(),
+        XsdValue::Double(value) => !value.is_finite(),
+        _ => false,
+    };
+    if not_finite {
+        purrdf_xsd::ErrorCode::Foca0002
+    } else {
+        purrdf_xsd::ErrorCode::Forg0001
     }
 }
 
@@ -5623,8 +5648,11 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
         // the query, not an unbound value: the policy asked for exactness.
         Err(purrdf_xsd::XsdError::Exact(error)) => Err(EvalError::Numeric(error)),
         // Division by zero and type failures keep their SPARQL expression-error
-        // meaning.
-        Err(_) => Ok(None),
+        // meaning; the F&O code goes to the governed outcome's evidence.
+        Err(error) => {
+            ctx.record_expression_error(error.code());
+            Ok(None)
+        }
     }
 }
 
@@ -5690,7 +5718,10 @@ pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
     }
     match op(&xa) {
         Ok(result) => governed_xsd_to_term(ctx, &result),
-        Err(_) => Ok(None),
+        Err(error) => {
+            ctx.record_expression_error(error.code());
+            Ok(None)
+        }
     }
 }
 
@@ -5709,7 +5740,10 @@ fn unary_numeric_fn<D: DatasetView + Sync>(
     }
     match op(&xa) {
         Ok(result) => governed_xsd_to_term(ctx, &result),
-        Err(_) => Ok(None),
+        Err(error) => {
+            ctx.record_expression_error(error.code());
+            Ok(None)
+        }
     }
 }
 

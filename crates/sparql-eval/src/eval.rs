@@ -2334,6 +2334,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
+    /// Count a numeric expression error of `code` that the evaluation absorbs into an
+    /// unbound value, for the governed outcome's evidence
+    /// ([`purrdf_core::GovernorEvidence::expression_errors`]). Nothing is kept when no
+    /// governor state is attached: an ungoverned evaluation reports no evidence.
+    pub(crate) fn record_expression_error(&self, code: Option<purrdf_xsd::ErrorCode>) {
+        if let (Some(state), Some(code)) = (self.governors.as_ref(), code) {
+            state.record_expression_error(code);
+        }
+    }
+
     /// Charge one operation on the arbitrary-precision numeric tower before it runs:
     /// its limb work as
     /// [`ChargePoint::RowExpressionEvaluation`](crate::governor::ChargePoint::RowExpressionEvaluation)
