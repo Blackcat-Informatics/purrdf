@@ -334,7 +334,7 @@ BOOK_ZH_DIR ?= docs/book/book/zh-Hans
 BOOK_ZH_SITE_URL ?= /purrdf/zh-Hans/
 
 book-zh: ## Build the zh-Hans book into $(BOOK_ZH_DIR), served at $(BOOK_ZH_SITE_URL) (after `book`; search off — see book.toml).
-	@case "$(BOOK_ZH_SITE_URL)" in /*/) ;; *) echo "book-zh: BOOK_ZH_SITE_URL must start and end with '/' (got '$(BOOK_ZH_SITE_URL)')" >&2; exit 2;; esac
+	@case "$(BOOK_ZH_SITE_URL)" in /|/*/) ;; *) echo "book-zh: BOOK_ZH_SITE_URL must start and end with '/' (got '$(BOOK_ZH_SITE_URL)')" >&2; exit 2;; esac
 	MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false \
 		MDBOOK_OUTPUT__HTML__SITE_URL='$(BOOK_ZH_SITE_URL)' \
 		mdbook build -d "$(abspath $(BOOK_ZH_DIR))" docs/book
