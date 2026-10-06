@@ -564,7 +564,9 @@ impl Parser<'_> {
                     // Typed ([`crate::error::ShapesError::Prebinding`]) like every other
                     // executed query's violation: this constraint executes wherever the
                     // shape does.
-                    if let Err(e) = crate::prebinding::check_select(&query, &["this"]) {
+                    if let Err(e) = crate::prebinding::check_select(&query, &["this"])
+                        .and_then(|()| crate::prebinding::check_shape_context_unassigned(&query))
+                    {
                         return Err(self.refuse_prebinding(
                             crate::error::PrebindingViolation::new(
                                 format!("sh:sparql constraint {c_node} on shape {id}"),

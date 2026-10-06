@@ -1998,9 +1998,21 @@ pub(crate) fn check_construct(
     construct: &str,
     prebound: &[&str],
 ) -> Result<(), String> {
-    let query = SparqlParser::new().parse_query(construct).map_err(|e| {
-        format!("SPARQL rule {rule_node} has an unparsable sh:construct query: {e}")
-    })?;
+    // The names the rule's evaluation pre-binds are constants to the grouping check
+    // (SPARQL 1.1 §11.4), exactly as they are when it runs: `prebound`, and for a
+    // shape rule the shape context as well (`crate::sparql::absent_shape_context`).
+    let shape_rule = prebound.contains(&"this");
+    let context: &[&str] = if shape_rule {
+        &crate::sparql::THIS_AND_SHAPE_CONTEXT[1..]
+    } else {
+        &[]
+    };
+    let query = SparqlParser::new()
+        .with_prebound_variables(prebound.iter().chain(context))
+        .parse_query(construct)
+        .map_err(|e| {
+            format!("SPARQL rule {rule_node} has an unparsable sh:construct query: {e}")
+        })?;
     let Query::Construct { template, .. } = &query else {
         return Err(format!("SPARQL rule {rule_node} must be a CONSTRUCT query"));
     };
@@ -2016,6 +2028,12 @@ pub(crate) fn check_construct(
     }
     if !prebound.is_empty() {
         crate::prebinding::check_construct(&query, prebound)
+            .map_err(|e| format!("SPARQL rule {rule_node}: {e}"))?;
+    }
+    // A shape rule runs with the shape context declared pre-bound, valued or not
+    // (`crate::sparql::absent_shape_context`); a global rule pre-binds none of it.
+    if shape_rule {
+        crate::prebinding::check_shape_context_unassigned(&query)
             .map_err(|e| format!("SPARQL rule {rule_node}: {e}"))?;
     }
     Ok(())
@@ -2136,6 +2154,59 @@ mod tests {
             .find(|s| !s.rules.is_empty())
             .expect("a shape with a rule");
         assert!(matches!(shape.rules[0].body, RuleBody::Sparql { .. }));
+    }
+
+    /// A shape rule's CONSTRUCT is checked against the grouping constraint (SPARQL
+    /// 1.1 §11.4) with the names its run pre-binds as constants — `$this` and the shape
+    /// context — so a sub-`SELECT` projecting `$this` beside an aggregate, or reading
+    /// `$currentShape` above its implicit group, loads and entails. The neighbour
+    /// reading a variable nothing pre-binds is still refused at load.
+    #[test]
+    fn a_shape_rule_reads_its_pre_bound_names_above_a_group() {
+        let out = entail(
+            "ex:alice a ex:Person ; ex:p ex:o1, ex:o2 .",
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:SPARQLRule ;
+                        sh:construct "CONSTRUCT { $this ex:counted ?ok } WHERE { { SELECT $this ((COUNT(?o) = 2 && BOUND($currentShape)) AS ?ok) WHERE { $this ex:p ?o } } FILTER(?ok) }" ] ."#,
+        );
+        assert!(
+            triples(&out)
+                .iter()
+                .any(|(s, p, _)| *s == ex("alice") && *p == ex("counted")),
+            "the grouped sub-SELECT ran with $this and $currentShape bound"
+        );
+        let err = parse_shapes_err(
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:SPARQLRule ;
+                        sh:construct "CONSTRUCT { $this ex:counted ?ok } WHERE { { SELECT $this ((COUNT(?o) = 2 && BOUND(?other)) AS ?ok) WHERE { $this ex:p ?o } } }" ] ."#,
+        );
+        assert!(err.contains("neither a GROUP BY key"), "got: {err}");
+    }
+
+    /// A shape rule runs with `$shapesGraph` and `$currentShape` declared pre-bound,
+    /// so assigning either is refused where the shapes graph loads — not admitted and
+    /// then aborted by the run. A GLOBAL rule pre-binds nothing ("Execute the query Q
+    /// without any pre-binding"), so the identical CONSTRUCT loads and entails there.
+    #[test]
+    fn only_a_shape_rule_refuses_assigning_the_shape_context() {
+        let construct = "CONSTRUCT { ?x ex:tagged ?currentShape } WHERE { ?x a ex:Person BIND(ex:t AS ?currentShape) }";
+        let err = parse_shapes_err(&format!(
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct "{}" ] ."#,
+            construct.replace("?x", "$this")
+        ));
+        assert!(
+            err.contains("the query assigns ?currentShape, which SHACL-SPARQL pre-binds"),
+            "got: {err}"
+        );
+        let out = entail(
+            "ex:alice a ex:Person .",
+            &format!(r#"ex:G a sh:SPARQLRule ; sh:construct "{construct}" ."#),
+        );
+        assert!(has_iri(&out, "alice", "tagged", "t"));
     }
 
     #[test]

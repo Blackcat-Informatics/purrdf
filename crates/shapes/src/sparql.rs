@@ -1409,7 +1409,8 @@ impl ShaclExecution {
         );
         let options = QueryOptions::new()
             .with_functions(scopes.functions())
-            .with_env(&scopes.env);
+            .with_env(&scopes.env)
+            .with_declared_prebound(absent_shape_context(parameters));
         let execution = SPARQL_ENGINE
             .with(|engine| engine.prepare_execution(query, None, parameters, options))
             .map_err(|e| format!("query evaluation error: {e}"))?;
@@ -1449,6 +1450,36 @@ pub(crate) fn bind_focus<D: DatasetView<ReadError = std::convert::Infallible>>(
     match focus_id {
         Some(id) => execution.bind_id(slot, dataset, id),
         None => execution.bind(slot, focus.to_term_value()),
+    }
+}
+
+/// The shape-context names `parameters` leaves out: the ones this run has no value
+/// for, because no shapes-graph IRI is set or no shape is current. Empty for a
+/// parameter list without `$this`, which is no shape's query: a global
+/// `sh:SPARQLRule` (run "without any pre-binding" but its template parameters) and a
+/// node expression's scalar `$a0 …` probe pre-bind no shape context at all.
+///
+/// A shape's query — a `sh:sparql` constraint, a component validator, a shape rule —
+/// always has `$this` among its parameters, and its absent shape-context names are
+/// declared pre-bound anyway (`QueryOptions::declared_prebound`). A loader
+/// declares the WHOLE shape context to the grouping check
+/// ([`THIS_AND_SHAPE_CONTEXT`]), because whether a shapes-graph IRI is set is decided
+/// per validation, not per shapes graph; so an evaluation that left an unvalued name
+/// out would refuse a query its load admitted — a `$shapesGraph` read in an aggregate
+/// projection, under an unnamed shapes graph. Declared, the name is one value for the
+/// whole evaluation, unbound included, which is what SHACL-SPARQL makes it.
+pub(crate) fn absent_shape_context(parameters: &[&str]) -> &'static [&'static str] {
+    if !parameters.contains(&"this") {
+        return &[];
+    }
+    match (
+        parameters.contains(&"shapesGraph"),
+        parameters.contains(&"currentShape"),
+    ) {
+        (true, true) => &[],
+        (true, false) => &["currentShape"],
+        (false, true) => &["shapesGraph"],
+        (false, false) => &["shapesGraph", "currentShape"],
     }
 }
 

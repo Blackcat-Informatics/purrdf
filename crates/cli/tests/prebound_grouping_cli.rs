@@ -495,3 +495,113 @@ fn a_named_function_body_reads_its_required_parameters_whatever_their_iri_order(
     assert_ne!(code(&out), 0, "pack must refuse");
     assert!(!product.exists(), "a refused pack writes no product");
 }
+
+/// A `sh:sparql` constraint whose query names `$shapesGraph` and `$currentShape`.
+fn sparql_constraint(select: &str) -> String {
+    shapes(&format!(
+        "ex:S a sh:NodeShape ; sh:targetClass ex:T ;\n  sh:sparql [ sh:select \"{select}\" ] .\n"
+    ))
+}
+
+/// **The shape context is pre-bound whether or not this run has a value for it.**
+/// A shapes graph loads with `$shapesGraph` and `$currentShape` declared to the
+/// grouping check, because whether the shapes graph is exposed under an IRI is a
+/// choice of each validation, not of the shapes graph. So a `sh:sparql` constraint
+/// reading either above its `GROUP BY` validates the same with `--shapes-graph` and
+/// without it — an unnamed shapes graph leaves `$shapesGraph` unbound, it does not
+/// turn the query into one its load would have refused.
+#[test]
+fn the_shape_context_is_a_group_constant_with_and_without_a_shapes_graph_iri() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    for (name, variable, expected) in [
+        // An unnamed shapes graph leaves `$shapesGraph` unbound, so the row — a
+        // violation — is selected only when no IRI is set. `$currentShape` is the
+        // shape either way, so no row is.
+        ("graph", "$shapesGraph", ["false", "true"]),
+        ("shape", "$currentShape", ["true", "true"]),
+    ] {
+        let file = write_file(
+            dir.path(),
+            &format!("{name}.ttl"),
+            &sparql_constraint(&format!(
+                "SELECT $this WHERE {{ $this <http://example.org/p> ?o }} GROUP BY $this \
+                 HAVING (COUNT(?o) = 2 && !BOUND({variable}))"
+            )),
+        );
+        let projected = write_file(
+            dir.path(),
+            &format!("{name}-projected.ttl"),
+            &sparql_constraint(&format!(
+                "SELECT $this ((COUNT(?o) = 2 && !BOUND({variable})) AS ?unbound) \
+                 WHERE {{ $this <http://example.org/p> ?o }} GROUP BY $this \
+                 HAVING (COUNT(?o) = 2 && !BOUND({variable}))"
+            )),
+        );
+        for (shapes_graph, conforms) in [
+            (None, expected[0]),
+            (Some("http://example.org/sg"), expected[1]),
+        ] {
+            for file in [&file, &projected] {
+                let mut args = vec!["validate", "--shapes", file.as_str()];
+                if let Some(iri) = shapes_graph {
+                    args.extend(["--shapes-graph", iri]);
+                }
+                args.push(&data);
+                let out = run(&args);
+                let verdict = stderr(&out);
+                assert!(
+                    verdict.contains(&format!("shacl conforms {conforms}\n")),
+                    "{variable} with shapes graph {shapes_graph:?}, {file}: {verdict}"
+                );
+            }
+        }
+    }
+}
+
+/// **Assigning the shape context is refused where the shapes graph loads.** The
+/// evaluation declares `$shapesGraph` and `$currentShape` pre-bound on every run, and
+/// a pre-bound variable may not be reassigned — so the load refuses the query with
+/// or without a shapes-graph IRI, rather than admitting it and aborting the
+/// validation. The neighbour assigning a fresh variable loads and validates.
+#[test]
+fn assigning_the_shape_context_is_refused_at_load_and_a_fresh_variable_is_not() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let assigning = |variable: &str| {
+        sparql_constraint(&format!(
+            "SELECT $this WHERE {{ $this <http://example.org/p> ?o . BIND(?o AS ?{variable}) \
+             FILTER(false) }}"
+        ))
+    };
+    for shapes_graph in [None, Some("http://example.org/sg")] {
+        let validate = |file: &str| {
+            let mut args = vec!["validate", "--shapes", file];
+            if let Some(iri) = shapes_graph {
+                args.extend(["--shapes-graph", iri]);
+            }
+            args.push(&data);
+            run(&args)
+        };
+        for variable in ["shapesGraph", "currentShape"] {
+            let refused = write_file(dir.path(), &format!("{variable}.ttl"), &assigning(variable));
+            let out = validate(&refused);
+            assert_ne!(code(&out), 0, "?{variable}, {shapes_graph:?}: refused");
+            assert!(
+                stderr(&out).contains(&format!(
+                    "the query assigns ?{variable}, which SHACL-SPARQL pre-binds"
+                )) && stderr(&out).contains("--shapes"),
+                "?{variable}, {shapes_graph:?}: refused as the shapes graph loads: {}",
+                stderr(&out)
+            );
+        }
+        let fresh = write_file(dir.path(), "fresh.ttl", &assigning("fresh"));
+        let out = validate(&fresh);
+        assert_eq!(code(&out), 0, "{shapes_graph:?}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("shacl conforms true\n"),
+            "{shapes_graph:?}: {}",
+            stderr(&out)
+        );
+    }
+}

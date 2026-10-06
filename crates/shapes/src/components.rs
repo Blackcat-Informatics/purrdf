@@ -1050,7 +1050,8 @@ fn parse_validator(
     let prebinding_result = match kind {
         ValidatorKind::Ask => crate::prebinding::check_ask(&query, &prebound),
         ValidatorKind::Select => crate::prebinding::check_select(&query, &prebound),
-    };
+    }
+    .and_then(|()| crate::prebinding::check_shape_context_unassigned(&query));
     let prebinding = prebinding_result.err().map(|e| {
         format!(
             "component {component_iri} validator {validator} violates pre-binding restrictions: \
