@@ -153,22 +153,24 @@ pub(crate) fn to_f32(value: &XsdValue) -> f32 {
     }
 }
 
-/// Negation, keeping the operand's datatype family.
+/// Negation: an `xsd:integer` for an integer-family operand (F&O 3.1 §4.2), a
+/// decimal otherwise.
 #[cold]
 #[inline(never)]
 pub(crate) fn neg(value: &XsdValue) -> XsdValue {
     if is_integer_family(value) {
-        return XsdValue::from_exact_integer(-&integer_of(value), value.datatype());
+        return XsdValue::from_exact_integer(-&integer_of(value), XsdDatatype::Integer);
     }
     XsdValue::from_exact_decimal(-&decimal_of(value))
 }
 
-/// The absolute value, keeping the operand's datatype family.
+/// The absolute value: an `xsd:integer` for an integer-family operand, a decimal
+/// otherwise.
 #[cold]
 #[inline(never)]
 pub(crate) fn abs(value: &XsdValue) -> XsdValue {
     if is_integer_family(value) {
-        return XsdValue::from_exact_integer(integer_of(value).abs(), value.datatype());
+        return XsdValue::from_exact_integer(integer_of(value).abs(), XsdDatatype::Integer);
     }
     let decimal = decimal_of(value);
     XsdValue::from_exact_decimal(if decimal.is_negative() {
@@ -185,7 +187,7 @@ pub(crate) fn abs(value: &XsdValue) -> XsdValue {
 #[inline(never)]
 pub(crate) fn round_to_integer(value: &XsdValue, rounding: Rounding) -> XsdValue {
     if is_integer_family(value) {
-        return value.clone();
+        return XsdValue::from_exact_integer(integer_of(value), XsdDatatype::Integer);
     }
     XsdValue::from_exact_decimal(exact::Decimal::from_integer(
         decimal_of(value).round_to_integer(rounding),

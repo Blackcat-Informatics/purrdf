@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Every numeric refusal of `purrdf-xsd` is a typed error that names its XPath F&O 3.1
-//! code, beside a neighbouring operation that answers.
+//! code, beside a neighbouring operation that answers; and the unary operators never
+//! mint a literal outside its datatype's value space.
 
 use purrdf_xsd::exact::{self, DivisionPolicy, ExactError};
 use purrdf_xsd::numeric::numeric_div_with_policy;
 use purrdf_xsd::{
-    ErrorCode, XsdDatatype as D, XsdError, XsdValue, numeric_div, numeric_unary_minus, parse,
+    ErrorCode, XsdDatatype as D, XsdError, XsdValue, numeric_abs, numeric_ceil, numeric_div,
+    numeric_floor, numeric_round, numeric_unary_minus, numeric_unary_plus, parse,
 };
 
 fn value(lexical: &str, datatype: D) -> XsdValue {
@@ -166,4 +168,36 @@ fn every_error_presents_its_code() {
         assert_eq!(code.qname(), format!("err:{}", code.local_name()));
         assert_eq!(code.to_string(), code.qname());
     }
+}
+
+/// Negation and the absolute value of a derived integer type are `xsd:integer`, at any
+/// size: `-5` is not an `xsd:unsignedByte`. Unary plus is the identity, type included.
+#[test]
+fn unary_results_of_a_derived_integer_are_xsd_integer() {
+    let five = value("5", D::UnsignedByte);
+    let negated = numeric_unary_minus(&five).expect("a value");
+    assert_eq!(negated.datatype(), D::Integer);
+    assert_eq!(negated.canonical_lexical(), "-5");
+    let absolute = numeric_abs(&value("-5", D::NegativeInteger)).expect("a value");
+    assert_eq!(absolute.datatype(), D::Integer);
+    assert_eq!(absolute.canonical_lexical(), "5");
+    for op in [numeric_ceil, numeric_floor, numeric_round] {
+        let rounded = op(&five).expect("identity");
+        assert_eq!(rounded.datatype(), D::Integer);
+        assert_eq!(rounded.canonical_lexical(), "5");
+    }
+    let huge = value(&format!("-1{}", "0".repeat(40)), D::NegativeInteger);
+    for result in [numeric_unary_minus(&huge), numeric_abs(&huge)] {
+        let result = result.expect("a value");
+        assert_eq!(result.datatype(), D::Integer);
+        assert!(matches!(result, XsdValue::BigInteger { .. }));
+        assert_eq!(result.canonical_lexical(), format!("1{}", "0".repeat(40)));
+    }
+    for op in [numeric_ceil, numeric_floor, numeric_round] {
+        assert_eq!(op(&huge).expect("identity").datatype(), D::Integer);
+    }
+    assert_eq!(
+        numeric_unary_plus(&five).expect("identity").datatype(),
+        D::UnsignedByte
+    );
 }

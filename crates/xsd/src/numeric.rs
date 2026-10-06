@@ -1592,10 +1592,7 @@ fn numeric_unary_minus_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         XsdValue::Integer { value, datatype } => value
             .checked_neg()
-            .map(|v| XsdValue::Integer {
-                value: v,
-                datatype: *datatype,
-            })
+            .map(integer_result)
             .ok_or_else(|| XsdError::OutOfRange {
                 datatype: *datatype,
                 lexical: value.to_string(),
@@ -1620,6 +1617,18 @@ fn numeric_unary_minus_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
         _ => Err(XsdError::TypeMismatch {
             reason: "unary minus applied to non-numeric value",
         }),
+    }
+}
+
+/// The `xsd:integer` result of a unary operator over an integer-family operand.
+///
+/// F&O 3.1 §4.2 types these results as `xs:integer`, and only permits a subtype
+/// when the value is in it: `-5` is not an `xsd:unsignedByte`, so keeping the
+/// operand's subtype would mint a literal outside its own value space.
+const fn integer_result(value: i128) -> XsdValue {
+    XsdValue::Integer {
+        value,
+        datatype: XsdDatatype::Integer,
     }
 }
 
@@ -1662,10 +1671,7 @@ fn numeric_abs_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         XsdValue::Integer { value, datatype } => value
             .checked_abs()
-            .map(|v| XsdValue::Integer {
-                value: v,
-                datatype: *datatype,
-            })
+            .map(integer_result)
             .ok_or_else(|| XsdError::OutOfRange {
                 datatype: *datatype,
                 lexical: value.to_string(),
@@ -1711,7 +1717,7 @@ pub fn numeric_ceil(a: &XsdValue) -> Result<XsdValue, XsdError> {
 fn numeric_ceil_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         // Integer is already an integer; ceiling is identity.
-        XsdValue::Integer { .. } => Ok(a.clone()),
+        XsdValue::Integer { value, .. } => Ok(integer_result(*value)),
         XsdValue::Decimal(d) => {
             // ceiling(n.frac) = whole_part + (if frac > 0 { 1 } else { 0 })
             let whole = d.whole_part();
@@ -1758,7 +1764,7 @@ pub fn numeric_floor(a: &XsdValue) -> Result<XsdValue, XsdError> {
 fn numeric_floor_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         // Integer is already an integer; floor is identity.
-        XsdValue::Integer { .. } => Ok(a.clone()),
+        XsdValue::Integer { value, .. } => Ok(integer_result(*value)),
         XsdValue::Decimal(d) => {
             // floor(n.frac) = whole_part - (if frac < 0 { 1 } else { 0 })
             let whole = d.whole_part();
@@ -1807,7 +1813,7 @@ pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
 fn numeric_round_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
         // Integer is already integral; round is identity.
-        XsdValue::Integer { .. } => Ok(a.clone()),
+        XsdValue::Integer { value, .. } => Ok(integer_result(*value)),
         XsdValue::Decimal(d) => {
             // XPath fn:round: half-values round toward +infinity.
             // For positive: round-half-up. For negative: round-half toward zero (not
