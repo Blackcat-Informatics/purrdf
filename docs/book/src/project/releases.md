@@ -103,7 +103,7 @@ shared test support: goldens, temporary paths, frozen vectors and the
 `helper-census` (the structural census behind the shared-helpers gate), and
 `purrdf-python` (the extension crate, which ships to PyPI via maturin instead).
 
-`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven that
+`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the twelve that
 published crates depend on, and they reach them solely through
 `[dev-dependencies]`. Their root `[workspace.dependencies]` entries are
 therefore path-only, with no `version` key, which is what makes cargo drop them
