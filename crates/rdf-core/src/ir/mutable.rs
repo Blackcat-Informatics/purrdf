@@ -66,6 +66,8 @@ pub use delta_view::{DeltaDatasetView, DeltaViewId};
 /// The lifetime of named-graph declarations in a mutable branch.
 ///
 /// Frozen datasets carry graph presence, never this caller-selected policy.
+/// [`Self::Implicit`] is the 3.x default; [`Self::RememberEmpty`] is expected to
+/// become the default in v4.0.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GraphExistenceMode {
@@ -273,6 +275,8 @@ impl MutableDataset {
 
     /// Branch from `base` with an explicitly selected graph-existence policy.
     /// No base row is copied; the policy applies only to this mutable branch.
+    /// [`Self::new`] keeps [`GraphExistenceMode::Implicit`] in 3.x; remembered
+    /// empty graphs are expected to become the default in v4.0.
     #[must_use]
     pub fn new_with_graph_existence(base: Arc<RdfDataset>, mode: GraphExistenceMode) -> Self {
         Self {

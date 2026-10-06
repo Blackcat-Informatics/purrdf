@@ -3947,6 +3947,8 @@ impl Default for QueryOptions<'_> {
 impl<'a> QueryOptions<'a> {
     /// Select the named-graph lifetime policy used by either UPDATE entry point.
     /// Frozen graph presence and ordinary query evaluation remain unchanged.
+    /// [`Self::EMPTY`] selects `GraphExistenceMode::Implicit` in 3.x; remembered
+    /// empty graphs are expected to become the default in v4.0.
     #[must_use]
     pub const fn with_graph_existence(
         mut self,

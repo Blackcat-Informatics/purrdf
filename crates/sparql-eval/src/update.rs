@@ -1159,7 +1159,7 @@ fn graph_op_copy(
     silent: bool,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
-    // SPARQL §3.2.4: COPY where source ≡ destination is a no-op.
+    // SPARQL 1.1 Update §3.2.3: COPY where source ≡ destination is a no-op.
     if source == destination {
         return Ok(());
     }
@@ -1188,7 +1188,7 @@ fn graph_op_move(
     silent: bool,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
-    // SPARQL §3.2.6: MOVE where source ≡ destination is a no-op. This guard is also
+    // SPARQL 1.1 Update §3.2.4: MOVE where source ≡ destination is a no-op. This guard is also
     // a correctness requirement, not just an optimization: with source == dest the
     // trailing source-removal below would re-suppress the just-inserted quads and
     // empty the graph.
@@ -1910,7 +1910,7 @@ mod tests {
 
     #[test]
     fn move_self_to_self_preserves_the_graph() {
-        // MOVE GRAPH ex:g TO GRAPH ex:g is a no-op (SPARQL §3.2.6). Without the
+        // MOVE GRAPH ex:g TO GRAPH ex:g is a no-op (SPARQL 1.1 Update §3.2.4). Without the
         // same-graph guard the suppression-delta double-remove would empty ex:g.
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri(&format!("{EX}a"));

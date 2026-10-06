@@ -7,7 +7,8 @@
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfStoreCapabilities {
-    /// Whether quads outside the default graph (named graphs) are representable.
+    /// Whether named graphs are representable. A dataset reports it when it carries
+    /// any named graph, including a declared empty one.
     pub named_graphs: bool,
     /// Whether RDF 1.2 triple terms (quoted triples) are representable.
     pub quoted_triples: bool,
