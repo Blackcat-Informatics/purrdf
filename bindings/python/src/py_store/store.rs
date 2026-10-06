@@ -225,7 +225,9 @@ impl PyStore {
     /// `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
     /// and `aggregate_namespace` all admit the plan and are then CARRIED by the
     /// returned object, so [`PreparedQuery::run`](super::prepared::PyPreparedQuery::run)
-    /// evaluates under the SAME registries the plan was admitted under. Nothing here
+    /// evaluates under the SAME registries the plan was admitted under. `xpath_regex`
+    /// (see [`query`](Self::query)) is carried the same way: every run's `REGEX` and
+    /// `REPLACE` evaluate under the dated law selected here. Nothing here
     /// widens what a registered relation reaches — running under a different registry
     /// than the one a plan was prepared against is refused, not silently answered
     /// short, exactly as [`query`](Self::query) would refuse it if asked to.
@@ -257,6 +259,7 @@ impl PyStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -274,6 +277,7 @@ impl PyStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
     ) -> PyResult<super::prepared::PyPreparedQuery> {
         presentation::settled(move || {
             let py = slf.py();
@@ -287,7 +291,11 @@ impl PyStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
             };
+            // Carried forward exactly as `standpoint_for_run` is: the law is read at
+            // EVALUATION time, off the engine `run` builds, so the handle keeps it.
+            let xpath_regex_for_run = config.xpath_regex;
             let parameters = parameters.unwrap_or_default();
             // Read off `config` BEFORE `build_engine` consumes it, exactly as `query`
             // does: the namespace declarations are parse configuration, they belong to
@@ -337,6 +345,7 @@ impl PyStore {
                     registry.as_ref(),
                     aggregates.as_ref(),
                     standpoint_for_run,
+                    xpath_regex_for_run,
                     graph_derived,
                 )
             });
