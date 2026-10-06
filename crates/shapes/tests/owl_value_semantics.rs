@@ -1248,3 +1248,47 @@ fn empty_fillers_and_ranges_admit_no_value() {
     }
     assert!(!instance("PO", "; ex:pu ex:n"));
 }
+
+#[test]
+fn the_complement_of_a_restriction_that_always_holds_admits_no_instance() {
+    // ≤1 p.owl:Nothing holds of every individual, so its complement is
+    // ¬owl:Thing: NC admits no instance, stated exactly.
+    let (compilation, report) = compile(
+        "ex:p a owl:ObjectProperty . ex:K a owl:Class .
+         ex:NC a owl:Class ; rdfs:subClassOf [ owl:complementOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:maxQualifiedCardinality \"1\"^^xsd:nonNegativeInteger ; owl:onClass owl:Nothing ] ] .
+         ex:NK a owl:Class ; rdfs:subClassOf [ owl:complementOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:maxQualifiedCardinality \"1\"^^xsd:nonNegativeInteger ; owl:onClass ex:K ] ] .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    let x = format!("{EX}x");
+    let class_outcomes = |class: &str| -> Vec<SchemaExpressionOutcome> {
+        report
+            .axioms
+            .iter()
+            .flat_map(|axiom| &axiom.classes)
+            .filter(|row| row.class_iri == format!("{EX}{class}"))
+            .flat_map(|row| &row.components)
+            .map(|component| component.outcome)
+            .collect()
+    };
+    assert_eq!(class_outcomes("NC"), [SchemaExpressionOutcome::Projected]);
+    assert!(!accepts(schema, &example(), "NC", "ex:x a ex:NC .", &x));
+    assert!(!accepts(
+        schema,
+        &example(),
+        "NC",
+        "ex:x a ex:NC ; ex:p ex:a , ex:b .",
+        &x
+    ));
+    // Neighbour: the complement of a restriction over a class qualifier is
+    // not projected, and NK still admits an instance.
+    assert_eq!(
+        class_outcomes("NK"),
+        [SchemaExpressionOutcome::Unrepresented]
+    );
+    assert!(accepts(schema, &example(), "NK", "ex:x a ex:NK .", &x));
+}

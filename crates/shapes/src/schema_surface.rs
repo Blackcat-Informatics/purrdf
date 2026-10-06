@@ -347,11 +347,21 @@ impl OntologyExpression {
     }
 
     /// Whether the expression is `owl:Thing` by its form: `owl:Thing` or the
-    /// complement of an empty expression.
+    /// complement of an empty expression, or a restriction every individual
+    /// meets: a minimum of zero, a universal over `owl:Thing`, or a maximum
+    /// (or an exact count of zero) over an empty qualifier.
     fn is_thing(&self) -> bool {
         match self {
             Self::Named(iri) => iri == OWL_THING,
             Self::Complement(inner) => inner.is_nothing(),
+            Self::Restriction(_, restriction) => match restriction.as_ref() {
+                Restriction::Min(0, _) => true,
+                Restriction::AllValues(filler) => filler.is_thing(),
+                Restriction::Max(_, Some(qualifier)) | Restriction::Exact(0, Some(qualifier)) => {
+                    qualifier.is_nothing()
+                }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -3713,6 +3723,19 @@ fn assemble_surface(
 
     let infos = conjunct_infos(class_axioms);
     let class_facts = class_expression_facts(class_axioms, &eligible_classes, supertypes, &infos)?;
+    // A class carrying an expression empty by its form (`¬(≤1 p.owl:Nothing)`,
+    // which is `¬owl:Thing`) admits no instance, as a subclass of
+    // `owl:Nothing` does.
+    for (class_iri, facts) in &class_facts {
+        if facts
+            .entries
+            .iter()
+            .any(|(_, conjunct)| conjunct.is_nothing())
+            && let Some(class) = classes.get_mut(*class_iri)
+        {
+            class.unsatisfiable = true;
+        }
+    }
     let mut property_templates: BTreeMap<String, SurfaceProperty> = BTreeMap::new();
     let needs_templates = !class_facts.is_empty();
     let no_anonymous = AnonymousSupers::default();
@@ -4186,6 +4209,8 @@ const ONE_OF_ANONYMOUS_REASON: &str =
     "an enumerated anonymous individual has no @id stable beyond one document";
 const COMPLEMENT_REASON: &str = "@type must not include the complemented class; membership in it \
      entailed through other classes is not visible to the schema";
+const EMPTY_COMPLEMENT_REASON: &str = "the complement of an expression every individual meets \
+     admits none, so the class admits no instance";
 const COMPLEMENT_EXPRESSION_REASON: &str = "the complement of a class expression whose projection \
      is approximate would reject conforming data, so no negation is projected";
 const UNION_REASON: &str = "projected as anyOf over the members' property constraints, read \
@@ -4461,6 +4486,10 @@ impl ConjunctContext<'_> {
                 } else {
                     vec![(component(Unrepresented, ONE_OF_ANONYMOUS_REASON), false)]
                 }
+            }
+            // The complement of what every individual meets admits none.
+            OntologyExpression::Complement(_) if conjunct.is_nothing() => {
+                vec![(component(Projected, EMPTY_COMPLEMENT_REASON), false)]
             }
             OntologyExpression::Complement(inner) => {
                 if matches!(**inner, OntologyExpression::Named(_)) {
