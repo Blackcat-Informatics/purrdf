@@ -6324,7 +6324,7 @@ def build_claims(
         ),
         # --- the remaining scoreboard rows the matrix block can source --------
         Claim(
-            "the SPARQL 1.1/1.2 scoreboard row",
+            "the SPARQL 1.0/1.1/1.2 scoreboard row",
             _CONFORMANCE,
             r"\| \*\*(?P<passed>\d+)\*\* pass · (?P<xfail>\d+) typed xfail · 0 fail",
             {"passed": sparql_pass, "xfail": sparql_xfail},
@@ -6476,9 +6476,9 @@ def build_claims(
             mat,
         ),
         Claim(
-            "the root README's SPARQL 1.1/1.2 row",
+            "the root README's SPARQL 1.0/1.1/1.2 row",
             _README,
-            r"\| SPARQL 1\.1/1\.2 \|[^|\n]*\| "
+            r"\| SPARQL 1\.0/1\.1/1\.2 \|[^|\n]*\| "
             r"\*\*(?P<passed>\d+)\*\* pass · (?P<xfail>\d+) ledgered \|",
             {"passed": sparql_pass, "xfail": sparql_xfail},
             mat,
