@@ -92,10 +92,12 @@ pub use pack::{
     pack_digest, restore_pack, verify_pack,
 };
 pub use paged::{
-    CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
-    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
-    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
-    PagedQueryView, SubsetPageProvider,
+    CanonicalPagedError, CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind,
+    PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
+    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
+    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PagedStack, PagedStackError,
+    PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot, StackPageOrigin, StackSource,
+    SubsetPageProvider, canonical_paged_seal,
 };
 pub use pipeline_bundle::{
     BundleDigestWork, CanonScopeName, GraphLayer, HandleEntry, HandleKey, PIPELINE_ROOT_DOMAIN,

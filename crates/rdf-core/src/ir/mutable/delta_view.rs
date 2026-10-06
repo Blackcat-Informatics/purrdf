@@ -252,16 +252,23 @@ impl DeltaDatasetView {
     }
 
     pub(super) fn base_quad_is_ordinary(&self, q: QuadIds) -> bool {
-        !self.suppressed.contains(&q)
-            && (!self.has_added_reifiers
-                || !self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)))
+        super::classify_statement(
+            super::StatementKind::Ordinary,
+            !self.suppressed.contains(&q),
+            false,
+            self.has_added_reifiers
+                && self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
+        ) == Some(super::StatementKind::Ordinary)
     }
 
     fn base_annotation_is_ordinary(&self, q: QuadIds) -> bool {
         self.has_suppressed_reifiers
-            && !self.suppressed.contains(&q)
-            && self.base.reifier_quads_of(q.s).any(|row| row.g == q.g)
-            && !self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base))
+            && super::classify_statement(
+                super::StatementKind::Annotation,
+                !self.suppressed.contains(&q),
+                self.base.reifier_quads_of(q.s).any(|row| row.g == q.g),
+                self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
+            ) == Some(super::StatementKind::Ordinary)
     }
     fn demoted_annotation_is_unique(&self, q: QuadIds) -> bool {
         self.base_annotation_is_ordinary(q)
@@ -281,8 +288,12 @@ impl DeltaDatasetView {
     }
     fn base_quad_is_annotation(&self, q: QuadIds) -> bool {
         self.has_added_reifiers
-            && !self.suppressed.contains(&q)
-            && self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base))
+            && super::classify_statement(
+                super::StatementKind::Ordinary,
+                !self.suppressed.contains(&q),
+                false,
+                self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
+            ) == Some(super::StatementKind::Annotation)
             && !self
                 .base
                 .annotations_of_with_graph(q.s)

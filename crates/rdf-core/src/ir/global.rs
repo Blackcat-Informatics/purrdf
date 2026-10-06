@@ -366,6 +366,37 @@ impl GlobalDictionary {
         }
     }
 
+    /// Checked allocation/address admission for composed retained metadata. The
+    /// ordinary lookup and miss insertion remain the dictionary's single homes.
+    fn try_intern_lookup(&mut self, lookup: GlobalTermLookup<'_>) -> Result<GlobalTermId, ()> {
+        let hash = hash_lookup_value(&lookup);
+        if let Some(id) = self.find(&lookup, hash) {
+            return Ok(id);
+        }
+        let bytes = match &lookup {
+            GlobalTermLookup::Iri(iri) => iri.len(),
+            GlobalTermLookup::Blank { label, .. } => label.len(),
+            GlobalTermLookup::Literal {
+                lexical, language, ..
+            } => lexical
+                .len()
+                .checked_add(language.map_or(0, str::len))
+                .ok_or(())?,
+            GlobalTermLookup::Triple { .. } => 0,
+        };
+        let total = self.arena.len().checked_add(bytes).ok_or(())?;
+        u32::try_from(total).map_err(|_| ())?;
+        GlobalTermId::checked_from_index(u64::try_from(self.terms.len()).map_err(|_| ())?)
+            .ok_or(())?;
+        self.arena.try_reserve(bytes).map_err(|_| ())?;
+        self.terms.try_reserve(1).map_err(|_| ())?;
+        let (arena, terms) = (&self.arena, &self.terms);
+        self.index
+            .try_reserve(1, |&i| hash_stored_value(arena, &terms[i as usize]))
+            .map_err(|_| ())?;
+        Ok(self.insert_missing(lookup, hash))
+    }
+
     /// The HIT half of [`intern_lookup`](Self::intern_lookup): the id of a value this
     /// dictionary has already stored, or `None`.
     ///
@@ -479,37 +510,47 @@ impl GlobalDictionary {
     /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
     /// predicate and object, each fully before the next, then the triple itself.
     pub(crate) fn reintern_validated(&mut self, value: &TermValue) -> GlobalTermId {
-        let interned = try_fold_nested(
+        self.try_reintern_validated(value)
+            .expect("validated dictionary value fits resident capacity")
+    }
+
+    /// Refuse resident address/allocation exhaustion while composing independent
+    /// dictionaries. Partial private dictionary growth is never published on error.
+    pub(crate) fn try_reintern_validated(&mut self, value: &TermValue) -> Result<GlobalTermId, ()> {
+        try_fold_nested(
             value,
             self,
             |dict, value| {
-                Ok::<_, Infallible>(Nested::Leaf(match value {
-                    TermValue::Iri(iri) => dict.intern_lookup(GlobalTermLookup::Iri(iri)),
-                    TermValue::Blank { label, scope } => dict.intern_blank(label, *scope),
+                Ok(Nested::Leaf(match value {
+                    TermValue::Iri(iri) => dict.try_intern_lookup(GlobalTermLookup::Iri(iri))?,
+                    TermValue::Blank { label, scope } => {
+                        dict.try_intern_lookup(GlobalTermLookup::Blank {
+                            label,
+                            scope: *scope,
+                        })?
+                    }
                     TermValue::Literal {
                         lexical_form,
                         datatype,
                         language,
                         direction,
                     } => {
-                        let datatype_id = dict.intern_lookup(GlobalTermLookup::Iri(datatype));
-                        dict.intern_literal(
-                            lexical_form,
-                            datatype_id,
-                            language.as_deref(),
-                            *direction,
-                        )
+                        let datatype_id =
+                            dict.try_intern_lookup(GlobalTermLookup::Iri(datatype))?;
+                        dict.try_intern_lookup(GlobalTermLookup::Literal {
+                            lexical: lexical_form,
+                            datatype: datatype_id,
+                            language: language.as_deref(),
+                            direction: *direction,
+                        })?
                     }
                     TermValue::Triple { s, p, o } => {
                         return Ok(Nested::Triple(&**s, &**p, &**o));
                     }
                 }))
             },
-            |dict, _, s, p, o| Ok(dict.intern_triple(s, p, o)),
-        );
-        match interned {
-            Ok(id) => id,
-        }
+            |dict, _, s, p, o| dict.try_intern_lookup(GlobalTermLookup::Triple { s, p, o }),
+        )
     }
 
     /// Intern a blank node. Identity is `(label, scope)` (C0.2).

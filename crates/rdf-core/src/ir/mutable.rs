@@ -1301,7 +1301,7 @@ fn check_value_absolute(value: &TermValue) -> Result<(), IriError> {
 /// identity that is well-defined across the base/delta boundary (C0.8). The mutable
 /// layer resolves each value to a `MutTermId` (base hit, or a freshly-minted delta
 /// id) internally.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct QuadValues {
     /// The subject term value.
     pub s: TermValue,
@@ -1311,6 +1311,32 @@ pub struct QuadValues {
     pub o: TermValue,
     /// The graph-name term value (`None` = default graph).
     pub g: Option<TermValue>,
+}
+
+/// Shared graph-scoped RDF 1.2 statement classification. Source-specific indexed
+/// probes supply visibility and reifier presence; an explicitly typed orphan
+/// annotation stays typed unless its originally applicable declaration disappears.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatementKind {
+    Ordinary,
+    Annotation,
+}
+pub(crate) const fn classify_statement(
+    physical: StatementKind,
+    visible: bool,
+    original_reifier: bool,
+    effective_reifier: bool,
+) -> Option<StatementKind> {
+    if !visible {
+        return None;
+    }
+    match physical {
+        StatementKind::Ordinary if effective_reifier => Some(StatementKind::Annotation),
+        StatementKind::Annotation if original_reifier && !effective_reifier => {
+            Some(StatementKind::Ordinary)
+        }
+        other => Some(other),
+    }
 }
 
 impl QuadValues {
