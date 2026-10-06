@@ -1978,12 +1978,39 @@ fn cardinality(value: &Term, facet: &str, owner: &str) -> Result<u64, SchemaComp
             "<{facet}> requires a non-negative integer literal; found {value}"
         )));
     }
-    non_negative_integer(literal.value()).ok_or_else(|| {
+    saturating_count(literal.value()).ok_or_else(|| {
         malformed(format!(
-            "<{facet}> requires a non-negative integer no larger than {}; found {value}",
-            u64::MAX
+            "<{facet}> requires a non-negative integer literal; found {value}"
         ))
     })
+}
+
+/// A cardinality's count: the non-negative integer a lexical form denotes
+/// (after the `collapse` whitespace facet), with every count beyond
+/// `u64::MAX` read as `u64::MAX`. No finite set of values tells those counts
+/// apart: a maximum that large holds of every instance, and a minimum that
+/// large of none, exactly as the larger count does.
+fn saturating_count(lexical: &str) -> Option<u64> {
+    let lexical = lexical.trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\r'));
+    let (negative, digits) = match lexical.as_bytes().first() {
+        Some(b'+') => (false, &lexical[1..]),
+        Some(b'-') => (true, &lexical[1..]),
+        _ => (false, lexical),
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    if digits.bytes().all(|byte| byte == b'0') {
+        return Some(0);
+    }
+    if negative {
+        return None;
+    }
+    Some(digits.bytes().fold(0_u64, |value, byte| {
+        value
+            .saturating_mul(10)
+            .saturating_add(u64::from(byte - b'0'))
+    }))
 }
 
 /// `owl:hasSelf` takes exactly the literal `true` (OWL 2 Mapping Table 13).
@@ -5399,10 +5426,6 @@ mod tests {
             ("owl:minCardinality \"1\"", "non-negative integer literal"),
             ("owl:minCardinality 1.0", "non-negative integer literal"),
             ("owl:minCardinality ex:one", "non-negative integer literal"),
-            (
-                "owl:minCardinality 99999999999999999999999",
-                "no larger than",
-            ),
         ] {
             refusal_with_neighbour(
                 &format!(
@@ -5417,6 +5440,9 @@ mod tests {
             "owl:minCardinality \"+2\"^^xsd:positiveInteger",
             "owl:minCardinality \"-0\"^^xsd:integer",
             "owl:minCardinality \"7\"^^xsd:unsignedByte",
+            "owl:minCardinality \" 3 \"^^xsd:integer",
+            "owl:minCardinality 99999999999999999999999",
+            "owl:maxCardinality 18446744073709551616",
         ] {
             complete(&format!(
                 "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; {valid} ] ."
