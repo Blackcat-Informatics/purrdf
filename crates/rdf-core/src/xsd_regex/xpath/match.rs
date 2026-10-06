@@ -104,16 +104,31 @@ struct Attempt {
     furthest: usize,
     /// The allowance for the program, independent of the input.
     program: u64,
+    /// The steps this attempt may spend before its allowance is recomputed.
+    ///
+    /// The allowance only grows with the start and the furthest position, so
+    /// spending within the last computed value needs no new arithmetic.
+    allowed: u64,
 }
 
 impl Attempt {
     /// Whether `spent`, at search start `start`, exceeds the allowance.
+    #[inline]
     fn exceeded(&mut self, start: usize, position: usize, spent: u64) -> Option<Refusal> {
         self.furthest = self.furthest.max(position);
+        if spent - self.before <= self.allowed {
+            return None;
+        }
+        self.recompute(start, spent)
+    }
+
+    #[cold]
+    fn recompute(&mut self, start: usize, spent: u64) -> Option<Refusal> {
         let allowance = u128::from(ATTEMPT_START_STEPS) * (start - self.origin + 1) as u128
             + u128::from(ATTEMPT_BYTE_STEPS) * (self.furthest - self.origin) as u128
             + u128::from(self.program);
         let spent = u128::from(spent - self.before);
+        self.allowed = u64::try_from(allowance).unwrap_or(u64::MAX);
         (spent > allowance).then(|| Refusal {
             resource: Resource::MatchSteps,
             required: spent,
@@ -218,6 +233,7 @@ impl<'a> Vm<'a> {
                     furthest: start,
                     program: ATTEMPT_NODE_STEPS
                         .saturating_mul((program.nodes.len() + program.sets.len()) as u64),
+                    allowed: 0,
                 });
                 let attempt = machine.find_from(start);
                 machine.attempt = None;
@@ -373,6 +389,16 @@ impl<'a> Ctx<'a> {
     }
 
     pub(super) fn set_matches(&mut self, root: usize, ch: char) -> Result<bool, Error> {
+        if let Some(ranges) = self.program.flat.get(root) {
+            // One comparison against the flattened union: one held cell and
+            // one step, as for an atomic set.
+            self.budget
+                .limits()
+                .admit(Resource::MatchSlots, self.live_slots + 1)?;
+            self.budget.charge(Resource::MatchSteps, 1)?;
+            let index = ranges.partition_point(|&(_, hi)| hi < ch);
+            return Ok(ranges.get(index).is_some_and(|&(lo, _)| lo <= ch));
+        }
         let set = self.program.sets[root];
         if !matches!(
             set,
@@ -1284,6 +1310,36 @@ mod tests {
         assert!(pattern(Profile::Xpath31, ".*b", "").lead.run.is_some());
         assert!(pattern(Profile::Xpath31, "(.*)b", "").lead.run.is_none());
         assert!(pattern(Profile::Xpath31, ".{0,9}b", "").lead.run.is_none());
+    }
+
+    #[test]
+    fn flattened_class_unions_match_like_their_alternatives() {
+        // A class union is flattened into sorted ranges; the same members
+        // written as an alternative of atoms keep per-atom evaluation.
+        for (class, alternative, flags) in [
+            ("^[a-z0-9]$", "^(?:[a-z]|[0-9])$", ""),
+            ("^[a-cK_]$", "^(?:[a-c]|K|_)$", "i"),
+            ("^[\u{3b8}x-z-]$", "^(?:\u{3b8}|[x-z]|-)$", "i"),
+            ("^[\n\t ]$", "^(?:\n|\t| )$", ""),
+        ] {
+            let flat = pattern(Profile::Xpath31, class, flags);
+            assert!(
+                (0..flat.sets.len()).any(|set| flat.flat.get(set).is_some()),
+                "{class}"
+            );
+            let atoms = pattern(Profile::Xpath31, alternative, flags);
+            for point in (0..0x2200).chain(0x1_0000..0x1_0010) {
+                let Some(ch) = char::from_u32(point) else {
+                    continue;
+                };
+                let text = ch.to_string();
+                assert_eq!(
+                    flat.is_match(&text, Limits::new()).unwrap(),
+                    atoms.is_match(&text, Limits::new()).unwrap(),
+                    "{class} {flags} U+{point:04X}"
+                );
+            }
+        }
     }
 
     #[test]

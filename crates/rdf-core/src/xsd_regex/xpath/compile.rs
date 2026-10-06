@@ -139,6 +139,38 @@ pub(super) struct Leads {
     pub scalars: Vec<(char, char)>,
 }
 
+/// Compound character sets that are unions of literal ranges (with their case
+/// variants under i), as sorted, disjoint scalar ranges.
+///
+/// A matched character is then one comparison against sorted ranges instead of
+/// a walk over the set's union tree. Sets of any other form keep that walk.
+#[derive(Debug, Default)]
+pub(super) struct FlatSets {
+    /// For each set id, the span of its ranges in `ranges`, if flattened.
+    spans: Vec<Option<(u32, u32)>>,
+    ranges: Vec<(char, char)>,
+}
+
+impl FlatSets {
+    /// The flattened ranges of `set`, if it has them.
+    #[inline]
+    pub(super) fn get(&self, set: usize) -> Option<&[(char, char)]> {
+        let (start, end) = (*self.spans.get(set)?)?;
+        Some(&self.ranges[start as usize..end as usize])
+    }
+
+    fn storage_bytes(&self) -> usize {
+        self.spans
+            .capacity()
+            .saturating_mul(size_of::<Option<(u32, u32)>>())
+            .saturating_add(
+                self.ranges
+                    .capacity()
+                    .saturating_mul(size_of::<(char, char)>()),
+            )
+    }
+}
+
 /// A folded range wider than this is evaluated through its set instead of
 /// being expanded into its case variants.
 const FOLDED_SPAN: u32 = 256;
@@ -177,6 +209,8 @@ pub struct CompiledPattern {
     pub(super) root: usize,
     /// Which start positions a search can skip without running the program.
     pub(super) lead: Leads,
+    /// Compound character sets that are unions of literal ranges, flattened.
+    pub(super) flat: FlatSets,
     pub(super) captures: usize,
     /// The parent table and nesting facts the matchers walk the arena with.
     pub(super) links: super::pike::Links,
@@ -226,6 +260,7 @@ impl CompiledPattern {
             .saturating_add(self.flags.capacity())
             .saturating_add(self.nodes.capacity().saturating_mul(size_of::<Node>()))
             .saturating_add(self.sets.capacity().saturating_mul(size_of::<Set>()))
+            .saturating_add(self.flat.storage_bytes())
             .saturating_add(
                 self.lead
                     .scalars
@@ -311,6 +346,7 @@ pub fn compile(
         parser.expression()?
     };
     let lead = parser.lead(root)?;
+    let flat = parser.flat_sets()?;
     // No token cursor or construction-only frame survives in the artifact.
     let Parser {
         scanner,
@@ -336,6 +372,7 @@ pub fn compile(
         sets,
         root,
         lead,
+        flat,
         captures,
         links,
         admission,
@@ -668,6 +705,49 @@ impl<'a> Parser<'a> {
     ///
     /// A folded range contributes each member's direct case variants, the
     /// same relation the matcher applies to it, so membership is unchanged.
+    /// Flatten every compound set a character atom matches with, when it is a
+    /// union of literal ranges.
+    fn flat_sets(&mut self) -> Result<FlatSets, Error> {
+        let mut flat = FlatSets::default();
+        for node in 0..self.nodes.len() {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            let Node::Character(set) = self.nodes[node] else {
+                continue;
+            };
+            if !matches!(self.sets[set], Set::Union(..)) || flat.get(set).is_some() {
+                continue;
+            }
+            let ranges = self.scalars(set)?;
+            let held = ranges.capacity() as u64 * 2;
+            if !ranges.is_empty() {
+                if flat.spans.is_empty() {
+                    let missing = self.sets.len();
+                    self.budget
+                        .charge_wide(Resource::CompileSlots, missing as u128 * 2)?;
+                    self.budget
+                        .charge_wide(Resource::CompileSteps, missing as u128)?;
+                    flat.spans
+                        .try_reserve_exact(missing)
+                        .map_err(|_| Error::Allocation {
+                            resource: Resource::CompileSlots,
+                            units: missing as u64 * 2,
+                        })?;
+                    flat.spans.resize(missing, None);
+                }
+                let start = flat.ranges.len();
+                for range in ranges.iter().copied() {
+                    grow(&mut self.budget, &mut flat.ranges, 2)?;
+                    flat.ranges.push(range);
+                }
+                let span = |at: usize| u32::try_from(at).expect("admitted ranges fit u32");
+                flat.spans[set] = Some((span(start), span(flat.ranges.len())));
+            }
+            drop(ranges);
+            self.budget.release_compile_slots(held);
+        }
+        Ok(flat)
+    }
+
     fn scalars(&mut self, root: usize) -> Result<Vec<(char, char)>, Error> {
         let mut work: Vec<usize> = Vec::new();
         let mut ranges: Vec<(char, char)> = Vec::new();
