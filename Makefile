@@ -440,6 +440,7 @@ bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NO
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
 	cargo run -q --locked -p helper-census -- --python-binding-tests
 	cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
+	cd bindings/python && PURRDF_TEST_REQUIRE_EXACT=1 uv run --locked cargo test --manifest-path ../../Cargo.toml --locked -p purrdf-cli --test python_empty_graphs -- --ignored --exact installed_empty_graph_modes
 
 miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
 	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised

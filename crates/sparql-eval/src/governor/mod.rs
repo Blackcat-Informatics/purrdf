@@ -1722,6 +1722,14 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 ///
 /// # v12
 ///
+/// [`CHARGE_SCHEDULE`] and every query charge remain byte-identical to v11.
+/// Governed UPDATE checks stop before each bulk named-graph declaration withdrawal,
+/// including metadata-only entries, and after freezing its private branch before
+/// publishing it. These additional checkpoints can move an observable stop cut point;
+/// graph declarations are not repriced as quad mutations and row fuel is unchanged.
+///
+/// # v13
+///
 /// The schedule is unchanged; what [`ChargePoint::RowExpressionEvaluation`] counts
 /// moves, because `xsd:integer` and `xsd:decimal` became exact at every size. An
 /// operation whose operands do not both fit machine words runs on the
@@ -1741,9 +1749,9 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// scratch-byte ceiling, before it runs. The admission is refused when the bytes
 /// would not fit beside everything the query has already minted, and is not added to
 /// the running total. Machine-word operands charge nothing extra, so a query whose
-/// numbers all fit machine words buys exactly the execution under v12 that it bought
-/// under v11.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
+/// numbers all fit machine words buys exactly the execution under v13 that it bought
+/// under v12.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1753,7 +1761,8 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 /// it unchanged and moves only the order of charges in a per-row loop; v10 also
 /// leaves it unchanged and corrects scratch ownership and mint checkpoints; v11
 /// leaves it unchanged and moves charged work through binding-driven positive
-/// operands and existence restrictions; v12 leaves it unchanged and charges
+/// operands and existence restrictions; v12 leaves it unchanged and checks UPDATE
+/// declaration work and final publication, and v13 leaves it unchanged and charges
 /// arbitrary-precision arithmetic through `row-expression-evaluation` — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
@@ -2762,15 +2771,15 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 12);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 13);
         assert_eq!(
-            pinned, "a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a",
-            "the consumer's v12 receipt identity pins the unchanged charge table"
+            pinned, "7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70",
+            "the consumer's v13 receipt identity pins the unchanged charge table"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 11, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 12, &CHARGE_SCHEDULE),
             pinned,
-            "exact-arithmetic charging cannot reuse the v11 receipt identity"
+            "exact-arithmetic charging cannot reuse the v12 receipt identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(
