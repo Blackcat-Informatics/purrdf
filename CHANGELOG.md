@@ -154,16 +154,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `owl:equivalentProperty` or `owl:inverseOf` with a named subject, or an
   `rdfs:domain`/`rdfs:range`) is refused with a typed error when it has:
   a restriction without `owl:onProperty` or `owl:onProperties`; a
-  cardinality that is not a non-negative integer literal within 64 bits; a
+  cardinality that is not a non-negative integer literal; a
   qualified cardinality without its qualifier, or a qualifier without a
   qualified cardinality; `owl:hasSelf` other than `true`; `owl:onProperties`
   with a facet other than `owl:someValuesFrom`/`owl:allValuesFrom`; a blank
   node with no construct, or one that is both a class expression and a data
-  range (OWL 2 Mapping to RDF Graphs §3.2.1); an empty, mixed or triple-term
-  `owl:oneOf`; a union or
-  intersection with fewer than two distinct members; an anonymous property
+  range (OWL 2 Mapping to RDF Graphs §3.2.1); a mixed or triple-term
+  `owl:oneOf`; an anonymous property
   expression that is not `owl:inverseOf` one named property; a non-IRI
-  `owl:onDatatype`, an empty `owl:withRestrictions`, a facet restriction that is
+  `owl:onDatatype`, a facet restriction that is
   not a blank node with one literal facet, or an `xsd:pattern` outside the XSD
   regular-expression language; an ill-formed or cyclic RDF list; an expression
   that contains itself; a data range where a class expression is required; or
@@ -176,7 +175,39 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   values), several properties or qualifiers, or several class constructs on
   one node. A facet over a defined datatype (`ex:Percent owl:equivalentClass
   xsd:integer[≥ 0]`) restricts the definition's values, and is reported as an
-  approximation where it has no exact form over them.
+  approximation where it has no exact form over them. Constructs are read by
+  their meaning rather than refused: a union of no class is `owl:Nothing` and
+  an intersection of none `owl:Thing` (of no data range, the empty range and
+  `rdfs:Literal`), a union or intersection of one member is that member,
+  repeated members count once, `owl:oneOf ()` is `owl:Nothing` (Mapping Table
+  18), and an empty `owl:withRestrictions` is its base datatype. A cardinality
+  beyond `u64::MAX` is read as `u64::MAX`, which no finite set of values tells
+  apart from it: such a maximum holds of every instance and such a minimum of
+  none. An IRI declared several property kinds is read by the OWL 2 RDF-Based
+  Semantics (§5.3): a datatype declaration decides, then an object one, so
+  PROV-O's `prov:specializationOf`, an annotation and an object property,
+  compiles as an object property.
+- **OWL datatypes are judged by value space:** an OWL range, filler, data
+  range, enumeration or `owl:hasValue` admits a literal by its value, as OWL 2
+  §4 reads a datatype, not by its tag as SHACL's `sh:datatype` does.
+  `xsd:decimal` admits the bare integer `1` and `"7"^^xsd:nonNegativeInteger`;
+  `xsd:string` admits `xsd:normalizedString`, `xsd:token` and the other
+  string datatypes, and `xsd:token` admits an `xsd:string` with no stray
+  whitespace; `xsd:integer[≥ 0]` admits `"5"^^xsd:int`; `xsd:dateTime` admits
+  `xsd:dateTimeStamp`. An enumeration or `owl:hasValue` matches every literal
+  of an equal value: `1` matches `"01"^^xsd:integer` and `"1.0"^^xsd:decimal`,
+  `"a b"` matches `" a  b "^^xsd:token`, `true` matches `"1"^^xsd:boolean`.
+  OWL-Time's `time:years 1` is now valid. A literal typed `owl:rational` is in
+  a decimal or integer value space exactly when its denominator divides out,
+  which no pattern decides, so it is admitted unjudged and the range is
+  reported as an approximation; a maximum counted over such a qualifier, and a
+  datatype complement of it, count and negate only the literals they judge, so
+  neither rejects a conforming value. A length or pattern facet holds of the
+  value, which a whitespace-collapsing literal's lexical form need not be, so
+  it is applied where the lexical form is the value and otherwise reported as
+  an approximation. An equal value of another datatype (a `dateTime` in
+  another time zone) is matched by any literal of that datatype, an
+  approximation too. SHACL-derived schemas keep SHACL's tag check.
 - **Output changes for ontologies without anonymous expressions:**
   - Every schema cache key (`SchemaCompilation.key`) changes, for every input,
     IRI-only ontologies and ontologies with no OWL at all included: the policy
@@ -196,6 +227,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     Its coverage rows are `representation_approximation`, because lexical
     forms are not judged. An `owl:DatatypeProperty` ranging over one of them,
     which used to be refused, is accepted.
+  - A property ranging over an XSD datatype, which used to admit only literals
+    tagged with that datatype, admits every literal whose value is in the
+    datatype's value space (see above). Its coverage rows are
+    `representation_approximation` for a decimal or integer range, which
+    admits `owl:rational` literals unjudged. SHACL-derived properties and
+    shaped-only output are unchanged.
+  - The schema `$id` under a hash namespace
+    (`http://purl.org/goodrelations/v1#`) is fragment-free:
+    `http://purl.org/goodrelations/v1/schema/instance.schema.json`, not
+    `…/v1#schema/instance.schema.json`. JSON Schema draft 2020-12 §8.2.1
+    requires a `$id` to resolve to an absolute URI without a fragment, and
+    draft 2020-12 validators refused the old one. Slash namespaces keep their
+    `$id`.
   - A class hierarchy whose closure holds more than 1,048,576 memberships (a
     subclass chain deeper than about 1,450) used to be refused with
     `LimitExceeded` "propagated class memberships". The closure now holds up to
@@ -203,14 +247,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   - A class constructor on an IRI (`owl:oneOf`, `owl:unionOf`,
     `owl:intersectionOf`, `owl:complementOf`, an IRI typed `owl:Restriction`),
     which used to be ignored, is projected and reported as above.
-  - Apart from the cache key and the changes above, an ontology whose axioms
-    all have IRI objects emits the same schema, OpenAPI document and coverage
-    report as before, byte for byte. A golden of that output, frozen before
-    anonymous class expressions were read, is checked on every test run: an
+  - Nothing else changes. A golden of the output frozen before anonymous class
+    expressions were read is compared on every test run with today's: for an
     ontology with a hierarchy, an equivalence, disjointness, domains, ranges,
     functional, symmetric and inverse properties, a sub-property, a declared
-    datatype and an object property over `rdf:JSON`, beside a SHACL shape, in
-    both surface modes.
+    datatype and an object property over `rdf:JSON`, beside a SHACL shape, the
+    shaped-only output is byte-identical, and the ontology-complete output
+    differs only in the OWL datatype ranges' value schemas and the integer
+    range's coverage precision.
 
 ### Changed
 
@@ -234,9 +278,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **GraphQL type-name collisions with a nested schema:** a class whose
+  derived nested type name another class already holds (GoodRelations'
+  `gr:BusinessEntity`, whose `@type` field would be named
+  `BusinessEntityType`, beside the class `gr:BusinessEntityType`) no longer
+  aborts emission with `GraphqlError` "type name … collides". The nested type
+  takes the first free name of `<Name>Nested`, `<Name>Nested2`, …, in the
+  definitions' order, so the choice is deterministic; a definition keeps its
+  own name.
 - **GraphQL emission of enumerated values beside their array form:** a
   property whose values are an enumeration, written as one value or several
-  (a SHACL `sh:in` or an OWL literal `owl:oneOf`), no longer aborts with
+  (a SHACL `sh:in`), no longer aborts with
   `GraphqlError` "type name … collides". The wrapper object that carries the
   enum in the `@oneOf` union is named `<Enum>Value`, apart from the enum.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`

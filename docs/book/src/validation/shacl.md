@@ -843,8 +843,20 @@ datatype restriction, an expression that contains itself, a data range where a
 class is required, or a filler that contradicts the property's kind. A blank
 node with several readings (several facets, facet values, properties,
 qualifiers or class constructs) is their conjunction, and a facet over a
-defined datatype restricts its definition's values. One request expands at
-most 1,048,576 expression nodes.
+defined datatype restricts its definition's values. An empty, single-member or
+repeated union or intersection, an empty enumeration, an empty facet list and a
+cardinality beyond 64 bits are read by their meaning, and a punned property by
+the RDF-Based Semantics. One request expands at most 1,048,576 expression
+nodes.
+
+OWL ranges, fillers, data ranges, enumerations and `owl:hasValue` judge a
+literal by its value, as OWL 2 reads a datatype, where `sh:datatype` judges its
+tag: `xsd:decimal` admits the integer `1`, `xsd:string` admits `xsd:token`,
+and an enumeration of `1` matches `"01"^^xsd:integer`. A decimal or integer
+range admits a literal typed `owl:rational` unjudged and is reported as an
+approximation, as is a length or pattern facet on a string datatype whose
+lexical forms may collapse whitespace. Under a hash namespace the schema `$id`
+drops the fragment, as draft 2020-12 requires.
 
 Direct SHACL remains authoritative. Ontology-only fields are optional unless a
 class restriction requires them;

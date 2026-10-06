@@ -480,7 +480,7 @@ axiom the surface always read: the object of `rdfs:subClassOf`,
 `owl:inverseOf` with a named subject, or an `rdfs:domain`/`rdfs:range`. Such an
 expression is malformed when it has:
 - a restriction without `owl:onProperty` or `owl:onProperties`;
-- a cardinality that is not a non-negative integer literal within 64 bits;
+- a cardinality that is not a non-negative integer literal;
 - a qualified cardinality without its qualifier, or a qualifier without a
   qualified cardinality;
 - `owl:hasSelf` other than `true`;
@@ -488,12 +488,11 @@ expression is malformed when it has:
   `owl:allValuesFrom`;
 - a blank node that declares no construct, or one that is both a class
   expression and a data range (OWL 2 Mapping to RDF Graphs §3.2.1);
-- an empty `owl:oneOf`, one that mixes individuals and literals, or one with a
+- an `owl:oneOf` that mixes individuals and literals, or one with a
   triple-term member;
-- a union or intersection with fewer than two distinct members;
 - an anonymous property expression that is not `owl:inverseOf` one named
   property;
-- `owl:onDatatype` that is not an IRI, an empty `owl:withRestrictions`, a
+- `owl:onDatatype` that is not an IRI, a
   facet restriction that is not a blank node with exactly one literal facet, or
   an `xsd:pattern` outside the XSD regular-expression language;
 - an ill-formed or cyclic RDF list, or an expression that contains itself;
@@ -509,7 +508,31 @@ two `owl:someValuesFrom` values), several properties or qualifiers, or several
 class constructs on one node. A facet over a defined datatype restricts its
 definition's values (`ex:Percent ≡ xsd:integer[≥ 0]` restricted by
 `xsd:maxInclusive 100` admits the integers 0 to 100), and is reported as an
-approximation where it has no exact form over them.
+approximation where it has no exact form over them. A union of no class is
+`owl:Nothing` and an intersection of none `owl:Thing` (of no data range, the
+empty range and `rdfs:Literal`); a union or intersection of one member is that
+member; `owl:oneOf ()` is `owl:Nothing`; an empty `owl:withRestrictions` is its
+base datatype. A cardinality beyond `u64::MAX` is read as `u64::MAX`, which no
+finite set of values tells apart from it. An IRI declared several property
+kinds (PROV-O's `prov:specializationOf`, an annotation and an object property)
+is read by the OWL 2 RDF-Based Semantics: a datatype declaration decides, then
+an object one.
+
+OWL ranges, fillers, data ranges, enumerations and `owl:hasValue` judge a
+literal by its value, as OWL 2 §4 reads a datatype, where SHACL's
+`sh:datatype` judges its tag. `xsd:decimal` admits the bare integer `1` and
+`"7"^^xsd:nonNegativeInteger`, `xsd:string` admits the string datatypes derived
+from it, a facet over `xsd:integer` admits every integer datatype within it, and
+an enumeration of `1` matches `"01"^^xsd:integer`. The value-space tables are
+in `src/owl_value_space.rs`. A literal typed `owl:rational` may denote a
+decimal or an integer, which no pattern decides, so a decimal or integer range
+admits it unjudged and is reported as an approximation; a maximum counted over
+such a qualifier, and a datatype complement of it, count and negate only the
+literals they judge. A length or pattern facet holds of a string's value, so it
+is stated only on literals whose lexical form is their value, and reported as
+an approximation. The schema `$id` under a hash namespace drops the fragment
+(`http://purl.org/goodrelations/v1/schema/instance.schema.json`), as draft
+2020-12 requires.
 
 The fixed ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or
 coverage cells, OWL expression depth 64, 1,048,576 expanded expression nodes
