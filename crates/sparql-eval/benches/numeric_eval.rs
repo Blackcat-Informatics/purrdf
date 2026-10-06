@@ -173,6 +173,18 @@ fn bench_exact(c: &mut Bench) {
     let engine = NativeSparqlEngine::new();
     let chain = squaring_chain(100, 6);
     let fits = QueryGovernors::UNBOUNDED.with_fuel(1_000_000_000);
+    // An error or a trip would be timed as if it were the work: prove each lane answers.
+    for &(label, query) in EXACT {
+        assert!(run(&engine, &ds, query) > 0, "case {label} is a no-op");
+    }
+    assert!(
+        run(&engine, &ds, &chain) > 0,
+        "the squaring chain is a no-op"
+    );
+    assert!(
+        governed(&engine, &ds, &chain, &fits),
+        "the squaring chain completes under its fuel ceiling"
+    );
     let mut group = c.benchmark_group("numeric_eval_exact");
     group.sample_size(10);
     for &(label, query) in EXACT {
