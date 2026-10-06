@@ -12,7 +12,7 @@
 use std::cmp::Ordering;
 use std::ops::Range;
 
-use super::{Budget, Error, Limits, Profile, Resource, unicode_tables};
+use super::{Budget, Error, Limits, Profile, Resource, dated_blocks, unicode_tables};
 use crate::xsd_regex::scan::{Scanner, Token};
 
 #[derive(Debug, Clone, Copy)]
@@ -271,6 +271,35 @@ pub fn compile(
         captures,
         admission,
     })
+}
+
+fn table(
+    table: &'static [(&'static str, &'static [(u32, u32)])],
+    name: &str,
+) -> Option<&'static [(u32, u32)]> {
+    table
+        .binary_search_by_key(&name, |&(name, _)| name)
+        .ok()
+        .map(|index| table[index].1)
+}
+
+/// The ranges of a block escape name under one dated law.
+///
+/// Both laws incorporate the XSD 1.0 Second Edition block table, which every
+/// minimally conforming processor must recognize, and admit the blocks of the
+/// processor's Unicode 17 database as that edition encourages. Where a name is
+/// in both with different extents, XPath 2.0 keeps the edition's dated range;
+/// XPath 3.1 follows the supported Unicode version, as the XSD 1.1 guidance it
+/// cites no longer ties block semantics to one Unicode version. A name in
+/// neither is invalid: F&O 3.1 section 5.6.1.5 makes it FORX0002, and XPath 2.0,
+/// whose base edition leaves the case undefined, applies the same rule.
+fn block(profile: Profile, name: &str) -> Option<&'static [(u32, u32)]> {
+    let dated = || table(dated_blocks::XSD10_SECOND_EDITION, name);
+    let current = || table(unicode_tables::BLOCKS, name);
+    match profile {
+        Profile::Xpath20 => dated().or_else(current),
+        Profile::Xpath31 => current().or_else(dated),
+    }
 }
 
 pub(super) fn syntax(offset: usize, message: &str) -> Error {
@@ -661,10 +690,7 @@ impl<'a> Parser<'a> {
         self.budget
             .charge_wide(Resource::CompileSteps, (name.len() as u128) * 10)?;
         let found = if name.starts_with("Is") {
-            unicode_tables::BLOCKS
-                .binary_search_by_key(&name, |&(name, _)| name)
-                .ok()
-                .map(|index| unicode_tables::BLOCKS[index].1)
+            block(self.profile, name)
         } else {
             unicode_tables::CATEGORIES
                 .binary_search_by_key(&name, |&(name, _)| name)
@@ -1038,6 +1064,67 @@ mod tests {
             ] {
                 accepted(profile, source, "");
             }
+        }
+    }
+
+    #[test]
+    fn xsd10_second_edition_block_names_are_part_of_both_dated_laws() {
+        let member = |profile, source: &str, ch: char| {
+            accepted(profile, source, "")
+                .is_match(ch.encode_utf8(&mut [0; 4]), Limits::new())
+                .unwrap()
+        };
+        for profile in [Profile::Xpath20, Profile::Xpath31] {
+            // Names only the dated table defines, with their dated extents.
+            for (source, inside, outside) in [
+                (r"\p{IsGreek}", '\u{3b1}', '\u{400}'),
+                (r"\p{IsCombiningMarksforSymbols}", '\u{20d0}', '\u{2100}'),
+                (r"\p{IsPrivateUse}", '\u{e000}', '\u{f0000}'),
+                (r"[a\p{IsGreek}-[\p{IsGreekandCoptic}]]", 'a', '\u{3b1}'),
+            ] {
+                assert!(member(profile, source, inside), "{profile:?} {source}");
+                assert!(!member(profile, source, outside), "{profile:?} {source}");
+            }
+            assert!(!member(profile, r"\P{IsGreek}", '\u{3b1}'));
+            assert!(member(profile, r"[^\p{IsPrivateUse}]", 'a'));
+            // Unicode 17 names remain recognized beside the dated table.
+            accepted(profile, r"\p{IsGreekandCoptic}\p{IsOldItalic}", "");
+            // Neighbouring names in neither table are FORX0002 syntax.
+            for source in [
+                r"\p{IsGreekX}",
+                r"\p{Isgreek}",
+                r"\p{IsPrivateUseArea-}",
+                r"\p{IsBadBlockName}",
+            ] {
+                assert!(
+                    matches!(
+                        compile(profile, source, "", Limits::new()),
+                        Err(Error::Syntax { .. })
+                    ),
+                    "{profile:?} {source}"
+                );
+            }
+        }
+        // A name in both tables keeps its dated extent only under XPath 2.0.
+        for (source, ch, xpath20) in [
+            (r"\p{IsSpecials}", '\u{feff}', true),
+            (r"\p{IsSpecials}", '\u{fffe}', false),
+            (r"\p{IsSpecials}", '\u{fff0}', true),
+            (r"\p{IsHangulSyllables}", '\u{d7a4}', false),
+            (r"\p{IsHangulSyllables}", '\u{d7a3}', true),
+            (r"\p{IsCJKUnifiedIdeographsExtensionA}", '\u{4db6}', false),
+            (r"\p{IsArabicPresentationForms-B}", '\u{feff}', false),
+        ] {
+            assert_eq!(member(Profile::Xpath20, source, ch), xpath20, "{source}");
+        }
+        for (source, ch, xpath31) in [
+            (r"\p{IsSpecials}", '\u{feff}', false),
+            (r"\p{IsSpecials}", '\u{fffe}', true),
+            (r"\p{IsHangulSyllables}", '\u{d7a4}', true),
+            (r"\p{IsCJKUnifiedIdeographsExtensionA}", '\u{4db6}', true),
+            (r"\p{IsArabicPresentationForms-B}", '\u{feff}', true),
+        ] {
+            assert_eq!(member(Profile::Xpath31, source, ch), xpath31, "{source}");
         }
     }
 

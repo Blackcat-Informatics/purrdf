@@ -754,6 +754,19 @@ empty-match check also preserves operational refusal. Unicode categories,
 blocks and the non-transitive full-case-variant relation use generated Unicode
 data. JSON Schema's ECMA-262 engine and its existing limits remain unchanged.
 
+Both Recommendations define their syntax and semantics as those of XML Schema
+Part 2 Second Edition with additions, so both laws recognize that edition's
+block table (`\p{IsGreek}`, `\p{IsPrivateUse}`,
+`\p{IsCombiningMarksforSymbols}` and the rest) beside the Unicode 17 block
+names. A name in both with a different extent (`Specials`, `HangulSyllables`,
+`CJKUnifiedIdeographsExtensionA`, `ArabicPresentationForms-B`) keeps the
+edition's dated range under 2.0 and the Unicode 17 range under 3.1. A block
+name in neither is invalid syntax (`FORX0002`): F&O 3.1 §5.6.1.5 requires
+that, and the 2.0 law, whose base edition leaves the case undefined, applies
+the same rule. The `x` flag removes whitespace outside character class
+expressions under both laws; F&O 2.0 §7.6.1.1 and 3.1 §5.6.2 state the same
+rule.
+
 The core API and each host's README document the explicit selection doors.
 Unselected entry points retain the compatibility behavior below. General
 grammar, matching and host semantics run in native Rust; WASM compilation and
