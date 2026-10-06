@@ -1,0 +1,6 @@
+crates/rdf-core/src/ir/paged/admission.rs: OK
+crates/rdf-core/src/ir/paged/query.rs: OK
+crates/rdf-core/src/ir/paged/stack.rs: OK
+crates/rdf-core/tests/paged_stack.rs: OK
+crates/sparql-eval/tests/paged_stack_query.rs: OK
+crates/rdf-wasm/src/interleaving.rs: OK

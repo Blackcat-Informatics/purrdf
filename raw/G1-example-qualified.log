@@ -1,0 +1,8 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 22s
+     Running `/opt/.cargo/slots/0ee87c9ba45e5dff/0/target/debug/examples/paged_stack`
+name=Bob; layers=2; pages=2; bytes=202; origins=[Sealed { layer: 0, page: PageId(0) }, Sealed { layer: 1, page: PageId(0) }]
+name=Robert; layers=3; pages=4; bytes=1088; origins=[Head, Sealed { layer: 0, page: PageId(0) }, Sealed { layer: 2, page: PageId(0) }, Sealed { layer: 1, page: PageId(0) }]
+compacted pages=1; ordered carrier identity verified

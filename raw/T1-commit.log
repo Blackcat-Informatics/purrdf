@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against c1d5bcd25908 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/457-paged-tier-an-lsm-style-stack-of-sealed dd9109995] core: layer sealed paged generations with pinned mutable snapshots
+ 11 files changed, 2668 insertions(+), 78 deletions(-)
+ create mode 100644 crates/rdf-core/src/ir/paged/stack.rs
+ create mode 100644 crates/rdf-core/tests/paged_stack.rs

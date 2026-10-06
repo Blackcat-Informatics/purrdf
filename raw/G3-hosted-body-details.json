@@ -1,0 +1,904 @@
+[
+  {
+    "config": "x86_64-v3",
+    "parent_symbol": "_RNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB5_12PagedDataset13from_provider",
+    "parent_path": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+    "parent_instruction_sha256": "2587bfa2d9f9e013304123fa643c821b6a4fc3cdb23103fa82816ff985bc37c7",
+    "raw_parent": "raw/G3-hosted-v3-parent.s",
+    "raw_parent_sha256": "dc0987ded1a583a74d95188fdfa58a0e31ac3e295cc0075a4ac6b72e96b8f29e",
+    "vector_register_instruction_mnemonics": {
+      "vxorps": 1,
+      "vmovups": 43,
+      "vmovaps": 10
+    },
+    "counted_work_mnemonics": [],
+    "calls": [
+      {
+        "index": 19,
+        "instruction": "callq *%rbp",
+        "demangled": null
+      },
+      {
+        "index": 24,
+        "instruction": "callq *%rax",
+        "demangled": null
+      },
+      {
+        "index": 43,
+        "instruction": "callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)",
+        "demangled": "alloc::raw_vec::handle_error"
+      },
+      {
+        "index": 50,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_no_alloc_shim_is_unstable_v2"
+      },
+      {
+        "index": 54,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_alloc"
+      },
+      {
+        "index": 87,
+        "instruction": "callq *%rax",
+        "demangled": null
+      },
+      {
+        "index": 111,
+        "instruction": "callq _RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build",
+        "demangled": "<purrdf_core::ir::paged::translation::PageTranslation>::try_build"
+      },
+      {
+        "index": 128,
+        "instruction": "callq *memcpy@GOTPCREL(%rip)",
+        "demangled": null
+      },
+      {
+        "index": 189,
+        "instruction": "callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_",
+        "demangled": "<hashbrown::map::HashMap<(purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, core::option::Option<purrdf_core::ir::global::GlobalTermId>), purrdf_core::ir::paged::provider::PageId, purrdf_hash::fixed::FixedState>>::insert"
+      },
+      {
+        "index": 203,
+        "instruction": "callq *_RNvMsb_NtNtCskgWIz7JHH9v_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)",
+        "demangled": "<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri"
+      },
+      {
+        "index": 209,
+        "instruction": "callq *_RNvMsb_NtNtCskgWIz7JHH9v_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)",
+        "demangled": "<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri"
+      },
+      {
+        "index": 282,
+        "instruction": "callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_",
+        "demangled": "<hashbrown::map::HashMap<(purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, core::option::Option<purrdf_core::ir::global::GlobalTermId>), purrdf_core::ir::paged::provider::PageId, purrdf_hash::fixed::FixedState>>::insert"
+      },
+      {
+        "index": 330,
+        "instruction": "callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_",
+        "demangled": "<hashbrown::map::HashMap<(purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, core::option::Option<purrdf_core::ir::global::GlobalTermId>), purrdf_core::ir::paged::provider::PageId, purrdf_hash::fixed::FixedState>>::insert"
+      },
+      {
+        "index": 385,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged16PagedFreezeErrorEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::PagedFreezeError>"
+      },
+      {
+        "index": 389,
+        "instruction": "callq *memcpy@GOTPCREL(%rip)",
+        "demangled": null
+      },
+      {
+        "index": 408,
+        "instruction": "callq *_RNvMs7_NtCsdf08ABbzq28_5alloc7raw_vecINtB5_6RawVecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotE8grow_oneBS_@GOTPCREL(%rip)",
+        "demangled": "<alloc::raw_vec::RawVec<purrdf_core::ir::paged::PageSlot>>::grow_one"
+      },
+      {
+        "index": 415,
+        "instruction": "callq *memcpy@GOTPCREL(%rip)",
+        "demangled": null
+      },
+      {
+        "index": 422,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 445,
+        "instruction": "callq *408(%rsp)",
+        "demangled": null
+      },
+      {
+        "index": 450,
+        "instruction": "callq *416(%rsp)",
+        "demangled": null
+      },
+      {
+        "index": 456,
+        "instruction": "callq _RNvMs_NtCsdf08ABbzq28_5alloc3vecINtB4_3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotE16into_boxed_sliceBK_",
+        "demangled": "<alloc::vec::Vec<purrdf_core::ir::paged::PageSlot>>::into_boxed_slice"
+      },
+      {
+        "index": 461,
+        "instruction": "callq _RNvMs_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11graph_indexNtB4_14GraphPageIndex6derive",
+        "demangled": "<purrdf_core::ir::paged::graph_index::GraphPageIndex>::derive"
+      },
+      {
+        "index": 503,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 506,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 509,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 523,
+        "instruction": "callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "demangled": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}"
+      },
+      {
+        "index": 539,
+        "instruction": "callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "demangled": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}"
+      },
+      {
+        "index": 553,
+        "instruction": "callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "demangled": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}"
+      },
+      {
+        "index": 567,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 574,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 576,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summary11PageSummaryEBJ_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::summary::PageSummary>"
+      },
+      {
+        "index": 581,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 605,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 619,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 633,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 640,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::PageSlot>"
+      },
+      {
+        "index": 651,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 657,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 665,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 677,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 679,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtCskEFv3nc5qE4_3std4sync9once_lock8OnceLockINtNtNtNtBI_11collections4hash3map7HashMapyINtNtCsdf08ABbzq28_5alloc3vec3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdENtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEEB2I_",
+        "demangled": "core::ptr::drop_glue::<std::sync::once_lock::OnceLock<std::collections::hash::map::HashMap<u64, alloc::vec::Vec<purrdf_core::ir::global::GlobalTermId>, purrdf_hash::fixed::FixedState>>>"
+      },
+      {
+        "index": 684,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcDNtNtCslK5Drzrx8K4_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCskgWIz7JHH9v_11purrdf_core@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<dyn core::any::Any + core::marker::Sync + core::marker::Send>>::drop_slow"
+      },
+      {
+        "index": 719,
+        "instruction": "callq *_RNvNvNtCsdf08ABbzq28_5alloc3fmt6format12format_inner@GOTPCREL(%rip)",
+        "demangled": "alloc::fmt::format::format_inner"
+      },
+      {
+        "index": 759,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 773,
+        "instruction": "callq *_RNvMsa_NtCslK5Drzrx8K4_4core3fmtNtB5_9Formatter9write_str@GOTPCREL(%rip)",
+        "demangled": "<core::fmt::Formatter>::write_str"
+      },
+      {
+        "index": 786,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 803,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 815,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking9panic_fmt@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_fmt"
+      },
+      {
+        "index": 836,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core6result13unwrap_failed@GOTPCREL(%rip)",
+        "demangled": "core::result::unwrap_failed"
+      },
+      {
+        "index": 841,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking18panic_bounds_check@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_bounds_check"
+      },
+      {
+        "index": 849,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 854,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtCsdf08ABbzq28_5alloc5boxed3BoxSNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEEB1h_",
+        "demangled": "core::ptr::drop_glue::<alloc::boxed::Box<[purrdf_core::ir::paged::PageSlot]>>"
+      },
+      {
+        "index": 860,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::PageSlot>"
+      },
+      {
+        "index": 862,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_in_cleanup"
+      },
+      {
+        "index": 883,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 889,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 897,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::PageSlot>"
+      },
+      {
+        "index": 907,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 909,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_in_cleanup"
+      },
+      {
+        "index": 912,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translation15PageTranslationEBJ_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::translation::PageTranslation>"
+      },
+      {
+        "index": 918,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 921,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 924,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 927,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 931,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtCsdf08ABbzq28_5alloc3vec3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEEB1e_",
+        "demangled": "core::ptr::drop_glue::<alloc::vec::Vec<purrdf_core::ir::paged::PageSlot>>"
+      },
+      {
+        "index": 935,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global16GlobalDictionaryEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::global::GlobalDictionary>"
+      },
+      {
+        "index": 940,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcDNtNtCslK5Drzrx8K4_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCskgWIz7JHH9v_11purrdf_core@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<dyn core::any::Any + core::marker::Sync + core::marker::Send>>::drop_slow"
+      },
+      {
+        "index": 942,
+        "instruction": "callq _Unwind_Resume@PLT",
+        "demangled": null
+      },
+      {
+        "index": 943,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_in_cleanup"
+      }
+    ],
+    "expected_profile_commands": [
+      [
+        "cargo",
+        "build",
+        "-v",
+        "--color",
+        "never",
+        "--message-format=json-render-diagnostics",
+        "--release",
+        "--locked",
+        "--lib",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--config",
+        "profile.release.lto=false",
+        "--config",
+        "profile.release.codegen-units=1",
+        "-p",
+        "purrdf-core",
+        "-p",
+        "purrdf-iri",
+        "-p",
+        "purrdf-xsd",
+        "-p",
+        "purrdf-json",
+        "-p",
+        "purrdf-rdf",
+        "-p",
+        "purrdf-sparql-algebra",
+        "-p",
+        "purrdf-sparql-eval",
+        "-p",
+        "purrdf-sparql-results",
+        "-p",
+        "purrdf-datalog",
+        "-p",
+        "purrdf-entail",
+        "-p",
+        "purrdf-shapes",
+        "-p",
+        "purrdf-shex",
+        "-p",
+        "purrdf-markdown",
+        "-p",
+        "purrdf-hnsw",
+        "-p",
+        "purrdf-text",
+        "-p",
+        "purrdf-retrieval",
+        "-p",
+        "purrdf-columnar",
+        "-p",
+        "purrdf-geo",
+        "-p",
+        "purrdf-gts",
+        "-p",
+        "purrdf-slice",
+        "-p",
+        "purrdf-deflate",
+        "-p",
+        "purrdf-hash",
+        "-p",
+        "purrdf-jsonschema",
+        "-p",
+        "purrdf-lex",
+        "-p",
+        "purrdf-ed25519"
+      ],
+      [
+        "cargo",
+        "rustc",
+        "-v",
+        "--color",
+        "never",
+        "--message-format=json-render-diagnostics",
+        "--release",
+        "--locked",
+        "--lib",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--config",
+        "profile.release.lto=false",
+        "--config",
+        "profile.release.codegen-units=1",
+        "-p",
+        "purrdf-wasm",
+        "--crate-type",
+        "rlib"
+      ]
+    ]
+  },
+  {
+    "config": "x86_64-v4",
+    "parent_symbol": "_RNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB5_12PagedDataset13from_provider",
+    "parent_path": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+    "parent_instruction_sha256": "47180794a45eecb30b238b50daa41d11d611b2dcf3f43d01befd8edbfba864ee",
+    "raw_parent": "raw/G3-hosted-v4-parent.s",
+    "raw_parent_sha256": "850af4ea7239e3a84fe5d6056f9cffe1d4964d5971711c692c0a80dc144f0b60",
+    "vector_register_instruction_mnemonics": {
+      "vxorps": 1,
+      "vmovups": 43,
+      "vmovaps": 10
+    },
+    "counted_work_mnemonics": [],
+    "calls": [
+      {
+        "index": 19,
+        "instruction": "callq *%rbp",
+        "demangled": null
+      },
+      {
+        "index": 24,
+        "instruction": "callq *%rax",
+        "demangled": null
+      },
+      {
+        "index": 43,
+        "instruction": "callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)",
+        "demangled": "alloc::raw_vec::handle_error"
+      },
+      {
+        "index": 50,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_no_alloc_shim_is_unstable_v2"
+      },
+      {
+        "index": 54,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_alloc"
+      },
+      {
+        "index": 87,
+        "instruction": "callq *%rax",
+        "demangled": null
+      },
+      {
+        "index": 111,
+        "instruction": "callq _RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build",
+        "demangled": "<purrdf_core::ir::paged::translation::PageTranslation>::try_build"
+      },
+      {
+        "index": 128,
+        "instruction": "callq *memcpy@GOTPCREL(%rip)",
+        "demangled": null
+      },
+      {
+        "index": 189,
+        "instruction": "callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_",
+        "demangled": "<hashbrown::map::HashMap<(purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, core::option::Option<purrdf_core::ir::global::GlobalTermId>), purrdf_core::ir::paged::provider::PageId, purrdf_hash::fixed::FixedState>>::insert"
+      },
+      {
+        "index": 203,
+        "instruction": "callq *_RNvMsb_NtNtCskgWIz7JHH9v_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)",
+        "demangled": "<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri"
+      },
+      {
+        "index": 209,
+        "instruction": "callq *_RNvMsb_NtNtCskgWIz7JHH9v_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)",
+        "demangled": "<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri"
+      },
+      {
+        "index": 282,
+        "instruction": "callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_",
+        "demangled": "<hashbrown::map::HashMap<(purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, core::option::Option<purrdf_core::ir::global::GlobalTermId>), purrdf_core::ir::paged::provider::PageId, purrdf_hash::fixed::FixedState>>::insert"
+      },
+      {
+        "index": 330,
+        "instruction": "callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_",
+        "demangled": "<hashbrown::map::HashMap<(purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, purrdf_core::ir::global::GlobalTermId, core::option::Option<purrdf_core::ir::global::GlobalTermId>), purrdf_core::ir::paged::provider::PageId, purrdf_hash::fixed::FixedState>>::insert"
+      },
+      {
+        "index": 385,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged16PagedFreezeErrorEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::PagedFreezeError>"
+      },
+      {
+        "index": 389,
+        "instruction": "callq *memcpy@GOTPCREL(%rip)",
+        "demangled": null
+      },
+      {
+        "index": 408,
+        "instruction": "callq *_RNvMs7_NtCsdf08ABbzq28_5alloc7raw_vecINtB5_6RawVecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotE8grow_oneBS_@GOTPCREL(%rip)",
+        "demangled": "<alloc::raw_vec::RawVec<purrdf_core::ir::paged::PageSlot>>::grow_one"
+      },
+      {
+        "index": 415,
+        "instruction": "callq *memcpy@GOTPCREL(%rip)",
+        "demangled": null
+      },
+      {
+        "index": 422,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 445,
+        "instruction": "callq *408(%rsp)",
+        "demangled": null
+      },
+      {
+        "index": 450,
+        "instruction": "callq *416(%rsp)",
+        "demangled": null
+      },
+      {
+        "index": 456,
+        "instruction": "callq _RNvMs_NtCsdf08ABbzq28_5alloc3vecINtB4_3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotE16into_boxed_sliceBK_",
+        "demangled": "<alloc::vec::Vec<purrdf_core::ir::paged::PageSlot>>::into_boxed_slice"
+      },
+      {
+        "index": 461,
+        "instruction": "callq _RNvMs_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11graph_indexNtB4_14GraphPageIndex6derive",
+        "demangled": "<purrdf_core::ir::paged::graph_index::GraphPageIndex>::derive"
+      },
+      {
+        "index": 503,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 506,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 509,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 523,
+        "instruction": "callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "demangled": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}"
+      },
+      {
+        "index": 539,
+        "instruction": "callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "demangled": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}"
+      },
+      {
+        "index": 553,
+        "instruction": "callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "demangled": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}"
+      },
+      {
+        "index": 567,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 574,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 576,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summary11PageSummaryEBJ_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::summary::PageSummary>"
+      },
+      {
+        "index": 581,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 605,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 619,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 633,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 640,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::PageSlot>"
+      },
+      {
+        "index": 651,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 657,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 665,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 677,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 679,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtCskEFv3nc5qE4_3std4sync9once_lock8OnceLockINtNtNtNtBI_11collections4hash3map7HashMapyINtNtCsdf08ABbzq28_5alloc3vec3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdENtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEEB2I_",
+        "demangled": "core::ptr::drop_glue::<std::sync::once_lock::OnceLock<std::collections::hash::map::HashMap<u64, alloc::vec::Vec<purrdf_core::ir::global::GlobalTermId>, purrdf_hash::fixed::FixedState>>>"
+      },
+      {
+        "index": 684,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcDNtNtCslK5Drzrx8K4_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCskgWIz7JHH9v_11purrdf_core@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<dyn core::any::Any + core::marker::Sync + core::marker::Send>>::drop_slow"
+      },
+      {
+        "index": 719,
+        "instruction": "callq *_RNvNvNtCsdf08ABbzq28_5alloc3fmt6format12format_inner@GOTPCREL(%rip)",
+        "demangled": "alloc::fmt::format::format_inner"
+      },
+      {
+        "index": 759,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 773,
+        "instruction": "callq *_RNvMsa_NtCslK5Drzrx8K4_4core3fmtNtB5_9Formatter9write_str@GOTPCREL(%rip)",
+        "demangled": "<core::fmt::Formatter>::write_str"
+      },
+      {
+        "index": 786,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 803,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 815,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking9panic_fmt@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_fmt"
+      },
+      {
+        "index": 836,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core6result13unwrap_failed@GOTPCREL(%rip)",
+        "demangled": "core::result::unwrap_failed"
+      },
+      {
+        "index": 841,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking18panic_bounds_check@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_bounds_check"
+      },
+      {
+        "index": 849,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 854,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtCsdf08ABbzq28_5alloc5boxed3BoxSNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEEB1h_",
+        "demangled": "core::ptr::drop_glue::<alloc::boxed::Box<[purrdf_core::ir::paged::PageSlot]>>"
+      },
+      {
+        "index": 860,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::PageSlot>"
+      },
+      {
+        "index": 862,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_in_cleanup"
+      },
+      {
+        "index": 883,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 889,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 897,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::PageSlot>"
+      },
+      {
+        "index": 907,
+        "instruction": "callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)",
+        "demangled": "__rustc::__rust_dealloc"
+      },
+      {
+        "index": 909,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_in_cleanup"
+      },
+      {
+        "index": 912,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translation15PageTranslationEBJ_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::paged::translation::PageTranslation>"
+      },
+      {
+        "index": 918,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow"
+      },
+      {
+        "index": 921,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 924,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 927,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_",
+        "demangled": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::ir::mutable::QuadKey, u64, purrdf_hash::fixed::FixedState>>"
+      },
+      {
+        "index": 931,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtCsdf08ABbzq28_5alloc3vec3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEEB1e_",
+        "demangled": "core::ptr::drop_glue::<alloc::vec::Vec<purrdf_core::ir::paged::PageSlot>>"
+      },
+      {
+        "index": 935,
+        "instruction": "callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global16GlobalDictionaryEBH_",
+        "demangled": "core::ptr::drop_glue::<purrdf_core::ir::global::GlobalDictionary>"
+      },
+      {
+        "index": 940,
+        "instruction": "callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcDNtNtCslK5Drzrx8K4_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCskgWIz7JHH9v_11purrdf_core@GOTPCREL(%rip)",
+        "demangled": "<alloc::rcs::arc::Arc<dyn core::any::Any + core::marker::Sync + core::marker::Send>>::drop_slow"
+      },
+      {
+        "index": 942,
+        "instruction": "callq _Unwind_Resume@PLT",
+        "demangled": null
+      },
+      {
+        "index": 943,
+        "instruction": "callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)",
+        "demangled": "core::panicking::panic_in_cleanup"
+      }
+    ],
+    "expected_profile_commands": [
+      [
+        "cargo",
+        "build",
+        "-v",
+        "--color",
+        "never",
+        "--message-format=json-render-diagnostics",
+        "--release",
+        "--locked",
+        "--lib",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--config",
+        "profile.release.lto=false",
+        "--config",
+        "profile.release.codegen-units=1",
+        "-p",
+        "purrdf-core",
+        "-p",
+        "purrdf-iri",
+        "-p",
+        "purrdf-xsd",
+        "-p",
+        "purrdf-json",
+        "-p",
+        "purrdf-rdf",
+        "-p",
+        "purrdf-sparql-algebra",
+        "-p",
+        "purrdf-sparql-eval",
+        "-p",
+        "purrdf-sparql-results",
+        "-p",
+        "purrdf-datalog",
+        "-p",
+        "purrdf-entail",
+        "-p",
+        "purrdf-shapes",
+        "-p",
+        "purrdf-shex",
+        "-p",
+        "purrdf-markdown",
+        "-p",
+        "purrdf-hnsw",
+        "-p",
+        "purrdf-text",
+        "-p",
+        "purrdf-retrieval",
+        "-p",
+        "purrdf-columnar",
+        "-p",
+        "purrdf-geo",
+        "-p",
+        "purrdf-gts",
+        "-p",
+        "purrdf-slice",
+        "-p",
+        "purrdf-deflate",
+        "-p",
+        "purrdf-hash",
+        "-p",
+        "purrdf-jsonschema",
+        "-p",
+        "purrdf-lex",
+        "-p",
+        "purrdf-ed25519"
+      ],
+      [
+        "cargo",
+        "rustc",
+        "-v",
+        "--color",
+        "never",
+        "--message-format=json-render-diagnostics",
+        "--release",
+        "--locked",
+        "--lib",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--config",
+        "profile.release.lto=false",
+        "--config",
+        "profile.release.codegen-units=1",
+        "-p",
+        "purrdf-wasm",
+        "--crate-type",
+        "rlib"
+      ]
+    ]
+  }
+]

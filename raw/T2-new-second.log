@@ -1,0 +1,14 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 17.86s
+     Running tests/paged_stack_query.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-sparql-eval/a55130a9e384f64d/out/paged_stack_query-a55130a9e384f64d)
+
+running 6 tests
+test constants_and_head_queries_check_skipped_and_zero_page_source_descriptors ... ok
+test aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary ... ok
+test source_faults_are_operational_sticky_and_refuse_compacted_artifacts ... ok
+test typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables ... ok
+test chronological_layers_match_eager_bags_for_every_consumer_family ... ok
+test generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

@@ -1,0 +1,12 @@
+60e5224cdc4e0578ed09ae3bf69b1b5fead667c252685ababf950ad6604282f3  .stage/paged-tier-an-lsm-style-stack-of-sealed/raw/T1-source.patch
+1e70fa87b947871e2475df520f4203bf84f7a9b0aa3d715c7dc3c3107ece6d8d  crates/rdf-core/src/ir/global.rs
+7475c8d6ceade8d375a4ded0b4fc1947ed7bc59129004d5b851db1911aa02192  crates/rdf-core/src/ir/mod.rs
+ed0be2d2259e755333740ff9a8a963993777c5342dcf0ded6dcd99e20bb76f89  crates/rdf-core/src/ir/mutable.rs
+e1749ba08186b1fd492191e25db0b46bb2cbccd69626e47e7144f0a2ab21a1bb  crates/rdf-core/src/ir/mutable/delta_view.rs
+7158f88cdff2317a272c0aace6bc7ab057afeedecaf35eaafb9d9a95244192b5  crates/rdf-core/src/ir/paged/mod.rs
+e40750c7eefc8e93741d0229afdedd1d0b769f2875d3292361e81d5f9cda1c86  crates/rdf-core/src/ir/paged/provider.rs
+fb68ae7a9dd237ff9fd2a107fe88308239e94d2408f20160b7677d3de5afc4e4  crates/rdf-core/src/ir/paged/query.rs
+b5a3169ffedff4fd734d33c2e2adb2b3d5ab1cd48fb6861b3f8c494992b5423c  crates/rdf-core/src/ir/paged/stack.rs
+08dc1fd162da8106c96362cbe43db7e1369e5129f765f4e5980ef83b70958612  crates/rdf-core/src/lib.rs
+6f583d191bfeb6c4d715ca8a46cf1a5e2576640ac33009b0ed92927564695947  crates/rdf-core/tests/paged_stack.rs
+87e84c03064406e0cc60a7d21af05e28d7569baf281f0e0b6da6da0eee5c0a0c  docs/design/purrdf-backend-contract.md

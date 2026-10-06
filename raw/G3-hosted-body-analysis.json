@@ -1,0 +1,410 @@
+[
+  {
+    "config": "x86_64-v3",
+    "reader_sha256": "3295116bcdc67581a301f53a19b3fadabb63f1ee11a83dcd0caa00f0b24596c5",
+    "identity": {
+      "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+      "manifest": "c96ab1574d88cae967d67bcb642a7a4b7716555aaf9ca66e1b2e87fac36f760a",
+      "schema": 1,
+      "source": "5cdc94d05519536689165b4fad734f27a4a23825a69df2d6071072c823aa1fec"
+    },
+    "report_status": "incomplete",
+    "checkout": [
+      "e32f3cfd0681ab438f58d924b5d426c836c724c0",
+      "cb77b4d6beb3a5b7f17e3979570e651dbebe0564"
+    ],
+    "context": "d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047",
+    "assembly": "raw/G3a-diagnostics-x86-v3/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/959e5ae7088e7cf4/out/purrdf_core-959e5ae7088e7cf4.s",
+    "assembly_sha256": "29d938338b5bc639ce1b09c47b4e405cc283ccc836ba707bf1c8c04e32205754",
+    "receipt": "raw/G3a-diagnostics-x86-v3/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/evidence/17b118aa34f168a9a55c2df05b3e966aebb93f579da7868955ee2e21bb305b06.json",
+    "compiler_commands": [
+      "     Running `/home/runner/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc --crate-name purrdf_core --edition=2024 crates/rdf-core/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=7e175ae1411d745a -C extra-filename=-959e5ae7088e7cf4 --out-dir /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/959e5ae7088e7cf4/out --target x86_64-unknown-linux-gnu -C strip=symbols -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/block-buffer/fbc106676fd8944e/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/cfg-if/02eb14cf7eb193b6/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/const-oid/7b142f816377adb5/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/cpufeatures/e78389fa1e70b93c/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/crypto-common/0a6e0df50f563f8b/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/digest/6edc47a1f1057eef/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/hybrid-array/3447f98045382ec2/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-events/be3c93ca3987ce01/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-hash/2d2b9f5b4abb1dd1/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-iri/e48d663b2083ad6a/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-lex/a4ca6daf4d9d377c/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-xsd/1cb4b444c3fddf70/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/regex-automata/604ae430dbff20bc/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/regex-syntax/68ac844628724567/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/typenum/fe636f9ed7c88f00/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/release/build/purrdf-core/959e5ae7088e7cf4/out --extern hashbrown=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/hashbrown/45a0ce85c15ec95f/out/libhashbrown-45a0ce85c15ec95f.rmeta --extern purrdf_cdt=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-cdt/542d9436e0f2550d/out/libpurrdf_cdt-542d9436e0f2550d.rmeta --extern purrdf_deflate=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-deflate/7035283daed265a4/out/libpurrdf_deflate-7035283daed265a4.rmeta --extern purrdf_events=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-events/be3c93ca3987ce01/out/libpurrdf_events-be3c93ca3987ce01.rmeta --extern purrdf_hash=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-hash/2d2b9f5b4abb1dd1/out/libpurrdf_hash-2d2b9f5b4abb1dd1.rmeta --extern purrdf_iri=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-iri/e48d663b2083ad6a/out/libpurrdf_iri-e48d663b2083ad6a.rmeta --extern purrdf_lex=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-lex/a4ca6daf4d9d377c/out/libpurrdf_lex-a4ca6daf4d9d377c.rmeta --extern purrdf_xsd=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-xsd/1cb4b444c3fddf70/out/libpurrdf_xsd-1cb4b444c3fddf70.rmeta --extern regex=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/regex/3979a9caae7dc80f/out/libregex-3979a9caae7dc80f.rmeta --extern regex_syntax=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/regex-syntax/68ac844628724567/out/libregex_syntax-68ac844628724567.rmeta --extern sha2=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/sha2/0cc727efb27c6ede/out/libsha2-0cc727efb27c6ede.rmeta --emit=asm -D warnings -C target-cpu=x86-64-v3 --force-warn=unused_crate_dependencies`"
+    ],
+    "verify_command_lines_problems": [],
+    "memberships": [
+      {
+        "graph": 0,
+        "package_id": "path+file:///home/runner/work/purrdf/purrdf/crates/rdf-core#purrdf-core@3.0.1",
+        "features": [],
+        "fresh": false,
+        "hosted_assembly": "/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/959e5ae7088e7cf4/out/purrdf_core-959e5ae7088e7cf4.s",
+        "stdout": "raw/G3a-diagnostics-x86-v3/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/cargo.graph-0.stdout.jsonl"
+      },
+      {
+        "graph": 1,
+        "package_id": "path+file:///home/runner/work/purrdf/purrdf/crates/rdf-core#purrdf-core@3.0.1",
+        "features": [],
+        "fresh": true,
+        "hosted_assembly": "/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/959e5ae7088e7cf4/out/purrdf_core-959e5ae7088e7cf4.s",
+        "stdout": "raw/G3a-diagnostics-x86-v3/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/cargo.graph-1.stdout.jsonl"
+      }
+    ],
+    "measure": {
+      "configs": [
+        "x86_64",
+        "x86_64-v3",
+        "x86_64-v4",
+        "aarch64",
+        "aarch64-neoverse-v1",
+        "wasm32",
+        "wasm32-simd128"
+      ],
+      "crate": "purrdf_core",
+      "symbol": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+      "label": "",
+      "min_vector_ops": 0,
+      "require_mnemonics": [],
+      "max_fma": 0,
+      "min_fma": null,
+      "forbid_relaxed": true,
+      "single_copy": false
+    },
+    "evaluation": {
+      "site": "core.paged-map-quad",
+      "config": "x86_64-v3",
+      "measure": {
+        "configs": [
+          "x86_64",
+          "x86_64-v3",
+          "x86_64-v4",
+          "aarch64",
+          "aarch64-neoverse-v1",
+          "wasm32",
+          "wasm32-simd128"
+        ],
+        "crate": "purrdf_core",
+        "symbol": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+        "label": "",
+        "min_vector_ops": 0,
+        "require_mnemonics": [],
+        "max_fma": 0,
+        "min_fma": null,
+        "forbid_relaxed": true,
+        "single_copy": false
+      },
+      "copies": 2,
+      "vector_ops": 0,
+      "fma": 0,
+      "relaxed": 0,
+      "problems": []
+    },
+    "functions": [
+      {
+        "symbol": "_RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}",
+        "graph": 0,
+        "instructions": 116,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation5build",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation>::build",
+        "graph": 0,
+        "instructions": 37,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation>::try_build",
+        "graph": 0,
+        "instructions": 385,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB5_12PagedDataset13from_provider",
+        "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+        "graph": 0,
+        "instructions": 944,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": true
+      },
+      {
+        "symbol": "_RNvXs0_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB5_15PageTranslationNtNtCslK5Drzrx8K4_4core5clone5Clone5clone",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation as core::clone::Clone>::clone",
+        "graph": 0,
+        "instructions": 91,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}",
+        "graph": 1,
+        "instructions": 116,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation5build",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation>::build",
+        "graph": 1,
+        "instructions": 37,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation>::try_build",
+        "graph": 1,
+        "instructions": 385,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB5_12PagedDataset13from_provider",
+        "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+        "graph": 1,
+        "instructions": 944,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": true
+      },
+      {
+        "symbol": "_RNvXs0_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB5_15PageTranslationNtNtCslK5Drzrx8K4_4core5clone5Clone5clone",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation as core::clone::Clone>::clone",
+        "graph": 1,
+        "instructions": 91,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      }
+    ],
+    "body_extract": "raw/G3-hosted-v3-bodies.txt",
+    "body_extract_sha256": "f09897c315c652f73b36f561bd3afc4cfb30923fabdd9c60524d207fb3d9cf66"
+  },
+  {
+    "config": "x86_64-v4",
+    "reader_sha256": "3295116bcdc67581a301f53a19b3fadabb63f1ee11a83dcd0caa00f0b24596c5",
+    "identity": {
+      "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+      "manifest": "c96ab1574d88cae967d67bcb642a7a4b7716555aaf9ca66e1b2e87fac36f760a",
+      "schema": 1,
+      "source": "5cdc94d05519536689165b4fad734f27a4a23825a69df2d6071072c823aa1fec"
+    },
+    "report_status": "incomplete",
+    "checkout": [
+      "e32f3cfd0681ab438f58d924b5d426c836c724c0",
+      "cb77b4d6beb3a5b7f17e3979570e651dbebe0564"
+    ],
+    "context": "5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b",
+    "assembly": "raw/G3a-diagnostics-x86-v4/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/dbaec6abe162cd34/out/purrdf_core-dbaec6abe162cd34.s",
+    "assembly_sha256": "6e3ab72d4572540b4133ae5e4ef3157a18e7830550de559327101644ffa9eccf",
+    "receipt": "raw/G3a-diagnostics-x86-v4/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/evidence/50a1899692f23636fb23e63b6a1dd7eeae1307526f1b2fb9e5a72cf534e615d2.json",
+    "compiler_commands": [
+      "     Running `/home/runner/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc --crate-name purrdf_core --edition=2024 crates/rdf-core/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=7e175ae1411d745a -C extra-filename=-dbaec6abe162cd34 --out-dir /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/dbaec6abe162cd34/out --target x86_64-unknown-linux-gnu -C strip=symbols -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/block-buffer/00d99822e718a476/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/cfg-if/ef0269f9171fc657/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/const-oid/18dc67fcad08fa93/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/cpufeatures/ddba599dff9d06bb/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/crypto-common/af1b357f5dbab6fc/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/digest/6b50701e6f52a8e5/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/hybrid-array/5ad610e37e24b880/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-events/154098ec89fbe605/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-hash/b438409fd9ffa02e/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-iri/7331635125660e8b/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-lex/c2a99a0930e320ae/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-xsd/0cb743a20dd17791/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/regex-automata/5d108809962d10c6/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/regex-syntax/0bbe0cf1120deae3/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/typenum/794a04a6b1eeb321/out -L dependency=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/release/build/purrdf-core/dbaec6abe162cd34/out --extern hashbrown=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/hashbrown/6483d49e77a77d1f/out/libhashbrown-6483d49e77a77d1f.rmeta --extern purrdf_cdt=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-cdt/51e024d02ff4f2e0/out/libpurrdf_cdt-51e024d02ff4f2e0.rmeta --extern purrdf_deflate=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-deflate/ea14c8a1843db106/out/libpurrdf_deflate-ea14c8a1843db106.rmeta --extern purrdf_events=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-events/154098ec89fbe605/out/libpurrdf_events-154098ec89fbe605.rmeta --extern purrdf_hash=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-hash/b438409fd9ffa02e/out/libpurrdf_hash-b438409fd9ffa02e.rmeta --extern purrdf_iri=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-iri/7331635125660e8b/out/libpurrdf_iri-7331635125660e8b.rmeta --extern purrdf_lex=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-lex/c2a99a0930e320ae/out/libpurrdf_lex-c2a99a0930e320ae.rmeta --extern purrdf_xsd=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-xsd/0cb743a20dd17791/out/libpurrdf_xsd-0cb743a20dd17791.rmeta --extern regex=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/regex/d8c35e60c3cfd733/out/libregex-d8c35e60c3cfd733.rmeta --extern regex_syntax=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/regex-syntax/0bbe0cf1120deae3/out/libregex_syntax-0bbe0cf1120deae3.rmeta --extern sha2=/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/sha2/2527fc6865e6e899/out/libsha2-2527fc6865e6e899.rmeta --emit=asm -D warnings -C target-cpu=x86-64-v4 --force-warn=unused_crate_dependencies`"
+    ],
+    "verify_command_lines_problems": [],
+    "memberships": [
+      {
+        "graph": 0,
+        "package_id": "path+file:///home/runner/work/purrdf/purrdf/crates/rdf-core#purrdf-core@3.0.1",
+        "features": [],
+        "fresh": false,
+        "hosted_assembly": "/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/dbaec6abe162cd34/out/purrdf_core-dbaec6abe162cd34.s",
+        "stdout": "raw/G3a-diagnostics-x86-v4/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/cargo.graph-0.stdout.jsonl"
+      },
+      {
+        "graph": 1,
+        "package_id": "path+file:///home/runner/work/purrdf/purrdf/crates/rdf-core#purrdf-core@3.0.1",
+        "features": [],
+        "fresh": true,
+        "hosted_assembly": "/home/runner/work/purrdf/purrdf/target/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/dbaec6abe162cd34/out/purrdf_core-dbaec6abe162cd34.s",
+        "stdout": "raw/G3a-diagnostics-x86-v4/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/cargo.graph-1.stdout.jsonl"
+      }
+    ],
+    "measure": {
+      "configs": [
+        "x86_64",
+        "x86_64-v3",
+        "x86_64-v4",
+        "aarch64",
+        "aarch64-neoverse-v1",
+        "wasm32",
+        "wasm32-simd128"
+      ],
+      "crate": "purrdf_core",
+      "symbol": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+      "label": "",
+      "min_vector_ops": 0,
+      "require_mnemonics": [],
+      "max_fma": 0,
+      "min_fma": null,
+      "forbid_relaxed": true,
+      "single_copy": false
+    },
+    "evaluation": {
+      "site": "core.paged-map-quad",
+      "config": "x86_64-v4",
+      "measure": {
+        "configs": [
+          "x86_64",
+          "x86_64-v3",
+          "x86_64-v4",
+          "aarch64",
+          "aarch64-neoverse-v1",
+          "wasm32",
+          "wasm32-simd128"
+        ],
+        "crate": "purrdf_core",
+        "symbol": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+        "label": "",
+        "min_vector_ops": 0,
+        "require_mnemonics": [],
+        "max_fma": 0,
+        "min_fma": null,
+        "forbid_relaxed": true,
+        "single_copy": false
+      },
+      "copies": 2,
+      "vector_ops": 0,
+      "fma": 0,
+      "relaxed": 0,
+      "problems": []
+    },
+    "functions": [
+      {
+        "symbol": "_RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}",
+        "graph": 0,
+        "instructions": 116,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation5build",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation>::build",
+        "graph": 0,
+        "instructions": 37,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation>::try_build",
+        "graph": 0,
+        "instructions": 385,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB5_12PagedDataset13from_provider",
+        "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+        "graph": 0,
+        "instructions": 944,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": true
+      },
+      {
+        "symbol": "_RNvXs0_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB5_15PageTranslationNtNtCslK5Drzrx8K4_4core5clone5Clone5clone",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation as core::clone::Clone>::clone",
+        "graph": 0,
+        "instructions": 91,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_",
+        "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}",
+        "graph": 1,
+        "instructions": 116,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation5build",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation>::build",
+        "graph": 1,
+        "instructions": 37,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation>::try_build",
+        "graph": 1,
+        "instructions": 385,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      },
+      {
+        "symbol": "_RNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB5_12PagedDataset13from_provider",
+        "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider",
+        "graph": 1,
+        "instructions": 944,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": true
+      },
+      {
+        "symbol": "_RNvXs0_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB5_15PageTranslationNtNtCslK5Drzrx8K4_4core5clone5Clone5clone",
+        "path": "<purrdf_core::ir::paged::translation::PageTranslation as core::clone::Clone>::clone",
+        "graph": 1,
+        "instructions": 91,
+        "vector_ops": 0,
+        "fma": 0,
+        "relaxed": 0,
+        "work_mnemonics": [],
+        "selected": false
+      }
+    ],
+    "body_extract": "raw/G3-hosted-v4-bodies.txt",
+    "body_extract_sha256": "7d20dc9550630e5d6665d66ef0fff412f042e6db3e5a753db1b962cc4f666f0f"
+  }
+]

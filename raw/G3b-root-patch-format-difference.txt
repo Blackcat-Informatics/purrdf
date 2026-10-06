@@ -1,0 +1,5 @@
+--- .stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-root-source.patch	2026-10-06 15:56:38.861514077 -0600
++++ .stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-source.patch	2026-10-06 15:55:15.046964438 -0600
+@@ -2 +2 @@
+-index 1d236adb1d25cbcb75bacee3e9968da9d961a26e..d7e2cfd1102927422a31d89bb25a88ff52a10bf1 100644
++index 1d236adb1..d7e2cfd11 100644

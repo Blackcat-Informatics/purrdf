@@ -1,0 +1,6 @@
+8819b801eb38103ecad70d5d72f898525bf3376f91962bdc09e85a75b5fe1e2a  crates/rdf-core/src/ir/paged/admission.rs
+02fe7264f8ea1021c4c2a41d9c97ccfe12f4af5f8d68d8e233bed1f5bed2c93d  crates/rdf-core/src/ir/paged/query.rs
+1b40f2de5e9c9acf06e650beb3b02792c800cac29b0720aff0c276db8f451827  crates/rdf-core/src/ir/paged/stack.rs
+0b67e1323d7d71ad90a76ecb606bcc4b88707300ed21f25e511e5fa7f5c4095d  crates/rdf-core/tests/paged_stack.rs
+42c6c6c64f5c2db98e0d5d8396d5d9ead37bf6232ffb1a3f43fa93b16624eec8  crates/sparql-eval/tests/paged_stack_query.rs
+53a72955d951e17ec62f59e648d8dd52391098e189139a1b98999988875d8f75  crates/rdf-wasm/src/interleaving.rs

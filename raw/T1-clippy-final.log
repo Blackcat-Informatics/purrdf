@@ -1,0 +1,90 @@
+   Compiling libc v0.2.186
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/testkit)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/stack)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/alloc-probe)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+error: redundant clone
+   --> crates/rdf-core/tests/paged_stack.rs:217:54
+    |
+217 |     let base = Arc::new(PagedDataset::from_provider(a.clone()).unwrap());
+    |                                                      ^^^^^^^^ help: remove this
+    |
+note: this value is dropped without further use
+   --> crates/rdf-core/tests/paged_stack.rs:217:53
+    |
+217 |     let base = Arc::new(PagedDataset::from_provider(a.clone()).unwrap());
+    |                                                     ^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+    = note: `-D clippy::redundant-clone` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: used `assert!` with an equality comparison
+   --> crates/rdf-core/tests/paged_stack.rs:342:9
+    |
+342 | /         assert!(
+343 | |             matches!(
+344 | |                 status,
+345 | |                 ViewOperationStatus::Failed {
+...   |
+349 | |             ) == (mode == 1)
+350 | |         );
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_assert_eq
+    = note: `-D clippy::manual-assert-eq` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_assert_eq)]`
+help: replace it with `assert_eq!(..)`
+    |
+342 ~         assert_eq!(
+343 |             matches!(
+...
+348 |                 }
+349 ~             ), (mode == 1)
+    |
+
+error: used `assert!` with an equality comparison
+   --> crates/rdf-core/tests/paged_stack.rs:351:9
+    |
+351 | /         assert!(
+352 | |             matches!(
+353 | |                 status,
+354 | |                 ViewOperationStatus::Failed {
+...   |
+358 | |             ) == (mode == 2 || mode == 3)
+359 | |         );
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_assert_eq
+help: replace it with `assert_eq!(..)`
+    |
+351 ~         assert_eq!(
+352 |             matches!(
+...
+357 |                 }
+358 ~             ), (mode == 2 || mode == 3)
+    |
+
+error: used `assert!` with an equality comparison
+   --> crates/rdf-core/tests/paged_stack.rs:360:9
+    |
+360 | /         assert!(
+361 | |             matches!(
+362 | |                 status,
+363 | |                 ViewOperationStatus::Failed {
+...   |
+367 | |             ) == (mode == 4 || mode == 5)
+368 | |         );
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_assert_eq
+help: replace it with `assert_eq!(..)`
+    |
+360 ~         assert_eq!(
+361 |             matches!(
+...
+366 |                 }
+367 ~             ), (mode == 4 || mode == 5)
+    |
+
+error: could not compile `purrdf-core` (test "paged_stack") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,59 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 48.52s
+     Running unittests src/lib.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 18 tests
+test ir::paged::admission::tests::default_graph_bound_skips_when_page_has_no_default_rows_and_admits_when_it_does ... ok
+test ir::paged::admission::tests::graph_match_any_never_skips_on_the_graph_axis ... ok
+test ir::paged::admission::tests::named_graph_bound_skips_a_term_known_only_as_a_subject_and_admits_a_graph_the_page_owns_rows_in ... ok
+test ir::paged::admission::tests::named_graph_bound_skips_when_page_owns_no_rows_in_it_and_admits_when_it_does ... ok
+test ir::paged::admission::tests::object_bound_skips_when_term_never_an_object_and_admits_when_it_is ... ok
+test ir::paged::admission::tests::posting_range_work_is_logarithmic_and_any_uses_the_exact_dense_range ... postings=8 graph=Default candidates=3 boundary_comparisons=7
+postings=8 graph=Named(GlobalTermId(6)) candidates=3 boundary_comparisons=7
+postings=8 graph=Any candidates=3 boundary_comparisons=0
+postings=128 graph=Default candidates=3 boundary_comparisons=15
+postings=128 graph=Named(GlobalTermId(6)) candidates=3 boundary_comparisons=15
+postings=128 graph=Any candidates=3 boundary_comparisons=0
+postings=1024 graph=Default candidates=3 boundary_comparisons=21
+postings=1024 graph=Named(GlobalTermId(6)) candidates=3 boundary_comparisons=21
+postings=1024 graph=Any candidates=3 boundary_comparisons=0
+ok
+test ir::paged::admission::tests::predicate_bound_skips_when_term_never_a_predicate_and_admits_when_it_is ... ok
+test ir::paged::admission::tests::subject_bound_skips_when_term_never_a_subject_and_admits_when_it_is ... ok
+test ir::paged::graph_index::tests::derive_indexes_every_stream_and_declared_empty_graphs ... ok
+test ir::paged::graph_index::tests::derive_materializes_no_page ... ok
+test ir::paged::graph_index::tests::derive_survives_compaction_and_page_subsetting ... ok
+test ir::paged::query::tests::debug_is_non_blocking_and_has_no_operational_side_effects ... ok
+test ir::paged::query::tests::plain_rdf_logical_drain_does_not_probe_reifier_page_summaries ... plain layers=1 pages=2 rows=2 visits=[2, 0, 2]
+plain layers=1 pages=2 rows=2 visits=[2, 0, 2]
+plain layers=8 pages=16 rows=16 visits=[16, 0, 16]
+plain layers=8 pages=16 rows=16 visits=[16, 0, 16]
+plain layers=32 pages=64 rows=64 visits=[64, 0, 64]
+plain layers=32 pages=64 rows=64 visits=[64, 0, 64]
+ok
+test ir::paged::query::tests::sparse_stream_ranges_and_estimates_visit_only_graph_postings ... sparse pages=3 named=false stream=Base visits=[8, 0, 0]
+sparse pages=3 named=false stream=Reifier visits=[0, 8, 0]
+sparse pages=3 named=false stream=Annotation visits=[0, 0, 8]
+sparse pages=3 named=true stream=Base visits=[8, 0, 0]
+sparse pages=3 named=true stream=Reifier visits=[0, 8, 0]
+sparse pages=3 named=true stream=Annotation visits=[0, 0, 8]
+sparse pages=67 named=false stream=Base visits=[8, 0, 0]
+sparse pages=67 named=false stream=Reifier visits=[0, 8, 0]
+sparse pages=67 named=false stream=Annotation visits=[0, 0, 8]
+sparse pages=67 named=true stream=Base visits=[8, 0, 0]
+sparse pages=67 named=true stream=Reifier visits=[0, 8, 0]
+sparse pages=67 named=true stream=Annotation visits=[0, 0, 8]
+sparse pages=1027 named=false stream=Base visits=[8, 0, 0]
+sparse pages=1027 named=false stream=Reifier visits=[0, 8, 0]
+sparse pages=1027 named=false stream=Annotation visits=[0, 0, 8]
+sparse pages=1027 named=true stream=Base visits=[8, 0, 0]
+sparse pages=1027 named=true stream=Reifier visits=[0, 8, 0]
+sparse pages=1027 named=true stream=Annotation visits=[0, 0, 8]
+ok
+test ir::paged::summary::tests::every_under_count_changes_the_digest ... ok
+test ir::paged::summary::tests::moving_one_row_between_graphs_changes_the_digest ... ok
+test ir::paged::summary::tests::page_summary_matches_an_independent_recount ... ok
+test ir::paged::summary::tests::sealing_the_same_page_twice_yields_the_same_digest ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1141 filtered out; finished in 0.01s
+

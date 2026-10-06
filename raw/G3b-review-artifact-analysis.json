@@ -1,0 +1,197 @@
+{
+  "status": "passed",
+  "scope": "read-only artifact and frozen sole-document source review",
+  "zip_sha256": "cda92e37b3cb12f92735f2e3ab8880ffa5db36193d2e039ee2c9867e87923e89",
+  "artifact_id": 11445534280,
+  "run_id": 37532305791,
+  "job_id": 112504470023,
+  "source_parent": "8364b29c9fb70195f123e2bc084160d83f78850a",
+  "archive_files_byte_verified": 550,
+  "internal_checksums": [
+    {
+      "path": "target/asm-projection/aggregate.log",
+      "sha256": "98fefccf8f1094da846bfba48840c68344da2130cf45189f8882fcf8df95f094"
+    },
+    {
+      "path": "target/asm-projection/checkout.txt",
+      "sha256": "ab6e50e5cfe1ad4a1a4b2defb8cd0256549771378a309c23d2bf9a6cff0adc87"
+    },
+    {
+      "path": "target/asm-projection/compiler-after.txt",
+      "sha256": "ec3667c8adc6a73da9a5c33c88b8767792f4f2d3f42acfab44337ebd1806be0f"
+    },
+    {
+      "path": "target/asm-projection/compiler.txt",
+      "sha256": "ec3667c8adc6a73da9a5c33c88b8767792f4f2d3f42acfab44337ebd1806be0f"
+    },
+    {
+      "path": "target/asm-projection/generation.log",
+      "sha256": "35c6b0ed9a73c850e79a14c458631d9684b43c37e46e85402b11adf0b12b1bee"
+    },
+    {
+      "path": "target/asm-projection/inputs-after.sha256",
+      "sha256": "cad947b7df65d1b6c4f1d59ce4867d4236e2f94d4f64e40449525ffaa087d285"
+    },
+    {
+      "path": "target/asm-projection/inputs-before.sha256",
+      "sha256": "3e63abb5eedb84972ee21d9d1dc18fedff80cb74f248fa235d6cd20a60bf138b"
+    },
+    {
+      "path": "target/asm-projection/projection.patch",
+      "sha256": "beeac41c6acb5d419762f566f05988cef7a746bdea8c66ce384e0af2723f3772"
+    },
+    {
+      "path": "target/asm-projection/purrdf-simd.md",
+      "sha256": "7285a4c4d1f401aec02d880622cdf7f9893fee4b9d781d27a61c076cd6a94356"
+    },
+    {
+      "path": "target/asm-projection/qualification.log",
+      "sha256": "359742ae01a40f58ce2e56acf356c7563d63cb282e496f46cb99eba28e94d270"
+    },
+    {
+      "path": "target/asm-projection/reports/all-configurations.json",
+      "sha256": "2f7a2ff71b2511f8cfaaf8a78321a762ba4d4519276820ffa42bf290c7e8c3c2"
+    },
+    {
+      "path": "target/asm-projection/source-status-after.txt",
+      "sha256": "d946f1d45501d0cea445c75cc47caf95a4aff84d2d30253218e4c20726300b94"
+    },
+    {
+      "path": "target/asm-projection/source-status-before.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "target/asm-projection/untracked-after.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "target/asm-projection/x86-v3-body-probe.log",
+      "sha256": "e332c65e05fb09a99ab6d26ad0245585d0b6871bfceb7cb488bd38f6814d099f"
+    },
+    {
+      "path": "target/asm-projection/x86-v4-body-probe.log",
+      "sha256": "0aa40fd0dc40456c1869e4e5380f93faf9e3ac19d407522cb2e171f2978700e4"
+    }
+  ],
+  "before_inputs": [
+    {
+      "path": ".github/workflows/ci.yaml",
+      "sha256": "3a240ca1303a4d3089fb35a875a2a8a34d6ca76910fde15b7ae4cb9d2d287cc4"
+    },
+    {
+      "path": "Makefile",
+      "sha256": "e09c948da50ed61175c82712a13b1b895d09946c5bf61d8b97a1cbb5617a2032"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "02b43e188d489473ab2948e8517910c48e644cd56c9247dea42d251c480f0b60"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "79c24237dbc710efec14f15a5e5af7a15a27fc3820399720aac601dc98917df2"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "sha256": "fb4564a4be0c39a9f5114a0bd965c737884fa9623ebd99800f27d3711ae2e800"
+    },
+    {
+      "path": "scripts/check-simd-asm.py",
+      "sha256": "3295116bcdc67581a301f53a19b3fadabb63f1ee11a83dcd0caa00f0b24596c5"
+    },
+    {
+      "path": "scripts/simd_asm_runtime.py",
+      "sha256": "8e8f406574e9c7e31a73b8d2b266546cf702707b9c9208e0b6d899f6204cbd05"
+    },
+    {
+      "path": "scripts/simd-asm-manifest.toml",
+      "sha256": "c96ab1574d88cae967d67bcb642a7a4b7716555aaf9ca66e1b2e87fac36f760a"
+    },
+    {
+      "path": "crates/rdf-core/src/ir/dataset.rs",
+      "sha256": "abd677bf0f4e62fcd5ce692f7d276995202d242e1af1165d73b7cca337316b1c"
+    },
+    {
+      "path": "crates/rdf-core/src/ir/paged/mod.rs",
+      "sha256": "7158f88cdff2317a272c0aace6bc7ab057afeedecaf35eaafb9d9a95244192b5"
+    },
+    {
+      "path": "crates/rdf-core/src/ir/paged/query.rs",
+      "sha256": "02fe7264f8ea1021c4c2a41d9c97ccfe12f4af5f8d68d8e233bed1f5bed2c93d"
+    },
+    {
+      "path": "crates/rdf-core/src/ir/paged/translation.rs",
+      "sha256": "1d885e73c5f1113028785609d38118d71c01978a554b4974ad51e9477c8f97a7"
+    },
+    {
+      "path": "docs/design/purrdf-simd.md",
+      "sha256": "30db86879aa83c616b0b4572d5feab583919f161115496e28a807419bce325c0"
+    }
+  ],
+  "hosted_identity": {
+    "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+    "manifest": "c96ab1574d88cae967d67bcb642a7a4b7716555aaf9ca66e1b2e87fac36f760a",
+    "schema": 1,
+    "source": "fe73fce1722108d47b7fcb7a8bcbf6214318a23800304c759282753c41b005c0"
+  },
+  "configs": {
+    "x86_64": 110,
+    "x86_64-v3": 110,
+    "x86_64-v4": 110,
+    "aarch64": 110,
+    "aarch64-neoverse-v1": 110,
+    "wasm32": 110,
+    "wasm32-simd128": 110
+  },
+  "pure_existing_calls": [
+    "load_manifest",
+    "runtime.source_identity(clean replay)",
+    "runtime.merge_reports(supplied hosted identity)",
+    "doc_checks",
+    "workspace_world",
+    "write_doc",
+    "parse_table"
+  ],
+  "delta": [
+    {
+      "site": "core.paged-map-quad",
+      "column": "x86_64-v3",
+      "before": "v14\u00b7f0\u00b7r0",
+      "after": "v0\u00b7f0\u00b7r0"
+    },
+    {
+      "site": "core.paged-map-quad",
+      "column": "x86_64-v4",
+      "before": "v10\u00b7f0\u00b7r0",
+      "after": "v0\u00b7f0\u00b7r0"
+    }
+  ],
+  "logs": {
+    "generation.log": {
+      "sha256": "35c6b0ed9a73c850e79a14c458631d9684b43c37e46e85402b11adf0b12b1bee",
+      "full_report_rows_verified": 110,
+      "first_line": "python3 scripts/check-simd-asm.py --doc --write-doc --jobs 2"
+    },
+    "qualification.log": {
+      "sha256": "359742ae01a40f58ce2e56acf356c7563d63cb282e496f46cb99eba28e94d270",
+      "full_report_rows_verified": 110,
+      "first_line": "python3 scripts/check-simd-asm.py --doc --jobs 2 --report target/asm-projection/reports/all-configurations.json"
+    }
+  },
+  "body_correspondence": {
+    "x86-v3": {
+      "normal": "raw/G3a-diagnostics-x86-v3/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/959e5ae7088e7cf4/out/purrdf_core-959e5ae7088e7cf4.s",
+      "projection": "raw/G3-projection-artifact/simd-asm/contexts/d75186906acf6aa57f7af1854ce87d03683eddd78ee35759a18ac497d3856047/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/959e5ae7088e7cf4/out/purrdf_core-959e5ae7088e7cf4.s",
+      "sha256": "29d938338b5bc639ce1b09c47b4e405cc283ccc836ba707bf1c8c04e32205754"
+    },
+    "x86-v4": {
+      "normal": "raw/G3a-diagnostics-x86-v4/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/dbaec6abe162cd34/out/purrdf_core-dbaec6abe162cd34.s",
+      "projection": "raw/G3-projection-artifact/simd-asm/contexts/5651b23f3fee308586b8d2c433cc1a00a2510901d807755d363291dd544aff6b/build/x86_64-unknown-linux-gnu/release/build/purrdf-core/dbaec6abe162cd34/out/purrdf_core-dbaec6abe162cd34.s",
+      "sha256": "6e3ab72d4572540b4133ae5e4ef3157a18e7830550de559327101644ffa9eccf"
+    }
+  },
+  "local_patch_sha256": "dd41c2fb51a065f10b622976eca465350218b1b10ae53fc5ac2c7acd2d73f78f",
+  "native_patch_sha256": "beeac41c6acb5d419762f566f05988cef7a746bdea8c66ce384e0af2723f3772",
+  "document_sha256": "7285a4c4d1f401aec02d880622cdf7f9893fee4b9d781d27a61c076cd6a94356",
+  "report_sha256": "2f7a2ff71b2511f8cfaaf8a78321a762ba4d4519276820ffa42bf290c7e8c3c2",
+  "no_local_compiler_measurement": true
+}

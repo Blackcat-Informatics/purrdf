@@ -1,0 +1,16 @@
+.github/workflows/ci.yaml:739:9: shellcheck reported issue in this script: SC1083:warning:3:25: This { is literal. Check expression (missing ;/\n?) or quote it [shellcheck]
+    |
+739 |         run: |
+    |         ^~~~
+.github/workflows/ci.yaml:739:9: shellcheck reported issue in this script: SC1083:warning:3:30: This } is literal. Check expression (missing ;/\n?) or quote it [shellcheck]
+    |
+739 |         run: |
+    |         ^~~~
+.github/workflows/ci.yaml:803:9: shellcheck reported issue in this script: SC1083:warning:3:25: This { is literal. Check expression (missing ;/\n?) or quote it [shellcheck]
+    |
+803 |         run: |
+    |         ^~~~
+.github/workflows/ci.yaml:803:9: shellcheck reported issue in this script: SC1083:warning:3:30: This } is literal. Check expression (missing ;/\n?) or quote it [shellcheck]
+    |
+803 |         run: |
+    |         ^~~~

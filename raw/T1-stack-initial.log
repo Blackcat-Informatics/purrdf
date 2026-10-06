@@ -1,0 +1,84 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/lex)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling digest v0.11.3
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling regex-automata v0.4.14
+   Compiling sha2 v0.11.0
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/xsd)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/cdt)
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/alloc-probe)
+error[E0433]: cannot find `DatasetImporter` in `purrdf_core`
+   --> crates/rdf-core/tests/paged_stack.rs:596:18
+    |
+596 |     purrdf_core::DatasetImporter::new(&mut oracle, ordinary.as_ref()).append();
+    |                  ^^^^^^^^^^^^^^^ could not find `DatasetImporter` in `purrdf_core`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_core::ir::import::DatasetImporter;
+    |
+help: if you import `DatasetImporter`, refer to it directly
+    |
+596 -     purrdf_core::DatasetImporter::new(&mut oracle, ordinary.as_ref()).append();
+596 +     DatasetImporter::new(&mut oracle, ordinary.as_ref()).append();
+    |
+
+error[E0433]: cannot find `DatasetImporter` in `purrdf_core`
+   --> crates/rdf-core/tests/paged_stack.rs:597:18
+    |
+597 |     purrdf_core::DatasetImporter::new(&mut oracle, typed.as_ref()).append();
+    |                  ^^^^^^^^^^^^^^^ could not find `DatasetImporter` in `purrdf_core`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_core::ir::import::DatasetImporter;
+    |
+help: if you import `DatasetImporter`, refer to it directly
+    |
+597 -     purrdf_core::DatasetImporter::new(&mut oracle, typed.as_ref()).append();
+597 +     DatasetImporter::new(&mut oracle, typed.as_ref()).append();
+    |
+
+error[E0599]: no associated function or constant named `from_u32` found for struct `BlankScope` in the current scope
+   --> crates/rdf-core/tests/paged_stack.rs:532:32
+    |
+532 |             scope: BlankScope::from_u32(44),
+    |                                ^^^^^^^^ associated function or constant not found in `BlankScope`
+    |
+help: there is an associated function `from` with a similar name
+    |
+532 -             scope: BlankScope::from_u32(44),
+532 +             scope: BlankScope::from(44),
+    |
+
+error[E0599]: no associated function or constant named `from_u32` found for struct `BlankScope` in the current scope
+   --> crates/rdf-core/tests/paged_stack.rs:581:28
+    |
+581 |         scope: BlankScope::from_u32(17),
+    |                            ^^^^^^^^ associated function or constant not found in `BlankScope`
+    |
+help: there is an associated function `from` with a similar name
+    |
+581 -         scope: BlankScope::from_u32(17),
+581 +         scope: BlankScope::from(17),
+    |
+
+Some errors have detailed explanations: E0433, E0599.
+For more information about an error, try `rustc --explain E0433`.
+error: could not compile `purrdf-core` (test "paged_stack") due to 4 previous errors

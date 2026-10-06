@@ -1,0 +1,915 @@
+diff --git crates/rdf-core/src/ir/paged/admission.rs crates/rdf-core/src/ir/paged/admission.rs
+index 24221e6aa..416c47ae9 100644
+--- crates/rdf-core/src/ir/paged/admission.rs
++++ crates/rdf-core/src/ir/paged/admission.rs
+@@ -251,6 +251,17 @@ pub(crate) fn candidate_pages_for_stream(
+-    match g {
+-        GraphMatch::Named(global_graph) => {
+-            PageCandidates::Listed(graph_index.pages_for_named(global_graph, stream).iter())
+-        }
+-        GraphMatch::Default => PageCandidates::Listed(graph_index.pages_for_default(stream).iter()),
+-        GraphMatch::Any => PageCandidates::All(0..page_count),
++    candidate_pages_for_stream_in_range(graph_index, page_count, g, stream, 0..page_count)
++}
++
++/// Restrict the same graph postings to one chronological physical range before
++/// iteration. Sorted postings need only binary boundaries, never a scan over
++/// other layers' postings; `Any` directly addresses the requested dense range.
++pub(crate) fn candidate_pages_for_stream_in_range(
++    graph_index: &GraphPageIndex,
++    page_count: u64,
++    g: GraphMatch<GlobalTermId>,
++    stream: PageStream,
++    range: std::ops::Range<u64>,
++) -> PageCandidates<'_> {
++    let start = range.start.min(page_count);
++    let end = range.end.min(page_count);
++    if start >= end {
++        return PageCandidates::All(0..0);
+@@ -257,0 +269,25 @@ pub(crate) fn candidate_pages_for_stream(
++    let postings = match g {
++        GraphMatch::Named(global_graph) => graph_index.pages_for_named(global_graph, stream),
++        GraphMatch::Default => graph_index.pages_for_default(stream),
++        GraphMatch::Any => return PageCandidates::All(start..end),
++    };
++    let lower = if start == 0 {
++        0
++    } else {
++        postings.partition_point(|page| {
++            #[cfg(test)]
++            tests::record_boundary();
++            page.0 < start
++        })
++    };
++    let rest = &postings[lower..];
++    let upper = if end == page_count {
++        rest.len()
++    } else {
++        rest.partition_point(|page| {
++            #[cfg(test)]
++            tests::record_boundary();
++            page.0 < end
++        })
++    };
++    PageCandidates::Listed(rest[..upper].iter())
+@@ -264,0 +301,102 @@ mod tests {
++    // Private, per-test-thread measurement of production posting comparisons.
++    thread_local! {
++        static BOUNDARY_COMPARISONS: std::cell::Cell<usize> = const {
++            std::cell::Cell::new(0)
++        };
++    }
++    pub(super) fn record_boundary() {
++        BOUNDARY_COMPARISONS.with(|count| count.set(count.get() + 1));
++    }
++
++    #[test]
++    fn posting_range_work_is_logarithmic_and_any_uses_the_exact_dense_range() {
++        use crate::{InMemoryPageProvider, PagedDataset, TermFactory, TermValue};
++        use std::sync::Arc;
++        for count in [8_u64, 128, 1024] {
++            let pages = (0..count)
++                .map(|i| {
++                    let mut builder = RdfDatasetBuilder::new();
++                    let s = builder.intern_iri(&format!("http://example.org/r{i}"));
++                    let o = builder.intern_value(&crate::term_fixture::triple_chain(1));
++                    let g = builder.intern_iri("http://example.org/g");
++                    builder.push_reifier(s, o);
++                    builder.push_reifier_in_graph(s, o, Some(g));
++                    builder.freeze().unwrap()
++                })
++                .collect();
++            let paged =
++                PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(pages))).unwrap();
++            let graph = paged
++                .dictionary()
++                .term_id_by_value(&TermValue::iri("http://example.org/g"))
++                .unwrap();
++            for g in [
++                GraphMatch::Default,
++                GraphMatch::Named(graph),
++                GraphMatch::Any,
++            ] {
++                BOUNDARY_COMPARISONS.with(|calls| calls.set(0));
++                let middle = count / 2;
++                let candidates = candidate_pages_for_stream_in_range(
++                    paged.graph_index(),
++                    count,
++                    g,
++                    PageStream::Reifier,
++                    middle..middle + 3,
++                )
++                .collect::<Vec<_>>();
++                assert_eq!(
++                    candidates,
++                    vec![PageId(middle), PageId(middle + 1), PageId(middle + 2)]
++                );
++                let comparisons = BOUNDARY_COMPARISONS.with(std::cell::Cell::get);
++                eprintln!(
++                    "postings={count} graph={g:?} candidates=3 boundary_comparisons={comparisons}"
++                );
++                if g == GraphMatch::Any {
++                    assert_eq!(comparisons, 0);
++                } else {
++                    assert!(comparisons <= 2 * (count.ilog2() as usize + 2));
++                }
++                BOUNDARY_COMPARISONS.with(|calls| calls.set(0));
++                assert_eq!(
++                    candidate_pages_for_stream_in_range(
++                        paged.graph_index(),
++                        count,
++                        g,
++                        PageStream::Reifier,
++                        middle..middle
++                    )
++                    .count(),
++                    0
++                );
++                assert_eq!(
++                    candidate_pages_for_stream_in_range(
++                        paged.graph_index(),
++                        count,
++                        g,
++                        PageStream::Annotation,
++                        0..count
++                    )
++                    .count(),
++                    if g == GraphMatch::Any {
++                        count as usize
++                    } else {
++                        0
++                    }
++                );
++                assert_eq!(BOUNDARY_COMPARISONS.with(std::cell::Cell::get), 0);
++                assert_eq!(
++                    candidate_pages_for_stream(paged.graph_index(), count, g, PageStream::Reifier)
++                        .count(),
++                    count as usize
++                );
++                assert_eq!(
++                    BOUNDARY_COMPARISONS.with(std::cell::Cell::get),
++                    0,
++                    "the unbounded native candidate path needs no range searches"
++                );
++            }
++        }
++    }
++
+diff --git crates/rdf-core/src/ir/paged/query.rs crates/rdf-core/src/ir/paged/query.rs
+index 32726a1d2..dd69c773e 100644
+--- crates/rdf-core/src/ir/paged/query.rs
++++ crates/rdf-core/src/ir/paged/query.rs
+@@ -397,54 +397,59 @@ impl<'dataset> PagedQueryView<'dataset> {
+-        self.dataset.pages[range]
+-            .iter()
+-            .filter(move |slot| stream_admitted(slot, stream, s, p, o, g))
+-            .flat_map(move |slot| {
+-                self.page(slot.id).into_iter().flat_map(move |page| {
+-                    let local = if stream == PageStream::Base {
+-                        match admission::admit_pattern(&slot.translation, s, p, o, g) {
+-                            PageAdmission::Admit(local) => Some(local),
+-                            PageAdmission::Skip(_) => None,
+-                        }
+-                    } else {
+-                        None
+-                    };
+-                    let local_s = s.and_then(|s| slot.translation.to_local(s));
+-                    let rows = local
+-                        .into_iter()
+-                        .flat_map(move |local| {
+-                            page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
+-                        })
+-                        .chain(
+-                            (stream == PageStream::Reifier && local_s.is_none())
+-                                .then_some(())
+-                                .into_iter()
+-                                .flat_map(move |()| page.reifier_quads()),
+-                        )
+-                        .chain(
+-                            local_s
+-                                .filter(|_| stream == PageStream::Reifier)
+-                                .into_iter()
+-                                .flat_map(move |s| page.reifier_quads_of(s)),
+-                        )
+-                        .chain(
+-                            (stream == PageStream::Annotation && local_s.is_none())
+-                                .then_some(())
+-                                .into_iter()
+-                                .flat_map(move |()| page.annotation_quads()),
+-                        )
+-                        .chain(
+-                            local_s
+-                                .filter(|_| stream == PageStream::Annotation)
+-                                .into_iter()
+-                                .flat_map(move |s| {
+-                                    page.annotations_of_with_graph(s)
+-                                        .map(move |(p, o, g)| QuadIds { s, p, o, g })
+-                                }),
+-                        );
+-                    rows.map(move |row| (slot.id, row.map_ids(|id| slot.translation.to_global(id))))
+-                        .filter(move |(_, row)| {
+-                            s.is_none_or(|s| s == row.s)
+-                                && p.is_none_or(|p| p == row.p)
+-                                && o.is_none_or(|o| o == row.o)
+-                                && g.matches(row.g)
+-                        })
+-                })
++        admission::candidate_pages_for_stream_in_range(
++            self.dataset.graph_index(),
++            self.dataset.page_count(),
++            g,
++            stream,
++            range.start as u64..range.end as u64,
++        )
++        .map(move |id| &self.dataset.pages[id.0 as usize])
++        .filter(move |slot| stream_admitted(slot, stream, s, p, o, g))
++        .flat_map(move |slot| {
++            self.page(slot.id).into_iter().flat_map(move |page| {
++                let local = if stream == PageStream::Base {
++                    match admission::admit_pattern(&slot.translation, s, p, o, g) {
++                        PageAdmission::Admit(local) => Some(local),
++                        PageAdmission::Skip(_) => None,
++                    }
++                } else {
++                    None
++                };
++                let local_s = s.and_then(|s| slot.translation.to_local(s));
++                let rows = local
++                    .into_iter()
++                    .flat_map(move |local| {
++                        page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
++                    })
++                    .chain(
++                        (stream == PageStream::Reifier && local_s.is_none())
++                            .then_some(())
++                            .into_iter()
++                            .flat_map(move |()| page.reifier_quads()),
++                    )
++                    .chain(
++                        local_s
++                            .filter(|_| stream == PageStream::Reifier)
++                            .into_iter()
++                            .flat_map(move |s| page.reifier_quads_of(s)),
++                    )
++                    .chain(
++                        (stream == PageStream::Annotation && local_s.is_none())
++                            .then_some(())
++                            .into_iter()
++                            .flat_map(move |()| page.annotation_quads()),
++                    )
++                    .chain(
++                        local_s
++                            .filter(|_| stream == PageStream::Annotation)
++                            .into_iter()
++                            .flat_map(move |s| {
++                                page.annotations_of_with_graph(s)
++                                    .map(move |(p, o, g)| QuadIds { s, p, o, g })
++                            }),
++                    );
++                rows.map(move |row| (slot.id, row.map_ids(|id| slot.translation.to_global(id))))
++                    .filter(move |(_, row)| {
++                        s.is_none_or(|s| s == row.s)
++                            && p.is_none_or(|p| p == row.p)
++                            && o.is_none_or(|o| o == row.o)
++                            && g.matches(row.g)
++                    })
+@@ -451,0 +457 @@ impl<'dataset> PagedQueryView<'dataset> {
++        })
+@@ -462,29 +468,33 @@ impl<'dataset> PagedQueryView<'dataset> {
+-        self.dataset
+-            .pages
+-            .iter()
+-            .filter(|slot| stream_admitted(slot, stream, s, p, o, g))
+-            .map(|slot| {
+-                let summary = slot.translation.summary();
+-                if stream == PageStream::Base {
+-                    return match admission::admit_pattern(&slot.translation, s, p, o, g) {
+-                        PageAdmission::Admit(local) => {
+-                            admission::estimate_admitted_page(summary, local, slot.quad_count)
+-                        }
+-                        PageAdmission::Skip(_) => 0,
+-                    };
+-                }
+-                match g {
+-                    GraphMatch::Default => summary.default_rows(stream),
+-                    GraphMatch::Named(g) => summary.graph_rows(
+-                        slot.translation.to_local(g).expect("admitted graph"),
+-                        stream,
+-                    ),
+-                    GraphMatch::Any => summary.default_rows(stream).saturating_add(
+-                        summary
+-                            .declared_graphs()
+-                            .map(|g| summary.graph_rows(g, stream))
+-                            .fold(0, u64::saturating_add),
+-                    ),
+-                }
+-            })
+-            .fold(0, u64::saturating_add)
++        admission::candidate_pages_for_stream(
++            self.dataset.graph_index(),
++            self.dataset.page_count(),
++            g,
++            stream,
++        )
++        .map(|id| &self.dataset.pages[id.0 as usize])
++        .filter(|slot| stream_admitted(slot, stream, s, p, o, g))
++        .map(|slot| {
++            let summary = slot.translation.summary();
++            if stream == PageStream::Base {
++                return match admission::admit_pattern(&slot.translation, s, p, o, g) {
++                    PageAdmission::Admit(local) => {
++                        admission::estimate_admitted_page(summary, local, slot.quad_count)
++                    }
++                    PageAdmission::Skip(_) => 0,
++                };
++            }
++            match g {
++                GraphMatch::Default => summary.default_rows(stream),
++                GraphMatch::Named(g) => summary.graph_rows(
++                    slot.translation.to_local(g).expect("admitted graph"),
++                    stream,
++                ),
++                GraphMatch::Any => summary.default_rows(stream).saturating_add(
++                    summary
++                        .declared_graphs()
++                        .map(|g| summary.graph_rows(g, stream))
++                        .fold(0, u64::saturating_add),
++                ),
++            }
++        })
++        .fold(0, u64::saturating_add)
+@@ -716,0 +727,2 @@ fn stream_admitted(
++    #[cfg(test)]
++    tests::record_admission(stream);
+@@ -1156,0 +1169 @@ mod tests {
++    use crate::TermFactory;
+@@ -1161,0 +1175,151 @@ mod tests {
++    // Count the actual stream-admission boundary, without a shipping metrics API.
++    thread_local! {
++        static SUMMARY_VISITS: std::cell::Cell<[usize; 3]> = const {
++            std::cell::Cell::new([0; 3])
++        };
++    }
++
++    pub(super) fn record_admission(stream: PageStream) {
++        SUMMARY_VISITS.with(|counts| {
++            let mut visits = counts.get();
++            visits[stream as usize] += 1;
++            counts.set(visits);
++        });
++    }
++
++    fn take_visits() -> [usize; 3] {
++        SUMMARY_VISITS.with(|counts| counts.replace([0; 3]))
++    }
++
++    fn stream_page(index: usize, stream: PageStream, named: bool) -> Arc<RdfDataset> {
++        let mut builder = RdfDatasetBuilder::new();
++        let s = builder.intern_iri(&format!("http://example.org/s{index}"));
++        let p = builder.intern_iri("http://example.org/p");
++        let o = builder.intern_value(&crate::term_fixture::triple_chain(1));
++        let g = named.then(|| builder.intern_iri("http://example.org/g"));
++        match stream {
++            PageStream::Base => builder.push_quad(s, p, o, g),
++            PageStream::Reifier => builder.push_reifier_in_graph(s, o, g),
++            PageStream::Annotation => builder.push_annotation_in_graph(s, p, o, g),
++        }
++        builder.freeze().unwrap()
++    }
++
++    fn seal_pages(pages: Vec<Arc<RdfDataset>>) -> Arc<PagedDataset> {
++        Arc::new(
++            PagedDataset::from_provider(Arc::new(super::super::InMemoryPageProvider::new(pages)))
++                .unwrap(),
++        )
++    }
++
++    #[test]
++    fn sparse_stream_ranges_and_estimates_visit_only_graph_postings() {
++        for padding in [0, 32, 512] {
++            for named in [false, true] {
++                // Unrelated pages share no rows in the target graph; the fixed
++                // three-page layer has one row of each stream in that graph.
++                let pages = (0..padding * 2 + 3)
++                    .map(|i| {
++                        if (padding..padding + 3).contains(&i) {
++                            let stream = [
++                                PageStream::Base,
++                                PageStream::Reifier,
++                                PageStream::Annotation,
++                            ][i - padding];
++                            stream_page(i, stream, named)
++                        } else {
++                            stream_page(i, PageStream::Base, !named)
++                        }
++                    })
++                    .collect();
++                let paged = seal_pages(pages);
++                let g = if named {
++                    GraphMatch::Named(
++                        paged
++                            .dictionary()
++                            .term_id_by_value(&TermValue::iri("http://example.org/g"))
++                            .unwrap(),
++                    )
++                } else {
++                    GraphMatch::Default
++                };
++                let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++                for stream in [
++                    PageStream::Base,
++                    PageStream::Reifier,
++                    PageStream::Annotation,
++                ] {
++                    take_visits();
++                    for _ in 0..8 {
++                        let rows = view
++                            .stream_pattern_range(stream, None, None, None, g, padding..padding + 3)
++                            .collect::<Vec<_>>();
++                        assert_eq!(rows.len(), 1);
++                        assert_eq!(rows[0].0, PageId((padding + stream as usize) as u64));
++                    }
++                    let visits = take_visits();
++                    eprintln!(
++                        "sparse pages={} named={named} stream={stream:?} visits={visits:?}",
++                        padding * 2 + 3
++                    );
++                    assert_eq!(visits[stream as usize], 8);
++                    assert_eq!(view.stream_estimate(stream, None, None, None, g), 1);
++                    assert_eq!(take_visits()[stream as usize], 1);
++                    assert_eq!(
++                        view.stream_pattern_range(
++                            stream,
++                            None,
++                            None,
++                            None,
++                            GraphMatch::Any,
++                            padding..padding + 3
++                        )
++                        .count(),
++                        1
++                    );
++                    assert_eq!(take_visits()[stream as usize], 3);
++                    assert_eq!(
++                        view.stream_pattern_range(stream, None, None, None, g, padding..padding)
++                            .count(),
++                        0
++                    );
++                    assert_eq!(take_visits(), [0; 3]);
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn plain_rdf_logical_drain_does_not_probe_reifier_page_summaries() {
++        for layers in [1, 8, 32] {
++            let sources = (0..layers)
++                .map(|i| {
++                    seal_pages(vec![
++                        stream_page(i * 2, PageStream::Base, false),
++                        stream_page(i * 2 + 1, PageStream::Base, true),
++                    ])
++                })
++                .collect();
++            let snapshot = super::super::PagedStack::new(sources)
++                .unwrap()
++                .snapshot()
++                .unwrap();
++            let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++            for _ in 0..2 {
++                take_visits();
++                assert_eq!(view.quads().count(), layers * 2);
++                let visits = take_visits();
++                eprintln!(
++                    "plain layers={layers} pages={} rows={} visits={visits:?}",
++                    layers * 2,
++                    layers * 2
++                );
++                assert_eq!(visits[PageStream::Reifier as usize], 0);
++                assert!(matches!(
++                    view.operation_status(),
++                    ViewOperationStatus::Ready { .. }
++                ));
++            }
++        }
++    }
++
+diff --git crates/rdf-core/src/ir/paged/stack.rs crates/rdf-core/src/ir/paged/stack.rs
+index 584bd8a55..814f47e56 100644
+--- crates/rdf-core/src/ir/paged/stack.rs
++++ crates/rdf-core/src/ir/paged/stack.rs
+@@ -787 +787 @@ impl PagedStackQueryView<'_> {
+-                if self.read_error().is_some() || !self.visible(page, row) || !seen.insert(row) {
++                if self.physical.failed() || !self.visible(page, row) || !seen.insert(row) {
+@@ -803 +803 @@ impl PagedStackQueryView<'_> {
+-                (self.read_error().is_none() && classified == Some(kind)).then_some(row)
++                (!self.physical.failed() && classified == Some(kind)).then_some(row)
+@@ -816 +816 @@ impl PagedStackQueryView<'_> {
+-                (self.read_error().is_none() && self.visible(page, row) && seen.insert(row))
++                (!self.physical.failed() && self.visible(page, row) && seen.insert(row))
+diff --git crates/rdf-core/tests/paged_stack.rs crates/rdf-core/tests/paged_stack.rs
+index 19a508ada..ce0ed0c63 100644
+--- crates/rdf-core/tests/paged_stack.rs
++++ crates/rdf-core/tests/paged_stack.rs
+@@ -86,0 +87,2 @@ struct ProbeProvider {
++    generation_reads: AtomicUsize,
++    count_reads: AtomicUsize,
+@@ -96,0 +99,2 @@ impl ProbeProvider {
++            generation_reads: AtomicUsize::new(0),
++            count_reads: AtomicUsize::new(0),
+@@ -101,0 +106 @@ impl PageProvider for ProbeProvider {
++        self.count_reads.fetch_add(1, Ordering::Relaxed);
+@@ -104,0 +110 @@ impl PageProvider for ProbeProvider {
++        self.generation_reads.fetch_add(1, Ordering::Relaxed);
+@@ -1003,0 +1010,202 @@ fn explicit_head_graph_lifetime_survives_sealing_while_populated_then_last_row_r
++
++#[test]
++fn logical_id_filters_do_not_recheck_descriptors_per_row_or_cached_reread() {
++    let mut measurements = Vec::new();
++    for rows in [1, 32, 256] {
++        let ordinary = page(
++            &(0..rows)
++                .map(|i| row(&format!("plain{i}"), "o"))
++                .collect::<Vec<_>>(),
++        );
++        let mut builder = RdfDatasetBuilder::new();
++        let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
++        for i in 0..rows {
++            let r = builder.intern_value(&iri(&format!("reifier{i}")));
++            builder.push_reifier(r, triple);
++        }
++        let providers = [
++            Arc::new(ProbeProvider::new(vec![ordinary], None)),
++            Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None)),
++        ];
++        let snapshot = PagedStack::new(
++            providers
++                .iter()
++                .map(|provider| Arc::new(PagedDataset::from_provider(provider.clone()).unwrap()))
++                .collect(),
++        )
++        .unwrap()
++        .snapshot()
++        .unwrap();
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        for provider in &providers {
++            provider.generation_reads.store(0, Ordering::Relaxed);
++            provider.count_reads.store(0, Ordering::Relaxed);
++            provider.reads.store(0, Ordering::Relaxed);
++        }
++        assert_eq!(view.quads().count(), rows);
++        assert_eq!(view.reifier_quads().count(), rows);
++        let admitted = providers
++            .iter()
++            .map(|provider| {
++                (
++                    provider.generation_reads.load(Ordering::Relaxed),
++                    provider.count_reads.load(Ordering::Relaxed),
++                    provider.reads.load(Ordering::Relaxed),
++                )
++            })
++            .collect::<Vec<_>>();
++        assert_eq!(view.quads().count(), rows);
++        assert_eq!(view.reifier_quads().count(), rows);
++        let reread = providers
++            .iter()
++            .map(|provider| {
++                (
++                    provider.generation_reads.load(Ordering::Relaxed),
++                    provider.count_reads.load(Ordering::Relaxed),
++                    provider.reads.load(Ordering::Relaxed),
++                )
++            })
++            .collect::<Vec<_>>();
++        eprintln!("ID drain rows={rows} sources=2 pages=2 admitted={admitted:?} reread={reread:?}");
++        assert_eq!(
++            reread, admitted,
++            "cached ID filters must not query descriptors"
++        );
++        assert!(matches!(
++            view.operation_status(),
++            ViewOperationStatus::Ready { .. }
++        ));
++        measurements.push(admitted);
++    }
++    assert!(
++        measurements.windows(2).all(|pair| pair[0] == pair[1]),
++        "fixed-page/source admissions cannot scale with logical ID rows"
++    );
++}
++
++#[test]
++fn cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open_iterators() {
++    for change_count in [false, true] {
++        let ordinary = page(&[row("a", "x"), row("b", "y")]);
++        let mut builder = RdfDatasetBuilder::new();
++        purrdf_core::ir::import::DatasetImporter::new(&mut builder, ordinary.as_ref()).append();
++        let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
++        let note = builder.intern_value(&iri("note"));
++        let value = builder.intern_value(&iri("value"));
++        for i in 0..2 {
++            let r = builder.intern_value(&iri(&format!("reifier{i}")));
++            builder.push_reifier(r, triple);
++            builder.push_annotation(r, note, value);
++        }
++        let provider = Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None));
++        let snapshot = PagedStack::new(vec![Arc::new(
++            PagedDataset::from_provider(provider.clone()).unwrap(),
++        )])
++        .unwrap()
++        .snapshot()
++        .unwrap();
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        assert_eq!(view.quads().count(), 2);
++        assert_eq!(view.reifier_quads().count(), 2);
++        assert_eq!(view.annotation_quads().count(), 2);
++        let mut open_rows = view.quads();
++        let mut open_reifiers = view.reifier_quads();
++        let mut open_annotations = view.annotation_quads();
++        assert!(open_rows.next().is_some());
++        assert!(open_reifiers.next().is_some());
++        assert!(open_annotations.next().is_some());
++        if change_count {
++            provider.count.store(2, Ordering::Relaxed);
++        } else {
++            provider.generation.store(8, Ordering::Relaxed);
++        }
++        // ID rows from certified cache alone are not a completeness certificate.
++        let status = view.operation_status();
++        let ViewOperationStatus::Failed {
++            error: PagedQueryError::SourceSnapshot { source, error },
++            ..
++        } = &status
++        else {
++            panic!("final checkpoint must refuse delayed descriptor drift: {status:?}");
++        };
++        assert_eq!(*source, 0);
++        if change_count {
++            assert!(matches!(
++                **error,
++                PagedQueryError::PageCountMismatch {
++                    expected: 1,
++                    actual: 2
++                }
++            ));
++        } else {
++            assert!(matches!(
++                **error,
++                PagedQueryError::StaleGeneration {
++                    expected: PageGeneration(7),
++                    actual: PageGeneration(8),
++                    ..
++                }
++            ));
++        }
++        assert_eq!(
++            open_rows.next(),
++            None,
++            "open ordinary iterator must observe the sticky latch"
++        );
++        assert_eq!(
++            open_reifiers.next(),
++            None,
++            "buffered reifier must observe the sticky latch"
++        );
++        assert_eq!(
++            open_annotations.next(),
++            None,
++            "buffered annotation must observe the sticky latch"
++        );
++        assert_eq!(view.reifier_quads().next(), None);
++        assert_eq!(view.annotation_quads().next(), None);
++        provider.count.store(1, Ordering::Relaxed);
++        provider.generation.store(7, Ordering::Relaxed);
++        assert_eq!(view.quads().next(), None);
++        assert_eq!(
++            view.operation_status(),
++            status,
++            "provider recovery cannot erase a fault"
++        );
++    }
++}
++
++#[test]
++fn declaration_probe_fault_suppresses_the_candidate_that_triggered_it() {
++    let ordinary = Arc::new(ProbeProvider::new(vec![page(&[row("r", "note")])], None));
++    let mut builder = RdfDatasetBuilder::new();
++    let r = builder.intern_value(&iri("r"));
++    let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
++    builder.push_reifier(r, triple);
++    let declarations = Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None));
++    let snapshot = PagedStack::new(
++        vec![ordinary, declarations.clone()]
++            .into_iter()
++            .map(|provider| Arc::new(PagedDataset::from_provider(provider).unwrap()))
++            .collect(),
++    )
++    .unwrap()
++    .snapshot()
++    .unwrap();
++    declarations.mode.store(1, Ordering::Relaxed);
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(
++        view.quads().next(),
++        None,
++        "classification failure cannot yield its ordinary candidate"
++    );
++    assert_eq!(view.annotation_quads().next(), None);
++    assert_eq!(view.reifier_quads().next(), None);
++    assert!(matches!(
++        view.operation_status(),
++        ViewOperationStatus::Failed {
++            error: PagedQueryError::Provider { .. },
++            ..
++        }
++    ));
++}
+diff --git crates/rdf-wasm/src/interleaving.rs crates/rdf-wasm/src/interleaving.rs
+index a7e18810a..143d1d384 100644
+--- crates/rdf-wasm/src/interleaving.rs
++++ crates/rdf-wasm/src/interleaving.rs
+@@ -298,0 +299,13 @@ pub const LEDGER: &[ThreadLocal] = &[
++    // Paging operation counts measure private production boundaries in tests only.
++    ThreadLocal {
++        file: "crates/rdf-core/src/ir/paged/admission.rs",
++        name: "BOUNDARY_COMPARISONS",
++        safety: Safety::NotCompiledIn,
++        reason: TEST_ONLY,
++    },
++    ThreadLocal {
++        file: "crates/rdf-core/src/ir/paged/query.rs",
++        name: "SUMMARY_VISITS",
++        safety: Safety::NotCompiledIn,
++        reason: TEST_ONLY,
++    },
+diff --git crates/sparql-eval/tests/paged_stack_query.rs crates/sparql-eval/tests/paged_stack_query.rs
+index cfc448a56..7d701a034 100644
+--- crates/sparql-eval/tests/paged_stack_query.rs
++++ crates/sparql-eval/tests/paged_stack_query.rs
+@@ -455,0 +456,3 @@ struct ControlledProvider {
++    descriptor_reads: AtomicUsize,
++    drift_after: AtomicUsize,
++    drift_kind: AtomicUsize,
+@@ -499,0 +503,3 @@ impl ControlledProvider {
++            descriptor_reads: AtomicUsize::new(0),
++            drift_after: AtomicUsize::new(0),
++            drift_kind: AtomicUsize::new(0),
+@@ -505 +511,14 @@ impl PageProvider for ControlledProvider {
+-        self.count.load(Ordering::Relaxed)
++        let actual = self.count.load(Ordering::Relaxed);
++        let checkpoint = self.descriptor_reads.fetch_add(1, Ordering::Relaxed) + 1;
++        if checkpoint == self.drift_after.load(Ordering::Relaxed) {
++            match self.drift_kind.load(Ordering::Relaxed) {
++                1 => {
++                    self.generation.fetch_add(1, Ordering::Relaxed);
++                }
++                2 => {
++                    self.count.fetch_add(1, Ordering::Relaxed);
++                }
++                _ => {}
++            }
++        }
++        actual
+@@ -790,0 +810,141 @@ fn constants_and_head_queries_check_skipped_and_zero_page_source_descriptors() {
++
++#[test]
++fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold() {
++    let provider = Arc::new(ControlledProvider::new(
++        vec![eager(
++            [edge("a", "p", iri("b")), edge("c", "p", iri("d"))],
++            &[],
++        )],
++        31,
++    ));
++    let snapshot = PagedStack::new(vec![Arc::new(
++        PagedDataset::from_provider(provider.clone()).unwrap(),
++    )])
++    .unwrap()
++    .snapshot()
++    .unwrap();
++    let engine = NativeSparqlEngine::new();
++    let text = "SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o } ORDER BY ?s";
++    let prepared = engine.prepare_query(text, None).unwrap();
++    for operation in 0..3 {
++        for drift_kind in [1, 2] {
++            provider.generation.store(23, Ordering::Relaxed);
++            provider.count.store(1, Ordering::Relaxed);
++            provider.drift_after.store(0, Ordering::Relaxed);
++            let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++            assert_eq!(
++                view.quads().count(),
++                2,
++                "admit the exact pages before measuring cached publication"
++            );
++            provider.descriptor_reads.store(0, Ordering::Relaxed);
++            match operation {
++                0 => assert_eq!(
++                    solutions(
++                        engine
++                            .query_fallible_view(&view, request(text), QueryOptions::EMPTY)
++                            .unwrap()
++                            .result
++                    )
++                    .1
++                    .len(),
++                    2
++                ),
++                1 => assert_eq!(
++                    solutions(
++                        engine
++                            .query_prepared_fallible_view(
++                                &view,
++                                &prepared,
++                                &[],
++                                QueryOptions::EMPTY
++                            )
++                            .unwrap()
++                            .result
++                    )
++                    .1
++                    .len(),
++                    2
++                ),
++                _ => assert_eq!(
++                    canonical_paged_seal(&view, bound(1)).unwrap().page_count(),
++                    2
++                ),
++            }
++            let checkpoints = provider.descriptor_reads.load(Ordering::Relaxed);
++            assert!(checkpoints >= 2);
++            // Observe the production call sequence rather than copying it into a
++            // test wrapper: mutate just after its penultimate healthy checkpoint.
++            provider.descriptor_reads.store(0, Ordering::Relaxed);
++            provider.drift_kind.store(drift_kind, Ordering::Relaxed);
++            provider
++                .drift_after
++                .store(checkpoints - 1, Ordering::Relaxed);
++            let reads_before = provider.reads.load(Ordering::Relaxed);
++            let error = match operation {
++                0 => {
++                    operational(
++                        engine
++                            .query_fallible_view(&view, request(text), QueryOptions::EMPTY)
++                            .expect_err("final drift must refuse ordinary publication"),
++                    )
++                    .0
++                }
++                1 => {
++                    operational(
++                        engine
++                            .query_prepared_fallible_view(
++                                &view,
++                                &prepared,
++                                &[],
++                                QueryOptions::EMPTY,
++                            )
++                            .expect_err("final drift must refuse prepared publication"),
++                    )
++                    .0
++                }
++                _ => match canonical_paged_seal(&view, bound(1))
++                    .expect_err("final drift must refuse a built fold")
++                {
++                    purrdf_core::CanonicalPagedError::Read(error) => error,
++                    other => panic!("expected final checkpoint error, got {other:?}"),
++                },
++            };
++            let PagedQueryError::SourceSnapshot { source, error } = error else {
++                panic!("delayed source drift must retain its qualified cause");
++            };
++            assert_eq!(source, 0);
++            if drift_kind == 1 {
++                assert!(matches!(
++                    *error,
++                    PagedQueryError::StaleGeneration {
++                        expected: PageGeneration(23),
++                        actual: PageGeneration(24),
++                        ..
++                    }
++                ));
++            } else {
++                assert!(matches!(
++                    *error,
++                    PagedQueryError::PageCountMismatch {
++                        expected: 1,
++                        actual: 2
++                    }
++                ));
++                assert_eq!(
++                    provider.descriptor_reads.load(Ordering::Relaxed),
++                    checkpoints
++                );
++            }
++            assert_eq!(
++                provider.reads.load(Ordering::Relaxed),
++                reads_before,
++                "delayed cached refusal must not depend on another page admission"
++            );
++            assert_eq!(view.quads().next(), None);
++            eprintln!(
++                "delayed operation={operation} drift={drift_kind} healthy_checkpoints={checkpoints}; complete result/artifact refused"
++            );
++        }
++    }
++}

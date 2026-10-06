@@ -1,0 +1,3 @@
+x86_64-v3 assembly 29d938338b5bc639ce1b09c47b4e405cc283ccc836ba707bf1c8c04e32205754 graphs [0, 1] selected [('<purrdf_core::ir::paged::PagedDataset>::from_provider', 0, 944, 0), ('<purrdf_core::ir::paged::PagedDataset>::from_provider', 1, 944, 0)] all parsed 10 problems ()
+x86_64-v4 assembly 6e3ab72d4572540b4133ae5e4ef3157a18e7830550de559327101644ffa9eccf graphs [0, 1] selected [('<purrdf_core::ir::paged::PagedDataset>::from_provider', 0, 944, 0), ('<purrdf_core::ir::paged::PagedDataset>::from_provider', 1, 944, 0)] all parsed 10 problems ()
+Existing homes invoked: load_manifest, asm_paths, verify_command_lines, collect_functions, symbol_names, measured, count, evaluate. No driver/Runner/measure_all/report_identity or compiler/Cargo subprocess invoked.

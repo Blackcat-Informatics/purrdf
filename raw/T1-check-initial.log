@@ -1,0 +1,217 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/hash)
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/lex)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking digest v0.11.3
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/xsd)
+    Checking regex-automata v0.4.14
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/iri)
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-events)
+    Checking sha2 v0.11.0
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/cdt)
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/deflate)
+    Checking hashbrown v0.17.1
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:226:31
+    |
+226 |         Ok(self.graphs.insert(frozen.term_value(id)))
+    |                        ------ ^^^^^^^^^^^^^^^^^^^^^ expected `TermValue`, found `Result<TermValue, TermLookupError>`
+    |                        |
+    |                        arguments to this method are incorrect
+    |
+    = note: expected enum `TermValue`
+               found enum `Result<TermValue, TermLookupError>`
+note: method defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/collections/btree/set.rs:900:12
+    |
+900 |     pub fn insert(&mut self, value: T) -> bool
+    |            ^^^^^^
+help: use the `?` operator to extract the `Result<TermValue, TermLookupError>` value, propagating a `Result::Err` value to the caller
+    |
+226 |         Ok(self.graphs.insert(frozen.term_value(id)?))
+    |                                                    +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:348:24
+    |
+348 |     Ok(QuadValues { s: frozen.term_value(s), p: frozen.term_value(p),
+    |                        ^^^^^^^^^^^^^^^^^^^^ expected `TermValue`, found `Result<TermValue, TermLookupError>`
+    |
+    = note: expected enum `TermValue`
+               found enum `Result<TermValue, TermLookupError>`
+help: use the `?` operator to extract the `Result<TermValue, TermLookupError>` value, propagating a `Result::Err` value to the caller
+    |
+348 |     Ok(QuadValues { s: frozen.term_value(s)?, p: frozen.term_value(p),
+    |                                            +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:348:49
+    |
+348 |     Ok(QuadValues { s: frozen.term_value(s), p: frozen.term_value(p),
+    |                                                 ^^^^^^^^^^^^^^^^^^^^ expected `TermValue`, found `Result<TermValue, TermLookupError>`
+    |
+    = note: expected enum `TermValue`
+               found enum `Result<TermValue, TermLookupError>`
+help: use the `?` operator to extract the `Result<TermValue, TermLookupError>` value, propagating a `Result::Err` value to the caller
+    |
+348 |     Ok(QuadValues { s: frozen.term_value(s), p: frozen.term_value(p)?,
+    |                                                                     +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:349:12
+    |
+349 |         o: frozen.term_value(o), g: g.map(|g| frozen.term_value(g)) })
+    |            ^^^^^^^^^^^^^^^^^^^^ expected `TermValue`, found `Result<TermValue, TermLookupError>`
+    |
+    = note: expected enum `TermValue`
+               found enum `Result<TermValue, TermLookupError>`
+help: use the `?` operator to extract the `Result<TermValue, TermLookupError>` value, propagating a `Result::Err` value to the caller
+    |
+349 |         o: frozen.term_value(o)?, g: g.map(|g| frozen.term_value(g)) })
+    |                                +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:349:37
+    |
+349 |         o: frozen.term_value(o), g: g.map(|g| frozen.term_value(g)) })
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<TermValue>`, found `Option<Result<TermValue, _>>`
+    |
+    = note: expected enum `Option<TermValue>`
+               found enum `Option<Result<TermValue, TermLookupError>>`
+
+error[E0277]: `?` couldn't convert the error to `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:633:94
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
+    |        --------------------------------------------------- expected `CanonicalPagedError<<D as FallibleDatasetView>::Error>` because of this
+...
+633 |             let row = QuadValues { s: view.term_value(q.s).map_err(CanonicalPagedError::Read)?,
+    |                                            --------------- ----------------------------------^ the trait `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>` is not implemented for `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+    |                                            |               |
+    |                                            |               this can't be annotated with `?` because it has type `Result<_, CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+    |                                            this has type `Result<_, TermLookupError<<D as FallibleDatasetView>::Error>>`
+    |
+note: `CanonicalPagedError<<D as FallibleDatasetView>::Error>` needs to implement `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:566:1
+    |
+566 | pub enum CanonicalPagedError<E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: the full name for the type has been written to '/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/4080fb114d151dca/out/purrdf_core-4080fb114d151dca.long-type-15947864448968355522.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider introducing a `where` clause, but there might be an alternative better way to express this requirement
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> where CanonicalPagedError<<D as FallibleDatasetView>::Error>: From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>> {
+    |                                                            +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0277]: `?` couldn't convert the error to `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:634:75
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
+    |        --------------------------------------------------- expected `CanonicalPagedError<<D as FallibleDatasetView>::Error>` because of this
+...
+634 |                 p: view.term_value(q.p).map_err(CanonicalPagedError::Read)?,
+    |                         --------------- ----------------------------------^ the trait `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>` is not implemented for `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+    |                         |               |
+    |                         |               this can't be annotated with `?` because it has type `Result<_, CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+    |                         this has type `Result<_, TermLookupError<<D as FallibleDatasetView>::Error>>`
+    |
+note: `CanonicalPagedError<<D as FallibleDatasetView>::Error>` needs to implement `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:566:1
+    |
+566 | pub enum CanonicalPagedError<E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: the full name for the type has been written to '/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/4080fb114d151dca/out/purrdf_core-4080fb114d151dca.long-type-15947864448968355522.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider introducing a `where` clause, but there might be an alternative better way to express this requirement
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> where CanonicalPagedError<<D as FallibleDatasetView>::Error>: From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>> {
+    |                                                            +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0277]: `?` couldn't convert the error to `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:635:75
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
+    |        --------------------------------------------------- expected `CanonicalPagedError<<D as FallibleDatasetView>::Error>` because of this
+...
+635 |                 o: view.term_value(q.o).map_err(CanonicalPagedError::Read)?,
+    |                         --------------- ----------------------------------^ the trait `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>` is not implemented for `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+    |                         |               |
+    |                         |               this can't be annotated with `?` because it has type `Result<_, CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+    |                         this has type `Result<_, TermLookupError<<D as FallibleDatasetView>::Error>>`
+    |
+note: `CanonicalPagedError<<D as FallibleDatasetView>::Error>` needs to implement `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:566:1
+    |
+566 | pub enum CanonicalPagedError<E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: the full name for the type has been written to '/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/4080fb114d151dca/out/purrdf_core-4080fb114d151dca.long-type-15947864448968355522.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider introducing a `where` clause, but there might be an alternative better way to express this requirement
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> where CanonicalPagedError<<D as FallibleDatasetView>::Error>: From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>> {
+    |                                                            +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0277]: `?` couldn't convert the error to `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:636:98
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
+    |        --------------------------------------------------- expected `CanonicalPagedError<<D as FallibleDatasetView>::Error>` because of this
+...
+636 |                 g: q.g.map(|g| view.term_value(g)).transpose().map_err(CanonicalPagedError::Read)? };
+    |                                                    ----------- ----------------------------------^ the trait `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>` is not implemented for `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+    |                                                    |           |
+    |                                                    |           this can't be annotated with `?` because it has type `Result<_, CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+    |                                                    this has type `Result<_, TermLookupError<<D as FallibleDatasetView>::Error>>`
+    |
+note: `CanonicalPagedError<<D as FallibleDatasetView>::Error>` needs to implement `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:566:1
+    |
+566 | pub enum CanonicalPagedError<E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: the full name for the type has been written to '/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/4080fb114d151dca/out/purrdf_core-4080fb114d151dca.long-type-15947864448968355522.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider introducing a `where` clause, but there might be an alternative better way to express this requirement
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> where CanonicalPagedError<<D as FallibleDatasetView>::Error>: From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>> {
+    |                                                            +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0277]: `?` couldn't convert the error to `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:643:104
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
+    |        --------------------------------------------------- expected `CanonicalPagedError<<D as FallibleDatasetView>::Error>` because of this
+...
+643 |         records.insert(CanonicalRecord::Graph(view.term_value(graph).map_err(CanonicalPagedError::Read)?));
+    |                                                    ----------------- ----------------------------------^ the trait `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>` is not implemented for `CanonicalPagedError<<D as FallibleDatasetView>::Error>`
+    |                                                    |                 |
+    |                                                    |                 this can't be annotated with `?` because it has type `Result<_, CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+    |                                                    this has type `Result<_, TermLookupError<<D as FallibleDatasetView>::Error>>`
+    |
+note: `CanonicalPagedError<<D as FallibleDatasetView>::Error>` needs to implement `From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>>`
+   --> crates/rdf-core/src/ir/paged/stack.rs:566:1
+    |
+566 | pub enum CanonicalPagedError<E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: the full name for the type has been written to '/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/4080fb114d151dca/out/purrdf_core-4080fb114d151dca.long-type-15947864448968355522.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider introducing a `where` clause, but there might be an alternative better way to express this requirement
+    |
+624 |     -> Result<PagedDataset, CanonicalPagedError<D::Error>> where CanonicalPagedError<<D as FallibleDatasetView>::Error>: From<CanonicalPagedError<TermLookupError<<D as FallibleDatasetView>::Error>>> {
+    |                                                            +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (lib) due to 10 previous errors

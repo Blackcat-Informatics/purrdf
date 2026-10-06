@@ -1,0 +1,103 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking either v1.16.0
+   Compiling getrandom v0.3.4
+    Checking crossbeam-epoch v0.9.18
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-results)
+    Checking rayon v1.12.0
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-algebra)
+    Checking inout v0.2.2
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-eval)
+    Checking cmov v0.5.4
+    Checking ctutils v0.4.2
+    Checking cpubits v0.1.1
+    Checking universal-hash v0.6.1
+    Checking cipher v0.5.2
+    Checking polyval v0.7.3
+    Checking twox-hash v2.1.2
+    Checking fastrand v2.4.1
+    Checking structured-zstd v0.0.49
+    Checking ghash v0.6.0
+    Checking ctr v0.10.1
+    Checking aes v0.9.3
+    Checking aead v0.6.1
+    Checking aes-gcm v0.11.1
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/ed25519)
+    Checking visual-hashing v1.0.0
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/gts)
+   Compiling proc-macro2 v1.0.106
+    Checking unicode-ident v1.0.24
+   Compiling quote v1.0.46
+    Checking syn v2.0.118
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/jsonschema)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/datalog)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/entail)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/retrieval)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/geo)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/slice)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/columnar)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/shapes)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/json)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/purrdf)
+error: used `assert!` to check that a value is empty
+   --> crates/sparql-eval/tests/paged_stack_query.rs:299:5
+    |
+299 | /     assert!(
+300 | |         carrier_pages(
+301 | |             &empty
+302 | |                 .compact(PagedQueryLimits::UNBOUNDED, bound(2))
+...   |
+305 | |         .is_empty()
+306 | |     );
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+299 ~     assert_eq!(
+300 ~         carrier_pages(
+301 +             &empty
+302 +                 .compact(PagedQueryLimits::UNBOUNDED, bound(2))
+303 +                 .unwrap()
+304 +         ), [] as [std::vec::Vec<u8>; 0]
+    |
+
+error: redundant clone
+   --> crates/sparql-eval/tests/paged_stack_query.rs:339:33
+    |
+339 |         QuadValues::triple(blank.clone(), iri("nested"), nested),
+    |                                 ^^^^^^^^ help: remove this
+    |
+note: this value is dropped without further use
+   --> crates/sparql-eval/tests/paged_stack_query.rs:339:28
+    |
+339 |         QuadValues::triple(blank.clone(), iri("nested"), nested),
+    |                            ^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+    = note: `-D clippy::redundant-clone` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: used `assert!` to check that a value is empty
+   --> crates/sparql-eval/tests/paged_stack_query.rs:773:21
+    |
+773 |                     assert!(evidence.pages.requested_pages.is_empty());
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+773 -                     assert!(evidence.pages.requested_pages.is_empty());
+773 +                     assert_eq!(evidence.pages.requested_pages, [] as [purrdf_core::PageId; 0]);
+    |
+
+error: could not compile `purrdf-sparql-eval` (test "paged_stack_query") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

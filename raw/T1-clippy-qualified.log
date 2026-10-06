@@ -1,0 +1,26 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+error: unexpected end of macro invocation
+   --> crates/rdf-core/tests/paged_stack.rs:340:26
+    |
+340 |                 .is_err()
+    |                          ^ missing tokens in macro arguments
+    |
+note: while trying to match `,`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/macros/mod.rs:44:16
+    |
+ 44 |     ($left:expr, $right:expr $(,)?) => {{
+    |                ^
+
+error: format argument must be a string literal
+   --> crates/rdf-core/tests/paged_stack.rs:350:13
+    |
+350 |             mode == 1
+    |             ^^^^^^^^^
+    |
+help: you might be missing a string literal to format with
+    |
+350 |             "{}", mode == 1
+    |             +++++
+
+error: could not compile `purrdf-core` (test "paged_stack") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

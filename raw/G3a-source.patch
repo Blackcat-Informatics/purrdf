@@ -1,0 +1,168 @@
+diff --git .github/workflows/ci.yaml .github/workflows/ci.yaml
+index 8ae5db6f9..5855729a4 100644
+--- .github/workflows/ci.yaml
++++ .github/workflows/ci.yaml
+@@ -9,6 +9,11 @@ on:
+       - main
+   # Any branch can be run on demand, without opening a pull request for it.
+   workflow_dispatch:
++    inputs:
++      simd_projection:
++        description: Generate and verify the complete SIMD document projection
++        type: boolean
++        default: false
+ 
+ # A newer push to a pull request supersedes the run the previous one started, so that
+ # run is cancelled rather than left to hold runners for a result nobody reads. Runs on
+@@ -730,7 +735,19 @@ jobs:
+           sudo apt-get update
+           sudo apt-get install -y --no-install-recommends \
+             clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
++      - name: Record measurement inputs
++        run: |
++          mkdir -p target/asm-diagnostics
++          rustc -vV > target/asm-diagnostics/compiler.txt
++          git rev-parse HEAD 'HEAD^{tree}' > target/asm-diagnostics/checkout.txt
++          git status --porcelain=v1 > target/asm-diagnostics/source-status.txt
++          test ! -s target/asm-diagnostics/source-status.txt
++          sha256sum Makefile Cargo.toml Cargo.lock rust-toolchain.toml \
++            scripts/check-simd-asm.py scripts/simd_asm_runtime.py \
++            scripts/simd-asm-manifest.toml docs/design/purrdf-simd.md \
++            > target/asm-diagnostics/inputs.sha256
+       - name: Measure and check this configuration
++        id: measure
+         run: |
+           # Bound scalar WASM compilation through the existing Cargo job budget.
+           # Other configurations keep their current scheduling.
+@@ -744,6 +761,105 @@ jobs:
+           name: simd-asm-${{ matrix.config }}
+           path: target/asm-reports/*.json
+           if-no-files-found: error
++      - name: Upload failed measurement diagnostics
++        if: failure() && steps.measure.outcome == 'failure'
++        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
++        with:
++          # Outside simd-asm-* so the aggregate receives only checked reports.
++          name: asm-diagnostics-${{ matrix.config }}
++          path: |
++            target/asm-diagnostics/
++            target/asm-reports/${{ matrix.config }}.json
++            target/simd-asm/contexts/**/purrdf_core*.s
++            target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
++            target/simd-asm/contexts/**/cargo.graph-*.stderr.log
++            target/simd-asm/contexts/**/evidence/*.json
++          if-no-files-found: error
++
++  # An explicit dispatch generates a projection independently of ordinary parity
++  # checks. Its output is reviewed and committed separately; it never commits or pushes.
++  simd-asm-projection:
++    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection
++    runs-on: ubuntu-latest
++    timeout-minutes: 120
++    env:
++      CARGO_BUILD_JOBS: 2
++    steps:
++      - name: Checkout
++        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
++        with:
++          persist-credentials: false
++      - name: Install Rust
++        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
++        with:
++          toolchain: "nightly" # keep in sync with rust-toolchain.toml
++          targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
++      - name: Install the C cross toolchain
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y --no-install-recommends \
++            clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
++      - name: Record the clean checkout and measurement inputs
++        run: |
++          mkdir -p target/asm-projection/reports
++          rustc -vV > target/asm-projection/compiler.txt
++          git rev-parse HEAD 'HEAD^{tree}' > target/asm-projection/checkout.txt
++          git status --porcelain=v1 > target/asm-projection/source-status-before.txt
++          test ! -s target/asm-projection/source-status-before.txt
++          sha256sum .github/workflows/ci.yaml Makefile Cargo.toml Cargo.lock rust-toolchain.toml \
++            scripts/check-simd-asm.py scripts/simd_asm_runtime.py \
++            scripts/simd-asm-manifest.toml crates/rdf-core/src/ir/dataset.rs \
++            crates/rdf-core/src/ir/paged/mod.rs crates/rdf-core/src/ir/paged/query.rs \
++            crates/rdf-core/src/ir/paged/translation.rs docs/design/purrdf-simd.md \
++            > target/asm-projection/inputs-before.sha256
++      - name: Inspect the actual x86-v3 eager seal and mapping bodies
++        run: |
++          make simd-asm SIMD_ASM_ARGS="--config x86_64-v3 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
++            > target/asm-projection/x86-v3-body-probe.log 2>&1
++      - name: Inspect the actual x86-v4 eager seal and mapping bodies
++        run: |
++          make simd-asm SIMD_ASM_ARGS="--config x86_64-v4 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
++            > target/asm-projection/x86-v4-body-probe.log 2>&1
++      - name: Generate the complete seven-configuration projection
++        run: |
++          make simd-asm SIMD_ASM_ARGS="--write-doc --jobs 2" \
++            > target/asm-projection/generation.log 2>&1
++          git diff --exit-code -- . ':(exclude)docs/design/purrdf-simd.md'
++          git ls-files --others --exclude-standard > target/asm-projection/untracked-after.txt
++          test ! -s target/asm-projection/untracked-after.txt
++          git diff --binary -- docs/design/purrdf-simd.md > target/asm-projection/projection.patch
++          cp docs/design/purrdf-simd.md target/asm-projection/purrdf-simd.md
++          sha256sum docs/design/purrdf-simd.md scripts/simd-asm-manifest.toml \
++            > target/asm-projection/inputs-after.sha256
++          git status --porcelain=v1 > target/asm-projection/source-status-after.txt
++      - name: Qualify the generated projection on all seven configurations
++        run: |
++          make simd-asm SIMD_ASM_ARGS="--jobs 2 --report target/asm-projection/reports/all-configurations.json" \
++            > target/asm-projection/qualification.log 2>&1
++      - name: Require complete checked evidence and the same compiler
++        run: |
++          make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-projection/reports" \
++            > target/asm-projection/aggregate.log 2>&1
++          rustc -vV > target/asm-projection/compiler-after.txt
++          cmp target/asm-projection/compiler.txt target/asm-projection/compiler-after.txt
++      - name: Record artifact checksums
++        if: ${{ !cancelled() }}
++        run: |
++          mkdir -p target/asm-projection
++          find target/asm-projection -type f ! -name artifacts.sha256 -print0 \
++            | sort -z | xargs -0 sha256sum > target/asm-projection/artifacts.sha256
++      - name: Upload projection and emitted-body evidence
++        if: ${{ !cancelled() }}
++        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
++        with:
++          name: asm-projection
++          path: |
++            target/asm-projection/
++            target/simd-asm/contexts/**/purrdf_core*.s
++            target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
++            target/simd-asm/contexts/**/cargo.graph-*.stderr.log
++            target/simd-asm/contexts/**/evidence/*.json
++          if-no-files-found: error
+ 
+   simd-asm:
+     needs: simd-asm-config
+diff --git docs/design/purrdf-simd.md docs/design/purrdf-simd.md
+index dadb829d5..1d236adb1 100644
+--- docs/design/purrdf-simd.md
++++ docs/design/purrdf-simd.md
+@@ -772,7 +772,7 @@ floor of 0 and says so. A crate-level row names no function and has no cells.
+ | `core.canon-escape` | `purrdf-core` | `canon::write_iri_escaped`, `write_literal_escaped`, `find_first_literal_escape`; `iri_escape::find_first_candidate` | `crates/rdf-core/src/ir/canon.rs:2796` | `flat_view_canon`, `shared_homes` | rdf-escape | I | — | rewrite | clean-run batching with the RDFC-1.0 output bytes unchanged. The IRI writer delegates to `iri_escape::push_escaped`, now the one emission of the IRIREF egress law (the Turtle writer and the entailment surface use it too); the literal law (the canonical `ECHAR` set plus `\u00XX` for the other C0 controls and DEL, C1 raw) is neither `iri_escape`'s nor `xml_escape`'s, so it stays here as the one canonical-literal writer, now public, over a local all-ASCII class whose every stop is an escape. The kernel is `purrdf_lex::terminals::ByteClass`, the formulation of `lex.scan-json-string` exported for a class a writer owns: sixteen-byte `as_chunks` lanes, each a `0x00`/`0xFF` byte from the class runs written as compares, a branch-free OR-fold as the clean-chunk test, the hit chunk's lanes read as a little-endian `u128` whose trailing-zero count over 8 is the offset. The per-char writers are kept under test as the oracle over fixed-seed values holding every ASCII scalar and the whole `0xC2` block, and the W3C RDFC-1.0 fixtures pass unchanged | the scans: +simd128 packed `i8x16` compares, baseline scalar lanes; the drivers: scalar on both builds | iri scan sse2 v23·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan sse2 v11·f0·r0·req✓<br>literal v0·f0·r0 | iri scan avx2 v22·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx2 v23·f0·r0·req✓<br>literal v4·f0·r0 | iri scan avx512 masks v10·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx512 masks v18·f0·r0·req✓<br>literal v3·f0·r0 | iri scan neon v20·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v8·f0·r0·req✓<br>literal v0·f0·r0 | iri scan sve v13·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v8·f0·r0·req✓<br>literal v0·f0·r0 | iri scan scalar v0·f0·r0<br>iri v0·f0·r0<br>literal scan scalar v0·f0·r0<br>literal v0·f0·r0 | iri scan simd128 v19·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan simd128 v9·f0·r0·req✓<br>literal v0·f0·r0 |
+ | `core.purremb-f32-decode` | `purrdf-core` | `F32Scalars::check_finite`, `F32Scalars::decode_into`, `EffectiveF32Row::decode_into` (`first_non_finite_f32`), `F32Scalars::next` | `crates/rdf-core/src/ir/embedding/view.rs:909` | `purremb`, `purremb_alloc` | — | FI | — | rewrite | a bulk decode beside the lazy iterator: `chunks_exact(4)` little-endian words, sixteen per block, each lane a `0x0000_0000`/`0xFFFF_FFFF` word from a masked compare of the exponent field (the finiteness test on the bits) and a branch-free OR as the clean-block test; only a hit block is searched again, out of line and `#[cold]`, for its first scalar. `check_finite` returns the iterator's first `NonFiniteScalar` at the same column; `decode_into` appends exactly what `for v in row { out.push(v?) }` does, including the values before a failure; the normalized row divides the same way. The per-scalar iterator is unchanged and recorded beside the fold: `F32Scalars::next` is inlined into every caller, so it is measured in `L2F32Scalars::next`, the out-of-line normalized iterator that inlines it. Whole-matrix verification uses `check_finite`. The drained iterator is kept under test as the oracle for every non-finite class at every position of every length to 40, with a later second non-finite, an advanced iterator, a nonzero first column and a trailing partial scalar | the fold: +simd128 `i32x4.eq` + `v128.any_true`, baseline scalar lanes; the iterator: scalar on both builds | fold sse2 v36·f0·r0·req✓<br>iterator v0·f0·r0 | fold avx2 v30·f0·r0·req✓<br>iterator v0·f0·r0 | fold avx512 v10·f0·r0·req✓<br>iterator v0·f0·r0 | fold neon v13·f0·r0·req✓<br>iterator v0·f0·r0 | fold neon v12·f0·r0·req✓<br>iterator v0·f0·r0 | fold scalar v0·f0·r0<br>iterator v0·f0·r0 | fold simd128 v48·f0·r0·req✓<br>iterator v0·f0·r0 |
+ | `core.purremb-norm` | `purrdf-core` | `norm_fold`, `deterministic_l2_norm` | `crates/rdf-core/src/ir/embedding/view.rs:4636` | `purremb`, `purremb_alloc` | — | FI | the scaled sum of squares is sequential by specification | leave | PURREMB §13.2 makes the written order normative (no FMA, sequential); measured in `L2F32Scalars::new` | scalar on both builds | v1·f0·r0 | v1·f0·r0 | v1·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+-| `core.paged-map-quad` | `purrdf-core` | `paged::map_quad_to_global` | `crates/rdf-core/src/ir/paged/mod.rs:1148` | `paged_cross_page_bgp` | paged_cross_page_bgp | I | four independent table gathers per quad | leave | a gather over at most four columns; measured in `PagedDataset::from_provider`, the in-library symbol that inlines it (query-time copies are monomorphized in the caller) | scalar on both builds | v0·f0·r0 | v14·f0·r0 | v10·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v6·f0·r0 |
++| `core.paged-map-quad` | `purrdf-core` | `QuadIds::map_ids` through `PageTranslation::to_global` | `crates/rdf-core/src/ir/dataset.rs:151`, `crates/rdf-core/src/ir/paged/mod.rs:469` | `paged_cross_page_bgp` | paged_cross_page_bgp | I | up to four independent table gathers per quad | leave | a gather over at most four columns through the shared id-mapping home; the selector measures the enclosing eager seal `PagedDataset::from_provider`. Counts cover its selected emitted parent bodies and do not establish isolated gather SIMD or inlining; query-time mappings are monomorphized in their callers | baseline and +simd128 counts describe the enclosing eager seal | v0·f0·r0 | v14·f0·r0 | v10·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v6·f0·r0 |
+ | `core.xsd-regex-scan` | `purrdf-core` | `xsd_regex::CompiledPattern::is_match` → `Prefilter::next_window` → `scan::find_byte_pair`, `scan::find_range_pair` (`scan::find_byte` / `scan::find_byte2` for a one-position window) | `crates/rdf-core/src/xsd_regex/prefilter.rs:400` | `xsd_regex`, `regex_eval`, `pattern_validate`, `expr_vm` | regex_eval, shapes-pattern_validate, shex-pattern_validate | I | — | rewrite | the `regex` crate is built without its literal prefilter, so the prefilter is PurRDF's: `Prefilter::build` reads, from the same `regex-syntax` HIR the engine compiled (case folding included), a window of single-byte positions every match contains, the bytes before it (bounded lengths and ASCII-class runs, read backward) and the bytes after it; `next_window` searches for two of the window's cheapest positions at once, one or two bytes by equality with `purrdf_lex::scan::find_byte_pair` and narrow classes such as `[0-9]` by range with `scan::find_range_pair` (sixty-four-byte blocks of paired lanes, one clean-block test, sixteen-byte chunks and one overlapping chunk after them, a kernel per shape, no run-time dispatch), and verifies the rest; the engine runs only on the slice a match through that window can occupy, or not at all when the pattern is its window. A pattern anchored at the start or the end of the haystack is left to the engine. Measured in the out-of-line copies in `purrdf_lex`. The engine alone is the oracle: 64,000 seeded pattern/haystack pairs (Unicode, anchors, `i`, `m`, `s`, `q`, `x`, empty matches) agree on `is_match` and `replace_all` | +simd128: packed `i8x16.eq` / `i8x16.le_u` + `v128.and` lanes; baseline: the same lane loops as scalar code | pair sse2 v248·f0·r0·req✓<br>range sse2 v573·f0·r0·req✓ | pair avx2 v120·f0·r0·req✓<br>range avx2 v249·f0·r0·req✓ | pair avx512 masks v79·f0·r0·req✓<br>range avx512 masks v158·f0·r0·req✓ | pair neon v170·f0·r0·req✓<br>range neon v338·f0·r0·req✓ | pair neon v167·f0·r0·req✓<br>range neon v349·f0·r0·req✓ | pair scalar v0·f0·r0<br>range scalar v0·f0·r0 | pair simd128 v166·f0·r0·req✓<br>range simd128 v251·f0·r0·req✓ |
+ | `core.sssom-tsv` | `purrdf-core` | `sssom::serialize_tsv` | `crates/rdf-core/src/sssom.rs:1119` | `sssom` | — | I | one `format!` per field and line into a `Vec<String>` | leave | allocation and formatting bound; no scan loop | scalar on both builds | v7·f0·r0 | v9·f0·r0 | v8·f0·r0 | v2·f0·r0 | v2·f0·r0 | v0·f0·r0 | v1·f0·r0 |
+ | `core.loss-json-escape` | `purrdf-core` | `loss::escape_json_into` (inlined into `loss::push_field`) | `crates/rdf-core/src/loss.rs:2389` | — | — | I | — | covered | a one-call writer over the workspace's one JSON string-escape law, `purrdf_lex::json_escape`, in its `ShortForms` spelling; the clean runs end at the law's scanner for that spelling (`lex.scan-json-string`), one out-of-line copy in `purrdf_lex`, measured there and repeated in this entry. The writer inlines into `push_field`, which is its measured call site; the law's own bench is `iri_json_escape_short_forms` in `crates/iri/benches/parse.rs` | the scan: +simd128 packed `i8x16` compares, baseline scalar lanes; the writer: scalar on both builds | scan sse2 v9·f0·r0·req✓<br>call site v0·f0·r0 | scan avx2 v21·f0·r0·req✓<br>call site v0·f0·r0 | scan avx512 masks v17·f0·r0·req✓<br>call site v0·f0·r0 | scan neon v6·f0·r0·req✓<br>call site v0·f0·r0 | scan neon v6·f0·r0·req✓<br>call site v0·f0·r0 | scan scalar v0·f0·r0<br>call site v0·f0·r0 | scan simd128 v7·f0·r0·req✓<br>call site v0·f0·r0 |
+diff --git scripts/simd-asm-manifest.toml scripts/simd-asm-manifest.toml
+index 76f0edb04..7de64004d 100644
+--- scripts/simd-asm-manifest.toml
++++ scripts/simd-asm-manifest.toml
+@@ -2692,7 +2692,7 @@ summary = "`norm_fold` (the normative PURREMB L2 fold), measured in `L2F32Scalar
+ 
+ [[site]]
+ id = "core.paged-map-quad"
+-summary = "`paged::map_quad_to_global`, the four-column page-to-global id gather, measured in `PagedDataset::from_provider`"
++summary = "`QuadIds::map_ids` through `PageTranslation::to_global`, the page-to-global id gather; measured bodies are the enclosing eager seal `PagedDataset::from_provider`, not an isolated gather"
+ 
+   [[site.measure]]
+   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]

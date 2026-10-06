@@ -1,0 +1,13 @@
+.github/workflows/ci.yaml: OK
+Makefile: OK
+Cargo.toml: OK
+Cargo.lock: OK
+rust-toolchain.toml: OK
+scripts/check-simd-asm.py: OK
+scripts/simd_asm_runtime.py: OK
+scripts/simd-asm-manifest.toml: OK
+crates/rdf-core/src/ir/dataset.rs: OK
+crates/rdf-core/src/ir/paged/mod.rs: OK
+crates/rdf-core/src/ir/paged/query.rs: OK
+crates/rdf-core/src/ir/paged/translation.rs: OK
+docs/design/purrdf-simd.md: OK

@@ -1,0 +1,3 @@
+3a240ca1303a4d3089fb35a875a2a8a34d6ca76910fde15b7ae4cb9d2d287cc4  .github/workflows/ci.yaml
+c96ab1574d88cae967d67bcb642a7a4b7716555aaf9ca66e1b2e87fac36f760a  scripts/simd-asm-manifest.toml
+30db86879aa83c616b0b4572d5feab583919f161115496e28a807419bce325c0  docs/design/purrdf-simd.md

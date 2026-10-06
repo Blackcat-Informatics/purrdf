@@ -1,0 +1,120 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 9.48s
+     Running tests/mutable_declared_graph_drain.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/2c37e1481ab92760/out/mutable_declared_graph_drain-2c37e1481ab92760)
+
+running 6 tests
+test bulk_declaration_checkpoints_preserve_unvisited_entries_and_snapshots ... ok
+test bulk_declaration_checkpoints_retain_populated_graphs_and_skip_an_empty_registry ... ok
+test draining_a_declared_graph_does_not_rewalk_the_dataset_per_removal ... ok
+test emptiness_is_decided_per_graph_and_by_the_graphs_own_rows ... ok
+test named_graph_capability_reads_do_not_allocate_the_registry ... ok
+test remembered_slot_drain_has_no_per_row_allocation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/paged_admission_law.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/8256a5422ebc17ac/out/paged_admission_law-8256a5422ebc17ac)
+
+running 11 tests
+test a_genuinely_empty_graph_selective_answer_is_a_complete_ready_result_not_an_error ... ok
+test compaction_preserves_the_named_graphs_value_set_in_canonical_order ... ok
+test fuzz::paged_law_regressions_decode_to_their_inputs_and_hold_both_laws ... ok
+test fuzz::property_paged_cardinality_estimate_upper_bounds_count ... ok
+test fuzz::property_paged_quads_for_pattern_matches_linear_scan_over_quads ... ok
+test identical_query_on_two_fresh_views_produces_identical_requested_pages ... ok
+test pinned_cross_page_join_admits_exactly_the_literal_page_sequence ... ok
+test pinned_cross_page_join_never_admits_a_page_that_only_mentions_the_subject_as_an_object ... ok
+test pinned_full_scan_admits_exactly_the_literal_page_set_in_order ... ok
+test pinned_graph_enumeration_admits_no_page_where_the_pre_change_rule_scanned_them_all ... ok
+test warm_restart_preserves_dictionary_rows_and_requested_pages_evidence ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/paged_backend.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/aa7527c6b337151a/out/paged_backend-aa7527c6b337151a)
+
+running 34 tests
+test a_query_over_a_drifted_warm_restart_refuses_with_typed_sticky_invalid_data ... ok
+test annotation_quads_in_graph_skips_a_reifier_only_page_and_still_yields_a_page_whose_only_row_in_g_is_an_annotation_row ... ok
+test annotations_of_with_graph_skips_a_page_that_only_mentions_the_term_in_the_reifier_table_and_admits_the_owning_page ... ok
+test cardinality_estimate_is_residency_independent ... ok
+test cardinality_estimate_materializes_no_page ... ok
+test compact_reclaims_dead_ids_deterministically ... ok
+test compacted_paged_serializes_byte_identical_to_single ... ok
+test cross_page_cost_model_is_per_page_sum ... ok
+test cross_page_parity_via_trait_surface ... ok
+test freeze_refuses_non_disjoint_side_tables ... ok
+test freeze_refuses_non_quad_disjoint_pages ... ok
+test from_parts_reconstitutes_without_materializing_pages ... ok
+test graph_drift_fixture_with_an_honest_provider_still_returns_the_right_rows ... ok
+test lazy_hook_fires_on_demand ... ok
+test named_graph_query_skips_the_page_that_declares_it_empty_and_admits_the_page_that_owns_rows_elsewhere ... ok
+test named_graph_side_table_only_content_is_skipped_by_quads_for_pattern_but_still_yielded_by_reifier_quads ... ok
+test named_graphs_costs_no_pages ... ok
+test paged_dataset_is_send_sync ... ok
+test paged_named_graphs_match_a_single_merged_dataset ... ok
+test pages_for_graph_equals_the_graph_only_pattern_for_every_known_graph ... ok
+test pages_for_pattern_predicts_actual_consumption ... ok
+test provider_fault_categories_remain_distinct ... ok
+test reifier_and_annotation_quads_in_graph_match_the_filtered_whole_table_on_every_backend ... ok
+test reifier_and_annotation_views_compose_across_pages ... ok
+test reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_only_row_in_g_is_a_reifier_row ... ok
+test reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owning_page ... ok
+test retain_graph_keeps_a_declared_empty_graph_that_owns_no_row_anywhere ... ok
+test retain_graph_keeps_every_page_carrying_the_graph_in_any_stream_and_materializes_none ... ok
+test seal_rejects_a_typed_generation_mismatch ... ok
+test snapshot_and_byte_metadata_survive_selection_and_compaction ... ok
+test the_same_query_over_an_honest_warm_restart_still_completes ... ok
+test verify_parts_accepts_an_honest_warm_restart ... ok
+test verify_parts_rejects_a_summary_that_disagrees_with_page_content ... ok
+test warm_restart_rejects_generation_and_page_count_mismatches ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/paged_fallible.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/0d2b45876ca0c8f5/out/paged_fallible-0d2b45876ca0c8f5)
+
+running 12 tests
+test annotation_quads_in_graph_named_consumes_only_the_owning_page ... ok
+test byte_budget_below_the_owning_page_charge_refuses_and_exact_equality_admits ... ok
+test changed_materialization_metadata_is_invalid_data ... ok
+test every_read_path_shares_one_operation_cache_and_evidence ... ok
+test flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_work ... ok
+test flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_not_ready_after ... ok
+test generation_drift_is_refused_before_materialization ... ok
+test inclusive_limits_and_cache_accounting_are_exact ... ok
+test named_graphs_is_empty_after_a_sticky_failure ... ok
+test page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it ... ok
+test provider_failure_after_seal_is_sticky_and_never_panics ... ok
+test status_checkpoint_detects_drift_without_a_page_read ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/paged_stack.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/e7198b4ae2dd2d13/out/paged_stack-e7198b4ae2dd2d13)
+
+running 22 tests
+test annotation_only_pages_demote_only_after_last_original_reifier_in_the_graph ... ok
+test cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open_iterators ... ok
+test canonical_fold_matches_independent_eager_typed_surface_and_dictionary_for_two_histories_and_bounds ... ok
+test chronological_removal_reinsertion_same_head_and_snapshot_isolation ... ok
+test construction_append_and_snapshot_do_not_read_lower_pages ... ok
+test declaration_probe_fault_suppresses_the_candidate_that_triggered_it ... ok
+test deterministic_value_set_mutations_match_an_independent_oracle_at_each_snapshot ... ok
+test drift_of_skipped_or_zero_page_sources_gates_the_entire_head_and_metadata ... ok
+test explicit_head_graph_lifetime_survives_sealing_while_populated_then_last_row_removal ... ok
+test graph_pruning_partial_removals_empty_declarations_and_scoped_head_values_survive ... ok
+test head_charges_once_under_global_limits_and_folds_have_no_partial_success ... ok
+test invalid_rows_never_mutate_the_head_and_pending_head_never_reorders ... ok
+test logical_id_filters_do_not_recheck_descriptors_per_row_or_cached_reread ... ID drain rows=1 sources=2 pages=2 admitted=[(4, 4, 1), (4, 4, 1)] reread=[(4, 4, 1), (4, 4, 1)]
+ID drain rows=32 sources=2 pages=2 admitted=[(4, 4, 1), (4, 4, 1)] reread=[(4, 4, 1), (4, 4, 1)]
+ID drain rows=256 sources=2 pages=2 admitted=[(4, 4, 1), (4, 4, 1)] reread=[(4, 4, 1), (4, 4, 1)]
+ok
+test metadata_point_reads_detect_source_drift_without_an_earlier_status_checkpoint ... ok
+test native_equal_primary_and_virtual_reifier_rows_retain_both_streams ... ok
+test new_reifiers_promote_older_primary_rows_only_in_the_matching_graph ... ok
+test newer_typed_occurrence_wins_before_partition_and_native_primary_typing_is_retained ... ok
+test orphan_annotation_association_uses_its_visible_introduction_prefix ... ok
+test page_count_drift_is_checked_without_materialization_and_is_sticky ... ok
+test sealed_implicit_graph_disappears_when_its_last_effective_row_is_removed ... ok
+test summary_drift_is_refused_even_with_equal_local_values_counts_and_charges ... ok
+test typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

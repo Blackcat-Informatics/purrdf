@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "staged_tree": "5d150fa4076cc75e293b517f79dd080b6ea807ed",
+  "cached_patch_sha256": "dd41c2fb51a065f10b622976eca465350218b1b10ae53fc5ac2c7acd2d73f78f",
+  "cached_document_sha256": "7285a4c4d1f401aec02d880622cdf7f9893fee4b9d781d27a61c076cd6a94356",
+  "sole_cached_path": "docs/design/purrdf-simd.md",
+  "unstaged_tracked_delta": false,
+  "checks": [
+    "git write-tree",
+    "cached binary patch byte equality",
+    "cached whitespace",
+    "cached document artifact byte equality"
+  ]
+}

@@ -1,0 +1,10 @@
+python3 scripts/check-thread-locals.py --self-test
+OK: self-test — the tree as committed has no divergence (the valid neighbour)
+OK: self-test — a `thread_local!` in a comment, a string or build output declares nothing
+OK: self-test — a fixture whose every `thread_local!` is listed passes (the neighbour)
+OK: self-test — the same fixture with one unlisted `thread_local!` is refused, naming it
+OK: self-test — a ledger entry whose static is gone is refused as stale
+OK: self-test — a `thread_local!` listed twice is refused
+OK: self-test — an empty ledger is refused
+python3 scripts/check-thread-locals.py
+OK: every `thread_local!` under crates/ is in the interleaving ledger (53 statics)

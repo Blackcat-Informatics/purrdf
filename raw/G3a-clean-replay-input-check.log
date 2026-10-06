@@ -1,0 +1,8 @@
+Makefile: OK
+Cargo.toml: OK
+Cargo.lock: OK
+rust-toolchain.toml: OK
+scripts/check-simd-asm.py: OK
+scripts/simd_asm_runtime.py: OK
+scripts/simd-asm-manifest.toml: OK
+docs/design/purrdf-simd.md: OK

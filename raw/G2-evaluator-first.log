@@ -1,0 +1,67 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 44s
+     Running tests/delta_view.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-sparql-eval/e388a2fe44d09756/out/delta_view-e388a2fe44d09756)
+
+running 1 test
+test prepared_joins_and_computed_terms_share_values_across_snapshot_layers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fallible_query.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-sparql-eval/ae57fc8f79d298aa/out/fallible_query-ae57fc8f79d298aa)
+
+running 17 tests
+test parse_failure_remains_an_ordinary_query_error_with_evidence ... ok
+test a_failed_paged_view_outranks_an_explain_stop_signal ... ok
+test operational_root_cause_wins_over_a_derived_evaluator_error ... ok
+test fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure ... ok
+test prepared_entry_uses_the_same_completeness_boundary ... ok
+test fallible_explain_options_measure_the_same_registered_relation_as_resident ... ok
+test cold_and_warm_bgp_planning_have_identical_demand_paging_evidence ... ok
+test operational_failure_taxonomy_is_not_an_empty_answer ... ok
+test production_query_budget_boundaries_are_exact_and_distinct ... ok
+test query_fallible_view_dispatches_a_registered_relation_with_options ... ok
+test query_time_failure_cannot_masquerade_as_an_empty_result ... ok
+test identical_executions_have_identical_results_status_and_evidence ... ok
+test query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_matched_registry_answers ... ok
+test every_required_query_form_and_operator_propagates_page_failure ... ok
+test successful_and_empty_results_are_explicitly_complete ... ok
+test healthy_fallible_explain_is_byte_identical_on_cold_warm_and_signalled_entries ... ok
+test resident_and_pack_views_keep_the_ordinary_byte_identical_result_path ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/paged_query_e2e.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-sparql-eval/1922c74861d8f4e4/out/paged_query_e2e-1922c74861d8f4e4)
+
+running 7 tests
+test query_materializes_only_the_pages_the_plan_needs ... ok
+test cross_page_join_order_is_cost_driven_and_flips_with_skew ... ok
+test operational_explain_uses_store_cardinalities_without_materializing_unneeded_pages ... ok
+test paged_property_path_parity_across_pages ... ok
+test paged_aggregate_group_by_parity_across_pages ... ok
+test paged_query_parity_is_byte_identical_to_single_dataset ... ok
+test paged_subquery_parity_across_pages ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/paged_stack_query.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-sparql-eval/a55130a9e384f64d/out/paged_stack_query-a55130a9e384f64d)
+
+running 8 tests
+delayed operation=0 drift=1 healthy_checkpoints=21; complete result/artifact refused
+delayed operation=0 drift=2 healthy_checkpoints=21; complete result/artifact refused
+test constants_and_head_queries_check_skipped_and_zero_page_source_descriptors ... delayed operation=ok1 drift=
+1 healthy_checkpoints=21; complete result/artifact refused
+delayed operation=1 drift=2 healthy_checkpoints=21; complete result/artifact refused
+test aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary ... ok
+delayed operation=2 drift=1 healthy_checkpoints=14; complete result/artifact refused
+delayed operation=2 drift=2 healthy_checkpoints=14; complete result/artifact refused
+test delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold ... ok
+test source_faults_are_operational_sticky_and_refuse_compacted_artifacts ... ok
+test native_primary_and_virtual_reifier_overlap_reaches_the_same_consumer_bag ... ok
+test typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables ... ok
+test chronological_layers_match_eager_bags_for_every_consumer_family ... ok
+test generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

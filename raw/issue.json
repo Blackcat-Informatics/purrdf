@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## The gap\n\nThe paged tier is built from sealed, quad-disjoint pages under one durable dictionary generation, and G2 compaction rewrites a whole generation. That fits a corpus that is sealed once. It does not fit a consumer that ingests continuously and must answer queries between compactions: re-sealing a generation per commit is not an option, and G6 states that the reference `PagedDataset` is a demonstrator whose eager seal does not build incrementally at ingest, leaving incremental ingest to the consumer.\n\nThe pieces that exist today are close but not composed:\n\n- **C4** `DatasetMut` overlays **one** frozen base with **one** in-memory delta, mutating by value with tagged `Base`/`Delta` handles so no single id space is implied (C0.8).\n- **G-clauses** give sealed pages, exact page evidence (G7, G8), snapshot binding (G9) and sealed-summary admission (G10) \u2014 for one sealed generation.\n- **G5** puts durable tiers outside purrdf, which is right: the request below is for the mechanism, not for persistence.\n\n## Requested shape: an LSM-style stack read as one snapshot\n\n1. **Base:** one or more sealed paged generations, as today.\n2. **Deltas:** a stack of small sealed delta generations above the base, each produced by sealing a batch of commits. Sealed, so they participate in G8 evidence and G10 admission like any page.\n3. **Head:** one in-memory mutable delta at the top (C4's shape), which the consumer can rebuild from its own log at open, so it carries no durability obligation.\n4. **Removals:** a removal set over quads (by value, per C4) applied at read time across every layer below the one that removed it, and dropped at compaction.\n5. **One snapshot:** a query pins the whole stack \u2014 base, deltas, head and removal set \u2014 as one G9 snapshot, and its G7/G8 evidence accounts for pages read in every layer.\n6. **Compaction:** folds deltas and removals into a new base generation, renumbering by canonical value per G2. The consumer publishes the result atomically; purrdf provides the fold.\n\n## Acceptance identities\n\nBoth are testable without trusting either side's implementation:\n\n- **Read equivalence:** for any query, results over `base + deltas + head - removals` are identical to results over an eager seal of the effective quad set.\n- **Compaction equivalence:** compacting the stack produces pages byte-identical to an eager seal of the same effective set.\n\n## Questions for the design\n\n- **Term identity across layers.** A delta can introduce terms absent from the base dictionary generation. Do sealed deltas extend the dictionary as an append-only generation, or carry their own interner with C4-style tagged handles until compaction? C0.8 rules out a numeric id range meaning \"delta\"; which of the remaining shapes keeps G10's local-id-space summaries exact?\n- **Removal of a quad that a lower layer holds** is the common case (a retraction of something already sealed). Should the removal set be per layer, or one set per snapshot, and how does G10 admission account for pages whose quads are partly removed \u2014 still exact, or labelled?\n- **Depth.** Is there a bound on stack depth the read path should enforce, or is that the consumer's compaction policy, with depth reported in G8 evidence?\n\n## Out of scope\n\nDurable storage of any layer (G5), the consumer's commit log, and when to compact. Those stay with the consumer.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-06T05:43:24Z",
+  "labels": [],
+  "milestone": null,
+  "number": 457,
+  "state": "OPEN",
+  "title": "Paged tier: an LSM-style stack of sealed delta generations with removals, read as one snapshot",
+  "updatedAt": "2026-10-06T05:43:24Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/457"
+}

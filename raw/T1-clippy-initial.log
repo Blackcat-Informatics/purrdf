@@ -1,0 +1,58 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/hash)
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/lex)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking digest v0.11.3
+    Checking regex-automata v0.4.14
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/iri)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-events)
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Checking sha2 v0.11.0
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/cdt)
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/deflate)
+    Checking hashbrown v0.17.1
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/rdf-core/src/ir/paged/stack.rs:196:35
+    |
+196 |     pub fn insert(&mut self, row: QuadValues) -> Result<bool, PagedStackError> {
+    |                                   ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+196 |     pub fn insert(&mut self, row: &QuadValues) -> Result<bool, PagedStackError> {
+    |                                   +
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/rdf-core/src/ir/paged/stack.rs:221:50
+    |
+221 |     pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, PagedStackError> {
+    |                                                  ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+221 |     pub fn declare_named_graph(&mut self, graph: &TermValue) -> Result<bool, PagedStackError> {
+    |                                                  +
+
+error: matching over `()` is more explicit
+   --> crates/rdf-core/src/ir/paged/stack.rs:503:43
+    |
+503 |     fn quads_for_pattern_with_plan(&self, _: &(), s: Option<Self::Id>, p: Option<Self::Id>, o: Option<Self::Id>, g: GraphMatch<Self...
+    |                                           ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+    = note: `-D clippy::ignored-unit-patterns` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::ignored_unit_patterns)]`
+
+error: could not compile `purrdf-core` (lib) due to 3 previous errors

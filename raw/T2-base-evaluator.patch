@@ -1,0 +1,578 @@
+diff --git crates/sparql-eval/src/engine.rs crates/sparql-eval/src/engine.rs
+index 9f4686d0f..d1c786029 100644
+--- crates/sparql-eval/src/engine.rs
++++ crates/sparql-eval/src/engine.rs
+@@ -1353,6 +1353,7 @@ impl NativeSparqlEngine {
+         // here — every value the materialised lane's single context would carry.
+         let filtering = crate::property_fn_eval::FilterContext {
+             options: self.eval_options,
++            disjoint_language_strings: options.disjoint_language_strings,
+             standpoint_predicates: self.standpoint_predicates.clone(),
+             loss_vocabulary: self.loss_vocabulary.clone(),
+             base_iri: prepared
+@@ -3878,6 +3879,21 @@ pub struct QueryOptions<'a> {
+     /// well defined. Admission and the rewrite still follow the substitutions alone.
+     /// Empty — the default — declares nothing beyond them.
+     pub declared_prebound: &'a [&'a str],
++    /// Whether `=` answers `false`, rather than a type error, when one operand is a
++    /// language-tagged string and the other a literal whose value the engine does not
++    /// know: one of a datatype it does not recognize (`"xyz"@en = "xyz"^^ex:unknown`)
++    /// or an ill-typed one (`"xyz"@en = "xyz"^^xsd:integer`). `!=` is then `true`.
++    ///
++    /// `false` — the default — is SPARQL 1.2 `sameValue` (§17.4.2.2) as written:
++    /// such a comparison is an error. `true` is an operator extension of the kind
++    /// §17.3.1 permits, which may replace an error and nothing else, so a `FILTER`
++    /// keeps every solution it kept before and possibly more. Its reading is that the
++    /// language-tagged strings are the value space of `rdf:langString` and
++    /// `rdf:dirLangString` alone, so no literal of another datatype can have one as its
++    /// value. Every other comparison is unchanged: an ill-typed literal against a
++    /// string, or two literals of unrecognized datatypes, is still an error. The W3C
++    /// SPARQL test vocabulary names the feature `mf:KnownTypesDefault2Neq`.
++    pub disjoint_language_strings: bool,
+ }
+ 
+ // The trait-object fields are not `Debug`, so derive cannot apply; they are reported by
+@@ -3895,6 +3911,7 @@ impl std::fmt::Debug for QueryOptions<'_> {
+             .field("remote", &self.remote.is_some())
+             .field("load", &self.load.is_some())
+             .field("declared_prebound", &self.declared_prebound)
++            .field("disjoint_language_strings", &self.disjoint_language_strings)
+             .finish()
+     }
+ }
+@@ -3939,6 +3956,7 @@ impl QueryOptions<'_> {
+         remote: None,
+         load: None,
+         declared_prebound: &[],
++        disjoint_language_strings: false,
+     };
+ 
+     /// Configure nothing — identical to [`Self::EMPTY`] and to
+@@ -4007,6 +4025,15 @@ impl<'a> QueryOptions<'a> {
+         self
+     }
+ 
++    /// Answer `=` with `false`, rather than a type error, for a language-tagged
++    /// string against a literal whose value the engine does not know (see
++    /// [`Self::disjoint_language_strings`]).
++    #[must_use]
++    pub const fn with_disjoint_language_strings(mut self, enabled: bool) -> Self {
++        self.disjoint_language_strings = enabled;
++        self
++    }
++
+     /// Set the deterministic prefix minted blank-node labels carry (`None` leaves
+     /// them unprefixed).
+     #[must_use]
+@@ -4516,7 +4543,8 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
+         .with_user_functions(options.functions)
+         .with_property_functions(options.property_functions())
+         .with_aggregates(options.aggregates())
+-        .with_call_depth(options.call_depth);
++        .with_call_depth(options.call_depth)
++        .with_disjoint_language_strings(options.disjoint_language_strings);
+     if let Some(graph) = options.focus_graph {
+         ctx = ctx.with_focus_graph(graph);
+     }
+diff --git crates/sparql-eval/src/eval.rs crates/sparql-eval/src/eval.rs
+index db85dbe5a..8ed98b3c7 100644
+--- crates/sparql-eval/src/eval.rs
++++ crates/sparql-eval/src/eval.rs
+@@ -89,6 +89,17 @@ impl Default for EvalOptions {
+     }
+ }
+ 
++/// How `=` answers a language-tagged string against a literal whose value the
++/// engine does not know (see
++/// [`QueryOptions::disjoint_language_strings`](crate::QueryOptions::disjoint_language_strings)).
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(crate) enum LanguageStringEquality {
++    /// SPARQL 1.2 `sameValue` as written: a type error.
++    Core,
++    /// The operator extension: unequal.
++    Disjoint,
++}
++
+ /// The caller-supplied **standpoint predicate table** read by the `heldIn`
+ /// extension function and by loss-aware `CONSTRUCT`.
+ ///
+@@ -484,6 +495,12 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+     pub rng_state: u64,
+     /// Tunable evaluation behavior (see [`EvalOptions`]). Production default.
+     pub options: EvalOptions,
++    /// Whether `=` answers `false`, rather than a type error, for a language-tagged
++    /// string against a literal of an unrecognized datatype or an ill-typed one (see
++    /// [`QueryOptions::disjoint_language_strings`](crate::QueryOptions::disjoint_language_strings)).
++    /// [`LanguageStringEquality::Core`] (the default) is the core SPARQL 1.2
++    /// `sameValue` answer.
++    pub(crate) language_strings: LanguageStringEquality,
+     /// The caller-supplied standpoint predicate table (see
+     /// [`StandpointPredicates`]) read by `heldIn` and loss-aware
+     /// `CONSTRUCT`. `None` (the default) means no table is configured:
+@@ -1004,6 +1021,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             now: now_val,
+             rng_state: rng_seed,
+             options: EvalOptions::default(),
++            language_strings: LanguageStringEquality::Core,
+             standpoint_predicates: None,
+             loss_vocabulary: None,
+             exists_inner_cache: DetHashMap::default(),
+@@ -2097,6 +2115,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+         self
+     }
+ 
++    /// Answer `=` with `false`, rather than a type error, for a language-tagged
++    /// string against a literal of an unrecognized datatype or an ill-typed one (see
++    /// [`QueryOptions::disjoint_language_strings`](crate::QueryOptions::disjoint_language_strings)).
++    #[must_use]
++    pub const fn with_disjoint_language_strings(mut self, enabled: bool) -> Self {
++        self.language_strings = if enabled {
++            LanguageStringEquality::Disjoint
++        } else {
++            LanguageStringEquality::Core
++        };
++        self
++    }
++
+     /// Fork a `Send` child context for a parallel worker, sharing this context's
+     /// immutable/read-only state and starting its mutable evaluation state fresh.
+     ///
+@@ -2175,6 +2206,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             now: self.now.clone(),
+             rng_state: self.rng_state,
+             options: self.options,
++            language_strings: self.language_strings,
+             standpoint_predicates: self.standpoint_predicates.clone(),
+             loss_vocabulary: self.loss_vocabulary.clone(),
+             exists_inner_cache: self.exists_inner_cache.clone(),
+@@ -2410,6 +2442,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             now: self.now.clone(),
+             rng_state: self.rng_state,
+             options: self.options,
++            language_strings: self.language_strings,
+             standpoint_predicates: self.standpoint_predicates.clone(),
+             loss_vocabulary: self.loss_vocabulary.clone(),
+             exists_inner_cache: DetHashMap::default(),
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index ff5fbb866..2bb7cd447 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -50,7 +50,7 @@ use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trai
+ 
+ use crate::DetHashSet;
+ use crate::error::EvalError;
+-use crate::eval::{EvalCtx, eval_evaluated};
++use crate::eval::{EvalCtx, LanguageStringEquality, eval_evaluated};
+ use crate::governor::lift::{Evaluated, Lift, Truncation};
+ use crate::scratch::SolutionTerm;
+ use crate::solution::{Solution, SolutionSeq, VarSchema};
+@@ -552,6 +552,39 @@ fn term_is_literal<D: DatasetView + Sync>(
+     })
+ }
+ 
++/// A well-formed language literal has a known RDF value even though it has no
++/// XSD value. Check borrowed views without materializing the lexical form.
++fn term_has_language_value<D: DatasetView + Sync>(
++    ctx: &EvalCtx<'_, D>,
++    term: SolutionTerm<D::Id>,
++) -> Result<bool, EvalError> {
++    match term {
++        SolutionTerm::Existing(id) => ctx
++            .dataset
++            .with_term(id, |term| match term {
++                TermRef::Literal {
++                    datatype,
++                    language: Some(_),
++                    direction,
++                    ..
++                } => ctx.dataset.with_term(datatype, |term| {
++                    matches!(term, TermRef::Iri(iri)
++                        if iri == purrdf_iri::vocab::language_datatype_iri(direction.is_some()))
++                }),
++                _ => Ok(false),
++            })
++            .map_err(EvalError::source_read)?
++            .map_err(EvalError::source_read),
++        SolutionTerm::Computed(sid) => Ok(has_language_value(ctx.scratch.computed_value(sid))),
++    }
++}
++
++fn has_language_value(value: &TermValue) -> bool {
++    matches!(value, TermValue::Literal {
++        datatype, language: Some(_), direction, ..
++    } if datatype == purrdf_iri::vocab::language_datatype_iri(direction.is_some()))
++}
++
+ /// Whether a solution term is a triple term, checked on the borrowed view (no
+ /// materialization) — mirrors [`term_is_literal`].
+ fn term_is_triple<D: DatasetView + Sync>(
+@@ -687,8 +720,9 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
+ /// are equal, value-comparable literals compare in the XSD value space
+ /// ([`sparql_value_eq`], under which a numeric NaN equals nothing, itself
+ /// included), distinct terms where at least one is a
+-/// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error), and two
+-/// incomparable literals are a type error (`None`). This is the equality companion to
++/// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error). Distinct known
++/// language values are unequal; an unknown or ill-typed literal comparison is a
++/// type error (`None`). This is the equality companion to
+ /// the ordering [`compare_terms`]; using it for `=` would wrongly turn a distinct
+ /// IRI pair into an error. Note that `sameValue` "cannot be used directly in
+ /// expressions" (its own spec text) — it names the semantics `=` embeds, not a
+@@ -735,18 +769,26 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
+     if term_is_triple(ctx, ta)? && term_is_triple(ctx, tb)? {
+         let av = value_of(ctx, ta)?;
+         let bv = value_of(ctx, tb)?;
+-        return rdf_equal(&av, &bv)
++        return rdf_equal_in(&av, &bv, ctx.language_strings)
+             .map(|eq| intern_boolean(ctx, eq))
+             .transpose();
+     }
+     let ax = xsd_of_term(ctx, ta)?;
+     let bx = xsd_of_term(ctx, tb)?;
+-    let eq = match (ax, bx) {
+-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
++    let eq = match (ax.as_ref(), bx.as_ref()) {
++        (Some(ax), Some(bx)) => sparql_value_eq(ax, bx),
+         _ => {
+             if term_is_literal(ctx, ta)? && term_is_literal(ctx, tb)? {
+-                // Two different literals neither side could value-compare.
+-                None
++                // sameValue distinguishes known unequal language values from
++                // unknown datatypes and ill-typed XSD literals, which still error;
++                // the language-string extension answers a language value against
++                // either of them as unequal.
++                let a_language = term_has_language_value(ctx, ta)?;
++                let b_language = term_has_language_value(ctx, tb)?;
++                let known = (ax.is_some() || a_language) && (bx.is_some() || b_language);
++                let extended = ctx.language_strings == LanguageStringEquality::Disjoint
++                    && (a_language || b_language);
++                (known || extended).then_some(false)
+             } else {
+                 // Distinct terms of (at least one) non-literal kind: known unequal.
+                 Some(false)
+@@ -773,7 +815,7 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
+         return Ok(Some(!value_holds_nan(target_value)));
+     }
+     let cv = value_of(ctx, candidate)?;
+-    Ok(rdf_equal(target_value, &cv))
++    Ok(rdf_equal_in(target_value, &cv, ctx.language_strings))
+ }
+ 
+ /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
+@@ -787,7 +829,21 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
+ /// (`None`); otherwise the terms are equal. The pairs are walked over a work list,
+ /// subject, predicate then object at every level, so a term nested to any depth costs
+ /// no machine stack.
++///
++/// The core `sameValue` answer: [`rdf_equal_in`] without the disjoint-value-space
++/// extension.
++#[cfg(test)]
+ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
++    rdf_equal_in(a, b, LanguageStringEquality::Core)
++}
++
++/// [`rdf_equal`], with `language_strings` choosing whether the operator
++/// extension [`crate::QueryOptions::disjoint_language_strings`] describes applies.
++fn rdf_equal_in(
++    a: &TermValue,
++    b: &TermValue,
++    language_strings: LanguageStringEquality,
++) -> Option<bool> {
+     let mut pending: Vec<(&TermValue, &TermValue)> = vec![(a, b)];
+     let mut errored = false;
+     while let Some((a, b)) = pending.pop() {
+@@ -812,7 +868,7 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+             pending.extend([(&**o1, &**o2), (&**p1, &**p2), (&**s1, &**s2)]);
+             continue;
+         }
+-        match leaf_equal(a, b) {
++        match leaf_equal(a, b, language_strings) {
+             Some(false) => return Some(false),
+             None => errored = true,
+             Some(true) => {}
+@@ -821,8 +877,12 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+     if errored { None } else { Some(true) }
+ }
+ 
+-/// [`rdf_equal`] for a pair of which at most one is a triple term.
+-fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
++/// [`rdf_equal_in`] for a pair of which at most one is a triple term.
++fn leaf_equal(
++    a: &TermValue,
++    b: &TermValue,
++    language_strings: LanguageStringEquality,
++) -> Option<bool> {
+     // SEP-0009 composite equality, for the value-space paths that reach this
+     // function rather than [`equal_terms`]: `IN` (§17.4.1.9) and the componentwise
+     // triple-term comparison. The same diversion, on the same rule, so a
+@@ -830,14 +890,20 @@ fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+     if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
+         return crate::cdt_fn::compare(crate::cdt_fn::CdtRelation::Equal, a, b);
+     }
+-    match (xsd_of(a), xsd_of(b)) {
+-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
++    let ax = xsd_of(a);
++    let bx = xsd_of(b);
++    match (ax.as_ref(), bx.as_ref()) {
++        (Some(ax), Some(bx)) => sparql_value_eq(ax, bx),
+         _ => {
+             if a == b {
+                 Some(true)
+             } else if is_literal(a) && is_literal(b) {
+-                // Two different literals neither side could value-compare.
+-                None
++                let a_language = has_language_value(a);
++                let b_language = has_language_value(b);
++                let known = (ax.is_some() || a_language) && (bx.is_some() || b_language);
++                let extended = language_strings == LanguageStringEquality::Disjoint
++                    && (a_language || b_language);
++                (known || extended).then_some(false)
+             } else {
+                 // Distinct terms of (at least one) non-literal kind: known unequal.
+                 Some(false)
+@@ -909,7 +975,8 @@ fn is_numeric_nan_pair(ax: &XsdValue, bx: &XsdValue) -> bool {
+ }
+ 
+ /// `=` equality between two already-typed XSD values: [`value_equal`]'s
+-/// value-space comparison, plus the answer `value_cmp` cannot give for NaN. On a
++/// value-space comparison, plus the answers `value_cmp` cannot give for NaN and for
++/// the disjoint dateTime/date primitive value spaces. On a
+ /// numeric pair `=` is `op:numeric-equal`, which is `false` whenever either operand
+ /// is NaN — NaN against another number, and NaN against NaN, of either or both of
+ /// `xsd:float`/`xsd:double` (SPARQL 1.2 §17.4.2.2: "The Operator Mapping for "="
+@@ -921,6 +988,14 @@ pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
+     if is_numeric_nan_pair(ax, bx) {
+         return Some(false);
+     }
++    // XSD 1.1 §2.2.2: these primitive value spaces are disjoint. Their
++    // partial ordering is undefined, but sameValue knows they are unequal.
++    if matches!(
++        (ax, bx),
++        (XsdValue::DateTime(_), XsdValue::Date(_)) | (XsdValue::Date(_), XsdValue::DateTime(_))
++    ) {
++        return Some(false);
++    }
+     value_equal(ax, bx)
+ }
+ 
+@@ -6291,6 +6366,169 @@ mod tests {
+         assert_eq!(ebv(&ds, &le), Some(false));
+     }
+ 
++    /// The same literal pair through borrowed dataset terms, computed terms,
++    /// their mixed pairs, IN's owned comparison and a triple-term component.
++    fn assert_literal_equality_paths(a: &TermValue, b: &TermValue, expected: Option<bool>) {
++        assert_literal_equality_paths_under(a, b, expected, LanguageStringEquality::Core);
++    }
++
++    /// [`assert_literal_equality_paths`] under the chosen language-string rule.
++    fn assert_literal_equality_paths_under(
++        a: &TermValue,
++        b: &TermValue,
++        expected: Option<bool>,
++        language_strings: LanguageStringEquality,
++    ) {
++        let extended = language_strings == LanguageStringEquality::Disjoint;
++        for (a, b) in [(a, b), (b, a)] {
++            assert_eq!(
++                rdf_equal_in(a, b, language_strings),
++                expected,
++                "owned {a:?} = {b:?}"
++            );
++            let triple = |object: &TermValue| TermValue::Triple {
++                s: TermBox::new(TermValue::iri("https://example.org/s")),
++                p: TermBox::new(TermValue::iri("https://example.org/p")),
++                o: TermBox::new(object.clone()),
++            };
++            assert_eq!(
++                rdf_equal_in(&triple(a), &triple(b), language_strings),
++                expected
++            );
++            for existing in [[false, false], [true, false], [false, true], [true, true]] {
++                let mut builder = RdfDatasetBuilder::new();
++                for (value, existing) in [(a, existing[0]), (b, existing[1])] {
++                    if existing {
++                        let TermValue::Literal {
++                            lexical_form,
++                            datatype,
++                            language,
++                            direction,
++                        } = value
++                        else {
++                            panic!("literal fixture");
++                        };
++                        builder.intern_literal(RdfLiteral {
++                            lexical_form: lexical_form.clone(),
++                            datatype: Some(datatype.clone()),
++                            language: language.clone(),
++                            direction: *direction,
++                        });
++                    }
++                }
++                let ds = builder.freeze().unwrap();
++                let mut ctx = EvalCtx::new(&ds).with_disjoint_language_strings(extended);
++                let ta = intern_leaf(&mut ctx, a.clone()).unwrap().unwrap();
++                let tb = intern_leaf(&mut ctx, b.clone()).unwrap().unwrap();
++                let answer = equal_terms(&mut ctx, Some(ta), Some(tb)).unwrap();
++                assert_eq!(
++                    answer.and_then(|term| ebv_term(&mut ctx, term).unwrap()),
++                    expected,
++                    "storage {existing:?}: {a:?} = {b:?}"
++                );
++                assert_eq!(in_candidate(&ctx, ta, a, tb).unwrap(), expected);
++            }
++        }
++    }
++
++    #[test]
++    fn language_value_inequality_preserves_unknown_and_ill_typed_errors() {
++        let a = TermValue::lang_literal("xyz", "en");
++        for b in [
++            TermValue::lang_literal("abc", "en"),
++            TermValue::lang_literal("xyz", "fr"),
++            TermValue::simple_literal("xyz"),
++            TermValue::typed_literal("7", XINT),
++            TermValue::typed_literal("true", XSD_BOOLEAN),
++        ] {
++            assert_literal_equality_paths(&a, &b, Some(false));
++        }
++        assert_literal_equality_paths(&a, &TermValue::lang_literal("xyz", "EN"), Some(true));
++        for b in [
++            TermValue::typed_literal("xyz", XINT),
++            TermValue::typed_literal("xyz", "https://example.org/unknown"),
++        ] {
++            assert_literal_equality_paths(&a, &b, None);
++            assert_literal_equality_paths(&b, &b, Some(true));
++        }
++        // A language datatype without a tag has no value; the dataset admission
++        // gate refuses this shape, so it is not a dataset/computed-pair fixture.
++        assert_eq!(
++            rdf_equal(&a, &TermValue::typed_literal("xyz", RDF_LANG_STRING)),
++            None
++        );
++        let directional = |direction| TermValue::Literal {
++            lexical_form: "xyz".to_owned(),
++            datatype: RDF_DIR_LANG_STRING.to_owned(),
++            language: Some("en".to_owned()),
++            direction: Some(direction),
++        };
++        let ltr = directional(RdfTextDirection::Ltr);
++        let rtl = directional(RdfTextDirection::Rtl);
++        assert_literal_equality_paths(&ltr, &rtl, Some(false));
++        assert_literal_equality_paths(&ltr, &a, Some(false));
++        assert_literal_equality_paths(&ltr, &ltr, Some(true));
++    }
++
++    /// The language-string extension turns exactly one class of error into
++    /// `false`: a language-tagged string against an ill-typed literal or one of an
++    /// unrecognized datatype. Each neighbouring comparison keeps its core answer,
++    /// and without the extension the same pairs are still errors.
++    #[test]
++    fn the_language_string_extension_replaces_only_its_own_errors() {
++        use LanguageStringEquality::{Core, Disjoint};
++        let language = TermValue::lang_literal("xyz", "en");
++        let directional = TermValue::Literal {
++            lexical_form: "xyz".to_owned(),
++            datatype: RDF_DIR_LANG_STRING.to_owned(),
++            language: Some("en".to_owned()),
++            direction: Some(RdfTextDirection::Ltr),
++        };
++        let ill_typed = TermValue::typed_literal("xyz", XINT);
++        let unknown = TermValue::typed_literal("xyz", "https://example.org/unknown");
++        for tagged in [&language, &directional] {
++            for other in [&ill_typed, &unknown] {
++                assert_literal_equality_paths_under(tagged, other, None, Core);
++                assert_literal_equality_paths_under(tagged, other, Some(false), Disjoint);
++            }
++        }
++        let other_unknown = TermValue::typed_literal("abc", "https://example.org/unknown");
++        let other_ill_typed = TermValue::typed_literal("abc", XINT);
++        for (a, b, expected) in [
++            (&TermValue::simple_literal("xyz"), &ill_typed, None),
++            (&TermValue::simple_literal("xyz"), &unknown, None),
++            (&ill_typed, &unknown, None),
++            (&ill_typed, &other_ill_typed, None),
++            (&unknown, &other_unknown, None),
++            (&language, &TermValue::simple_literal("xyz"), Some(false)),
++            (&language, &TermValue::lang_literal("xyz", "EN"), Some(true)),
++            (&language, &directional, Some(false)),
++            (&unknown, &unknown, Some(true)),
++        ] {
++            assert_literal_equality_paths_under(a, b, expected, Core);
++            assert_literal_equality_paths_under(a, b, expected, Disjoint);
++        }
++    }
++
++    #[test]
++    fn date_and_datetime_equality_is_false_without_giving_them_an_order() {
++        use purrdf_xsd::datatype::{XSD_DATE, XSD_DATE_TIME};
++        let datetime = TermValue::typed_literal("2006-08-23T09:00:00+01:00", XSD_DATE_TIME);
++        let date = TermValue::typed_literal("2006-08-23", XSD_DATE);
++        assert_literal_equality_paths(&datetime, &date, Some(false));
++        assert_eq!(
++            value_cmp(&xsd_of(&datetime).unwrap(), &xsd_of(&date).unwrap()),
++            None
++        );
++        // One primitive type's timezone uncertainty remains a type error.
++        let unzoned = TermValue::typed_literal("2006-08-23T08:00:00", XSD_DATE_TIME);
++        assert_literal_equality_paths(&datetime, &unzoned, None);
++        let equal = TermValue::typed_literal("2006-08-23T08:00:00Z", XSD_DATE_TIME);
++        assert_literal_equality_paths(&datetime, &equal, Some(true));
++        let invalid = TermValue::typed_literal("not-a-date", XSD_DATE_TIME);
++        assert_literal_equality_paths(&invalid, &date, None);
++    }
++
+     #[test]
+     fn str_and_concat_and_strlen() {
+         let ds = empty_ds();
+diff --git crates/sparql-eval/src/property_fn_eval.rs crates/sparql-eval/src/property_fn_eval.rs
+index 926d65fad..fd653a665 100644
+--- crates/sparql-eval/src/property_fn_eval.rs
++++ crates/sparql-eval/src/property_fn_eval.rs
+@@ -1096,6 +1096,9 @@ impl ReadStage {
+ pub(crate) struct FilterContext {
+     /// The engine's evaluation options.
+     pub(crate) options: crate::eval::EvalOptions,
++    /// The request's choice of the language-string `=` extension
++    /// ([`crate::QueryOptions::disjoint_language_strings`]).
++    pub(crate) disjoint_language_strings: bool,
+     /// The engine's standpoint predicate table, which `heldIn` reads.
+     pub(crate) standpoint_predicates: Option<crate::eval::StandpointPredicates>,
+     /// The engine's loss vocabulary.
+@@ -1111,7 +1114,9 @@ impl FilterContext {
+     fn context<'d, D: DatasetView + Sync>(&self, dataset: &'d D) -> EvalCtx<'d, D> {
+         // The seed is never read: the shape admits no predicate that reaches a
+         // builtin drawing on it (`crate::parallel::function_is_builtin_stateful`).
+-        let mut ctx = EvalCtx::at(dataset, self.now.clone(), 0).with_eval_options(self.options);
++        let mut ctx = EvalCtx::at(dataset, self.now.clone(), 0)
++            .with_eval_options(self.options)
++            .with_disjoint_language_strings(self.disjoint_language_strings);
+         if let Some(predicates) = &self.standpoint_predicates {
+             ctx = ctx.with_standpoint_predicates(predicates.clone());
+         }
+diff --git crates/sparql-eval/src/remote.rs crates/sparql-eval/src/remote.rs
+index 8b9ea2bc0..0ffa2c6d4 100644
+--- crates/sparql-eval/src/remote.rs
++++ crates/sparql-eval/src/remote.rs
+@@ -899,7 +899,9 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
+     // has nothing to say about it.
+     if crate::property_fn_eval::pattern_reaches_property_function(inner) {
+         return Err(EvalError::unsupported(
+-            "a property-function call inside a SERVICE body: the call would be forwarded as              an ordinary triple pattern and matched against the remote endpoint's data, so              the relation would never be invoked and the answer would be silently wrong",
++            "a property-function call inside a SERVICE body: the call would be forwarded as an \
++             ordinary triple pattern and matched against the remote endpoint's data, so the \
++             relation would never be invoked and the answer would be silently wrong",
+         ));
+     }
+     // A custom aggregate call inside a forwarded body is refused the same way, for the
+@@ -908,7 +910,9 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
+     // actually resolved — never sees the call at all once it has been shipped away.
+     if crate::property_fn_eval::pattern_reaches_custom_aggregate(inner) {
+         return Err(EvalError::unsupported(
+-            "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded              as text the remote endpoint has no registered meaning for, so this engine's              aggregate registry would never resolve the call and the answer would be silently              wrong",
++            "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded as \
++             text the remote endpoint has no registered meaning for, so this engine's aggregate \
++             registry would never resolve the call and the answer would be silently wrong",
+         ));
+     }
+     // A variable endpoint still unresolved here was not substituted by a `LATERAL` (a

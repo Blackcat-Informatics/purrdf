@@ -1,0 +1,5 @@
+x86_64-v3 instruction digest 2587bfa2d9f9e013304123fa643c821b6a4fc3cdb23103fa82816ff985bc37c7 vector-register mnemonics {'vxorps': 1, 'vmovups': 43, 'vmovaps': 10} call sites 69
+Direct mapping-method calls: []
+x86_64-v4 instruction digest 47180794a45eecb30b238b50daa41d11d611b2dcf3f43d01befd8edbfba864ee vector-register mnemonics {'vxorps': 1, 'vmovups': 43, 'vmovaps': 10} call sites 69
+Direct mapping-method calls: []
+Existing homes: collect_functions, demangle, count, build_commands. build_commands constructs argv only; no build executes.

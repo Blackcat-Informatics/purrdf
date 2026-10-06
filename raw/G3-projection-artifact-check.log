@@ -1,0 +1,16 @@
+asm-projection/aggregate.log: OK
+asm-projection/checkout.txt: OK
+asm-projection/compiler-after.txt: OK
+asm-projection/compiler.txt: OK
+asm-projection/generation.log: OK
+asm-projection/inputs-after.sha256: OK
+asm-projection/inputs-before.sha256: OK
+asm-projection/projection.patch: OK
+asm-projection/purrdf-simd.md: OK
+asm-projection/qualification.log: OK
+asm-projection/reports/all-configurations.json: OK
+asm-projection/source-status-after.txt: OK
+asm-projection/source-status-before.txt: OK
+asm-projection/untracked-after.txt: OK
+asm-projection/x86-v3-body-probe.log: OK
+asm-projection/x86-v4-body-probe.log: OK

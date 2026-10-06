@@ -1,0 +1,8 @@
+FAIL: `make check` and the CI workflows do not run the same gates:
+  `scripts/check-simd-asm.py --config x86_64-v3 --jobs 1 --crate purrdf_core --probe '' --dump > target/asm-projection/x86-v3-body-probe.log 2>` runs in a pull-request workflow and NOT in `make check`, so a red merge cannot be reproduced locally
+  `scripts/check-simd-asm.py --config x86_64-v4 --jobs 1 --crate purrdf_core --probe '' --dump > target/asm-projection/x86-v4-body-probe.log 2>` runs in a pull-request workflow and NOT in `make check`, so a red merge cannot be reproduced locally
+  `scripts/check-simd-asm.py --doc --jobs 2 --report target/asm-projection/reports/all-configurations.json > target/asm-projection/qualification.log 2>` runs in a pull-request workflow and NOT in `make check`, so a red merge cannot be reproduced locally
+  `scripts/check-simd-asm.py --merge-reports target/asm-projection/reports > target/asm-projection/aggregate.log 2>` runs in a pull-request workflow and NOT in `make check`, so a red merge cannot be reproduced locally
+  `scripts/check-simd-asm.py --write-doc --jobs 2 > target/asm-projection/generation.log 2>` runs in a pull-request workflow and NOT in `make check`, so a red merge cannot be reproduced locally
+  Two lists is two rules. Add the missing step so both lists say the same thing;
+  a gate only one of them runs is a gate that does not hold.

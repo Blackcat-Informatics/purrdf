@@ -1,0 +1,32 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 44.77s
+     Running unittests src/lib.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 24 tests
+test ir::global::tests::a_relative_iri_is_refused_and_leaves_the_dictionary_unchanged ... ok
+test ir::global::tests::blank_scope_participates_in_identity ... ok
+test ir::global::tests::all_term_kinds_match_borrowed_and_stored_hashes ... ok
+test ir::global::tests::global_term_id_index_round_trips ... ok
+test ir::global::tests::intern_is_deterministic_across_runs ... ok
+test ir::global::tests::intern_is_idempotent_and_insertion_ordered ... ok
+test ir::global::tests::global_term_id_from_index_rejects_u64_max - should panic ... ok
+test ir::global::tests::cold_validated_reinterning_preserves_composite_registration ... ok
+test ir::global::tests::intern_value_registers_composite_blanks_inside_triple_terms ... ok
+test ir::global::tests::new_dictionary_is_empty ... ok
+test ir::global::tests::intern_literal_registers_nested_composite_identities_with_their_scopes ... ok
+test ir::global::tests::ordinary_literal_ingress_preserves_opaque_bytes_and_insertion_order ... ok
+test ir::global::tests::re_interning_an_absolute_iri_is_a_hit_and_reintern_skips_revalidation ... ok
+test ir::global::tests::resolve_round_trips_blank ... ok
+test ir::global::tests::iri_hash_matches_stored_form_across_lengths_and_table_growth ... ok
+test ir::global::tests::resolve_round_trips_iri ... ok
+test ir::global::tests::resolve_round_trips_triple_with_interned_components ... ok
+test ir::global::tests::resolve_round_trips_language_literal ... ok
+test ir::global::tests::resolve_round_trips_typed_literal_with_interned_datatype ... ok
+test ir::global::tests::ring_fence_term_id_stays_four_bytes ... ok
+test ir::global::tests::term_id_by_value_hits_and_misses ... ok
+test ir::global::tests::term_id_by_value_matches_intern_for_all_shapes ... ok
+test ir::global::tests::the_walks_agree_with_their_recursive_references_on_generated_terms ... ok
+test ir::global::tests::a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 1132 filtered out; finished in 0.08s
+

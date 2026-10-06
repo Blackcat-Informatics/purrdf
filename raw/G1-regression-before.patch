@@ -1,0 +1,81 @@
+diff --git crates/rdf-core/src/ir/global.rs crates/rdf-core/src/ir/global.rs
+index 2b656a977..2866e7122 100644
+--- crates/rdf-core/src/ir/global.rs
++++ crates/rdf-core/src/ir/global.rs
+@@ -1183,6 +1183,76 @@ mod tests {
+         assert_eq!(dict.len(), count);
+     }
+ 
++    #[test]
++    fn cold_validated_reinterning_preserves_composite_registration() {
++        let scoped = BlankScope(7).qualify_label("same").into_owned();
++        let lexical = format!(
++            "[_:same, {{'scoped': _:{scoped}, 'deep': '[_:nested]'^^<{}>, \
++             'triple': <<( _:subject <http://example.org/p> _:object )>>, \
++             'opaque': '_:quoted'}}]",
++            purrdf_cdt::CDT_LIST
++        );
++        let literal = TermValue::typed_literal(&lexical, purrdf_cdt::CDT_LIST);
++        let recursive = TermValue::Triple {
++            s: TermBox::new(TermValue::Triple {
++                s: TermBox::new(TermValue::iri("http://example.org/holder")),
++                p: TermBox::new(TermValue::iri("http://example.org/p")),
++                o: TermBox::new(literal.clone()),
++            }),
++            p: TermBox::new(TermValue::iri("http://example.org/outer")),
++            o: TermBox::new(TermValue::simple_literal("[_:opaque]")),
++        };
++        for value in [literal, recursive] {
++            let mut ordinary = GlobalDictionary::new();
++            let ordinary_id = ordinary.intern(&value).expect("absolute fixture");
++            let mut checked = GlobalDictionary::new();
++            let checked_id = checked
++                .try_reintern_validated(&value)
++                .expect("small resident fixture");
++            let mut validated = GlobalDictionary::new();
++            let validated_id = validated.reintern_validated(&value);
++            for dict in [&ordinary, &checked, &validated] {
++                for (label, scope) in [
++                    ("same", BlankScope::DEFAULT),
++                    ("same", BlankScope(7)),
++                    ("nested", BlankScope::DEFAULT),
++                    ("subject", BlankScope::DEFAULT),
++                    ("object", BlankScope::DEFAULT),
++                ] {
++                    let blank = TermValue::Blank {
++                        label: label.to_owned(),
++                        scope,
++                    };
++                    assert_eq!(
++                        dict.term_id_by_value(&blank),
++                        ordinary.term_id_by_value(&blank),
++                        "cold ingress retains the exact embedded identity {blank:?}"
++                    );
++                    assert!(dict.term_id_by_value(&blank).is_some());
++                }
++                for opaque in ["quoted", "opaque"] {
++                    assert_eq!(dict.term_id_by_value(&TermValue::blank(opaque)), None);
++                }
++            }
++            assert_eq!([checked_id, validated_id], [ordinary_id; 2]);
++            for dict in [&mut ordinary, &mut checked, &mut validated] {
++                assert_eq!(dict.term_value(ordinary_id), value);
++                let count = dict.len();
++                assert_eq!(dict.try_reintern_validated(&value), Ok(ordinary_id));
++                assert_eq!(dict.reintern_validated(&value), ordinary_id);
++                assert_eq!(dict.intern(&value).expect("repeated fixture"), ordinary_id);
++                assert_eq!(dict.len(), count, "all ingress paths are store-once");
++            }
++            assert_eq!(checked.len(), ordinary.len());
++            assert_eq!(validated.len(), ordinary.len());
++            for index in 0..ordinary.len() {
++                let id = GlobalTermId::from_index(u64::try_from(index).expect("small index"));
++                assert_eq!(checked.term_value(id), ordinary.term_value(id));
++                assert_eq!(validated.term_value(id), ordinary.term_value(id));
++            }
++        }
++    }
++
+     #[test]
+     fn ordinary_literal_ingress_preserves_opaque_bytes_and_insertion_order() {
+         let mut dict = GlobalDictionary::new();

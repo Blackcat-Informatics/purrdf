@@ -1,0 +1,9 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 3.94s
+     Running tests/paged_stack.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/e7198b4ae2dd2d13/out/paged_stack-e7198b4ae2dd2d13)
+
+running 1 test
+test cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open_iterators ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.00s
+

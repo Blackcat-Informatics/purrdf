@@ -1,0 +1,4 @@
+169:User needs to know: consumer-owned storage/log and atomic publication policies are explicit issue boundaries. Replacing a stack with an ordinary canonical base retains current graph membership but cannot encode hidden populated explicit-versus-implicit graph lifetime policy; callers retaining that policy must retain its separate data. Wasm compilation passed; runtime wasm and hosted CI remain unverified until actual checks establish them. No issue requirement was deferred or cut.
+175:The Stage 1 plan and its hash remain authoritative and unchanged. No scope cut.
+437:The Stage 1 plan and its hash remain authoritative and unchanged. No scope cut.
+599:issue completion. No requirement was deferred or cut.

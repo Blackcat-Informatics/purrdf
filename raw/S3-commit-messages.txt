@@ -1,0 +1,61 @@
+d48be7c960adfeaba44d642630cde4a66d7e86e7
+docs: regenerate paged mapping assembly counts
+
+8364b29c9fb70195f123e2bc084160d83f78850a
+ci: capture SIMD projections and failed measurement evidence
+
+a0f8a7ed8bd293d4e9d84f182fe4f6c0afa64cbb
+rdf: bound paged stack metadata probes
+
+6aa17ec81526d270160827586a6f695d064a1f31
+core: preserve composite blank identities during checked interning
+
+Share checked literal registration between ordinary and validated ingress so
+cold copies retain embedded blank identities, scopes and insertion order.
+Cover List, Map and recursive triple values with independent cold dictionaries,
+opaque lexical text and idempotent replay; document validated stack inputs.
+
+b2edf7450cf654d20ae97bd856d67102d0916b7b
+rdf: expose paged stacks and qualify guarded consumers
+
+Route the layered paging API through the supported RDF and umbrella surfaces.
+Exercise retained snapshots through ordinary and prepared fallible SPARQL,
+independent eager typed inputs, chronological graphs and RDF 1.2 transitions,
+exact aggregate receipts, limits and terminal faults.
+
+Add a runnable consumer that verifies old/current answers and actual ordered
+eager carrier identity. Qualify affected evaluator tests, the root consumer,
+all-target clippy, release wasm libraries, helper hygiene and effective gate
+profiles with the repository's normal compiler and configuration.
+
+331c44e93aa6bcf8434dd027c4e0aae2b5b939b9
+Merge remote-tracking branch 'origin/main' into paudley/457-paged-tier-an-lsm-style-stack-of-sealed
+
+* origin/main: (13 commits)
+  conformance: anchor the README SPARQL claim to the renamed 1.0/1.1/1.2 row
+  conformance: report the superseded data-r2 case in its own matrix row
+  conformance: grade dawg-sort-11 against the SPARQL 1.2 order in its own row
+  conformance: report the data-r2 corpus and its unlisted files in the matrix
+  conformance: regenerate the parser and evaluator goldens over the data-r2 corpus
+  conformance: model mf:requires, keep upstream manifest names, account for unlisted files
+  sparql-eval: take the language-string equality extension per request
+  sparql-eval: spell the SERVICE forwarding refusals without embedded indentation
+  conformance: refuse empty frozen-corpus registries
+  Fix OPTIONAL filter ownership and known literal inequality
+  ...
+
+dd9109995f056e61aea8361a80ad9977a57ec2bf
+core: layer sealed paged generations with pinned mutable snapshots
+
+Compose independently sealed dictionaries and pages behind one guarded read
+operation. Ordered value removals, resident batching, RDF 1.2 classification,
+and retained graph declarations produce an isolated effective snapshot without
+materializing lower pages during setup.
+
+Canonical folding rebuilds bounded native pages and compares their actual pack
+bytes with eager typed inputs. Full source descriptors, shared page and byte
+limits, indexed probes, and sticky failures preserve the paging contract.
+
+Validate 82 focused paging/graph tests, 42 mutable tests, 23 global dictionary
+tests, all-target core clippy with warnings denied, and helper hygiene.
+

@@ -1,0 +1,11 @@
+rdf: expose paged stacks and qualify guarded consumers
+
+Route the layered paging API through the supported RDF and umbrella surfaces.
+Exercise retained snapshots through ordinary and prepared fallible SPARQL,
+independent eager typed inputs, chronological graphs and RDF 1.2 transitions,
+exact aggregate receipts, limits and terminal faults.
+
+Add a runnable consumer that verifies old/current answers and actual ordered
+eager carrier identity. Qualify affected evaluator tests, the root consumer,
+all-target clippy, release wasm libraries, helper hygiene and effective gate
+profiles with the repository's normal compiler and configuration.

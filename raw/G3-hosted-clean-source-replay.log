@@ -1,0 +1,4 @@
+Existing runtime.source_identity(clean_replay) = 5cdc94d05519536689165b4fad734f27a4a23825a69df2d6071072c823aa1fec
+Replay = /home/paudley/Active/purrdf/.worktrees/qual-asm-37532305791
+runtime SHA-256 = 8e8f406574e9c7e31a73b8d2b266546cf702707b9c9208e0b6d899f6204cbd05
+Non-Rust _Unwind_Resume retained as raw call operand, not a demangled Rust symbol.

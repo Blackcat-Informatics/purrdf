@@ -1,0 +1,12 @@
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/T1-source.patch: OK
+crates/rdf-core/src/ir/global.rs: OK
+crates/rdf-core/src/ir/mod.rs: OK
+crates/rdf-core/src/ir/mutable.rs: OK
+crates/rdf-core/src/ir/mutable/delta_view.rs: OK
+crates/rdf-core/src/ir/paged/mod.rs: OK
+crates/rdf-core/src/ir/paged/provider.rs: OK
+crates/rdf-core/src/ir/paged/query.rs: OK
+crates/rdf-core/src/ir/paged/stack.rs: OK
+crates/rdf-core/src/lib.rs: OK
+crates/rdf-core/tests/paged_stack.rs: OK
+docs/design/purrdf-backend-contract.md: OK

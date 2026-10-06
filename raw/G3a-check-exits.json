@@ -1,0 +1,74 @@
+[
+  {
+    "check": "actionlint",
+    "command": "actionlint .github/workflows/ci.yaml",
+    "exit_code": 0,
+    "log": "raw/G3a-actionlint.log"
+  },
+  {
+    "check": "toolchain-pin",
+    "command": "python3 scripts/check-toolchain-pin.py",
+    "exit_code": 0,
+    "log": "raw/G3a-toolchain-pin.log"
+  },
+  {
+    "check": "toolchain-pin-selftest",
+    "command": "python3 scripts/check-toolchain-pin.py --self-test",
+    "exit_code": 0,
+    "log": "raw/G3a-toolchain-pin-selftest.log"
+  },
+  {
+    "check": "gate-parity",
+    "command": "python3 scripts/check-gate-parity.py",
+    "exit_code": 0,
+    "log": "raw/G3a-gate-parity.log"
+  },
+  {
+    "check": "gate-parity-selftest",
+    "command": "python3 scripts/check-gate-parity.py --self-test",
+    "exit_code": 0,
+    "log": "raw/G3a-gate-parity-selftest.log"
+  },
+  {
+    "check": "simd-selftest",
+    "command": "python3 scripts/check-simd-asm.py --self-test",
+    "exit_code": 0,
+    "log": "raw/G3a-simd-selftest.log"
+  },
+  {
+    "check": "whitespace",
+    "command": "git diff --check",
+    "exit_code": 0,
+    "log": "raw/G3a-whitespace.log"
+  },
+  {
+    "check": "metadata-schema",
+    "command": "Read-only Python invocation of existing load_manifest, parse_table, doc_checks and workspace_world; compare to HEAD parsed by those same homes",
+    "exit_code": 0,
+    "log": "raw/G3a-metadata-schema.log"
+  },
+  {
+    "check": "make-probe-dryrun",
+    "command": "make -n simd-asm with the exact probe SIMD_ASM_ARGS from ci.yaml",
+    "exit_code": 0,
+    "log": "raw/G3a-make-probe-dryrun.log"
+  },
+  {
+    "check": "make-generation-dryrun",
+    "command": "make -n simd-asm with the exact generation SIMD_ASM_ARGS from ci.yaml",
+    "exit_code": 0,
+    "log": "raw/G3a-make-generation-dryrun.log"
+  },
+  {
+    "check": "make-report-dryrun",
+    "command": "make -n simd-asm with the exact report SIMD_ASM_ARGS from ci.yaml",
+    "exit_code": 0,
+    "log": "raw/G3a-make-report-dryrun.log"
+  },
+  {
+    "check": "make-aggregate-dryrun",
+    "command": "make -n simd-asm with the exact aggregate SIMD_ASM_ARGS from ci.yaml",
+    "exit_code": 0,
+    "log": "raw/G3a-make-aggregate-dryrun.log"
+  }
+]

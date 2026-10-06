@@ -1,0 +1,5 @@
+Command: CARGO_BUILD_JOBS=2 cargo test --locked -p purrdf-core --test paged_stack --test paged_backend --test paged_fallible --test paged_admission_law --test mutable_declared_graph_drain
+Exit: 0
+Tested global.rs SHA256: f801d280e3bbb62be74f58dd47ccd77e016d2517dbf88397a09e6aa75ec659cd
+Final global.rs SHA256: 2934a164143a36cccba6c06c43c626f81438f9d86b59f760d61ca8e2d4696c66
+Intervening changes only validated-authority documentation and an additional top-level Map fixture within the global unit regression. Non-test production code and all five integration targets unchanged. Reused 82 passing integration cases for final identity on that bounded assessment; final global unit suite rerun separately.

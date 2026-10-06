@@ -1,0 +1,4091 @@
+diff --git crates/purrdf/src/lib.rs crates/purrdf/src/lib.rs
+index 9feb46f8e..ecb3d4f6d 100644
+--- crates/purrdf/src/lib.rs
++++ crates/purrdf/src/lib.rs
+@@ -718,6 +718,8 @@ mod tests {
+ 
+     #[test]
+     fn facade_exposes_the_completed_umbrella() {
++        use std::sync::Arc;
++
+         assert_eq!(columnar::Table::ALL.len(), 5);
+ 
+         // gts: the container engine (its `model`) and the rdf-level adapter
+@@ -757,6 +759,36 @@ mod tests {
+         assert_eq!(limits.max_pages, 1);
+         let _: Option<sparql::CompleteSparqlResult<PagedQueryEvidence>> = None;
+ 
++        let page_rows = std::num::NonZeroUsize::new(1).expect("positive canonical bound");
++        let base = canonical_paged_seal(restored.as_ref(), page_rows).expect("empty paged base");
++        let mut stack = PagedStack::new(vec![Arc::new(base)]).expect("root stack API");
++        let value = TermValue::iri("https://example.org/value");
++        stack
++            .insert(QuadValues::triple(
++                value.clone(),
++                TermValue::iri("https://example.org/p"),
++                value,
++            ))
++            .expect("root head mutation");
++        let snapshot = stack.snapshot().expect("root pinned snapshot");
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        let complete = sparql::NativeSparqlEngine::new().query_fallible_view(&view, SparqlRequest {
++            query: "ASK { <https://example.org/value> <https://example.org/p> <https://example.org/value> }",
++            base_iri: None, substitutions: &[],
++        }, sparql::QueryOptions::EMPTY).expect("root fallible stack consumer");
++        assert!(matches!(complete.result, SparqlResult::Boolean(true)));
++        assert_eq!(
++            complete.evidence.requested_origins,
++            vec![StackPageOrigin::Head]
++        );
++        assert_eq!(
++            snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, page_rows)
++                .expect("root canonical fold")
++                .page_count(),
++            1
++        );
++
+         // So is governed query execution: the ceilings, the outcome, and the certified
+         // partial answers all resolve unambiguously under the one `sparql` module, so a
+         // consumer that sets a budget never has to name the evaluator crate.
+diff --git crates/rdf-core/src/ir/global.rs crates/rdf-core/src/ir/global.rs
+index 7dd4c7593..2b656a977 100644
+--- crates/rdf-core/src/ir/global.rs
++++ crates/rdf-core/src/ir/global.rs
+@@ -366,6 +366,37 @@ impl GlobalDictionary {
+         }
+     }
+ 
++    /// Checked allocation/address admission for composed retained metadata. The
++    /// ordinary lookup and miss insertion remain the dictionary's single homes.
++    fn try_intern_lookup(&mut self, lookup: GlobalTermLookup<'_>) -> Result<GlobalTermId, ()> {
++        let hash = hash_lookup_value(&lookup);
++        if let Some(id) = self.find(&lookup, hash) {
++            return Ok(id);
++        }
++        let bytes = match &lookup {
++            GlobalTermLookup::Iri(iri) => iri.len(),
++            GlobalTermLookup::Blank { label, .. } => label.len(),
++            GlobalTermLookup::Literal {
++                lexical, language, ..
++            } => lexical
++                .len()
++                .checked_add(language.map_or(0, str::len))
++                .ok_or(())?,
++            GlobalTermLookup::Triple { .. } => 0,
++        };
++        let total = self.arena.len().checked_add(bytes).ok_or(())?;
++        u32::try_from(total).map_err(|_| ())?;
++        GlobalTermId::checked_from_index(u64::try_from(self.terms.len()).map_err(|_| ())?)
++            .ok_or(())?;
++        self.arena.try_reserve(bytes).map_err(|_| ())?;
++        self.terms.try_reserve(1).map_err(|_| ())?;
++        let (arena, terms) = (&self.arena, &self.terms);
++        self.index
++            .try_reserve(1, |&i| hash_stored_value(arena, &terms[i as usize]))
++            .map_err(|_| ())?;
++        Ok(self.insert_missing(lookup, hash))
++    }
++
+     /// The HIT half of [`intern_lookup`](Self::intern_lookup): the id of a value this
+     /// dictionary has already stored, or `None`.
+     ///
+@@ -479,37 +510,47 @@ impl GlobalDictionary {
+     /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
+     /// predicate and object, each fully before the next, then the triple itself.
+     pub(crate) fn reintern_validated(&mut self, value: &TermValue) -> GlobalTermId {
+-        let interned = try_fold_nested(
++        self.try_reintern_validated(value)
++            .expect("validated dictionary value fits resident capacity")
++    }
++
++    /// Refuse resident address/allocation exhaustion while composing independent
++    /// dictionaries. Partial private dictionary growth is never published on error.
++    pub(crate) fn try_reintern_validated(&mut self, value: &TermValue) -> Result<GlobalTermId, ()> {
++        try_fold_nested(
+             value,
+             self,
+             |dict, value| {
+-                Ok::<_, Infallible>(Nested::Leaf(match value {
+-                    TermValue::Iri(iri) => dict.intern_lookup(GlobalTermLookup::Iri(iri)),
+-                    TermValue::Blank { label, scope } => dict.intern_blank(label, *scope),
++                Ok(Nested::Leaf(match value {
++                    TermValue::Iri(iri) => dict.try_intern_lookup(GlobalTermLookup::Iri(iri))?,
++                    TermValue::Blank { label, scope } => {
++                        dict.try_intern_lookup(GlobalTermLookup::Blank {
++                            label,
++                            scope: *scope,
++                        })?
++                    }
+                     TermValue::Literal {
+                         lexical_form,
+                         datatype,
+                         language,
+                         direction,
+                     } => {
+-                        let datatype_id = dict.intern_lookup(GlobalTermLookup::Iri(datatype));
+-                        dict.intern_literal(
+-                            lexical_form,
+-                            datatype_id,
+-                            language.as_deref(),
+-                            *direction,
+-                        )
++                        let datatype_id =
++                            dict.try_intern_lookup(GlobalTermLookup::Iri(datatype))?;
++                        dict.try_intern_lookup(GlobalTermLookup::Literal {
++                            lexical: lexical_form,
++                            datatype: datatype_id,
++                            language: language.as_deref(),
++                            direction: *direction,
++                        })?
+                     }
+                     TermValue::Triple { s, p, o } => {
+                         return Ok(Nested::Triple(&**s, &**p, &**o));
+                     }
+                 }))
+             },
+-            |dict, _, s, p, o| Ok(dict.intern_triple(s, p, o)),
+-        );
+-        match interned {
+-            Ok(id) => id,
+-        }
++            |dict, _, s, p, o| dict.try_intern_lookup(GlobalTermLookup::Triple { s, p, o }),
++        )
+     }
+ 
+     /// Intern a blank node. Identity is `(label, scope)` (C0.2).
+diff --git crates/rdf-core/src/ir/mod.rs crates/rdf-core/src/ir/mod.rs
+index 39f0468c0..4d665cd74 100644
+--- crates/rdf-core/src/ir/mod.rs
++++ crates/rdf-core/src/ir/mod.rs
+@@ -92,10 +92,12 @@ pub use pack::{
+     pack_digest, restore_pack, verify_pack,
+ };
+ pub use paged::{
+-    CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
+-    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
+-    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
+-    PagedQueryView, SubsetPageProvider,
++    CanonicalPagedError, CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind,
++    PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
++    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
++    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PagedStack, PagedStackError,
++    PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot, StackPageOrigin, StackSource,
++    SubsetPageProvider, canonical_paged_seal,
+ };
+ pub use pipeline_bundle::{
+     BundleDigestWork, CanonScopeName, GraphLayer, HandleEntry, HandleKey, PIPELINE_ROOT_DOMAIN,
+diff --git crates/rdf-core/src/ir/mutable.rs crates/rdf-core/src/ir/mutable.rs
+index 419f404d0..35965a952 100644
+--- crates/rdf-core/src/ir/mutable.rs
++++ crates/rdf-core/src/ir/mutable.rs
+@@ -1301,7 +1301,7 @@ fn check_value_absolute(value: &TermValue) -> Result<(), IriError> {
+ /// identity that is well-defined across the base/delta boundary (C0.8). The mutable
+ /// layer resolves each value to a `MutTermId` (base hit, or a freshly-minted delta
+ /// id) internally.
+-#[derive(Clone, PartialEq, Eq, Debug)]
++#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+ pub struct QuadValues {
+     /// The subject term value.
+     pub s: TermValue,
+@@ -1313,6 +1313,32 @@ pub struct QuadValues {
+     pub g: Option<TermValue>,
+ }
+ 
++/// Shared graph-scoped RDF 1.2 statement classification. Source-specific indexed
++/// probes supply visibility and reifier presence; an explicitly typed orphan
++/// annotation stays typed unless its originally applicable declaration disappears.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum StatementKind {
++    Ordinary,
++    Annotation,
++}
++pub(crate) const fn classify_statement(
++    physical: StatementKind,
++    visible: bool,
++    original_reifier: bool,
++    effective_reifier: bool,
++) -> Option<StatementKind> {
++    if !visible {
++        return None;
++    }
++    match physical {
++        StatementKind::Ordinary if effective_reifier => Some(StatementKind::Annotation),
++        StatementKind::Annotation if original_reifier && !effective_reifier => {
++            Some(StatementKind::Ordinary)
++        }
++        other => Some(other),
++    }
++}
++
+ impl QuadValues {
+     /// Every row of `dataset`'s RDF surface — the plain quads and BOTH statement
+     /// tables (reifier and annotation rows) — as owned value-quads, in table order:
+diff --git crates/rdf-core/src/ir/mutable/delta_view.rs crates/rdf-core/src/ir/mutable/delta_view.rs
+index ff5d4ac94..15c188044 100644
+--- crates/rdf-core/src/ir/mutable/delta_view.rs
++++ crates/rdf-core/src/ir/mutable/delta_view.rs
+@@ -252,16 +252,23 @@ impl DeltaDatasetView {
+     }
+ 
+     pub(super) fn base_quad_is_ordinary(&self, q: QuadIds) -> bool {
+-        !self.suppressed.contains(&q)
+-            && (!self.has_added_reifiers
+-                || !self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)))
++        super::classify_statement(
++            super::StatementKind::Ordinary,
++            !self.suppressed.contains(&q),
++            false,
++            self.has_added_reifiers
++                && self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
++        ) == Some(super::StatementKind::Ordinary)
+     }
+ 
+     fn base_annotation_is_ordinary(&self, q: QuadIds) -> bool {
+         self.has_suppressed_reifiers
+-            && !self.suppressed.contains(&q)
+-            && self.base.reifier_quads_of(q.s).any(|row| row.g == q.g)
+-            && !self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base))
++            && super::classify_statement(
++                super::StatementKind::Annotation,
++                !self.suppressed.contains(&q),
++                self.base.reifier_quads_of(q.s).any(|row| row.g == q.g),
++                self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
++            ) == Some(super::StatementKind::Ordinary)
+     }
+     fn demoted_annotation_is_unique(&self, q: QuadIds) -> bool {
+         self.base_annotation_is_ordinary(q)
+@@ -281,8 +288,12 @@ impl DeltaDatasetView {
+     }
+     fn base_quad_is_annotation(&self, q: QuadIds) -> bool {
+         self.has_added_reifiers
+-            && !self.suppressed.contains(&q)
+-            && self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base))
++            && super::classify_statement(
++                super::StatementKind::Ordinary,
++                !self.suppressed.contains(&q),
++                false,
++                self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
++            ) == Some(super::StatementKind::Annotation)
+             && !self
+                 .base
+                 .annotations_of_with_graph(q.s)
+diff --git crates/rdf-core/src/ir/paged/mod.rs crates/rdf-core/src/ir/paged/mod.rs
+index ea885e91a..1cd997acd 100644
+--- crates/rdf-core/src/ir/paged/mod.rs
++++ crates/rdf-core/src/ir/paged/mod.rs
+@@ -85,6 +85,7 @@ pub(crate) mod admission;
+ pub(crate) mod graph_index;
+ pub mod provider;
+ pub mod query;
++pub mod stack;
+ pub(crate) mod summary;
+ pub mod translation;
+ 
+@@ -103,6 +104,10 @@ pub use provider::{
+     PageMaterialization, PageProvider, SubsetPageProvider,
+ };
+ pub use query::{PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView};
++pub use stack::{
++    CanonicalPagedError, PagedStack, PagedStackError, PagedStackEvidence, PagedStackQueryView,
++    PagedStackSnapshot, StackPageOrigin, StackSource, canonical_paged_seal,
++};
+ pub use translation::PageTranslation;
+ 
+ /// One page of a [`PagedDataset`]: its [`PageId`], the local↔global
+diff --git crates/rdf-core/src/ir/paged/provider.rs crates/rdf-core/src/ir/paged/provider.rs
+index 41df09e23..aac32916b 100644
+--- crates/rdf-core/src/ir/paged/provider.rs
++++ crates/rdf-core/src/ir/paged/provider.rs
+@@ -220,6 +220,36 @@ pub trait PageProvider: Send + Sync {
+     /// The provider's current immutable snapshot generation.
+     fn generation(&self) -> PageGeneration;
+ 
++    /// Check the complete descriptor pinned by an operation, without reading pages.
++    /// Composed providers override this to check every retained source descriptor
++    /// directly, including sources with no pages.
++    ///
++    /// # Errors
++    /// Returns typed generation or page-count drift. A successful checkpoint is
++    /// required even for an operation that reads no pages.
++    fn check_snapshot(
++        &self,
++        expected: PageGeneration,
++        page_count: u64,
++    ) -> Result<(), super::PagedQueryError> {
++        let actual = self.generation();
++        if actual != expected {
++            return Err(super::PagedQueryError::StaleGeneration {
++                page: None,
++                expected,
++                actual,
++            });
++        }
++        let actual = self.page_count();
++        if actual != page_count {
++            return Err(super::PagedQueryError::PageCountMismatch {
++                expected: page_count,
++                actual,
++            });
++        }
++        Ok(())
++    }
++
+     /// Materialize one page or return a typed operational failure.
+     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault>;
+ }
+diff --git crates/rdf-core/src/ir/paged/query.rs crates/rdf-core/src/ir/paged/query.rs
+index c824358da..32726a1d2 100644
+--- crates/rdf-core/src/ir/paged/query.rs
++++ crates/rdf-core/src/ir/paged/query.rs
+@@ -115,6 +115,20 @@ impl PagedQueryEvidence {
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ #[non_exhaustive]
+ pub enum PagedQueryError {
++    /// The provider changed its dense page layout at a checkpoint.
++    PageCountMismatch {
++        /// Pinned page count.
++        expected: u64,
++        /// Observed page count.
++        actual: u64,
++    },
++    /// A particular source of a physical composition failed its checkpoint.
++    SourceSnapshot {
++        /// Chronological source ordinal, independent of its page ordinals.
++        source: u64,
++        /// The original typed checkpoint failure.
++        error: Box<Self>,
++    },
+     /// The provider failed for an implementation-specific operational reason.
+     Provider {
+         /// The requested page.
+@@ -207,6 +221,11 @@ impl From<PageFault> for PagedQueryError {
+ impl std::fmt::Display for PagedQueryError {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
++            Self::PageCountMismatch { expected, actual } => write!(
++                f,
++                "provider page count changed: expected {expected}, got {actual}"
++            ),
++            Self::SourceSnapshot { source, error } => write!(f, "source {source}: {error}"),
+             Self::Provider { page, message } => {
+                 write!(
+                     f,
+@@ -269,7 +288,14 @@ impl std::fmt::Display for PagedQueryError {
+     }
+ }
+ 
+-impl std::error::Error for PagedQueryError {}
++impl std::error::Error for PagedQueryError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self {
++            Self::SourceSnapshot { error, .. } => Some(error.as_ref()),
++            _ => None,
++        }
++    }
++}
+ 
+ #[derive(Debug)]
+ struct QueryPageCache {
+@@ -345,6 +371,124 @@ impl PagedDataset {
+ }
+ 
+ impl<'dataset> PagedQueryView<'dataset> {
++    /// Physical stream candidates share the ordinary admission/cache/budget home.
++    /// Side-table summaries support exact subject and graph tests; predicate/object
++    /// presence is conservative until the admitted row is filtered.
++    pub(super) fn stream_pattern(
++        &self,
++        stream: PageStream,
++        s: Option<GlobalTermId>,
++        p: Option<GlobalTermId>,
++        o: Option<GlobalTermId>,
++        g: GraphMatch<GlobalTermId>,
++    ) -> impl Iterator<Item = (PageId, QuadIds<GlobalTermId>)> + '_ {
++        self.stream_pattern_range(stream, s, p, o, g, 0..self.dataset.pages.len())
++    }
++
++    pub(super) fn stream_pattern_range(
++        &self,
++        stream: PageStream,
++        s: Option<GlobalTermId>,
++        p: Option<GlobalTermId>,
++        o: Option<GlobalTermId>,
++        g: GraphMatch<GlobalTermId>,
++        range: std::ops::Range<usize>,
++    ) -> impl Iterator<Item = (PageId, QuadIds<GlobalTermId>)> + '_ {
++        self.dataset.pages[range]
++            .iter()
++            .filter(move |slot| stream_admitted(slot, stream, s, p, o, g))
++            .flat_map(move |slot| {
++                self.page(slot.id).into_iter().flat_map(move |page| {
++                    let local = if stream == PageStream::Base {
++                        match admission::admit_pattern(&slot.translation, s, p, o, g) {
++                            PageAdmission::Admit(local) => Some(local),
++                            PageAdmission::Skip(_) => None,
++                        }
++                    } else {
++                        None
++                    };
++                    let local_s = s.and_then(|s| slot.translation.to_local(s));
++                    let rows = local
++                        .into_iter()
++                        .flat_map(move |local| {
++                            page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
++                        })
++                        .chain(
++                            (stream == PageStream::Reifier && local_s.is_none())
++                                .then_some(())
++                                .into_iter()
++                                .flat_map(move |()| page.reifier_quads()),
++                        )
++                        .chain(
++                            local_s
++                                .filter(|_| stream == PageStream::Reifier)
++                                .into_iter()
++                                .flat_map(move |s| page.reifier_quads_of(s)),
++                        )
++                        .chain(
++                            (stream == PageStream::Annotation && local_s.is_none())
++                                .then_some(())
++                                .into_iter()
++                                .flat_map(move |()| page.annotation_quads()),
++                        )
++                        .chain(
++                            local_s
++                                .filter(|_| stream == PageStream::Annotation)
++                                .into_iter()
++                                .flat_map(move |s| {
++                                    page.annotations_of_with_graph(s)
++                                        .map(move |(p, o, g)| QuadIds { s, p, o, g })
++                                }),
++                        );
++                    rows.map(move |row| (slot.id, row.map_ids(|id| slot.translation.to_global(id))))
++                        .filter(move |(_, row)| {
++                            s.is_none_or(|s| s == row.s)
++                                && p.is_none_or(|p| p == row.p)
++                                && o.is_none_or(|o| o == row.o)
++                                && g.matches(row.g)
++                        })
++                })
++            })
++    }
++
++    pub(super) fn stream_estimate(
++        &self,
++        stream: PageStream,
++        s: Option<GlobalTermId>,
++        p: Option<GlobalTermId>,
++        o: Option<GlobalTermId>,
++        g: GraphMatch<GlobalTermId>,
++    ) -> u64 {
++        self.dataset
++            .pages
++            .iter()
++            .filter(|slot| stream_admitted(slot, stream, s, p, o, g))
++            .map(|slot| {
++                let summary = slot.translation.summary();
++                if stream == PageStream::Base {
++                    return match admission::admit_pattern(&slot.translation, s, p, o, g) {
++                        PageAdmission::Admit(local) => {
++                            admission::estimate_admitted_page(summary, local, slot.quad_count)
++                        }
++                        PageAdmission::Skip(_) => 0,
++                    };
++                }
++                match g {
++                    GraphMatch::Default => summary.default_rows(stream),
++                    GraphMatch::Named(g) => summary.graph_rows(
++                        slot.translation.to_local(g).expect("admitted graph"),
++                        stream,
++                    ),
++                    GraphMatch::Any => summary.default_rows(stream).saturating_add(
++                        summary
++                            .declared_graphs()
++                            .map(|g| summary.graph_rows(g, stream))
++                            .fold(0, u64::saturating_add),
++                    ),
++                }
++            })
++            .fold(0, u64::saturating_add)
++    }
+     /// Start a fresh operation over `dataset` with explicit resource limits.
+     #[must_use]
+     pub fn new(dataset: &'dataset PagedDataset, limits: PagedQueryLimits) -> Self {
+@@ -369,7 +513,7 @@ impl<'dataset> PagedQueryView<'dataset> {
+         self.limits
+     }
+ 
+-    fn failed(&self) -> bool {
++    pub(super) fn failed(&self) -> bool {
+         lock_read_state(&self.state).error.is_some()
+     }
+ 
+@@ -400,16 +544,12 @@ impl<'dataset> PagedQueryView<'dataset> {
+         }
+         state.evidence.requested_pages.push(id);
+ 
+-        let provider_generation = self.dataset.provider.generation();
+-        if provider_generation != self.dataset.generation {
+-            return fail(
+-                &mut state,
+-                PagedQueryError::StaleGeneration {
+-                    page: Some(id),
+-                    expected: self.dataset.generation,
+-                    actual: provider_generation,
+-                },
+-            );
++        if let Err(error) = self
++            .dataset
++            .provider
++            .check_snapshot(self.dataset.generation, self.dataset.page_count())
++        {
++            return fail(&mut state, request_error(error, id));
+         }
+         if state.evidence.consumed_pages >= self.limits.max_pages {
+             let consumed = state.evidence.consumed_pages;
+@@ -454,16 +594,12 @@ impl<'dataset> PagedQueryView<'dataset> {
+         if let Err(error) = self.validate_materialization(id, &materialization) {
+             return fail(&mut state, error);
+         }
+-        let current_generation = self.dataset.provider.generation();
+-        if current_generation != self.dataset.generation {
+-            return fail(
+-                &mut state,
+-                PagedQueryError::StaleGeneration {
+-                    page: Some(id),
+-                    expected: self.dataset.generation,
+-                    actual: current_generation,
+-                },
+-            );
++        if let Err(error) = self
++            .dataset
++            .provider
++            .check_snapshot(self.dataset.generation, self.dataset.page_count())
++        {
++            return fail(&mut state, request_error(error, id));
+         }
+ 
+         state.evidence.consumed_pages += 1;
+@@ -570,11 +706,65 @@ impl<'dataset> PagedQueryView<'dataset> {
+     }
+ }
+ 
++fn stream_admitted(
++    slot: &super::PageSlot,
++    stream: PageStream,
++    s: Option<GlobalTermId>,
++    p: Option<GlobalTermId>,
++    o: Option<GlobalTermId>,
++    g: GraphMatch<GlobalTermId>,
++) -> bool {
++    if stream == PageStream::Base {
++        return matches!(
++            admission::admit_pattern(&slot.translation, s, p, o, g),
++            PageAdmission::Admit(_)
++        );
++    }
++    let summary = slot.translation.summary();
++    if s.is_some_and(|s| {
++        slot.translation.to_local(s).is_none_or(|s| match stream {
++            PageStream::Reifier => summary.reifier_rows(s) == 0,
++            PageStream::Annotation => summary.annotation_rows(s) == 0,
++            PageStream::Base => unreachable!(),
++        })
++    }) || p.is_some_and(|p| slot.translation.to_local(p).is_none())
++        || o.is_some_and(|o| slot.translation.to_local(o).is_none())
++    {
++        return false;
++    }
++    match g {
++        GraphMatch::Default => summary.default_rows(stream) > 0,
++        GraphMatch::Named(g) => slot
++            .translation
++            .to_local(g)
++            .is_some_and(|g| summary.graph_rows(g, stream) > 0),
++        GraphMatch::Any => {
++            summary.default_rows(stream) > 0
++                || summary
++                    .declared_graphs()
++                    .any(|g| summary.graph_rows(g, stream) > 0)
++        }
++    }
++}
++
+ fn fail<T>(state: &mut QueryState, error: PagedQueryError) -> Result<T, PagedQueryError> {
+     state.error = Some(error.clone());
+     Err(error)
+ }
+ 
++fn request_error(error: PagedQueryError, id: PageId) -> PagedQueryError {
++    match error {
++        PagedQueryError::StaleGeneration {
++            expected, actual, ..
++        } => PagedQueryError::StaleGeneration {
++            page: Some(id),
++            expected,
++            actual,
++        },
++        other => other,
++    }
++}
++
+ impl FallibleDatasetView for PagedQueryView<'_> {
+     type Error = PagedQueryError;
+     type Evidence = PagedQueryEvidence;
+@@ -586,14 +776,11 @@ impl FallibleDatasetView for PagedQueryView<'_> {
+         // such an operation cannot certify a stale snapshot merely because no lazy
+         // materialization occurred.
+         if state.error.is_none() {
+-            let actual = self.dataset.provider.generation();
+-            if actual != self.dataset.generation {
+-                state.error = Some(PagedQueryError::StaleGeneration {
+-                    page: None,
+-                    expected: self.dataset.generation,
+-                    actual,
+-                });
+-            }
++            state.error = self
++                .dataset
++                .provider
++                .check_snapshot(self.dataset.generation, self.dataset.page_count())
++                .err();
+         }
+         match &state.error {
+             None => ViewOperationStatus::Ready {
+@@ -619,14 +806,11 @@ impl DatasetView for PagedQueryView<'_> {
+     fn read_error(&self) -> Option<Self::ReadError> {
+         let mut state = lock_read_state(&self.state);
+         if state.error.is_none() {
+-            let actual = self.dataset.provider.generation();
+-            if actual != self.dataset.generation {
+-                state.error = Some(PagedQueryError::StaleGeneration {
+-                    page: None,
+-                    expected: self.dataset.generation,
+-                    actual,
+-                });
+-            }
++            state.error = self
++                .dataset
++                .provider
++                .check_snapshot(self.dataset.generation, self.dataset.page_count())
++                .err();
+         }
+         state.error.clone()
+     }
+@@ -944,7 +1128,7 @@ impl DatasetView for PagedQueryView<'_> {
+         // true, so a terminal operational error must not let this metadata-only path
+         // keep yielding graph ids. `graph_index()` reads no page and cannot itself fail,
+         // so the gate is applied explicitly here rather than by `page`.
+-        let live = !self.failed();
++        let live = self.read_error().is_none();
+         self.dataset
+             .graph_index()
+             .keys()
+@@ -956,7 +1140,7 @@ impl DatasetView for PagedQueryView<'_> {
+     /// Membership in [`named_graphs`](DatasetView::named_graphs): a binary search of
+     /// the same graph-index keys, behind the same sticky-failure gate.
+     fn has_named_graph(&self, graph: GlobalTermId) -> bool {
+-        !self.failed()
++        self.read_error().is_none()
+             && self
+                 .dataset
+                 .graph_index()
+diff --git crates/rdf-core/src/ir/paged/stack.rs crates/rdf-core/src/ir/paged/stack.rs
+new file mode 100644
+index 000000000..584bd8a55
+--- /dev/null
++++ crates/rdf-core/src/ir/paged/stack.rs
+@@ -0,0 +1,1174 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Chronological sealed layers, a mutable value head, and owned guarded snapshots.
++
++use std::collections::BTreeSet;
++use std::convert::Infallible;
++use std::num::NonZeroUsize;
++use std::sync::{Arc, OnceLock};
++
++use super::summary::PageStream;
++use super::{
++    InMemoryPageProvider, PageFault, PageGeneration, PageId, PageMaterialization, PageProvider,
++    PagedDataset, PagedFreezeError, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
++    PagedQueryView,
++};
++use crate::ir::mutable::{StatementKind, classify_statement};
++use crate::{
++    DatasetMut, DatasetView, FallibleDatasetView, FastSet, GlobalDictionary, GlobalTermId,
++    GraphMatch, MutableDataset, PackBuilder, PackError, QuadIds, QuadValues, RdfDataset,
++    RdfDatasetBuilder, RdfDiagnostic, RdfStoreCapabilities, TermFactory, TermRef, TermValue,
++    ViewOperationStatus,
++};
++
++/// A pinned sealed source, in chronological order (oldest first).
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct StackSource {
++    /// Its original provider generation, not a composed hash.
++    pub generation: PageGeneration,
++    /// Its original dense page count, including zero-page layers.
++    pub page_count: u64,
++}
++
++/// The source-qualified address of a physical page request.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum StackPageOrigin {
++    /// A sealed layer and its original dense page ordinal.
++    Sealed {
++        /// Chronological layer ordinal.
++        layer: u64,
++        /// Page ordinal within that layer.
++        page: PageId,
++    },
++    /// The snapshot's frozen resident head, charged like one reference page.
++    Head,
++}
++
++/// Exact immutable stack identity and aggregate operation evidence.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct PagedStackEvidence {
++    /// Every sealed descriptor, including sources that no probe touches.
++    pub sources: Arc<[StackSource]>,
++    /// Head value rows pinned by this snapshot.
++    pub head: Arc<[QuadValues]>,
++    /// Graph declarations made in the head.
++    pub head_graphs: Arc<[TermValue]>,
++    /// Explicit declarations retained across head seals, one set per sealed layer
++    /// followed by the head; physical declaration-only graphs are in the source seal.
++    pub graph_declarations: Arc<[Arc<[TermValue]>]>,
++    /// One removal set for each sealed layer, followed by the head's set.
++    pub removals: Arc<[Arc<[QuadValues]>]>,
++    /// The shared page/byte receipt, with physical dense routing page IDs.
++    pub pages: PagedQueryEvidence,
++    /// Qualified addresses in precisely the receipt's first-request order.
++    pub requested_origins: Vec<StackPageOrigin>,
++    /// Reference byte charge of the head page (zero if no head page exists).
++    pub head_bytes: u64,
++}
++
++/// A construction or mutable membership failure; absence never substitutes for error.
++#[derive(Debug)]
++pub enum PagedStackError {
++    /// Invalid RDF row or head declaration.
++    Invalid(RdfDiagnostic),
++    /// Sealed metadata construction failed.
++    Freeze(PagedFreezeError),
++    /// Effective membership could not be established.
++    Read(PagedQueryError),
++    /// The deterministic head seal failed.
++    Seal(CanonicalPagedError<Infallible>),
++    /// A logical count or resident allocation cannot be represented.
++    Capacity,
++    /// At least one sealed base is required.
++    MissingBase,
++    /// Publishing an external delta would reorder pending head mutations.
++    PendingHead,
++}
++impl std::fmt::Display for PagedStackError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::Invalid(e) => write!(f, "invalid stack head: {e}"),
++            Self::Freeze(e) => write!(f, "stack metadata construction: {e}"),
++            Self::Read(e) => write!(f, "stack membership: {e}"),
++            Self::Seal(e) => write!(f, "stack head seal: {e}"),
++            Self::Capacity => f.write_str("stack exceeds resident address capacity"),
++            Self::MissingBase => f.write_str("attach at least one sealed base generation"),
++            Self::PendingHead => f.write_str("seal the pending head before appending a generation"),
++        }
++    }
++}
++impl std::error::Error for PagedStackError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self {
++            Self::Invalid(error) => Some(error),
++            Self::Freeze(error) => Some(error),
++            Self::Read(error) => Some(error),
++            Self::Seal(error) => Some(error),
++            Self::Capacity | Self::MissingBase | Self::PendingHead => None,
++        }
++    }
++}
++
++#[derive(Debug)]
++struct Layer {
++    dataset: Arc<PagedDataset>,
++    removals: BTreeSet<QuadValues>,
++    declared_graphs: BTreeSet<TermValue>,
++}
++
++/// A consumer-owned chronological stack with one mutable in-memory value head.
++///
++/// The stack provides no persistence or automatic compaction policy. Snapshot
++/// publication never reads old page contents. Reuse one published snapshot for
++/// multiple operations: rebuilding its dictionary/translations costs linear work
++/// in all retained dictionary values and translation entries, not only the delta.
++#[derive(Debug)]
++pub struct PagedStack {
++    layers: Vec<Layer>,
++    head: BTreeSet<QuadValues>,
++    removals: BTreeSet<QuadValues>,
++    graphs: BTreeSet<TermValue>,
++    sealed_snapshot: OnceLock<PagedStackSnapshot>,
++}
++
++impl PagedStack {
++    /// Attach one or more independently sealed bases, oldest first. Repeated
++    /// facts across bases are effective set members, not a violation of in-layer G3.
++    ///
++    /// # Errors
++    /// Refuses an empty base list or a provider whose sealed descriptor has drifted.
++    pub fn new(bases: Vec<Arc<PagedDataset>>) -> Result<Self, PagedStackError> {
++        if bases.is_empty() {
++            return Err(PagedStackError::MissingBase);
++        }
++        let stack = Self {
++            layers: bases
++                .into_iter()
++                .map(|dataset| Layer {
++                    dataset,
++                    removals: BTreeSet::new(),
++                    declared_graphs: BTreeSet::new(),
++                })
++                .collect(),
++            head: BTreeSet::new(),
++            removals: BTreeSet::new(),
++            graphs: BTreeSet::new(),
++            sealed_snapshot: OnceLock::new(),
++        };
++        stack.check_sources()?;
++        Ok(stack)
++    }
++
++    fn check_sources(&self) -> Result<(), PagedStackError> {
++        for (source, layer) in self.layers.iter().enumerate() {
++            layer
++                .dataset
++                .provider
++                .check_snapshot(layer.dataset.generation(), layer.dataset.page_count())
++                .map_err(|error| {
++                    PagedStackError::Read(PagedQueryError::SourceSnapshot {
++                        source: source as u64,
++                        error: Box::new(error),
++                    })
++                })?;
++        }
++        Ok(())
++    }
++
++    /// Append a sealed generation with value removals that suppress older layers.
++    /// Additions in this generation win over its own removals. A nonempty head
++    /// must first be sealed, so appending cannot reorder already accepted mutations.
++    ///
++    /// # Errors
++    /// Refuses pending head changes, source drift, or invalid removal row values.
++    pub fn append(
++        &mut self,
++        dataset: Arc<PagedDataset>,
++        removals: Vec<QuadValues>,
++    ) -> Result<(), PagedStackError> {
++        self.check_sources()?;
++        if !self.head.is_empty() || !self.removals.is_empty() || !self.graphs.is_empty() {
++            return Err(PagedStackError::PendingHead);
++        }
++        dataset
++            .provider
++            .check_snapshot(dataset.generation(), dataset.page_count())
++            .map_err(PagedStackError::Read)?;
++        let mut normalized = BTreeSet::new();
++        for row in removals {
++            normalized.insert(normalize_row(&row)?);
++        }
++        self.layers
++            .try_reserve(1)
++            .map_err(|_| PagedStackError::Capacity)?;
++        self.layers.push(Layer {
++            dataset,
++            removals: normalized,
++            declared_graphs: BTreeSet::new(),
++        });
++        self.sealed_snapshot.take();
++        Ok(())
++    }
++
++    /// Test effective RDF-surface membership with a typed operational result.
++    ///
++    /// # Errors
++    /// Returns source/admission failures instead of an absent boolean.
++    pub fn contains(&self, row: &QuadValues) -> Result<bool, PagedStackError> {
++        self.contains_with_limits(row, PagedQueryLimits::UNBOUNDED)
++    }
++
++    /// Membership under an explicit whole-operation I/O allowance. Head presence
++    /// and removals are checked before lower pages. Sealed routing metadata is reused
++    /// throughout a mutable batch, but each membership operation owns a fresh cache.
++    ///
++    /// # Errors
++    /// Invalid values or source/resource faults prevent a membership answer.
++    pub fn contains_with_limits(
++        &self,
++        row: &QuadValues,
++        limits: PagedQueryLimits,
++    ) -> Result<bool, PagedStackError> {
++        self.check_sources()?;
++        let row = normalize_row(row)?;
++        if self.head.contains(&row) {
++            return Ok(true);
++        }
++        if self.removals.contains(&row) {
++            return Ok(false);
++        }
++        if self.sealed_snapshot.get().is_none() {
++            let snapshot = self.snapshot_with_head(false)?;
++            let _ = self.sealed_snapshot.set(snapshot);
++        }
++        let snapshot = self
++            .sealed_snapshot
++            .get()
++            .expect("sealed routing metadata initialized");
++        let view = snapshot.query_view(limits);
++        let found = view.contains_values(&row).map_err(PagedStackError::Read)?;
++        if let Some(error) = view.read_error() {
++            return Err(PagedStackError::Read(error));
++        }
++        Ok(found)
++    }
++
++    /// Insert by RDF value. An insertion above a previous removal survives it.
++    ///
++    /// # Errors
++    /// Invalid RDF or a failed lower membership read leaves the head unchanged.
++    // Match the value-consuming mutation boundary; canonicalization replaces the
++    // supplied representation before ownership enters the head.
++    #[allow(clippy::needless_pass_by_value)]
++    pub fn insert(&mut self, row: QuadValues) -> Result<bool, PagedStackError> {
++        let row = normalize_row(&row)?;
++        if self.contains(&row)? {
++            return Ok(false);
++        }
++        self.removals.remove(&row);
++        self.head.insert(row);
++        Ok(true)
++    }
++
++    /// Remove from the effective surface, including every older copy.
++    ///
++    /// # Errors
++    /// Failed membership reads leave both the head and removal set unchanged.
++    pub fn remove(&mut self, row: &QuadValues) -> Result<bool, PagedStackError> {
++        let row = normalize_row(row)?;
++        if !self.contains(&row)? {
++            return Ok(false);
++        }
++        self.head.remove(&row);
++        self.removals.insert(row);
++        Ok(true)
++    }
++
++    /// Declare a graph independently of its rows; declaration-only graphs survive
++    /// removals and folds. Only IRI or scoped blank graph names are valid.
++    ///
++    /// # Errors
++    /// Returns invalid RDF or source drift without changing the head.
++    // Declarations share the value-consuming writer boundary with insertion.
++    #[allow(clippy::needless_pass_by_value)]
++    pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, PagedStackError> {
++        self.check_sources()?;
++        let mut builder = RdfDatasetBuilder::new();
++        let id = builder.intern_value(&graph);
++        builder.declare_named_graph(id);
++        let frozen = builder.freeze().map_err(PagedStackError::Invalid)?;
++        Ok(self.graphs.insert(frozen.as_ref().term_value(id)))
++    }
++
++    fn frozen_head(&self) -> Result<Arc<RdfDataset>, PagedStackError> {
++        let mut mutation = MutableDataset::new(
++            RdfDatasetBuilder::new()
++                .freeze()
++                .map_err(PagedStackError::Invalid)?,
++        );
++        for row in &self.head {
++            mutation.insert(row.clone()).map_err(|e| {
++                PagedStackError::Read(PagedQueryError::InvalidData {
++                    page: PageId(0),
++                    message: e.to_string(),
++                })
++            })?;
++        }
++        let head = mutation.freeze().map_err(PagedStackError::Invalid)?;
++        if self.graphs.is_empty() {
++            return Ok(head);
++        }
++        let mut builder = RdfDatasetBuilder::new();
++        crate::ir::import::DatasetImporter::new(&mut builder, head.as_ref()).append();
++        for graph in &self.graphs {
++            let id = builder.intern_value(graph);
++            builder.declare_named_graph(id);
++        }
++        builder.freeze().map_err(PagedStackError::Invalid)
++    }
++
++    /// Pin an immutable owned snapshot without materializing a lower page.
++    ///
++    /// # Errors
++    /// Refuses invalid head data, descriptor drift, or metadata count exhaustion.
++    pub fn snapshot(&self) -> Result<PagedStackSnapshot, PagedStackError> {
++        self.snapshot_with_head(true)
++    }
++
++    fn snapshot_with_head(
++        &self,
++        include_head: bool,
++    ) -> Result<PagedStackSnapshot, PagedStackError> {
++        self.check_sources()?;
++        let has_head = include_head && (!self.head.is_empty() || !self.graphs.is_empty());
++        let mut sources: Vec<Arc<PagedDataset>> = self
++            .layers
++            .iter()
++            .map(|layer| Arc::clone(&layer.dataset))
++            .collect();
++        let mut head_bytes = 0;
++        if has_head {
++            let head = PageMaterialization::in_memory(self.frozen_head()?, PageGeneration::INITIAL);
++            head_bytes = head.byte_len;
++            sources.push(Arc::new(
++                PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
++                    vec![(head.dataset, head_bytes)],
++                    PageGeneration::INITIAL,
++                )))
++                .map_err(PagedStackError::Freeze)?,
++            ));
++        }
++        let descriptors: Arc<[StackSource]> = self
++            .layers
++            .iter()
++            .map(|layer| StackSource {
++                generation: layer.dataset.generation(),
++                page_count: layer.dataset.page_count(),
++            })
++            .collect();
++        let mut dictionary = GlobalDictionary::new();
++        let mut parts = Vec::new();
++        let mut origins = Vec::new();
++        let mut empty_graphs = BTreeSet::new();
++        let mut ranges = Vec::new();
++        for (layer, source) in sources.iter().enumerate() {
++            let first = parts.len();
++            let mut remap = Vec::new();
++            remap
++                .try_reserve(source.dictionary.len())
++                .map_err(|_| PagedStackError::Capacity)?;
++            for i in 0..source.dictionary.len() {
++                let value = source
++                    .dictionary
++                    .term_value(GlobalTermId::from_index(i as u64));
++                remap.push(
++                    dictionary
++                        .try_reintern_validated(&value)
++                        .map_err(|()| PagedStackError::Capacity)?,
++                );
++            }
++            for slot in &source.pages {
++                let translation = slot.translation.remap(|id| remap[id.index() as usize]);
++                for graph in translation.summary().declared_graphs() {
++                    if [
++                        PageStream::Base,
++                        PageStream::Reifier,
++                        PageStream::Annotation,
++                    ]
++                    .iter()
++                    .all(|&stream| translation.summary().graph_rows(graph, stream) == 0)
++                    {
++                        empty_graphs.insert(translation.to_global(graph));
++                    }
++                }
++                parts
++                    .try_reserve(1)
++                    .map_err(|_| PagedStackError::Capacity)?;
++                parts.push(super::PagePart {
++                    translation,
++                    capabilities: slot.caps,
++                    quad_count: slot.quad_count,
++                    byte_len: slot.byte_len,
++                });
++                origins.push(if layer == self.layers.len() {
++                    StackPageOrigin::Head
++                } else {
++                    StackPageOrigin::Sealed {
++                        layer: layer as u64,
++                        page: slot.id,
++                    }
++                });
++            }
++            ranges.push(first..parts.len());
++        }
++        let empty_removals = BTreeSet::new();
++        let empty_graph_values = BTreeSet::new();
++        let graph_declarations: Arc<[Arc<[TermValue]>]> = self
++            .layers
++            .iter()
++            .map(|layer| &layer.declared_graphs)
++            .chain(std::iter::once(if include_head {
++                &self.graphs
++            } else {
++                &empty_graph_values
++            }))
++            .map(|graphs| graphs.iter().cloned().collect::<Arc<[_]>>())
++            .collect();
++        for graph in self
++            .layers
++            .iter()
++            .flat_map(|layer| &layer.declared_graphs)
++            .chain(self.graphs.iter().filter(|_| include_head))
++        {
++            empty_graphs.insert(
++                dictionary
++                    .try_reintern_validated(graph)
++                    .map_err(|()| PagedStackError::Capacity)?,
++            );
++        }
++        let head_removals = if include_head {
++            &self.removals
++        } else {
++            &empty_removals
++        };
++        let removal_values: Arc<[Arc<[QuadValues]>]> = self
++            .layers
++            .iter()
++            .map(|layer| &layer.removals)
++            .chain(std::iter::once(head_removals))
++            .map(|set| set.iter().cloned().collect::<Arc<[_]>>())
++            .collect();
++        let removals: Vec<FastSet<QuadIds<GlobalTermId>>> = removal_values
++            .iter()
++            .map(|set| {
++                set.iter()
++                    .map(|row| {
++                        Ok(QuadIds {
++                            s: dictionary
++                                .try_reintern_validated(&row.s)
++                                .map_err(|()| PagedStackError::Capacity)?,
++                            p: dictionary
++                                .try_reintern_validated(&row.p)
++                                .map_err(|()| PagedStackError::Capacity)?,
++                            o: dictionary
++                                .try_reintern_validated(&row.o)
++                                .map_err(|()| PagedStackError::Capacity)?,
++                            g: row
++                                .g
++                                .as_ref()
++                                .map(|g| {
++                                    dictionary
++                                        .try_reintern_validated(g)
++                                        .map_err(|()| PagedStackError::Capacity)
++                                })
++                                .transpose()?,
++                        })
++                    })
++                    .collect::<Result<_, PagedStackError>>()
++            })
++            .collect::<Result<_, _>>()?;
++        let provider = Arc::new(StackProvider {
++            sources,
++            origins: origins.clone(),
++        });
++        let physical =
++            PagedDataset::from_parts(dictionary, provider, PageGeneration::INITIAL, parts)
++                .map_err(PagedStackError::Freeze)?;
++        let snapshot = PagedStackSnapshot {
++            physical,
++            origins,
++            removals,
++            empty_graphs,
++            ranges,
++            sources: descriptors,
++            head: if include_head {
++                self.head.iter().cloned().collect()
++            } else {
++                Arc::from([])
++            },
++            head_graphs: if include_head {
++                self.graphs.iter().cloned().collect()
++            } else {
++                Arc::from([])
++            },
++            removal_values,
++            graph_declarations,
++            head_bytes,
++        };
++        self.check_sources()?;
++        Ok(snapshot)
++    }
++
++    /// Seal only the mutable batch and publish a fresh empty head. Even a
++    /// removal-only batch adds a zero-page layer that retains its ordered tombstones.
++    ///
++    /// # Errors
++    /// Source drift or head encoding failures publish no layer and retain the head.
++    pub fn seal_head(&mut self, page_rows: NonZeroUsize) -> Result<(), PagedStackError> {
++        self.check_sources()?;
++        let dataset = canonical_paged_seal(self.frozen_head()?.as_ref(), page_rows)
++            .map_err(PagedStackError::Seal)?;
++        self.check_sources()?;
++        self.layers
++            .try_reserve(1)
++            .map_err(|_| PagedStackError::Capacity)?;
++        self.layers.push(Layer {
++            dataset: Arc::new(dataset),
++            removals: std::mem::take(&mut self.removals),
++            declared_graphs: std::mem::take(&mut self.graphs),
++        });
++        self.head.clear();
++        self.graphs.clear();
++        self.sealed_snapshot.take();
++        Ok(())
++    }
++
++    /// Fold the effective surface into a new canonical base; publication belongs
++    /// to the consumer. This explicitly paid operation reads surviving candidates.
++    ///
++    /// # Errors
++    /// A failed source, limit, or encoder returns no partial artifact.
++    pub fn compact(
++        &self,
++        limits: PagedQueryLimits,
++        page_rows: NonZeroUsize,
++    ) -> Result<PagedDataset, CanonicalPagedError<PagedQueryError>> {
++        let snapshot = self
++            .snapshot()
++            .map_err(|error| CanonicalPagedError::Construction(Box::new(error)))?;
++        snapshot.compact(limits, page_rows)
++    }
++}
++
++fn normalize_row(row: &QuadValues) -> Result<QuadValues, PagedStackError> {
++    let mut builder = RdfDatasetBuilder::new();
++    let s = builder.intern_value(&row.s);
++    let p = builder.intern_value(&row.p);
++    let o = builder.intern_value(&row.o);
++    let g = row.g.as_ref().map(|g| builder.intern_value(g));
++    builder.push_quad(s, p, o, g);
++    let frozen = builder.freeze().map_err(PagedStackError::Invalid)?;
++    Ok(QuadValues {
++        s: frozen.as_ref().term_value(s),
++        p: frozen.as_ref().term_value(p),
++        o: frozen.as_ref().term_value(o),
++        g: g.map(|g| frozen.as_ref().term_value(g)),
++    })
++}
++
++struct StackProvider {
++    sources: Vec<Arc<PagedDataset>>,
++    origins: Vec<StackPageOrigin>,
++}
++impl PageProvider for StackProvider {
++    fn page_count(&self) -> u64 {
++        self.origins.len() as u64
++    }
++    fn generation(&self) -> PageGeneration {
++        PageGeneration::INITIAL
++    }
++    fn check_snapshot(&self, _: PageGeneration, _: u64) -> Result<(), PagedQueryError> {
++        for (source, dataset) in self.sources.iter().enumerate() {
++            dataset
++                .provider
++                .check_snapshot(dataset.generation(), dataset.page_count())
++                .map_err(|error| PagedQueryError::SourceSnapshot {
++                    source: source as u64,
++                    error: Box::new(error),
++                })?;
++        }
++        Ok(())
++    }
++    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
++        let origin = self
++            .origins
++            .get(page.0 as usize)
++            .ok_or_else(|| PageFault::invalid_data(page, "unknown stack page"))?;
++        let (layer, original) = match *origin {
++            StackPageOrigin::Sealed { layer, page } => (layer as usize, page),
++            StackPageOrigin::Head => (self.sources.len() - 1, PageId(0)),
++        };
++        let source = &self.sources[layer];
++        let mut materialization = source.provider.materialize(original).map_err(|mut fault| {
++            fault.message = format!(
++                "source {layer}, original page {}: {}",
++                original.0, fault.message
++            );
++            fault.page = page;
++            fault
++        })?;
++        if materialization.generation != source.generation() {
++            return Err(PageFault::stale_generation(
++                page,
++                source.generation(),
++                materialization.generation,
++            ));
++        }
++        materialization.generation = PageGeneration::INITIAL;
++        Ok(materialization)
++    }
++}
++
++/// Immutable metadata and copied head/removals, retained independently of its writer.
++#[derive(Debug)]
++pub struct PagedStackSnapshot {
++    physical: PagedDataset,
++    origins: Vec<StackPageOrigin>,
++    removals: Vec<FastSet<QuadIds<GlobalTermId>>>,
++    empty_graphs: BTreeSet<GlobalTermId>,
++    ranges: Vec<std::ops::Range<usize>>,
++    sources: Arc<[StackSource]>,
++    head: Arc<[QuadValues]>,
++    head_graphs: Arc<[TermValue]>,
++    removal_values: Arc<[Arc<[QuadValues]>]>,
++    graph_declarations: Arc<[Arc<[TermValue]>]>,
++    head_bytes: u64,
++}
++impl PagedStackSnapshot {
++    /// Start one operation sharing a single physical cache, budget and sticky latch.
++    #[must_use]
++    pub fn query_view(&self, limits: PagedQueryLimits) -> PagedStackQueryView<'_> {
++        PagedStackQueryView {
++            snapshot: self,
++            physical: self.physical.query_view(limits),
++        }
++    }
++    /// The snapshot-local value dictionary; IDs never identify a writer or source.
++    #[must_use]
++    pub const fn dictionary(&self) -> &GlobalDictionary {
++        &self.physical.dictionary
++    }
++    /// Number of sealed layers, including removal-only generations.
++    #[must_use]
++    pub fn sealed_depth(&self) -> usize {
++        self.sources.len()
++    }
++    /// Fold through the guarded logical read path and canonical eager partitioner.
++    ///
++    /// # Errors
++    /// Source or resource errors refuse the complete fold.
++    pub fn compact(
++        &self,
++        limits: PagedQueryLimits,
++        page_rows: NonZeroUsize,
++    ) -> Result<PagedDataset, CanonicalPagedError<PagedQueryError>> {
++        canonical_paged_seal(&self.query_view(limits), page_rows)
++    }
++}
++
++/// The logical, fallible RDF 1.2 view of one complete pinned stack.
++#[derive(Debug)]
++pub struct PagedStackQueryView<'a> {
++    snapshot: &'a PagedStackSnapshot,
++    physical: PagedQueryView<'a>,
++}
++impl PagedStackQueryView<'_> {
++    fn layer_of(&self, page: PageId) -> usize {
++        match self.snapshot.origins[page.0 as usize] {
++            StackPageOrigin::Sealed { layer, .. } => layer as usize,
++            StackPageOrigin::Head => self.snapshot.sources.len(),
++        }
++    }
++
++    fn visible(&self, page: PageId, row: QuadIds<GlobalTermId>) -> bool {
++        self.visible_at(page, row, self.snapshot.removals.len() - 1)
++    }
++
++    fn visible_at(&self, page: PageId, row: QuadIds<GlobalTermId>, prefix: usize) -> bool {
++        let layer = self.layer_of(page);
++        if layer > prefix {
++            return false;
++        }
++        !self
++            .snapshot
++            .removals
++            .iter()
++            .take(prefix + 1)
++            .skip(layer + 1)
++            .any(|set| set.contains(&row))
++    }
++
++    fn declarations(
++        &self,
++        subject: GlobalTermId,
++        graph: Option<GlobalTermId>,
++        prefix: usize,
++    ) -> bool {
++        let end = self
++            .snapshot
++            .ranges
++            .get(prefix)
++            .map_or(self.snapshot.physical.pages.len(), |range| range.end);
++        self.physical
++            .stream_pattern_range(
++                PageStream::Reifier,
++                Some(subject),
++                None,
++                None,
++                graph.map_or(GraphMatch::Default, GraphMatch::Named),
++                0..end,
++            )
++            .any(|(page, row)| self.visible_at(page, row, prefix))
++    }
++
++    fn external_declaration(
++        &self,
++        subject: GlobalTermId,
++        graph: Option<GlobalTermId>,
++        page: PageId,
++    ) -> bool {
++        let origin = self.snapshot.origins[page.0 as usize];
++        self.physical
++            .stream_pattern(
++                PageStream::Reifier,
++                Some(subject),
++                None,
++                None,
++                graph.map_or(GraphMatch::Default, GraphMatch::Named),
++            )
++            .any(|(other, row)| {
++                let other_origin = self.snapshot.origins[other.0 as usize];
++                let same_source = match (origin, other_origin) {
++                    (
++                        StackPageOrigin::Sealed { layer: a, .. },
++                        StackPageOrigin::Sealed { layer: b, .. },
++                    ) => a == b,
++                    (StackPageOrigin::Head, StackPageOrigin::Head) => true,
++                    _ => false,
++                };
++                !same_source && self.visible(other, row)
++            })
++    }
++
++    fn logical_rows(
++        &self,
++        kind: StatementKind,
++        s: Option<GlobalTermId>,
++        p: Option<GlobalTermId>,
++        o: Option<GlobalTermId>,
++        g: GraphMatch<GlobalTermId>,
++    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
++        let mut seen = FastSet::default();
++        self.snapshot
++            .ranges
++            .iter()
++            .rev()
++            .flat_map(move |range| {
++                [PageStream::Annotation, PageStream::Base]
++                    .into_iter()
++                    .flat_map(move |stream| {
++                        self.physical
++                            .stream_pattern_range(stream, s, p, o, g, range.clone())
++                            .map(move |(page, row)| (stream, page, row))
++                    })
++            })
++            .filter_map(move |(stream, page, row)| {
++                if self.read_error().is_some() || !self.visible(page, row) || !seen.insert(row) {
++                    return None;
++                }
++                let effective = if stream == PageStream::Base {
++                    self.external_declaration(row.s, row.g, page)
++                } else {
++                    self.declarations(row.s, row.g, self.snapshot.removals.len() - 1)
++                };
++                let original = stream == PageStream::Annotation
++                    && self.declarations(row.s, row.g, self.layer_of(page));
++                let physical = if stream == PageStream::Base {
++                    StatementKind::Ordinary
++                } else {
++                    StatementKind::Annotation
++                };
++                let classified = classify_statement(physical, true, original, effective);
++                (self.read_error().is_none() && classified == Some(kind)).then_some(row)
++            })
++    }
++
++    fn reifiers(
++        &self,
++        s: Option<GlobalTermId>,
++        g: GraphMatch<GlobalTermId>,
++    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
++        let mut seen = FastSet::default();
++        self.physical
++            .stream_pattern(PageStream::Reifier, s, None, None, g)
++            .filter_map(move |(page, row)| {
++                (self.read_error().is_none() && self.visible(page, row) && seen.insert(row))
++                    .then_some(row)
++            })
++    }
++
++    fn contains_values(&self, row: &QuadValues) -> Result<bool, PagedQueryError> {
++        let dictionary = self.snapshot.dictionary();
++        let (Some(s), Some(p), Some(o)) = (
++            dictionary.term_id_by_value(&row.s),
++            dictionary.term_id_by_value(&row.p),
++            dictionary.term_id_by_value(&row.o),
++        ) else {
++            return Ok(false);
++        };
++        let graph = match &row.g {
++            None => GraphMatch::Default,
++            Some(g) => {
++                let Some(g) = dictionary.term_id_by_value(g) else {
++                    return Ok(false);
++                };
++                GraphMatch::Named(g)
++            }
++        };
++        let found = self
++            .quads_for_pattern(Some(s), Some(p), Some(o), graph)
++            .next()
++            .is_some()
++            || self.reifiers(Some(s), graph).any(|q| q.p == p && q.o == o)
++            || self
++                .logical_rows(StatementKind::Annotation, Some(s), Some(p), Some(o), graph)
++                .next()
++                .is_some();
++        if let Some(error) = self.read_error() {
++            return Err(error);
++        }
++        Ok(found)
++    }
++}
++impl DatasetView for PagedStackQueryView<'_> {
++    type Id = GlobalTermId;
++    type ReadError = PagedQueryError;
++    type TermGuard<'a>
++        = TermRef<'a, GlobalTermId>
++    where
++        Self: 'a;
++    type ProbePlan = ();
++    fn read_error(&self) -> Option<Self::ReadError> {
++        self.physical.read_error()
++    }
++    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
++        self.physical.resolve(id)
++    }
++    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
++        self.physical.term_id_by_value(value)
++    }
++    fn capabilities(&self) -> RdfStoreCapabilities {
++        let mut caps = self.physical.capabilities();
++        caps.annotations |= caps.reifiers;
++        caps
++    }
++    fn len_hint(&self) -> Option<u64> {
++        None
++    }
++    fn term_count(&self) -> u64 {
++        self.physical.term_count()
++    }
++    fn stats_fingerprint(&self) -> u64 {
++        self.physical.stats_fingerprint()
++    }
++    fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.quads_for_pattern(None, None, None, GraphMatch::Any)
++    }
++    fn quads_for_pattern(
++        &self,
++        s: Option<Self::Id>,
++        p: Option<Self::Id>,
++        o: Option<Self::Id>,
++        g: GraphMatch<Self::Id>,
++    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.logical_rows(StatementKind::Ordinary, s, p, o, g)
++    }
++    fn probe_plan(&self, _: bool, _: bool, _: bool, _: GraphMatch<Self::Id>) {}
++    fn quads_for_pattern_with_plan(
++        &self,
++        (): &(),
++        s: Option<Self::Id>,
++        p: Option<Self::Id>,
++        o: Option<Self::Id>,
++        g: GraphMatch<Self::Id>,
++    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.quads_for_pattern(s, p, o, g)
++    }
++    fn cardinality_estimate(
++        &self,
++        s: Option<Self::Id>,
++        p: Option<Self::Id>,
++        o: Option<Self::Id>,
++        g: GraphMatch<Self::Id>,
++    ) -> u64 {
++        self.physical
++            .stream_estimate(PageStream::Base, s, p, o, g)
++            .saturating_add(
++                self.physical
++                    .stream_estimate(PageStream::Annotation, s, p, o, g),
++            )
++    }
++    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.reifiers(None, GraphMatch::Any)
++    }
++    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.reifiers(Some(reifier), GraphMatch::Any)
++    }
++    fn reifier_quads_in_graph(
++        &self,
++        g: GraphMatch<Self::Id>,
++    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.reifiers(None, g)
++    }
++    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.annotation_quads_in_graph(GraphMatch::Any)
++    }
++    fn annotation_quads_in_graph(
++        &self,
++        g: GraphMatch<Self::Id>,
++    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.logical_rows(StatementKind::Annotation, None, None, None, g)
++    }
++    fn annotations_of_with_graph(
++        &self,
++        reifier: Self::Id,
++    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
++        self.logical_rows(
++            StatementKind::Annotation,
++            Some(reifier),
++            None,
++            None,
++            GraphMatch::Any,
++        )
++        .map(|q| (q.p, q.o, q.g))
++    }
++    fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
++        self.physical
++            .named_graphs()
++            .filter(move |&graph| self.has_named_graph(graph))
++    }
++    fn has_named_graph(&self, graph: Self::Id) -> bool {
++        if self.read_error().is_some() {
++            return false;
++        }
++        if self.snapshot.empty_graphs.contains(&graph) {
++            return true;
++        }
++        if self.snapshot.removals.iter().all(FastSet::is_empty) {
++            return self.physical.has_named_graph(graph);
++        }
++        let g = GraphMatch::Named(graph);
++        let found = self.quads_for_pattern(None, None, None, g).next().is_some()
++            || self.reifier_quads_in_graph(g).next().is_some()
++            || self.annotation_quads_in_graph(g).next().is_some();
++        self.read_error().is_none() && found
++    }
++}
++impl FallibleDatasetView for PagedStackQueryView<'_> {
++    type Error = PagedQueryError;
++    type Evidence = PagedStackEvidence;
++    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence> {
++        let (error, pages) = match self.physical.operation_status() {
++            ViewOperationStatus::Ready { evidence } => (None, evidence),
++            ViewOperationStatus::Failed { error, evidence } => (Some(error), evidence),
++        };
++        let requested_origins = pages
++            .requested_pages
++            .iter()
++            .map(|page| self.snapshot.origins[page.0 as usize])
++            .collect();
++        let evidence = PagedStackEvidence {
++            sources: Arc::clone(&self.snapshot.sources),
++            head: Arc::clone(&self.snapshot.head),
++            head_graphs: Arc::clone(&self.snapshot.head_graphs),
++            graph_declarations: Arc::clone(&self.snapshot.graph_declarations),
++            removals: Arc::clone(&self.snapshot.removal_values),
++            pages,
++            requested_origins,
++            head_bytes: self.snapshot.head_bytes,
++        };
++        match error {
++            None => ViewOperationStatus::Ready { evidence },
++            Some(error) => ViewOperationStatus::Failed { error, evidence },
++        }
++    }
++}
++
++/// Failure of canonical eager sealing or a guarded fold; no partial base is returned.
++#[derive(Debug)]
++pub enum CanonicalPagedError<E> {
++    /// The source operation failed, retaining its original typed cause.
++    Read(E),
++    /// A typed recursive term lookup failure (including source read errors).
++    Term(crate::TermLookupError<E>),
++    /// A row failed the native RDF 1.2 validation boundary.
++    Invalid(RdfDiagnostic),
++    /// Native sealed page construction failed.
++    Freeze(PagedFreezeError),
++    /// The actual deterministic page encoder failed.
++    Pack(PackError),
++    /// Resident capacity was exhausted.
++    Capacity,
++    /// Snapshot construction failed before a read operation could start.
++    Construction(Box<PagedStackError>),
++}
++impl<E: std::fmt::Display> std::fmt::Display for CanonicalPagedError<E> {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::Read(e) => write!(f, "canonical source read: {e}"),
++            Self::Term(e) => write!(f, "canonical term lookup: {e}"),
++            Self::Invalid(e) => write!(f, "canonical RDF row: {e}"),
++            Self::Freeze(e) => write!(f, "canonical page seal: {e}"),
++            Self::Pack(e) => write!(f, "canonical page carrier: {e}"),
++            Self::Capacity => f.write_str("canonical fold exceeds resident address capacity"),
++            Self::Construction(e) => write!(f, "canonical snapshot construction: {e}"),
++        }
++    }
++}
++impl<E: std::error::Error + 'static> std::error::Error for CanonicalPagedError<E> {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self {
++            Self::Read(error) => Some(error),
++            Self::Term(error) => Some(error),
++            Self::Invalid(error) => Some(error),
++            Self::Freeze(error) => Some(error),
++            Self::Pack(error) => Some(error),
++            Self::Construction(error) => Some(error.as_ref()),
++            Self::Capacity => None,
++        }
++    }
++}
++
++#[derive(PartialEq, Eq, PartialOrd, Ord)]
++enum CanonicalRecord {
++    Ordinary(QuadValues),
++    Reifier(QuadValues),
++    Annotation(QuadValues),
++    Graph(TermValue),
++}
++
++impl CanonicalRecord {
++    fn replay(self, builder: &mut RdfDatasetBuilder) {
++        match self {
++            Self::Graph(graph) => {
++                let g = builder.intern_value(&graph);
++                builder.declare_named_graph(g);
++            }
++            row => {
++                let (kind, row) = match row {
++                    Self::Ordinary(row) => (0, row),
++                    Self::Reifier(row) => (1, row),
++                    Self::Annotation(row) => (2, row),
++                    Self::Graph(_) => unreachable!(),
++                };
++                let s = builder.intern_value(&row.s);
++                let p = builder.intern_value(&row.p);
++                let o = builder.intern_value(&row.o);
++                let g = row.g.as_ref().map(|g| builder.intern_value(g));
++                match kind {
++                    0 => builder.push_quad(s, p, o, g),
++                    1 => builder.push_reifier_in_graph(s, o, g),
++                    _ => builder.push_annotation_in_graph(s, p, o, g),
++                }
++            }
++        }
++    }
++}
++
++/// Canonical eager seal shared by head publication and whole-stack compaction.
++/// Records sort by typed table (ordinary, reifier, annotation, graph declaration),
++/// then by `(subject,predicate,object,graph)` value; graph records sort by value.
++/// Each record, including a graph declaration, consumes one row of the positive
++/// page bound. The completely empty surface produces zero pages. Actual page
++/// charges are the byte lengths of the deterministic `PackBuilder` carriers.
++///
++/// # Errors
++/// Source checkpoints and term reads, native validation, capacity, and carrier
++/// encoding failures return no partially built dataset.
++pub fn canonical_paged_seal<D: FallibleDatasetView>(
++    view: &D,
++    page_rows: NonZeroUsize,
++) -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
++    checkpoint(view)?;
++    let mut records = BTreeSet::new();
++    let mut populated_graphs = BTreeSet::new();
++    for (kind, rows) in [
++        (
++            0,
++            Box::new(view.quads()) as Box<dyn Iterator<Item = QuadIds<D::Id>>>,
++        ),
++        (
++            1,
++            Box::new(view.reifier_quads()) as Box<dyn Iterator<Item = QuadIds<D::Id>>>,
++        ),
++        (
++            2,
++            Box::new(view.annotation_quads()) as Box<dyn Iterator<Item = QuadIds<D::Id>>>,
++        ),
++    ] {
++        for q in rows {
++            let row = QuadValues {
++                s: view.term_value(q.s).map_err(CanonicalPagedError::Term)?,
++                p: view.term_value(q.p).map_err(CanonicalPagedError::Term)?,
++                o: view.term_value(q.o).map_err(CanonicalPagedError::Term)?,
++                g: q.g
++                    .map(|g| view.term_value(g))
++                    .transpose()
++                    .map_err(CanonicalPagedError::Term)?,
++            };
++            populated_graphs.extend(row.g.iter().cloned());
++            records.insert(match kind {
++                0 => CanonicalRecord::Ordinary(row),
++                1 => CanonicalRecord::Reifier(row),
++                _ => CanonicalRecord::Annotation(row),
++            });
++        }
++        checkpoint(view)?;
++    }
++    for graph in view.named_graphs() {
++        let graph = view.term_value(graph).map_err(CanonicalPagedError::Term)?;
++        if !populated_graphs.contains(&graph) {
++            records.insert(CanonicalRecord::Graph(graph));
++        }
++    }
++    checkpoint(view)?;
++    let mut pages = Vec::new();
++    let mut records = records.into_iter().peekable();
++    while records.peek().is_some() {
++        let mut builder = RdfDatasetBuilder::new();
++        for record in records.by_ref().take(page_rows.get()) {
++            record.replay(&mut builder);
++        }
++        let page = builder.freeze().map_err(CanonicalPagedError::Invalid)?;
++        let bytes = PackBuilder::build_bytes(&page).map_err(CanonicalPagedError::Pack)?;
++        pages
++            .try_reserve(1)
++            .map_err(|_| CanonicalPagedError::Capacity)?;
++        pages.push((page, bytes.len() as u64));
++    }
++    checkpoint(view)?;
++    let sealed = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
++        pages,
++        PageGeneration::INITIAL,
++    )))
++    .map_err(CanonicalPagedError::Freeze)?;
++    checkpoint(view)?;
++    Ok(sealed.compact())
++}
++fn checkpoint<D: FallibleDatasetView>(view: &D) -> Result<(), CanonicalPagedError<D::Error>> {
++    match view.operation_status() {
++        ViewOperationStatus::Ready { .. } => Ok(()),
++        ViewOperationStatus::Failed { error, .. } => Err(CanonicalPagedError::Read(error)),
++    }
++}
+diff --git crates/rdf-core/src/lib.rs crates/rdf-core/src/lib.rs
+index cab040e3d..256a463f6 100644
+--- crates/rdf-core/src/lib.rs
++++ crates/rdf-core/src/lib.rs
+@@ -198,18 +198,20 @@ pub use ir::{
+     CANON_PRESENTATION_FLAT_ASSERTION_ID, CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
+     CANON_PRESENTATION_OVERLAY_ID, CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID,
+     CANON_PROFILE_VERSION, CanonError, CanonHash, CanonPresentation, CanonScopeName,
+-    CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
+-    DatasetStateDigest, DatasetStateError, DeltaDatasetView, DeltaViewId, FrozenDatasetSource,
+-    GENID_WELL_KNOWN_PATH, GlobalDictionary, GlobalTermId, GraphExistenceMode, GraphLayer,
+-    GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset, Nested,
++    CanonicalPagedError, CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff,
++    DatasetSink, DatasetStateDigest, DatasetStateError, DeltaDatasetView, DeltaViewId,
++    FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary, GlobalTermId, GraphExistenceMode,
++    GraphLayer, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset, Nested,
+     NonIriPredicate, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
+     PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
+     PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
+-    PagedQueryView, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds,
+-    QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
+-    RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError,
+-    SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
+-    ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_relabel,
++    PagedQueryView, PagedStack, PagedStackError, PagedStackEvidence, PagedStackQueryView,
++    PagedStackSnapshot, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle,
++    QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT,
++    RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope,
++    ReservedVocabulary, SkolemError, StackPageOrigin, StackSource, SubsetPageProvider, TermBox,
++    TermId, TermPosition, TermRef, TermValue, TermVisit, ValidatedRdfDatasetBuilder,
++    ViewCanonError, blank_count_view, canonical_paged_seal, canonical_relabel,
+     canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
+     canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
+     dataset_diff, datasets_isomorphic, deskolemize, fold_term, graph_digest_view, skolemize,
+diff --git crates/rdf-core/tests/paged_stack.rs crates/rdf-core/tests/paged_stack.rs
+new file mode 100644
+index 000000000..19a508ada
+--- /dev/null
++++ crates/rdf-core/tests/paged_stack.rs
+@@ -0,0 +1,1003 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Public layered paging, chronology, RDF 1.2 classification, and fold laws.
++
++use std::collections::BTreeSet;
++use std::num::NonZeroUsize;
++use std::sync::Arc;
++use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
++
++use purrdf_core::{
++    BlankScope, CanonicalPagedError, DatasetView, FallibleDatasetView, GlobalTermId, GraphMatch,
++    InMemoryPageProvider, PackBuilder, PageFault, PageGeneration, PageId, PageMaterialization,
++    PageProvider, PagedDataset, PagedQueryError, PagedQueryLimits, PagedStack, PagedStackError,
++    PagedStackEvidence, RdfDataset, RdfDatasetBuilder, RdfTextDirection, StackPageOrigin, TermBox,
++    TermFactory, TermValue, ViewOperationStatus, canonical_paged_seal,
++};
++
++fn iri(name: &str) -> TermValue {
++    TermValue::iri(format!("https://example.org/{name}"))
++}
++fn row(s: &str, o: &str) -> purrdf_core::QuadValues {
++    purrdf_core::QuadValues::triple(iri(s), iri("p"), iri(o))
++}
++fn page(rows: &[purrdf_core::QuadValues]) -> Arc<RdfDataset> {
++    let mut builder = RdfDatasetBuilder::new();
++    for row in rows {
++        let s = builder.intern_value(&row.s);
++        let p = builder.intern_value(&row.p);
++        let o = builder.intern_value(&row.o);
++        let g = row.g.as_ref().map(|g| builder.intern_value(g));
++        builder.push_quad(s, p, o, g);
++    }
++    builder.freeze().unwrap()
++}
++fn sealed(pages: Vec<Arc<RdfDataset>>) -> Arc<PagedDataset> {
++    Arc::new(PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(pages))).unwrap())
++}
++fn bound(n: usize) -> NonZeroUsize {
++    NonZeroUsize::new(n).unwrap()
++}
++fn evidence(
++    view: &impl FallibleDatasetView<Error = PagedQueryError, Evidence = PagedStackEvidence>,
++) -> PagedStackEvidence {
++    match view.operation_status() {
++        ViewOperationStatus::Ready { evidence } => evidence,
++        ViewOperationStatus::Failed { error, .. } => panic!("incomplete: {error}"),
++    }
++}
++fn surface<D: DatasetView>(view: &D) -> BTreeSet<purrdf_core::QuadValues> {
++    view.quads()
++        .chain(view.reifier_quads())
++        .chain(view.annotation_quads())
++        .map(|q| purrdf_core::QuadValues {
++            s: view.term_value(q.s).unwrap(),
++            p: view.term_value(q.p).unwrap(),
++            o: view.term_value(q.o).unwrap(),
++            g: q.g.map(|g| view.term_value(g).unwrap()),
++        })
++        .collect()
++}
++fn page_bytes(dataset: &PagedDataset) -> Vec<Vec<u8>> {
++    (0..dataset.page_count())
++        .map(|i| {
++            let part = dataset.with_pages(&[PageId(i)]);
++            PackBuilder::build_view_bytes(&part.query_view(PagedQueryLimits::UNBOUNDED)).unwrap()
++        })
++        .collect()
++}
++fn dictionary_values(dataset: &PagedDataset) -> Vec<TermValue> {
++    (0..dataset.dictionary().len())
++        .map(|i| {
++            dataset
++                .dictionary()
++                .term_value(GlobalTermId::from_index(i as u64))
++        })
++        .collect()
++}
++
++struct ProbeProvider {
++    pages: Vec<Arc<RdfDataset>>,
++    alternate: Option<Arc<RdfDataset>>,
++    reads: AtomicUsize,
++    generation: AtomicU64,
++    count: AtomicU64,
++    mode: AtomicUsize,
++}
++impl ProbeProvider {
++    fn new(pages: Vec<Arc<RdfDataset>>, alternate: Option<Arc<RdfDataset>>) -> Self {
++        Self {
++            count: AtomicU64::new(pages.len() as u64),
++            pages,
++            alternate,
++            reads: AtomicUsize::new(0),
++            generation: AtomicU64::new(7),
++            mode: AtomicUsize::new(0),
++        }
++    }
++}
++impl PageProvider for ProbeProvider {
++    fn page_count(&self) -> u64 {
++        self.count.load(Ordering::Relaxed)
++    }
++    fn generation(&self) -> PageGeneration {
++        PageGeneration(self.generation.load(Ordering::Relaxed))
++    }
++    fn materialize(&self, id: PageId) -> Result<PageMaterialization, PageFault> {
++        self.reads.fetch_add(1, Ordering::Relaxed);
++        let mode = self.mode.load(Ordering::Relaxed);
++        match mode {
++            1 => return Err(PageFault::provider(id, "provider refusal")),
++            2 => return Err(PageFault::cancelled(id, "cancelled")),
++            3 => return Err(PageFault::deadline_exceeded(id, "deadline")),
++            _ => {}
++        }
++        let dataset = if mode == 5 {
++            self.alternate.as_ref().unwrap()
++        } else {
++            &self.pages[id.0 as usize]
++        };
++        if mode == 6 {
++            self.generation.fetch_add(1, Ordering::Relaxed);
++        }
++        Ok(PageMaterialization::new(
++            Arc::clone(dataset),
++            PageGeneration(7),
++            if mode == 4 { 11 } else { 10 },
++        ))
++    }
++}
++
++#[test]
++fn construction_append_and_snapshot_do_not_read_lower_pages() {
++    let a = Arc::new(ProbeProvider::new(vec![page(&[row("a", "b")])], None));
++    let b = Arc::new(ProbeProvider::new(vec![page(&[row("b", "c")])], None));
++    let first = Arc::new(PagedDataset::from_provider(a.clone()).unwrap());
++    let second = Arc::new(PagedDataset::from_provider(b.clone()).unwrap());
++    assert_eq!(
++        first.dictionary().term_value(GlobalTermId::from_index(0)),
++        iri("a")
++    );
++    assert_eq!(
++        second.dictionary().term_value(GlobalTermId::from_index(0)),
++        iri("b")
++    );
++    a.reads.store(0, Ordering::Relaxed);
++    b.reads.store(0, Ordering::Relaxed);
++    let mut stack = PagedStack::new(vec![first]).unwrap();
++    stack.append(second, vec![]).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    assert_eq!(a.reads.load(Ordering::Relaxed), 0);
++    assert_eq!(b.reads.load(Ordering::Relaxed), 0);
++    let view = snapshot.query_view(PagedQueryLimits::new(2, 20));
++    assert_eq!(
++        surface(&view),
++        BTreeSet::from([row("a", "b"), row("b", "c")])
++    );
++    let receipt = evidence(&view);
++    assert_eq!(receipt.sources.len(), 2);
++    assert_eq!(
++        receipt.requested_origins,
++        vec![
++            StackPageOrigin::Sealed {
++                layer: 1,
++                page: PageId(0)
++            },
++            StackPageOrigin::Sealed {
++                layer: 0,
++                page: PageId(0)
++            }
++        ]
++    );
++    assert_eq!(
++        (receipt.pages.consumed_pages, receipt.pages.consumed_bytes),
++        (2, 20)
++    );
++    assert_eq!(surface(&view).len(), 2);
++    assert_eq!(evidence(&view), receipt);
++}
++
++#[test]
++fn chronological_removal_reinsertion_same_head_and_snapshot_isolation() {
++    let q = row("a", "b");
++    let base = sealed(vec![page(std::slice::from_ref(&q))]);
++    let mut stack = PagedStack::new(vec![Arc::clone(&base), base]).unwrap();
++    let original = stack.snapshot().unwrap();
++    assert!(!stack.insert(q.clone()).unwrap());
++    assert!(stack.remove(&q).unwrap());
++    assert!(!stack.remove(&q).unwrap());
++    stack.seal_head(bound(2)).unwrap();
++    let removed = stack.snapshot().unwrap();
++    assert_eq!(removed.sealed_depth(), 3);
++    assert!(surface(&removed.query_view(PagedQueryLimits::UNBOUNDED)).is_empty());
++    assert!(stack.insert(q.clone()).unwrap());
++    assert!(stack.remove(&q).unwrap());
++    assert!(stack.insert(q.clone()).unwrap());
++    let reinserted = stack.snapshot().unwrap();
++    stack.seal_head(bound(1)).unwrap();
++    assert!(stack.remove(&q).unwrap());
++    for snapshot in [original, reinserted] {
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        assert_eq!(surface(&view), BTreeSet::from([q.clone()]));
++        assert_eq!(view.quads().count(), 1);
++        evidence(&view);
++    }
++    assert!(!stack.contains(&q).unwrap());
++    let view = removed.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(
++        evidence(&view).removals[2].as_ref(),
++        std::slice::from_ref(&q)
++    );
++}
++
++#[test]
++fn head_charges_once_under_global_limits_and_folds_have_no_partial_success() {
++    let a = Arc::new(ProbeProvider::new(vec![page(&[row("a", "b")])], None));
++    let base = Arc::new(PagedDataset::from_provider(a).unwrap());
++    let mut stack = PagedStack::new(vec![base]).unwrap();
++    stack.insert(row("new", "term")).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    let unbounded = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(surface(&unbounded).len(), 2);
++    let receipt = evidence(&unbounded);
++    assert!(receipt.head_bytes > 0);
++    assert_eq!(
++        receipt.requested_origins.first(),
++        Some(&StackPageOrigin::Head)
++    );
++    assert_eq!(receipt.head.as_ref(), &[row("new", "term")]);
++    let exact = snapshot.query_view(PagedQueryLimits::new(2, 10 + receipt.head_bytes));
++    assert_eq!(surface(&exact).len(), 2);
++    assert_eq!(
++        evidence(&exact).pages.consumed_bytes,
++        10 + receipt.head_bytes
++    );
++    let zero = snapshot.query_view(PagedQueryLimits::new(0, 0));
++    assert_eq!(zero.quads().count(), 0);
++    assert!(matches!(
++        zero.operation_status(),
++        ViewOperationStatus::Failed {
++            error: PagedQueryError::PageBudgetExceeded { .. },
++            ..
++        }
++    ));
++    let below = snapshot.query_view(PagedQueryLimits::new(2, 9 + receipt.head_bytes));
++    assert_eq!(below.quads().count(), 1);
++    assert!(matches!(
++        below.operation_status(),
++        ViewOperationStatus::Failed {
++            error: PagedQueryError::ByteBudgetExceeded { .. },
++            ..
++        }
++    ));
++    assert_eq!(below.annotation_quads().count(), 0);
++    assert_eq!(below.named_graphs().count(), 0);
++    assert!(matches!(
++        snapshot.compact(PagedQueryLimits::new(1, u64::MAX), bound(2)),
++        Err(CanonicalPagedError::Read(
++            PagedQueryError::PageBudgetExceeded { .. }
++        ))
++    ));
++}
++
++#[test]
++fn drift_of_skipped_or_zero_page_sources_gates_the_entire_head_and_metadata() {
++    for pages in [vec![], vec![page(&[row("skipped", "o")])]] {
++        let provider = Arc::new(ProbeProvider::new(pages, None));
++        let base = Arc::new(PagedDataset::from_provider(provider.clone()).unwrap());
++        let mut stack = PagedStack::new(vec![base]).unwrap();
++        stack.insert(row("head", "o")).unwrap();
++        stack.declare_named_graph(iri("empty")).unwrap();
++        let snapshot = stack.snapshot().unwrap();
++        provider.reads.store(0, Ordering::Relaxed);
++        provider.generation.store(8, Ordering::Relaxed);
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        assert!(matches!(
++            view.operation_status(),
++            ViewOperationStatus::Failed {
++                error: PagedQueryError::SourceSnapshot { source: 0, .. },
++                ..
++            }
++        ));
++        assert_eq!(view.quads().count(), 0);
++        assert_eq!(view.named_graphs().count(), 0);
++        assert!(view.term_id_by_value(&iri("head")).is_err());
++        assert_eq!(provider.reads.load(Ordering::Relaxed), 0);
++        assert!(stack.contains(&row("absent", "o")).is_err());
++    }
++}
++
++#[test]
++fn page_count_drift_is_checked_without_materialization_and_is_sticky() {
++    let provider = Arc::new(ProbeProvider::new(vec![], None));
++    let mut stack = PagedStack::new(vec![Arc::new(
++        PagedDataset::from_provider(provider.clone()).unwrap(),
++    )])
++    .unwrap();
++    stack.insert(row("head", "o")).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    provider.count.store(1, Ordering::Relaxed);
++    let failed = view.operation_status();
++    assert!(
++        matches!(&failed, ViewOperationStatus::Failed { error: PagedQueryError::SourceSnapshot { error, .. }, .. } if matches!(**error, PagedQueryError::PageCountMismatch { expected: 0, actual: 1 }))
++    );
++    provider.count.store(0, Ordering::Relaxed);
++    assert_eq!(view.operation_status(), failed);
++    assert_eq!(view.quads().count(), 0);
++}
++
++#[test]
++fn typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold() {
++    for mode in 1..=6 {
++        let provider = Arc::new(ProbeProvider::new(
++            vec![page(&[row("a", "b")])],
++            Some(page(&[row("x", "y")])),
++        ));
++        let mut stack = PagedStack::new(vec![Arc::new(
++            PagedDataset::from_provider(provider.clone()).unwrap(),
++        )])
++        .unwrap();
++        stack.insert(row("head", "o")).unwrap();
++        let snapshot = stack.snapshot().unwrap();
++        provider.mode.store(mode, Ordering::Relaxed);
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        assert_eq!(
++            view.quads().count(),
++            1,
++            "head precedes fault; the failed checkpoint rejects this partial internal row"
++        );
++        let status = view.operation_status();
++        assert!(matches!(status, ViewOperationStatus::Failed { .. }));
++        assert_eq!(view.annotation_quads().count(), 0);
++        assert_eq!(view.reifier_quads().count(), 0);
++        assert_eq!(view.named_graphs().count(), 0);
++        assert!(stack.remove(&row("a", "b")).is_err());
++        assert!(
++            snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++                .is_err()
++        );
++        assert_eq!(
++            matches!(
++                status,
++                ViewOperationStatus::Failed {
++                    error: PagedQueryError::Provider { .. },
++                    ..
++                }
++            ),
++            mode == 1
++        );
++        assert_eq!(
++            matches!(
++                status,
++                ViewOperationStatus::Failed {
++                    error: PagedQueryError::Stopped { .. },
++                    ..
++                }
++            ),
++            mode == 2 || mode == 3
++        );
++        assert_eq!(
++            matches!(
++                status,
++                ViewOperationStatus::Failed {
++                    error: PagedQueryError::InvalidData { .. },
++                    ..
++                }
++            ),
++            mode == 4 || mode == 5
++        );
++    }
++}
++
++fn reifier_rows() -> (
++    purrdf_core::QuadValues,
++    purrdf_core::QuadValues,
++    purrdf_core::QuadValues,
++) {
++    let triple = TermValue::Triple {
++        s: TermBox::new(iri("s")),
++        p: TermBox::new(iri("p")),
++        o: TermBox::new(iri("o")),
++    };
++    let first = purrdf_core::QuadValues {
++        s: iri("r"),
++        p: TermValue::iri(purrdf_core::vocab::rdf::REIFIES),
++        o: triple.clone(),
++        g: Some(iri("g")),
++    };
++    let second = purrdf_core::QuadValues {
++        o: TermValue::Triple {
++            s: TermBox::new(iri("other")),
++            p: TermBox::new(iri("p")),
++            o: TermBox::new(triple),
++        },
++        ..first.clone()
++    };
++    let annotation = purrdf_core::QuadValues {
++        s: iri("r"),
++        p: iri("p"),
++        o: iri("value"),
++        g: Some(iri("g")),
++    };
++    (first, second, annotation)
++}
++fn typed_page(
++    reifiers: &[purrdf_core::QuadValues],
++    annotations: &[purrdf_core::QuadValues],
++) -> Arc<RdfDataset> {
++    let mut b = RdfDatasetBuilder::new();
++    for q in reifiers {
++        let s = b.intern_value(&q.s);
++        let o = b.intern_value(&q.o);
++        let g = q.g.as_ref().map(|g| b.intern_value(g));
++        b.push_reifier_in_graph(s, o, g);
++    }
++    for q in annotations {
++        let s = b.intern_value(&q.s);
++        let p = b.intern_value(&q.p);
++        let o = b.intern_value(&q.o);
++        let g = q.g.as_ref().map(|g| b.intern_value(g));
++        b.push_annotation_in_graph(s, p, o, g);
++    }
++    b.freeze().unwrap()
++}
++
++#[test]
++fn annotation_only_pages_demote_only_after_last_original_reifier_in_the_graph() {
++    let (first, second, annotation) = reifier_rows();
++    let mut stack = PagedStack::new(vec![sealed(vec![
++        typed_page(&[first.clone(), second.clone()], &[]),
++        typed_page(&[], std::slice::from_ref(&annotation)),
++    ])])
++    .unwrap();
++    let original = stack.snapshot().unwrap();
++    let original_view = original.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(original_view.annotation_quads().count(), 1);
++    assert!(stack.remove(&first).unwrap());
++    stack.seal_head(bound(1)).unwrap();
++    let one = stack.snapshot().unwrap();
++    assert_eq!(
++        one.query_view(PagedQueryLimits::UNBOUNDED)
++            .annotation_quads()
++            .count(),
++        1
++    );
++    assert!(stack.remove(&second).unwrap());
++    let last = stack.snapshot().unwrap();
++    let view = last.query_view(PagedQueryLimits::UNBOUNDED);
++    let r = view.term_id_by_value(&iri("r")).unwrap().unwrap();
++    let p = view.term_id_by_value(&iri("p")).unwrap().unwrap();
++    let g = view.term_id_by_value(&iri("g")).unwrap().unwrap();
++    assert_eq!(
++        view.quads_for_pattern(Some(r), Some(p), None, GraphMatch::Named(g))
++            .count(),
++        1
++    );
++    assert_eq!(view.annotation_quads().count(), 0);
++    assert_eq!(surface(&view), BTreeSet::from([annotation.clone()]));
++    assert!(view.cardinality_estimate(Some(r), Some(p), None, GraphMatch::Named(g)) >= 1);
++    evidence(&view);
++    let orphan_stack = PagedStack::new(vec![sealed(vec![typed_page(
++        &[],
++        std::slice::from_ref(&annotation),
++    )])])
++    .unwrap();
++    let orphan = orphan_stack.snapshot().unwrap();
++    assert_eq!(
++        orphan
++            .query_view(PagedQueryLimits::UNBOUNDED)
++            .quads()
++            .count(),
++        0
++    );
++    assert_eq!(
++        orphan
++            .query_view(PagedQueryLimits::UNBOUNDED)
++            .annotation_quads()
++            .count(),
++        1
++    );
++}
++
++#[test]
++fn new_reifiers_promote_older_primary_rows_only_in_the_matching_graph() {
++    let (first, _, annotation) = reifier_rows();
++    let default = purrdf_core::QuadValues {
++        g: None,
++        ..annotation.clone()
++    };
++    let elsewhere = purrdf_core::QuadValues {
++        g: Some(iri("elsewhere")),
++        ..annotation.clone()
++    };
++    let mut stack = PagedStack::new(vec![sealed(vec![page(&[
++        annotation.clone(),
++        default.clone(),
++        elsewhere.clone(),
++    ])])])
++    .unwrap();
++    stack.insert(first.clone()).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(view.quads().count(), 2);
++    assert_eq!(view.annotation_quads().count(), 1);
++    assert_eq!(
++        surface(&view),
++        BTreeSet::from([first, annotation, default, elsewhere])
++    );
++    evidence(&view);
++}
++
++#[test]
++fn graph_pruning_partial_removals_empty_declarations_and_scoped_head_values_survive() {
++    let q = purrdf_core::QuadValues {
++        g: Some(iri("implicit")),
++        ..row("a", "b")
++    };
++    let mut b = RdfDatasetBuilder::new();
++    let empty = b.intern_value(&iri("empty"));
++    b.declare_named_graph(empty);
++    let provider = Arc::new(ProbeProvider::new(
++        vec![
++            page(std::slice::from_ref(&q)),
++            b.freeze().unwrap(),
++            page(&[row("unrelated", "o")]),
++        ],
++        None,
++    ));
++    let mut stack = PagedStack::new(vec![Arc::new(
++        PagedDataset::from_provider(provider.clone()).unwrap(),
++    )])
++    .unwrap();
++    stack.remove(&q).unwrap();
++    let scoped = purrdf_core::QuadValues {
++        s: TermValue::Blank {
++            label: "head".into(),
++            scope: BlankScope(44),
++        },
++        ..row("unused", "o")
++    };
++    stack.insert(scoped.clone()).unwrap();
++    stack.declare_named_graph(iri("head-empty")).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert!(surface(&view).contains(&scoped));
++    let graphs: BTreeSet<_> = view
++        .named_graphs()
++        .map(|g| view.term_value(g).unwrap())
++        .collect();
++    assert_eq!(graphs, BTreeSet::from([iri("empty"), iri("head-empty")]));
++    evidence(&view);
++    provider.reads.store(0, Ordering::Relaxed);
++    let narrowed = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    let s = narrowed
++        .term_id_by_value(&iri("unrelated"))
++        .unwrap()
++        .unwrap();
++    assert_eq!(
++        narrowed
++            .quads_for_pattern(Some(s), None, None, GraphMatch::Default)
++            .count(),
++        1
++    );
++    assert_eq!(provider.reads.load(Ordering::Relaxed), 1);
++    assert_eq!(
++        evidence(&narrowed).requested_origins,
++        vec![StackPageOrigin::Sealed {
++            layer: 0,
++            page: PageId(2)
++        }]
++    );
++}
++
++#[test]
++fn canonical_fold_matches_independent_eager_typed_surface_and_dictionary_for_two_histories_and_bounds()
++ {
++    let (first, _, annotation) = reifier_rows();
++    let directional = TermValue::Literal {
++        lexical_form: "مرحبا".into(),
++        datatype: purrdf_core::vocab::rdf::DIR_LANG_STRING.into(),
++        language: Some("ar".into()),
++        direction: Some(RdfTextDirection::Rtl),
++    };
++    let blank = TermValue::Blank {
++        label: "same".into(),
++        scope: BlankScope(17),
++    };
++    let nested = TermValue::Triple {
++        s: TermBox::new(blank.clone()),
++        p: TermBox::new(iri("p")),
++        o: TermBox::new(first.o.clone()),
++    };
++    let special = purrdf_core::QuadValues::triple(blank, iri("p"), nested);
++    let literal = purrdf_core::QuadValues::triple(iri("literal"), iri("p"), directional);
++    let ordinary = page(&[special.clone(), literal.clone(), row("a", "b")]);
++    let typed = typed_page(
++        std::slice::from_ref(&first),
++        std::slice::from_ref(&annotation),
++    );
++    let mut oracle = RdfDatasetBuilder::new();
++    purrdf_core::ir::import::DatasetImporter::new(&mut oracle, ordinary.as_ref()).append();
++    purrdf_core::ir::import::DatasetImporter::new(&mut oracle, typed.as_ref()).append();
++    let graph = oracle.intern_value(&iri("empty"));
++    oracle.declare_named_graph(graph);
++    let oracle = oracle.freeze().unwrap();
++    for n in [1, 3] {
++        let eager = canonical_paged_seal(oracle.as_ref(), bound(n)).unwrap();
++        for history in 0..2 {
++            let mut stack = if history == 0 {
++                PagedStack::new(vec![
++                    sealed(vec![Arc::clone(&ordinary)]),
++                    sealed(vec![Arc::clone(&typed)]),
++                ])
++                .unwrap()
++            } else {
++                let mut stack =
++                    PagedStack::new(vec![sealed(vec![page(&[row("removed", "only")])])]).unwrap();
++                stack.remove(&row("removed", "only")).unwrap();
++                stack.seal_head(bound(2)).unwrap();
++                stack
++                    .append(
++                        sealed(vec![typed_page(&[], std::slice::from_ref(&annotation))]),
++                        vec![],
++                    )
++                    .unwrap();
++                stack
++                    .append(
++                        sealed(vec![typed_page(std::slice::from_ref(&first), &[])]),
++                        vec![],
++                    )
++                    .unwrap();
++                for row in [literal.clone(), row("a", "b"), special.clone()] {
++                    stack.insert(row).unwrap();
++                }
++                stack.seal_head(bound(1)).unwrap();
++                stack
++            };
++            stack.declare_named_graph(iri("empty")).unwrap();
++            let compacted = stack
++                .compact(PagedQueryLimits::UNBOUNDED, bound(n))
++                .unwrap();
++            assert_eq!(page_bytes(&compacted), page_bytes(&eager));
++            assert_eq!(dictionary_values(&compacted), dictionary_values(&eager));
++            assert_eq!(
++                surface(&compacted.query_view(PagedQueryLimits::UNBOUNDED)),
++                surface(oracle.as_ref())
++            );
++            // Canonical partitioning can separate annotations and declarations.
++            let roundtrip = PagedStack::new(vec![Arc::new(compacted)])
++                .unwrap()
++                .snapshot()
++                .unwrap();
++            assert_eq!(
++                surface(&roundtrip.query_view(PagedQueryLimits::UNBOUNDED)),
++                surface(oracle.as_ref())
++            );
++        }
++    }
++    let empty = RdfDatasetBuilder::new().freeze().unwrap();
++    assert_eq!(
++        canonical_paged_seal(empty.as_ref(), bound(1))
++            .unwrap()
++            .page_count(),
++        0
++    );
++}
++
++#[test]
++fn invalid_rows_never_mutate_the_head_and_pending_head_never_reorders() {
++    assert!(matches!(
++        PagedStack::new(vec![]),
++        Err(PagedStackError::MissingBase)
++    ));
++    let mut stack = PagedStack::new(vec![sealed(vec![])]).unwrap();
++    let invalid = purrdf_core::QuadValues {
++        p: TermValue::blank("predicate"),
++        ..row("a", "b")
++    };
++    assert!(stack.insert(invalid).is_err());
++    assert!(
++        surface(
++            &stack
++                .snapshot()
++                .unwrap()
++                .query_view(PagedQueryLimits::UNBOUNDED)
++        )
++        .is_empty()
++    );
++    stack.insert(row("a", "b")).unwrap();
++    assert!(matches!(
++        stack.append(sealed(vec![]), vec![]),
++        Err(PagedStackError::PendingHead)
++    ));
++}
++
++#[test]
++fn newer_typed_occurrence_wins_before_partition_and_native_primary_typing_is_retained() {
++    let (declaration, _, q) = reifier_rows();
++    for reverse in [false, true] {
++        let primary = sealed(vec![page(std::slice::from_ref(&q))]);
++        let annotation = sealed(vec![typed_page(&[], std::slice::from_ref(&q))]);
++        let bases = if reverse {
++            vec![annotation, primary]
++        } else {
++            vec![primary, annotation]
++        };
++        let snapshot = PagedStack::new(bases).unwrap().snapshot().unwrap();
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        assert_eq!(view.quads().count(), usize::from(reverse));
++        assert_eq!(view.annotation_quads().count(), usize::from(!reverse));
++        assert_eq!(surface(&view).len(), 1);
++        let expected = if reverse {
++            page(std::slice::from_ref(&q))
++        } else {
++            typed_page(&[], std::slice::from_ref(&q))
++        };
++        assert_eq!(
++            page_bytes(
++                &snapshot
++                    .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++                    .unwrap()
++            ),
++            page_bytes(&canonical_paged_seal(expected.as_ref(), bound(1)).unwrap())
++        );
++    }
++    let mut builder = RdfDatasetBuilder::new();
++    purrdf_core::ir::import::DatasetImporter::new(
++        &mut builder,
++        page(std::slice::from_ref(&q)).as_ref(),
++    )
++    .append();
++    purrdf_core::ir::import::DatasetImporter::new(
++        &mut builder,
++        typed_page(std::slice::from_ref(&declaration), &[]).as_ref(),
++    )
++    .append();
++    let native = builder.freeze().unwrap();
++    let snapshot = PagedStack::new(vec![sealed(vec![Arc::clone(&native)])])
++        .unwrap()
++        .snapshot()
++        .unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(view.quads().count(), native.as_ref().quad_count());
++    assert_eq!(view.annotation_quads().count(), 0);
++    assert_eq!(
++        page_bytes(
++            &snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, bound(2))
++                .unwrap()
++        ),
++        page_bytes(&canonical_paged_seal(native.as_ref(), bound(2)).unwrap())
++    );
++}
++
++#[test]
++fn native_equal_primary_and_virtual_reifier_rows_retain_both_streams() {
++    let (declaration, _, _) = reifier_rows();
++    let mut builder = RdfDatasetBuilder::new();
++    for source in [
++        page(std::slice::from_ref(&declaration)),
++        typed_page(std::slice::from_ref(&declaration), &[]),
++    ] {
++        purrdf_core::ir::import::DatasetImporter::new(&mut builder, source.as_ref()).append();
++    }
++    let native = builder.freeze().unwrap();
++    let snapshot = PagedStack::new(vec![sealed(vec![Arc::clone(&native)])])
++        .unwrap()
++        .snapshot()
++        .unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(view.quads().count(), 1);
++    assert_eq!(view.reifier_quads().count(), 1);
++    assert_eq!(view.annotation_quads().count(), 0);
++    assert_eq!(surface(&view).len(), 1);
++    assert_eq!(
++        page_bytes(
++            &snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++                .unwrap()
++        ),
++        page_bytes(&canonical_paged_seal(native.as_ref(), bound(1)).unwrap())
++    );
++}
++
++#[test]
++fn sealed_implicit_graph_disappears_when_its_last_effective_row_is_removed() {
++    let q = purrdf_core::QuadValues {
++        g: Some(iri("implicit")),
++        ..row("a", "b")
++    };
++    let mut stack = PagedStack::new(vec![sealed(vec![])]).unwrap();
++    stack.insert(q.clone()).unwrap();
++    stack.seal_head(bound(1)).unwrap();
++    stack.remove(&q).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(view.named_graphs().count(), 0);
++    assert_eq!(
++        snapshot
++            .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++            .unwrap()
++            .page_count(),
++        0
++    );
++}
++
++#[test]
++fn summary_drift_is_refused_even_with_equal_local_values_counts_and_charges() {
++    let provider = Arc::new(ProbeProvider::new(
++        vec![page(&[row("a", "a"), row("b", "b")])],
++        Some(page(&[row("a", "a"), row("a", "b")])),
++    ));
++    let base = Arc::new(PagedDataset::from_provider(provider.clone()).unwrap());
++    let snapshot = PagedStack::new(vec![base]).unwrap().snapshot().unwrap();
++    provider.mode.store(5, Ordering::Relaxed);
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(view.quads().count(), 0);
++    assert!(
++        matches!(view.operation_status(), ViewOperationStatus::Failed { error: PagedQueryError::InvalidData { message, .. }, .. } if message.contains("summary"))
++    );
++}
++
++#[test]
++fn deterministic_value_set_mutations_match_an_independent_oracle_at_each_snapshot() {
++    let initial: Vec<_> = (0..4)
++        .map(|i| row(&format!("s{i}"), &format!("o{i}")))
++        .collect();
++    let mut oracle: BTreeSet<_> = initial.iter().cloned().collect();
++    let mut stack = PagedStack::new(vec![sealed(vec![page(&initial)])]).unwrap();
++    let mut retained = Vec::new();
++    for i in 0..64 {
++        let q = row(
++            &format!("s{}", (i * 13 + 3) % 9),
++            &format!("o{}", (i * 7) % 5),
++        );
++        let changed = if i % 3 == 0 {
++            assert_eq!(stack.remove(&q).unwrap(), oracle.remove(&q));
++            false
++        } else {
++            let expected = oracle.insert(q.clone());
++            assert_eq!(stack.insert(q).unwrap(), expected);
++            expected
++        };
++        let _ = changed;
++        let snapshot = stack.snapshot().unwrap();
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        assert_eq!(surface(&view), oracle);
++        assert_eq!(view.quads().count(), oracle.len());
++        evidence(&view);
++        if i % 8 == 0 {
++            retained.push((snapshot, oracle.clone()));
++            stack.seal_head(bound(1 + i % 3)).unwrap();
++        }
++    }
++    for (snapshot, expected) in retained {
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        assert_eq!(surface(&view), expected);
++        evidence(&view);
++    }
++    let eager = page(&oracle.into_iter().collect::<Vec<_>>());
++    for n in [1, 5] {
++        assert_eq!(
++            page_bytes(
++                &stack
++                    .compact(PagedQueryLimits::UNBOUNDED, bound(n))
++                    .unwrap()
++            ),
++            page_bytes(&canonical_paged_seal(eager.as_ref(), bound(n)).unwrap())
++        );
++    }
++}
++
++#[test]
++fn orphan_annotation_association_uses_its_visible_introduction_prefix() {
++    let (declaration, _, annotation) = reifier_rows();
++    // A reifier was removed BEFORE an explicitly typed orphan was introduced.
++    let mut stack = PagedStack::new(vec![sealed(vec![typed_page(
++        std::slice::from_ref(&declaration),
++        &[],
++    )])])
++    .unwrap();
++    stack.remove(&declaration).unwrap();
++    stack.seal_head(bound(1)).unwrap();
++    stack
++        .append(
++            sealed(vec![typed_page(&[], std::slice::from_ref(&annotation))]),
++            vec![],
++        )
++        .unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(view.annotation_quads().count(), 1);
++    assert_eq!(view.quads().count(), 0);
++    let oracle = typed_page(&[], std::slice::from_ref(&annotation));
++    assert_eq!(
++        page_bytes(
++            &snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++                .unwrap()
++        ),
++        page_bytes(&canonical_paged_seal(oracle.as_ref(), bound(1)).unwrap())
++    );
++    // An orphan predates a temporarily visible future declaration. Its original
++    // association stays absent when that declaration is later removed.
++    let mut stack = PagedStack::new(vec![sealed(vec![Arc::clone(&oracle)])]).unwrap();
++    stack.insert(declaration.clone()).unwrap();
++    stack.seal_head(bound(1)).unwrap();
++    stack.remove(&declaration).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    assert_eq!(
++        snapshot
++            .query_view(PagedQueryLimits::UNBOUNDED)
++            .annotation_quads()
++            .count(),
++        1
++    );
++    assert_eq!(
++        snapshot
++            .query_view(PagedQueryLimits::UNBOUNDED)
++            .quads()
++            .count(),
++        0
++    );
++    assert_eq!(
++        page_bytes(
++            &snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, bound(2))
++                .unwrap()
++        ),
++        page_bytes(&canonical_paged_seal(oracle.as_ref(), bound(2)).unwrap())
++    );
++}
++
++#[test]
++fn metadata_point_reads_detect_source_drift_without_an_earlier_status_checkpoint() {
++    for kind in 0..3 {
++        let provider = Arc::new(ProbeProvider::new(vec![], None));
++        let mut stack = PagedStack::new(vec![Arc::new(
++            PagedDataset::from_provider(provider.clone()).unwrap(),
++        )])
++        .unwrap();
++        stack.insert(row("head", "value")).unwrap();
++        stack.declare_named_graph(iri("empty")).unwrap();
++        let snapshot = stack.snapshot().unwrap();
++        let id = snapshot
++            .dictionary()
++            .term_id_by_value(&iri("head"))
++            .unwrap();
++        let graph = snapshot
++            .dictionary()
++            .term_id_by_value(&iri("empty"))
++            .unwrap();
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        provider.generation.store(8, Ordering::Relaxed);
++        match kind {
++            0 => assert!(view.term_id_by_value(&iri("head")).is_err()),
++            1 => assert!(view.resolve(id).is_err()),
++            _ => assert!(!view.has_named_graph(graph)),
++        }
++        assert_eq!(view.named_graphs().count(), 0);
++        assert_eq!(view.quads().count(), 0);
++        assert!(
++            matches!(view.operation_status(), ViewOperationStatus::Failed { evidence, .. } if evidence.pages.requested_pages.is_empty())
++        );
++    }
++}
++
++#[test]
++fn explicit_head_graph_lifetime_survives_sealing_while_populated_then_last_row_removal() {
++    let graph = iri("declared");
++    let q = purrdf_core::QuadValues {
++        g: Some(graph.clone()),
++        ..row("a", "b")
++    };
++    let mut stack = PagedStack::new(vec![sealed(vec![])]).unwrap();
++    stack.declare_named_graph(graph.clone()).unwrap();
++    stack.insert(q.clone()).unwrap();
++    stack.seal_head(bound(1)).unwrap();
++    stack.remove(&q).unwrap();
++    stack.seal_head(bound(2)).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(view.quads().count(), 0);
++    assert_eq!(
++        view.named_graphs()
++            .map(|id| view.term_value(id).unwrap())
++            .collect::<Vec<_>>(),
++        vec![graph.clone()]
++    );
++    let mut eager = RdfDatasetBuilder::new();
++    let id = eager.intern_value(&graph);
++    eager.declare_named_graph(id);
++    assert_eq!(
++        page_bytes(
++            &snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++                .unwrap()
++        ),
++        page_bytes(&canonical_paged_seal(eager.freeze().unwrap().as_ref(), bound(1)).unwrap())
++    );
++}
+diff --git crates/rdf/src/lib.rs crates/rdf/src/lib.rs
+index 343d6351f..6218b634b 100644
+--- crates/rdf/src/lib.rs
++++ crates/rdf/src/lib.rs
+@@ -217,48 +217,50 @@ pub use purrdf_core::{
+     CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
+     CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
+     CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
+-    CanonHash, CanonPresentation, CanonScopeName, CanonicalRelabeling, Canonicalized,
+-    CompositeDatasetView, CompositeSource, CompositeViewId, ContentDigest, ContentStore,
+-    ContentStoreError, DatasetDiff, DatasetMut, DatasetProvenance, DatasetSink, DatasetStateDigest,
+-    DatasetStateError, DatasetView, DeltaDatasetView, DeltaViewId, DiagnosticParameter,
+-    DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue, DrainCheckpoint,
+-    DrainFailure, FallibleDatasetView, FastHasher, FastMap, FastSet, FnFunction, FnImpl, FnMapping,
+-    FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog, FrozenDatasetSource,
+-    GENID_WELL_KNOWN_PATH, GraphExistenceMode, GraphLayer, GraphMatch, GraphMatchValue,
+-    GraphPlacement, GtsBundle, HandleEntry, HandleKey, IdSet, IdVec, IriError, LossEntry,
+-    LossLedger, MutableDataset, OriginKind, OriginSetId, OriginSetInterner, OwnerKey,
++    CanonHash, CanonPresentation, CanonScopeName, CanonicalPagedError, CanonicalRelabeling,
++    Canonicalized, CompositeDatasetView, CompositeSource, CompositeViewId, ContentDigest,
++    ContentStore, ContentStoreError, DatasetDiff, DatasetMut, DatasetProvenance, DatasetSink,
++    DatasetStateDigest, DatasetStateError, DatasetView, DeltaDatasetView, DeltaViewId,
++    DiagnosticParameter, DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue,
++    DrainCheckpoint, DrainFailure, FallibleDatasetView, FastHasher, FastMap, FastSet, FnFunction,
++    FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
++    FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GraphExistenceMode, GraphLayer, GraphMatch,
++    GraphMatchValue, GraphPlacement, GtsBundle, HandleEntry, HandleKey, IdSet, IdVec, IriError,
++    LossEntry, LossLedger, MutableDataset, OriginKind, OriginSetId, OriginSetInterner, OwnerKey,
+     OwnerMutability, PIPELINE_ROOT_DOMAIN, PROJECTION_CODECS, PageFault, PageFaultKind,
+     PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
+     PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
+-    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle, PipelineBundleError,
+-    PipelineViewBundle, ProvenanceError, QuadHandle, QuadIds, QuadPatternCursor, QuadRef,
+-    QuadValues, RDFC_CALL_LIMIT, RESEARCH_OBJECT_CODECS, RESERVED_NAMESPACE, RdfAnnotation,
+-    RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+-    RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral, RdfLocation, RdfLookaside,
+-    RdfLookasideKind, RdfLookasideResource, RdfMetadataEntry, RdfMetadataValue,
+-    RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier, RdfSegmentRecord,
+-    RdfSerializeRequest, RdfSerializer, RdfSeverity, RdfSignatureRecord, RdfStoreCapabilities,
+-    RdfSuppressionRecord, RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple, ReservedVocabulary,
+-    RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
++    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PagedStack, PagedStackError,
++    PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot, PipelineBundle,
++    PipelineBundleError, PipelineViewBundle, ProvenanceError, QuadHandle, QuadIds,
++    QuadPatternCursor, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESEARCH_OBJECT_CODECS,
++    RESERVED_NAMESPACE, RdfAnnotation, RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset,
++    RdfDatasetBuilder, RdfDatasetVisitor, RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral,
++    RdfLocation, RdfLookaside, RdfLookasideKind, RdfLookasideResource, RdfMetadataEntry,
++    RdfMetadataValue, RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier,
++    RdfSegmentRecord, RdfSerializeRequest, RdfSerializer, RdfSeverity, RdfSignatureRecord,
++    RdfStoreCapabilities, RdfSuppressionRecord, RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple,
++    ReservedVocabulary, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
+     SSSOM_DEFAULT_VALIDATION_TYPES, ScopeBinding, SegmentUnitMap, SerializeGraph, SkolemError,
+     SmallVec, SparqlEngine, SparqlRequest, SparqlResult, SssomColumnLayout, SssomColumnLayoutError,
+     SssomCommentError, SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping,
+-    SssomMappingSet, SssomMeta, SssomSetComment, SubsetPageProvider, TermBox, TermFactory, TermId,
+-    TermPosition, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner, UnitMetadata,
+-    ViewAccountingReport, ViewCanonError, ViewLimits, ViewOperationStatus, ViewStats, ViewWork,
+-    assert_ledger_complete, assert_ledger_sound, blank_count_view, canonical_relabel,
+-    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
+-    canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
+-    check_ledger_complete, check_ledger_sound, check_provenance, checkpointed_drain, dataset_diff,
+-    datasets_isomorphic, deskolemize, display_term, emit_annotation, emit_quad, emit_reifier,
+-    emit_resource, emit_term, fno_to_ntriples, fno_to_quads, graph_digest_view,
+-    gts_to_rdf_loss_ledger, loss_matrix_json, lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger,
+-    pair_loss_ledger, profile_for, rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger,
+-    rdf_to_lpg_loss_ledger, rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger,
+-    rdf_to_research_object_loss_ledger, rdf_to_skos_loss_ledger, registered_pairs,
+-    research_object_to_rdf_loss_ledger, rule_iri, skolemize, smallvec, try_canonicalize,
+-    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+-    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
++    SssomMappingSet, SssomMeta, SssomSetComment, StackPageOrigin, StackSource, SubsetPageProvider,
++    TermBox, TermFactory, TermId, TermPosition, TermRef, TermValue, UnitCatalog, UnitId,
++    UnitInterner, UnitMetadata, ViewAccountingReport, ViewCanonError, ViewLimits,
++    ViewOperationStatus, ViewStats, ViewWork, assert_ledger_complete, assert_ledger_sound,
++    blank_count_view, canonical_paged_seal, canonical_relabel, canonical_relabel_with_mapping,
++    canonicalize, canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
++    check_admissible_flat_view, check_admissible_view, check_ledger_complete, check_ledger_sound,
++    check_provenance, checkpointed_drain, dataset_diff, datasets_isomorphic, deskolemize,
++    display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term,
++    fno_to_ntriples, fno_to_quads, graph_digest_view, gts_to_rdf_loss_ledger, loss_matrix_json,
++    lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger, pair_loss_ledger, profile_for,
++    rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger,
++    rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger, rdf_to_research_object_loss_ledger,
++    rdf_to_skos_loss_ledger, registered_pairs, research_object_to_rdf_loss_ledger, rule_iri,
++    skolemize, smallvec, try_canonicalize, try_canonicalize_flat_graph_view,
++    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_view,
++    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
+ };
+ pub use purrdf_core::{
+     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
+diff --git crates/sparql-eval/examples/paged_stack.rs crates/sparql-eval/examples/paged_stack.rs
+new file mode 100644
+index 000000000..5c3251b1a
+--- /dev/null
++++ crates/sparql-eval/examples/paged_stack.rs
+@@ -0,0 +1,105 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Run with `cargo run -p purrdf-sparql-eval --example paged_stack`.
++//! Pinned readers survive head publication; consumers own durable publication.
++
++#[path = "support/paged_stack.rs"]
++mod fixture;
++
++use fixture::{carrier_pages, eager, seal};
++use purrdf_core::term_fixture::iri;
++use purrdf_core::{
++    PagedQueryLimits, PagedStack, QuadValues, SparqlRequest, TermValue, canonical_paged_seal,
++};
++use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
++use std::collections::BTreeSet;
++use std::num::NonZeroUsize;
++
++fn main() {
++    let page_rows = NonZeroUsize::new(2).expect("positive partition bound");
++    let edge = QuadValues::triple(iri("alice"), iri("knows"), iri("bob"));
++    let name = QuadValues::triple(iri("bob"), iri("name"), TermValue::simple_literal("Bob"));
++    let mut expected = BTreeSet::from([edge.clone(), name.clone()]);
++    let mut stack = PagedStack::new(vec![
++        seal(eager([edge.clone()], &[])),
++        seal(eager([name.clone()], &[])),
++    ])
++    .expect("independent generations");
++    let old = stack.snapshot().expect("retain reader before edits");
++    assert!(stack.remove(&name).expect("remove by RDF value"));
++    assert!(expected.remove(&name));
++    let replacement =
++        QuadValues::triple(iri("bob"), iri("name"), TermValue::simple_literal("Robert"));
++    assert!(
++        stack
++            .insert(replacement.clone())
++            .expect("new value in resident head")
++    );
++    assert!(expected.insert(replacement));
++    stack
++        .seal_head(page_rows)
++        .expect("seal only the head batch");
++    assert!(stack.remove(&edge).expect("remove older edge"));
++    assert!(
++        stack
++            .insert(edge)
++            .expect("later insertion survives its tombstone")
++    );
++    let current = stack.snapshot().expect("current reader with unsealed head");
++    let engine = NativeSparqlEngine::new();
++    let text = "SELECT ?name WHERE { <http://example.org/alice> <http://example.org/knows> ?person . ?person <http://example.org/name> ?name }";
++    let prepared = engine
++        .prepare_query(text, None)
++        .expect("prepare join across dictionaries");
++    for (snapshot, wanted) in [(&old, "Bob"), (&current, "Robert")] {
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        let complete = engine
++            .query_fallible_view(
++                &view,
++                SparqlRequest {
++                    query: text,
++                    base_iri: None,
++                    substitutions: &[],
++                },
++                QueryOptions::EMPTY,
++            )
++            .expect("complete layered query");
++        let (variables, rows) = complete.result.into_solutions().expect("SELECT shape");
++        assert_eq!(variables, vec!["name"]);
++        assert_eq!(rows, vec![vec![Some(TermValue::simple_literal(wanted))]]);
++        let repeated = engine
++            .query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
++            .expect("same cached reader through prepared API");
++        assert_eq!(
++            repeated.result.into_solutions().expect("SELECT shape").1,
++            rows
++        );
++        assert_eq!(
++            repeated.evidence, complete.evidence,
++            "no repeated admission charge"
++        );
++        println!(
++            "name={wanted}; layers={}; pages={}; bytes={}; origins={:?}",
++            snapshot.sealed_depth(),
++            complete.evidence.pages.consumed_pages,
++            complete.evidence.pages.consumed_bytes,
++            complete.evidence.requested_origins
++        );
++    }
++    let oracle = eager(expected, &[]);
++    let canonical = canonical_paged_seal(oracle.as_ref(), page_rows)
++        .expect("independent eager canonical input");
++    let folded = current
++        .compact(PagedQueryLimits::UNBOUNDED, page_rows)
++        .expect("guarded fold");
++    assert_eq!(
++        carrier_pages(&folded),
++        carrier_pages(&canonical),
++        "actual ordered carrier bytes"
++    );
++    println!(
++        "compacted pages={}; ordered carrier identity verified",
++        folded.page_count()
++    );
++}
+diff --git crates/sparql-eval/examples/support/paged_stack.rs crates/sparql-eval/examples/support/paged_stack.rs
+new file mode 100644
+index 000000000..ae4b7cb3e
+--- /dev/null
++++ crates/sparql-eval/examples/support/paged_stack.rs
+@@ -0,0 +1,48 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Shared public-API inputs and carrier comparisons for the layered consumer.
++
++use purrdf_core::{
++    InMemoryPageProvider, PackBuilder, PageId, PagedDataset, PagedQueryLimits, QuadValues,
++    RdfDataset, RdfDatasetBuilder, TermFactory, TermValue,
++};
++use std::sync::Arc;
++
++pub(crate) fn eager(
++    rows: impl IntoIterator<Item = QuadValues>,
++    graphs: &[TermValue],
++) -> Arc<RdfDataset> {
++    let mut builder = RdfDatasetBuilder::new();
++    for row in rows {
++        let s = builder.intern_value(&row.s);
++        let p = builder.intern_value(&row.p);
++        let o = builder.intern_value(&row.o);
++        let g = row.g.as_ref().map(|value| builder.intern_value(value));
++        builder.push_quad(s, p, o, g);
++    }
++    for graph in graphs {
++        let id = builder.intern_value(graph);
++        builder.declare_named_graph(id);
++    }
++    builder.freeze().expect("valid eager consumer input")
++}
++
++pub(crate) fn seal(page: Arc<RdfDataset>) -> Arc<PagedDataset> {
++    Arc::new(
++        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![page])))
++            .expect("seal independent generation"),
++    )
++}
++
++pub(crate) fn carrier_pages(dataset: &PagedDataset) -> Vec<Vec<u8>> {
++    let mut ordered = Vec::new();
++    for ordinal in 0..dataset.page_count() {
++        let selected = dataset.with_pages(&[PageId(ordinal)]);
++        let bytes =
++            PackBuilder::build_view_bytes(&selected.query_view(PagedQueryLimits::UNBOUNDED))
++                .expect("complete canonical page carrier");
++        ordered.push(bytes);
++    }
++    ordered
++}
+diff --git crates/sparql-eval/tests/paged_stack_query.rs crates/sparql-eval/tests/paged_stack_query.rs
+new file mode 100644
+index 000000000..cfc448a56
+--- /dev/null
++++ crates/sparql-eval/tests/paged_stack_query.rs
+@@ -0,0 +1,790 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Real evaluator publication over independently sealed chronological generations.
++
++#[path = "../examples/support/paged_stack.rs"]
++mod fixture;
++mod support;
++
++use fixture::{carrier_pages, eager, seal};
++use purrdf_core::term_fixture::iri;
++use purrdf_core::{
++    BlankScope, DatasetView, FallibleDatasetView, GlobalTermId, PackBuilder, PageFault,
++    PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset, PagedQueryError,
++    PagedQueryLimits, PagedStack, PagedStackEvidence, PagedStackSnapshot, QuadValues, RdfDataset,
++    RdfDatasetBuilder, RdfTextDirection, SparqlRequest, SparqlResult, StackPageOrigin, StopCause,
++    TermBox, TermFactory, TermValue, ViewOperationStatus, canonical_paged_seal,
++};
++use purrdf_sparql_eval::{FallibleSparqlError, NativeSparqlEngine, QueryOptions};
++use std::collections::BTreeSet;
++use std::num::NonZeroUsize;
++use std::sync::Arc;
++use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
++use support::solutions;
++
++fn request(query: &str) -> SparqlRequest<'_> {
++    SparqlRequest {
++        query,
++        base_iri: None,
++        substitutions: &[],
++    }
++}
++fn bound(n: usize) -> NonZeroUsize {
++    NonZeroUsize::new(n).expect("positive page bound")
++}
++fn edge(s: &str, p: &str, o: TermValue) -> QuadValues {
++    QuadValues::triple(iri(s), iri(p), o)
++}
++fn integer(n: &str) -> TermValue {
++    TermValue::typed_literal(n, purrdf_xsd::datatype::XSD_INTEGER)
++}
++
++const QUERIES: &[&str] = &[
++    "SELECT ?s ?o ?n ?a WHERE { ?s ex:knows ?o . ?o ex:name ?n . ?o ex:age ?a FILTER(?a >= 18) } ORDER BY ?s ?o",
++    "SELECT ?s ?o ?n WHERE { ?s ex:knows ?o OPTIONAL { ?o ex:name ?n } } ORDER BY ?s ?o",
++    "SELECT ?s ?o WHERE { { ?s ex:knows ?o } UNION { ?s ex:knows ?o } } ORDER BY ?s ?o",
++    "SELECT DISTINCT ?s ?o WHERE { { ?s ex:knows ?o } UNION { ?s ex:knows ?o } } ORDER BY ?s ?o",
++    "SELECT ?s ?o WHERE { ?s ex:knows ?o MINUS { ?o ex:name ?n } } ORDER BY ?s ?o",
++    "SELECT ?s ?o WHERE { ?s ex:knows ?o FILTER NOT EXISTS { ?o ex:name ?n } } ORDER BY ?s ?o",
++    "SELECT ?s (COUNT(?o) AS ?count) WHERE { ?s ex:knows ?o } GROUP BY ?s ORDER BY ?s",
++    "SELECT ?s ?count WHERE { { SELECT ?s (COUNT(?o) AS ?count) WHERE { ?s ex:knows ?o } GROUP BY ?s } FILTER(?count > 0) } ORDER BY ?s",
++    "SELECT ?o WHERE { ex:alice ex:knows+ ?o } ORDER BY ?o",
++    "SELECT ?g ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o } } ORDER BY ?g ?s ?p ?o",
++    "SELECT ?g WHERE { GRAPH ?g {} } ORDER BY ?g",
++    "ASK { GRAPH ex:empty {} }",
++    "ASK { GRAPH ex:implicit {} }",
++    "ASK { ex:alice ex:knows ex:bob }",
++    "CONSTRUCT { ?s ex:linkedName ?n } WHERE { ?s ex:knows ?o . ?o ex:name ?n }",
++    "SELECT ?s ?o WHERE { ?s ex:knows ?o } ORDER BY ?s ?o LIMIT 2 OFFSET 1",
++    "SELECT ?s ?o WHERE { GRAPH ex:delta { ?s ex:name ?o } } ORDER BY ?s ?o",
++    "ASK { GRAPH ex:delta {} }",
++    "ASK { GRAPH ex:deltaEmpty {} }",
++];
++
++fn assert_same_result(actual: SparqlResult, expected: SparqlResult, query: &str) {
++    match (actual, expected) {
++        (
++            SparqlResult::Solutions {
++                variables: av,
++                rows: ar,
++                ..
++            },
++            SparqlResult::Solutions {
++                variables: ev,
++                rows: er,
++                ..
++            },
++        ) => {
++            assert_eq!(av, ev, "variables: {query}");
++            assert_eq!(ar, er, "ordered solution bags: {query}");
++        }
++        (SparqlResult::Boolean(a), SparqlResult::Boolean(e)) => assert_eq!(a, e, "ASK: {query}"),
++        (SparqlResult::Graph(a), SparqlResult::Graph(e)) => assert_eq!(
++            PackBuilder::build_bytes(&a).unwrap(),
++            PackBuilder::build_bytes(&e).unwrap(),
++            "CONSTRUCT carrier: {query}"
++        ),
++        (a, e) => panic!("result shapes differ for {query}: {a:?} != {e:?}"),
++    }
++}
++
++fn matrix(snapshot: &PagedStackSnapshot, oracle: &RdfDataset, queries: &[&str]) {
++    let engine = NativeSparqlEngine::new();
++    for query in queries {
++        let text = format!("PREFIX ex: <http://example.org/> {query}");
++        let prepared = engine
++            .prepare_query(&text, None)
++            .expect("prepare consumer query");
++        for prepared_entry in [false, true] {
++            let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++            let complete = if prepared_entry {
++                engine.query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
++            } else {
++                engine.query_fallible_view(&view, request(&text), QueryOptions::EMPTY)
++            }
++            .unwrap_or_else(|e| panic!("layered consumer failed: {e:?}: {text}"));
++            let expected = engine
++                .query_prepared_view(oracle, &prepared, &[], QueryOptions::EMPTY)
++                .expect("independent eager input query");
++            assert_same_result(complete.result, expected, &text);
++            assert!(matches!(
++                view.operation_status(),
++                ViewOperationStatus::Ready { .. }
++            ));
++        }
++    }
++}
++
++#[test]
++fn chronological_layers_match_eager_bags_for_every_consumer_family() {
++    let repeated = edge("alice", "knows", iri("bob"));
++    let missing = edge("alice", "knows", iri("unnamed"));
++    let first = vec![
++        repeated.clone(),
++        missing,
++        edge("bob", "knows", iri("carol")),
++    ];
++    let implicit = QuadValues {
++        g: Some(iri("implicit")),
++        ..edge("named", "name", TermValue::simple_literal("Named"))
++    };
++    let second = vec![
++        edge("bob", "name", TermValue::simple_literal("Bob")),
++        repeated.clone(),
++        edge("bob", "age", integer("25")),
++        edge("carol", "name", TermValue::simple_literal("Carol")),
++        edge("carol", "age", integer("17")),
++        implicit.clone(),
++    ];
++    let base_a = seal(eager(first.clone(), &[]));
++    let base_b = seal(eager(second.clone(), &[iri("empty")]));
++    assert_ne!(
++        base_a.dictionary().term_value(GlobalTermId::from_index(0)),
++        base_b.dictionary().term_value(GlobalTermId::from_index(0)),
++        "colliding local/global ordinal zero names different values"
++    );
++    let mut stack = PagedStack::new(vec![base_a, base_b]).unwrap();
++    let mut values: BTreeSet<_> = first.into_iter().chain(second).collect();
++    let original = stack.snapshot().unwrap();
++    let original_oracle = eager(values.clone(), &[iri("empty")]);
++    matrix(&original, &original_oracle, QUERIES);
++    for old in [
++        edge("bob", "name", TermValue::simple_literal("Bob")),
++        edge("carol", "age", integer("17")),
++    ] {
++        assert_eq!(stack.remove(&old).unwrap(), values.remove(&old));
++    }
++    for new in [
++        edge("bob", "name", TermValue::simple_literal("Robert")),
++        edge("carol", "age", integer("18")),
++        edge("alice", "knows", iri("dave")),
++        edge("dave", "name", TermValue::simple_literal("Dave")),
++        edge("dave", "age", integer("30")),
++    ] {
++        assert_eq!(stack.insert(new.clone()).unwrap(), values.insert(new));
++    }
++    stack.seal_head(bound(2)).unwrap();
++    assert_eq!(stack.remove(&repeated).unwrap(), values.remove(&repeated));
++    assert_eq!(stack.remove(&implicit).unwrap(), values.remove(&implicit));
++    stack.seal_head(bound(1)).unwrap();
++    let removed = stack.snapshot().unwrap();
++    let removed_oracle = eager(values.clone(), &[iri("empty")]);
++    matrix(&removed, &removed_oracle, QUERIES);
++    assert!(matches!(NativeSparqlEngine::new().query_fallible_view(&removed.query_view(PagedQueryLimits::UNBOUNDED), request("ASK { <http://example.org/alice> <http://example.org/knows> <http://example.org/bob> }"), QueryOptions::EMPTY).unwrap().result, SparqlResult::Boolean(false)));
++    assert_eq!(
++        stack.insert(repeated.clone()).unwrap(),
++        values.insert(repeated)
++    );
++    let delta_graph_row = QuadValues {
++        g: Some(iri("delta")),
++        ..edge("writer", "name", TermValue::simple_literal("Delta graph"))
++    };
++    assert_eq!(
++        stack.insert(delta_graph_row.clone()).unwrap(),
++        values.insert(delta_graph_row.clone())
++    );
++    assert!(stack.declare_named_graph(iri("deltaEmpty")).unwrap());
++    let head = stack.snapshot().unwrap();
++    let oracle = eager(values.clone(), &[iri("empty"), iri("deltaEmpty")]);
++    matrix(&head, &oracle, QUERIES);
++    let (_, witnesses) = solutions(
++        NativeSparqlEngine::new()
++            .query_fallible_view(
++                &head.query_view(PagedQueryLimits::UNBOUNDED),
++                request("SELECT ?s ?o WHERE { ?s <http://example.org/knows> ?o }"),
++                QueryOptions::EMPTY,
++            )
++            .unwrap()
++            .result,
++    );
++    assert_eq!(
++        witnesses.len(),
++        4,
++        "nonempty set: repeated physical rows count once"
++    );
++    stack.seal_head(bound(3)).unwrap();
++    matrix(&stack.snapshot().unwrap(), &oracle, QUERIES);
++    matrix(&original, &original_oracle, QUERIES);
++    matrix(&removed, &removed_oracle, QUERIES);
++    for n in [1, 4] {
++        let expected = canonical_paged_seal(oracle.as_ref(), bound(n)).unwrap();
++        for retained in [&head, &stack.snapshot().unwrap()] {
++            let folded = retained
++                .compact(PagedQueryLimits::UNBOUNDED, bound(n))
++                .unwrap();
++            assert_eq!(carrier_pages(&folded), carrier_pages(&expected));
++        }
++    }
++    assert_eq!(
++        stack.remove(&delta_graph_row).unwrap(),
++        values.remove(&delta_graph_row)
++    );
++    stack.seal_head(bound(1)).unwrap();
++    let withdrawn = stack.snapshot().unwrap();
++    let withdrawn_oracle = eager(values, &[iri("empty"), iri("deltaEmpty")]);
++    matrix(&withdrawn, &withdrawn_oracle, QUERIES);
++    assert_eq!(
++        carrier_pages(
++            &withdrawn
++                .compact(PagedQueryLimits::UNBOUNDED, bound(2))
++                .unwrap()
++        ),
++        carrier_pages(&canonical_paged_seal(withdrawn_oracle.as_ref(), bound(2)).unwrap())
++    );
++    matrix(&head, &oracle, QUERIES);
++}
++
++#[test]
++fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity() {
++    let initial = edge("anchor", "knows", iri("anchor"));
++    let mut values = BTreeSet::from([initial.clone()]);
++    let mut stack = PagedStack::new(vec![seal(eager([initial], &[]))]).unwrap();
++    let mut snapshots = Vec::new();
++    let queries = [
++        QUERIES[1],
++        QUERIES[2],
++        QUERIES[4],
++        QUERIES[6],
++        "SELECT ?o WHERE { ex:anchor ex:knows+ ?o } ORDER BY ?o",
++    ];
++    for step in 0..32 {
++        let row = edge(
++            &format!("s{}", (step * 13 + 3) % 7),
++            "knows",
++            iri(&format!("o{}", (step * 11) % 4)),
++        );
++        if step % 3 == 0 {
++            assert_eq!(stack.remove(&row).unwrap(), values.remove(&row));
++        } else {
++            assert_eq!(stack.insert(row.clone()).unwrap(), values.insert(row));
++        }
++        let snapshot = stack.snapshot().unwrap();
++        let oracle = eager(values.clone(), &[]);
++        matrix(&snapshot, &oracle, &queries);
++        let (_, path_rows) = solutions(NativeSparqlEngine::new().query_fallible_view(&snapshot.query_view(PagedQueryLimits::UNBOUNDED), request("SELECT ?o WHERE { <http://example.org/anchor> <http://example.org/knows>+ ?o }"), QueryOptions::EMPTY).unwrap().result);
++        assert_eq!(
++            path_rows,
++            vec![vec![Some(iri("anchor"))]],
++            "nonempty cycle closure survives generated edits"
++        );
++        if step % 7 == 0 {
++            snapshots.push((snapshot, oracle));
++            stack.seal_head(bound(1 + step % 3)).unwrap();
++        }
++    }
++    for (snapshot, oracle) in snapshots {
++        assert!(oracle.quad_count() > 0, "anchor survives every history");
++        matrix(&snapshot, &oracle, &queries);
++        for n in [1, 5] {
++            assert_eq!(
++                carrier_pages(
++                    &snapshot
++                        .compact(PagedQueryLimits::UNBOUNDED, bound(n))
++                        .unwrap()
++                ),
++                carrier_pages(&canonical_paged_seal(oracle.as_ref(), bound(n)).unwrap())
++            );
++        }
++    }
++    let only = edge("deleted", "knows", iri("gone"));
++    let mut empty = PagedStack::new(vec![seal(eager([only.clone()], &[]))]).unwrap();
++    empty.remove(&only).unwrap();
++    empty.seal_head(bound(1)).unwrap();
++    matrix(
++        &empty.snapshot().unwrap(),
++        &purrdf_core::term_fixture::empty_dataset(),
++        &[QUERIES[2], QUERIES[6], QUERIES[13]],
++    );
++    assert_eq!(
++        carrier_pages(
++            &empty
++                .compact(PagedQueryLimits::UNBOUNDED, bound(2))
++                .unwrap()
++        ),
++        [] as [Vec<u8>; 0]
++    );
++}
++
++#[test]
++fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
++    let blank = TermValue::Blank {
++        label: "same".into(),
++        scope: BlankScope(51),
++    };
++    let nested = TermValue::Triple {
++        s: TermBox::new(blank.clone()),
++        p: TermBox::new(iri("p")),
++        o: TermBox::new(purrdf_core::term_fixture::triple_chain(2)),
++    };
++    let direction = TermValue::Literal {
++        lexical_form: "مرحبا".into(),
++        datatype: purrdf_core::vocab::rdf::DIR_LANG_STRING.into(),
++        language: Some("ar".into()),
++        direction: Some(RdfTextDirection::Rtl),
++    };
++    let declaration = QuadValues {
++        s: iri("r"),
++        p: TermValue::iri(purrdf_core::vocab::rdf::REIFIES),
++        o: nested.clone(),
++        g: Some(iri("g")),
++    };
++    let note = QuadValues {
++        s: iri("r"),
++        p: iri("note"),
++        o: direction.clone(),
++        g: Some(iri("g")),
++    };
++    let ordinary = [
++        QuadValues::triple(blank, iri("nested"), nested),
++        QuadValues::triple(
++            TermValue::Blank {
++                label: "same".into(),
++                scope: BlankScope(52),
++            },
++            iri("label"),
++            direction,
++        ),
++        QuadValues {
++            g: Some(iri("elsewhere")),
++            ..note.clone()
++        },
++    ];
++    let mut typed = RdfDatasetBuilder::new();
++    let r = typed.intern_value(&declaration.s);
++    let t = typed.intern_value(&declaration.o);
++    let g = typed.intern_value(declaration.g.as_ref().unwrap());
++    typed.push_reifier_in_graph(r, t, Some(g));
++    let p = typed.intern_value(&note.p);
++    let o = typed.intern_value(&note.o);
++    typed.push_annotation_in_graph(r, p, o, Some(g));
++    let typed = typed.freeze().unwrap();
++    let ordinary_page = eager(ordinary.clone(), &[]);
++    let mut expected = RdfDatasetBuilder::new();
++    for page in [&typed, &ordinary_page] {
++        purrdf_core::ir::import::DatasetImporter::new(&mut expected, page.as_ref()).append();
++    }
++    let expected = expected.freeze().unwrap();
++    let mut stack = PagedStack::new(vec![seal(typed), seal(ordinary_page)]).unwrap();
++    let before = stack.snapshot().unwrap();
++    let queries = [
++        "SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?p ?s ?o",
++        "SELECT ?g ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o } } ORDER BY ?g ?p ?o",
++        "SELECT ?o WHERE { GRAPH ex:g { ex:r ex:note ?o } }",
++        "SELECT ?o WHERE { GRAPH ex:g { ex:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?o } }",
++        "CONSTRUCT { ?s ?p ?o } WHERE { GRAPH ex:g { ?s ?p ?o } }",
++    ];
++    matrix(&before, &expected, &queries);
++    let (_, rows) = solutions(NativeSparqlEngine::new().query_fallible_view(&before.query_view(PagedQueryLimits::UNBOUNDED), request("SELECT ?o WHERE { GRAPH <http://example.org/g> { <http://example.org/r> <http://example.org/note> ?o } }"), QueryOptions::EMPTY).unwrap().result);
++    assert_eq!(
++        rows,
++        vec![vec![Some(note.o.clone())]],
++        "directional value is published intact"
++    );
++    stack.remove(&declaration).unwrap();
++    stack.seal_head(bound(1)).unwrap();
++    let after = stack.snapshot().unwrap();
++    let expected_after = eager(ordinary.iter().cloned().chain([note.clone()]), &[]);
++    matrix(&after, &expected_after, &queries);
++    matrix(&before, &expected, &queries);
++    for (snapshot, oracle) in [(&before, &expected), (&after, &expected_after)] {
++        for n in [1, 3] {
++            assert_eq!(
++                carrier_pages(
++                    &snapshot
++                        .compact(PagedQueryLimits::UNBOUNDED, bound(n))
++                        .unwrap()
++                ),
++                carrier_pages(&canonical_paged_seal(oracle.as_ref(), bound(n)).unwrap())
++            );
++        }
++    }
++    let new_declaration = QuadValues {
++        g: Some(iri("elsewhere")),
++        ..declaration
++    };
++    assert!(stack.insert(new_declaration.clone()).unwrap());
++    let mut promoted_builder = RdfDatasetBuilder::new();
++    let ordinary_expected = eager(ordinary[..2].iter().cloned().chain([note.clone()]), &[]);
++    purrdf_core::ir::import::DatasetImporter::new(
++        &mut promoted_builder,
++        ordinary_expected.as_ref(),
++    )
++    .append();
++    let r = promoted_builder.intern_value(&new_declaration.s);
++    let triple = promoted_builder.intern_value(&new_declaration.o);
++    let graph = promoted_builder.intern_value(new_declaration.g.as_ref().unwrap());
++    promoted_builder.push_reifier_in_graph(r, triple, Some(graph));
++    let p = promoted_builder.intern_value(&note.p);
++    let o = promoted_builder.intern_value(&note.o);
++    promoted_builder.push_annotation_in_graph(r, p, o, Some(graph));
++    let promoted_oracle = promoted_builder.freeze().unwrap();
++    let promoted_head = stack.snapshot().unwrap();
++    stack.seal_head(bound(1)).unwrap();
++    let promoted_sealed = stack.snapshot().unwrap();
++    for snapshot in [&promoted_head, &promoted_sealed] {
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        assert_eq!(
++            view.quads().count(),
++            3,
++            "only matching graph primary is promoted"
++        );
++        assert_eq!(view.annotation_quads().count(), 1);
++        assert_eq!(view.reifier_quads().count(), 1);
++        matrix(snapshot, &promoted_oracle, &queries);
++        for n in [1, 3] {
++            assert_eq!(
++                carrier_pages(
++                    &snapshot
++                        .compact(PagedQueryLimits::UNBOUNDED, bound(n))
++                        .unwrap()
++                ),
++                carrier_pages(&canonical_paged_seal(promoted_oracle.as_ref(), bound(n)).unwrap())
++            );
++        }
++    }
++    matrix(&after, &expected_after, &queries);
++}
++
++struct ControlledProvider {
++    pages: Vec<Arc<RdfDataset>>,
++    generation: AtomicU64,
++    count: AtomicU64,
++    reads: AtomicUsize,
++    mode: AtomicUsize,
++    charge: u64,
++}
++
++#[test]
++fn native_primary_and_virtual_reifier_overlap_reaches_the_same_consumer_bag() {
++    let mut builder = RdfDatasetBuilder::new();
++    let s = builder.intern_value(&iri("r"));
++    let p = builder.intern_value(&TermValue::iri(purrdf_core::vocab::rdf::REIFIES));
++    let o = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
++    builder.push_quad(s, p, o, None);
++    builder.push_reifier(s, o);
++    let oracle = builder.freeze().unwrap();
++    let snapshot = PagedStack::new(vec![seal(Arc::clone(&oracle))])
++        .unwrap()
++        .snapshot()
++        .unwrap();
++    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    assert_eq!(view.quads().count(), 1);
++    assert_eq!(view.reifier_quads().count(), 1);
++    matrix(
++        &snapshot,
++        &oracle,
++        &[
++            "SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?s ?p ?o",
++            "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }",
++        ],
++    );
++    assert_eq!(
++        carrier_pages(
++            &snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++                .unwrap()
++        ),
++        carrier_pages(&canonical_paged_seal(oracle.as_ref(), bound(1)).unwrap())
++    );
++}
++impl ControlledProvider {
++    fn new(pages: Vec<Arc<RdfDataset>>, charge: u64) -> Self {
++        Self {
++            count: AtomicU64::new(u64::try_from(pages.len()).unwrap()),
++            pages,
++            generation: AtomicU64::new(23),
++            reads: AtomicUsize::new(0),
++            mode: AtomicUsize::new(0),
++            charge,
++        }
++    }
++}
++impl PageProvider for ControlledProvider {
++    fn page_count(&self) -> u64 {
++        self.count.load(Ordering::Relaxed)
++    }
++    fn generation(&self) -> PageGeneration {
++        PageGeneration(self.generation.load(Ordering::Relaxed))
++    }
++    fn materialize(&self, id: PageId) -> Result<PageMaterialization, PageFault> {
++        self.reads.fetch_add(1, Ordering::Relaxed);
++        match self.mode.load(Ordering::Relaxed) {
++            1 => Err(PageFault::provider(id, "consumer source refusal")),
++            2 => Err(PageFault::cancelled(id, "consumer cancellation")),
++            3 => Err(PageFault::deadline_exceeded(id, "consumer deadline")),
++            4 => Err(PageFault::invalid_data(id, "consumer corrupt carrier")),
++            5 => Ok(PageMaterialization::new(
++                eager([edge("object", "p", iri("base"))], &[]),
++                PageGeneration(23),
++                self.charge,
++            )),
++            _ => Ok(PageMaterialization::new(
++                Arc::clone(&self.pages[usize::try_from(id.0).unwrap()]),
++                PageGeneration(23),
++                self.charge,
++            )),
++        }
++    }
++}
++
++fn operational(
++    error: FallibleSparqlError<PagedQueryError, PagedStackEvidence>,
++) -> (PagedQueryError, PagedStackEvidence) {
++    assert!(
++        error.diagnostic().is_none(),
++        "storage failure cannot become a query diagnostic"
++    );
++    assert!(
++        error.partial_answers().is_none(),
++        "storage failure cannot publish partial answers"
++    );
++    match error {
++        FallibleSparqlError::Operational { error, evidence } => (error, evidence),
++        other => panic!("expected Operational, got {other:?}"),
++    }
++}
++
++#[test]
++fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
++    let a = Arc::new(ControlledProvider::new(
++        vec![eager([edge("a", "p", iri("b"))], &[])],
++        11,
++    ));
++    let b = Arc::new(ControlledProvider::new(
++        vec![eager([edge("b", "q", iri("c"))], &[])],
++        17,
++    ));
++    let mut stack = PagedStack::new(vec![
++        Arc::new(PagedDataset::from_provider(a.clone()).unwrap()),
++        Arc::new(PagedDataset::from_provider(b.clone()).unwrap()),
++    ])
++    .unwrap();
++    stack.insert(edge("head", "h", iri("value"))).unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    a.reads.store(0, Ordering::Relaxed);
++    b.reads.store(0, Ordering::Relaxed);
++    let engine = NativeSparqlEngine::new();
++    let query = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?s ?p ?o";
++    let unbounded = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++    let complete = engine
++        .query_fallible_view(&unbounded, request(query), QueryOptions::EMPTY)
++        .unwrap();
++    assert_eq!(solutions(complete.result).1.len(), 3);
++    let receipt = complete.evidence;
++    assert_eq!(receipt.pages.consumed_pages, 3);
++    assert_eq!(receipt.pages.consumed_bytes, 28 + receipt.head_bytes);
++    assert!(receipt.head_bytes > 0);
++    assert_eq!(
++        receipt.requested_origins,
++        vec![
++            StackPageOrigin::Head,
++            StackPageOrigin::Sealed {
++                layer: 1,
++                page: PageId(0)
++            },
++            StackPageOrigin::Sealed {
++                layer: 0,
++                page: PageId(0)
++            }
++        ]
++    );
++    assert_eq!(
++        (
++            a.reads.load(Ordering::Relaxed),
++            b.reads.load(Ordering::Relaxed)
++        ),
++        (1, 1)
++    );
++    let prepared = engine.prepare_query(query, None).unwrap();
++    let reread = engine
++        .query_prepared_fallible_view(&unbounded, &prepared, &[], QueryOptions::EMPTY)
++        .unwrap();
++    assert_eq!(reread.evidence, receipt);
++    assert_eq!(
++        (
++            a.reads.load(Ordering::Relaxed),
++            b.reads.load(Ordering::Relaxed)
++        ),
++        (1, 1),
++        "cache rereads neither materialize nor charge"
++    );
++    let exact = snapshot.query_view(PagedQueryLimits::new(3, receipt.pages.consumed_bytes));
++    assert_eq!(
++        engine
++            .query_fallible_view(&exact, request(query), QueryOptions::EMPTY)
++            .unwrap()
++            .evidence,
++        receipt
++    );
++    for limits in [
++        PagedQueryLimits::new(0, 0),
++        PagedQueryLimits::new(2, u64::MAX),
++        PagedQueryLimits::new(3, receipt.pages.consumed_bytes - 1),
++    ] {
++        a.reads.store(0, Ordering::Relaxed);
++        b.reads.store(0, Ordering::Relaxed);
++        let view = snapshot.query_view(limits);
++        let (error, evidence) = operational(
++            engine
++                .query_fallible_view(&view, request(query), QueryOptions::EMPTY)
++                .expect_err("one refused page prevents publication"),
++        );
++        assert!(matches!(
++            error,
++            PagedQueryError::PageBudgetExceeded { .. } | PagedQueryError::ByteBudgetExceeded { .. }
++        ));
++        assert_eq!(
++            evidence.pages.requested_pages.len(),
++            usize::try_from(evidence.pages.consumed_pages + 1).unwrap(),
++            "refused address remains requested"
++        );
++        assert_eq!(
++            u64::try_from(a.reads.load(Ordering::Relaxed) + b.reads.load(Ordering::Relaxed))
++                .unwrap(),
++            evidence.pages.consumed_pages.saturating_sub(1),
++            "rejected source is never materialized"
++        );
++        assert!(
++            snapshot.compact(limits, bound(1)).is_err(),
++            "no partially folded artifact"
++        );
++    }
++}
++
++#[test]
++fn source_faults_are_operational_sticky_and_refuse_compacted_artifacts() {
++    for mode in 1..=5 {
++        let provider = Arc::new(ControlledProvider::new(
++            vec![eager([edge("base", "p", iri("object"))], &[])],
++            19,
++        ));
++        let mut stack = PagedStack::new(vec![Arc::new(
++            PagedDataset::from_provider(provider.clone()).unwrap(),
++        )])
++        .unwrap();
++        stack.insert(edge("head", "h", iri("value"))).unwrap();
++        stack.declare_named_graph(iri("empty")).unwrap();
++        let snapshot = stack.snapshot().unwrap();
++        provider.reads.store(0, Ordering::Relaxed);
++        provider.mode.store(mode, Ordering::Relaxed);
++        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++        let engine = NativeSparqlEngine::new();
++        let (error, evidence) = operational(
++            engine
++                .query_fallible_view(
++                    &view,
++                    request("SELECT * WHERE { ?s ?p ?o }"),
++                    QueryOptions::EMPTY,
++                )
++                .expect_err("failure after head cannot publish head"),
++        );
++        match (mode, &error) {
++            (1, PagedQueryError::Provider { .. })
++            | (4 | 5, PagedQueryError::InvalidData { .. }) => {}
++            (
++                2,
++                PagedQueryError::Stopped {
++                    cause: StopCause::Cancelled,
++                    ..
++                },
++            )
++            | (
++                3,
++                PagedQueryError::Stopped {
++                    cause: StopCause::Deadline,
++                    ..
++                },
++            ) => {}
++            _ => panic!("wrong operational root: {mode}: {error:?}"),
++        }
++        assert_eq!(provider.reads.load(Ordering::Relaxed), 1);
++        assert_eq!(
++            evidence.pages.consumed_pages, 1,
++            "head admitted, failed sealed page not consumed"
++        );
++        assert_eq!(view.quads().count(), 0);
++        assert_eq!(view.named_graphs().count(), 0);
++        let prepared = engine.prepare_query("SELECT * WHERE {}", None).unwrap();
++        let (sticky, sticky_evidence) = operational(
++            engine
++                .query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
++                .expect_err("constant query cannot escape the failure latch"),
++        );
++        assert_eq!(sticky, error);
++        assert_eq!(sticky_evidence, evidence);
++        assert!(
++            snapshot
++                .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++                .is_err()
++        );
++    }
++}
++
++#[test]
++fn constants_and_head_queries_check_skipped_and_zero_page_source_descriptors() {
++    for zero_pages in [false, true] {
++        for count_drift in [false, true] {
++            let pages = if zero_pages {
++                vec![]
++            } else {
++                vec![eager([edge("unrelated", "p", iri("object"))], &[])]
++            };
++            let provider = Arc::new(ControlledProvider::new(pages, 13));
++            let mut stack = PagedStack::new(vec![
++                seal(eager([edge("untouched", "p", iri("unrelated"))], &[])),
++                Arc::new(PagedDataset::from_provider(provider.clone()).unwrap()),
++            ])
++            .unwrap();
++            stack.insert(edge("head", "h", iri("value"))).unwrap();
++            let snapshot = stack.snapshot().unwrap();
++            provider.reads.store(0, Ordering::Relaxed);
++            if count_drift {
++                provider.count.fetch_add(1, Ordering::Relaxed);
++            } else {
++                provider.generation.fetch_add(1, Ordering::Relaxed);
++            }
++            for query in [
++                "SELECT (1 AS ?constant) WHERE {}",
++                "SELECT ?o WHERE { <http://example.org/head> <http://example.org/h> ?o }",
++            ] {
++                let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
++                let engine = NativeSparqlEngine::new();
++                let prepared = engine.prepare_query(query, None).unwrap();
++                for error in [
++                    engine
++                        .query_fallible_view(&view, request(query), QueryOptions::EMPTY)
++                        .unwrap_err(),
++                    engine
++                        .query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
++                        .unwrap_err(),
++                ] {
++                    let (root, evidence) = operational(error);
++                    let PagedQueryError::SourceSnapshot { source, error } = root else {
++                        panic!("full source vector drift was not preserved: {root:?}");
++                    };
++                    assert_eq!(source, 1);
++                    assert_eq!(evidence.sources.len(), 2);
++                    assert!(if count_drift {
++                        matches!(*error, PagedQueryError::PageCountMismatch { .. })
++                    } else {
++                        matches!(*error, PagedQueryError::StaleGeneration { .. })
++                    });
++                    assert_eq!(evidence.pages.requested_pages, [] as [PageId; 0]);
++                    assert_eq!(evidence.pages.consumed_bytes, 0);
++                }
++                assert_eq!(view.quads().count(), 0);
++            }
++            assert_eq!(
++                provider.reads.load(Ordering::Relaxed),
++                0,
++                "descriptor checks do not fetch skipped content"
++            );
++            assert!(
++                snapshot
++                    .compact(PagedQueryLimits::UNBOUNDED, bound(1))
++                    .is_err()
++            );
++        }
++    }
++}
+diff --git docs/design/purrdf-backend-contract.md docs/design/purrdf-backend-contract.md
+index bcc2615f8..a94ac3759 100644
+--- docs/design/purrdf-backend-contract.md
++++ docs/design/purrdf-backend-contract.md
+@@ -566,6 +566,118 @@ as in debug ones. What it forgoes is advance notice about the pages it does not
+ 
+ ---
+ 
++### G11 — layered paged snapshots
++
++`PagedStack` composes one or more independently sealed bases, chronological
++sealed delta generations, and one mutable resident value head. G3 remains a
++requirement within each sealed generation. Equal facts in different generations
++are ordinary repeated ingestion and become one effective dataset fact. Each
++generation's removal set suppresses every older occurrence; an addition in that
++generation or a newer generation wins. In a mutable batch, insert/remove/insert
++leaves the fact present. `insert`, `remove`, and `contains` return typed results:
++unreadable lower storage is never reported as an absent or unchanged boolean.
++An externally sealed delta can be appended only after the pending head is sealed,
++so accepted mutations cannot silently change chronological position.
++
++Each owned `PagedStackSnapshot` pins the ordered sealed source descriptors, copied
++head values, head graph declarations, and per-layer value removals. Source
++dictionaries remain independent. The snapshot rebuilds one private physical
++dictionary and remaps translations by RDF value, retaining the original local
++summary verbatim. Neither append nor snapshot materializes a lower page. Snapshot
++work and retention are `O(all retained dictionary values + translation entries +
++head and removal metadata)`, including recursively referenced term dependencies.
++Repeated small publications can therefore accumulate quadratic metadata work.
++Reuse a published immutable snapshot across queries. Mutable membership reuses
++sealed routing metadata throughout a batch, checks head presence/removals first,
++and creates a fresh I/O cache for each lower membership operation.
++
++`query_view` supplies one guarded `FallibleDatasetView` with `GlobalTermId` IDs
++local to that snapshot. All physical pages pass through the existing
++`PagedQueryView` admission, certification, cache, byte/page limits, and first-fault
++latch. Limits apply to the entire operation; there is no per-layer allowance.
++The head is resident but is charged as one page and its deterministic reference
++RDF byte size on first admission, once per operation. An empty head contributes
++no page. Sealed head batches use the actual deterministic pack byte size instead.
++Receipts share the exact immutable head/removal values and every original source
++generation/page count, including zero-page sources; they also map each first
++physical request to its chronological layer and original page, or the head.
++Sealed depth is the descriptor count. Compaction timing and depth policy remain
++consumer-owned, with no hidden ceiling or recursive per-layer call chain.
++
++At every operation checkpoint, the composed provider checks every pinned source
++generation and page count directly. A combined generation hash is never used as
++proof of vector equality. Drift in a skipped or zero-page source refuses even a
++constants-only operation. Source failures retain their typed causes and routing
++addresses. After any terminal fault, further logical rows, head rows, point reads,
++and named-graph metadata are gated by the same sticky latch. Partial internal rows
++are not a complete answer; only final guarded readiness permits publication.
++
++Logical candidate order is newest source first, annotation candidates before
++ordinary candidates within a source, then original ascending page/in-page order.
++The newest visible occurrence chooses a value row's physical type before logical
++stream filtering; within one source, annotation typing takes precedence over a
++duplicate ordinary occurrence. Thus a value row appears in at most one of the
++logical ordinary/annotation streams. The virtual reifier stream retains native
++IR behavior, which permits an equal physical ordinary or annotation row beside
++that reifier binding. Native ordinary typing in a sealed source is retained when all
++applicable reifier declarations are in that source. A surviving declaration in
++another generation promotes that ordinary row to an annotation, in the same graph
++only. A physical annotation becomes ordinary when an originally applicable
++graph-scoped declaration was visible in that annotation's introduction prefix
++and no effective declaration survives. Prefix visibility includes removals through
++that source and excludes future sources. An explicit annotation introduced after
++an older declaration was removed remains an orphan; a future declaration does
++not retroactively change its original association. An explicit annotation with
++no original declaration remains typed;
++annotation-only pages are legitimate. Removing one of several declarations does
++not demote the row. These classification decisions share the mutable-view home;
++source-specific cursors retain their own indexed probes.
++
++Physical summaries remain exact. Removals, duplicate suppression and stream
++classification make effective cardinality estimates conservative upper bounds,
++not exact logical counts. Ordinary and annotation reads probe both corresponding
++physical streams, using exact local subject/graph counts and ordinary positional
++counts. Side-table predicate/object presence is a conservative admission test,
++followed by exact row filtering. Reifier presence is queried in the correct graph
++through the same admitted physical page accessor. An annotation-only page cannot
++be skipped merely because its ordinary count is zero. Named graphs with no
++physical rows at sealing are remembered declarations; head declarations are
++explicit. Row-bearing implicit graphs disappear after their final effective row
++is removed. Determining their effective membership can require admitted reads
++when removals exist; it is not always a free physical graph-index union.
++Explicit writer declarations also survive `seal_head` while their graph is
++populated: they remain separate immutable layer metadata and appear in the
++snapshot receipt. `compact` returns a plain `PagedDataset` whose observable
++contract is the current typed rows and named-graph membership. Only graphs empty
++in that folded output have declaration-only carrier records; a populated graph's
++earlier explicit/implicit lifetime distinction is not part of `DatasetView` and
++is not encoded in the plain base. A consumer retaining that extra writer policy
++across base replacement retains its declaration set separately.
++
++`canonical_paged_seal` is the shared eager-seal/fold partitioner. It drains a
++complete guarded RDF 1.2 view, resolves typed rows by value, and sorts records by
++table (ordinary, reifier, annotation, declaration-only graph), then by the
++`(subject, predicate, object, graph)` `TermValue` tuple; graph records sort by
++graph value. A graph represented by any row needs no extra declaration record.
++Each typed row or declaration-only graph consumes one record of the caller's
++positive `NonZeroUsize` page bound. Consecutive sorted records form each page;
++completely empty output has zero pages. Each page is reconstructed through the
++native typed builder, validated and encoded with `PackBuilder`; its charge is
++that actual carrier's byte length. Nested triples, datatype dependencies, blank
++scopes and literal direction retain their values, and an annotation stays typed
++even when its declaration falls on another output page. Checked G3 sealing and
++canonical global dictionary remapping finish the new base. A failed checkpoint,
++read, validation, capacity admission or encoder returns no partial artifact.
++
++Compaction discards historical tombstones and older duplicate occurrences.
++For equal effective typed rows, named-graph membership and page bound, it produces
++identical ordered page carrier bytes and identical canonical global value IDs,
++independent of source IDs, page boundaries and mutation history. Locations and
++other non-RDF sidecars are outside `DatasetView` and remain consumer-owned.
++Storage, commit-log reconstruction and atomic publication remain under G5.
++
++---
++
+ ## P-clauses — the pack backend (a read-only succinct `DatasetView`)
+ 
+ The pack codec is a THIRD `DatasetView` implementer alongside the frozen

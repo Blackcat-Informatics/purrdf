@@ -1,0 +1,1 @@
+python3 scripts/check-simd-asm.py --doc --config x86_64-v3 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump

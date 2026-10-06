@@ -1,0 +1,5 @@
+aa5731127a2849e34bbfc84c518bd43f5b219a7bef30b0452fac6315f5f1ee2a  scripts/simd-asm-manifest.toml
+3295116bcdc67581a301f53a19b3fadabb63f1ee11a83dcd0caa00f0b24596c5  scripts/check-simd-asm.py
+8e8f406574e9c7e31a73b8d2b266546cf702707b9c9208e0b6d899f6204cbd05  scripts/simd_asm_runtime.py
+db811d648d0a87d91842648c27f09083f040beb5491d1a18acc8252d074710e0  docs/design/purrdf-simd.md
+abd677bf0f4e62fcd5ce692f7d276995202d242e1af1165d73b7cca337316b1c  crates/rdf-core/src/ir/dataset.rs

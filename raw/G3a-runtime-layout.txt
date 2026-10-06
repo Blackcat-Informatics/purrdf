@@ -1,0 +1,42 @@
+        stdout_path = directory / f"cargo.graph-{graph}.stdout.jsonl"
+        stderr_path = directory / f"cargo.graph-{graph}.stderr.log"
+        with self.lock:
+            if self.stopped.is_set():
+                raise self.gate.GateError("assembly run cancelled")
+            with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+                child = subprocess.Popen(
+                    cmd, cwd=self.gate.REPO_ROOT, env=env, stdout=stdout,
+                    stderr=stderr, start_new_session=True, pass_fds=(lease,),
+                )
+            self.children.add(child)
+        try:
+            child.wait()
+            return subprocess.CompletedProcess(cmd, child.returncode, stdout_path.read_text(), stderr_path.read_text())
+        finally:
+            with self.lock:
+                self.children.discard(child)
+
+    @contextlib.contextmanager
+    def context(self, identity):
+        key = digest(encoded(identity))
+        if self.stage:
+            workspace = digest(f"{self.gate.REPO_ROOT.resolve()}\n{key}".encode())[:16]
+            root = Path(self.stage["slots"]) / workspace / "0"
+            lock = Path(self.stage["locks"]) / workspace / "0.lock"
+        else:
+            root = self.root / "contexts" / key
+            lock = root / "lease.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with lock.open("a+") as lease:
+            while True:
+                try:
+                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if self.stopped.wait(0.1):
+                        raise self.gate.GateError("assembly run cancelled while waiting for its context")
+            root.mkdir(parents=True, exist_ok=True)
+            if self.stage:
+                (root / ".stage-asm-context").write_text(key)
+            yield root, key, lease.fileno()
+

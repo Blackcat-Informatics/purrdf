@@ -1,0 +1,22 @@
+457	Paged tier: an LSM-style stack of sealed delta generations with removals, read as one snapshot	https://github.com/Blackcat-Informatics/purrdf/issues/457
+454	rdflib shim: algebra-level reassignment rewrite so every case matches rdflib 7.6	https://github.com/Blackcat-Informatics/purrdf/issues/454
+453	rdf:langString ranges are reported as unrecognized-term	https://github.com/Blackcat-Informatics/purrdf/issues/453
+452	owl:propertyChainAxiom is a property-chain boundary; regular chains are not decided	https://github.com/Blackcat-Informatics/purrdf/issues/452
+451	xsd:dateTimeStamp ranges are not exactly decided (data-range boundary)	https://github.com/Blackcat-Informatics/purrdf/issues/451
+443	Optimize the exact numeric tower: small-value parity and subquadratic large-value arithmetic	https://github.com/Blackcat-Informatics/purrdf/issues/443
+423	Arbitrary-precision numeric tower for exact reasoned mathematics	https://github.com/Blackcat-Informatics/purrdf/issues/423
+422	Bounded numerics that never fail silently: documented xsd:integer/xsd:decimal limits, typed overflow errors, exact comparison at any size	https://github.com/Blackcat-Informatics/purrdf/issues/422
+416	Model OWL anonymous class expressions in the developer-schema surface instead of refusing them	https://github.com/Blackcat-Informatics/purrdf/issues/416
+409	geo: deterministic hierarchical spatial cell index for CRS84 points (assignment, parent/child, covering)	https://github.com/Blackcat-Informatics/purrdf/issues/409
+408	geo: deterministic geodesic distance in metres for CRS84 (geof:metric*)	https://github.com/Blackcat-Informatics/purrdf/issues/408
+406	Native XPath regex profile with operational resource refusal	https://github.com/Blackcat-Informatics/purrdf/issues/406
+402	SHACL dated profile selection and complete validation reports (additive)	https://github.com/Blackcat-Informatics/purrdf/issues/402
+401	Update transfers preserve RDF 1.2 identity: per-document LOAD blank scoping and typed record transfer	https://github.com/Blackcat-Informatics/purrdf/issues/401
+384	Build a portable adversarial SHACL suite and contribute missing W3C tests	https://github.com/Blackcat-Informatics/purrdf/issues/384
+367	perf(hash): native SHA-2 that beats the sha2 crate — multi-buffer RDFC hashing and wide-schedule SHA-512	https://github.com/Blackcat-Informatics/purrdf/issues/367
+365	Post-v3.0: asynchronous Wasm lane and parse/serialize follow-ups from #358	https://github.com/Blackcat-Informatics/purrdf/issues/365
+364	Post-v3.0: evaluation limits, host-parity additions and SHACL/SPARQL follow-ons from #356	https://github.com/Blackcat-Informatics/purrdf/issues/364
+308	Reduce native CI test compilation and C smoke time	https://github.com/Blackcat-Informatics/purrdf/issues/308
+280	Verify and benchmark under LargeRDFBench	https://github.com/Blackcat-Informatics/purrdf/issues/280
+261	Chinese translation phases 2–4: SPARQL extensions, Python API guide, remainder of the book	https://github.com/Blackcat-Informatics/purrdf/issues/261
+260	zh-Hans glossary gate: harden the anchored-substring residuals (reviewer R1–R4 leftovers)	https://github.com/Blackcat-Informatics/purrdf/issues/260

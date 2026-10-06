@@ -1,0 +1,41 @@
+2026-10-06T22:25:55Z
+d48be7c960adfeaba44d642630cde4a66d7e86e7
+5d150fa4076cc75e293b517f79dd080b6ea807ed
+base-ancestor-exit=0
+ce1721dae29798cf2657336171b9981a0a1d86eec1ef0682392fc7379081ea29  .stage/paged-tier-an-lsm-style-stack-of-sealed/plan.md
+functional-inputs-diff-exit=0
+M	docs/design/purrdf-simd.md
+crates/rdf-core/src/ir/global.rs: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G1-source.patch: OK
+G1-source-check-exit=0
+crates/rdf-core/src/ir/paged/admission.rs: OK
+crates/rdf-core/src/ir/paged/query.rs: OK
+crates/rdf-core/src/ir/paged/stack.rs: OK
+crates/rdf-core/tests/paged_stack.rs: OK
+crates/sparql-eval/tests/paged_stack_query.rs: OK
+crates/rdf-wasm/src/interleaving.rs: OK
+G2-source-check-exit=0
+docs/design/purrdf-simd.md: OK
+scripts/simd-asm-manifest.toml: OK
+G3b-source-check-exit=0
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-reports/aarch64-neoverse-v1.json: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-reports/aarch64.json: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-reports/wasm32-simd128.json: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-reports/wasm32.json: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-reports/x86_64-v3.json: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-reports/x86_64-v4.json: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-reports/x86_64.json: OK
+all-seven-report-check-exit=0
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-aarch64.zip: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-x86_64-v3.zip: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-x86_64-v4.zip: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-wasm32-simd128.zip: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-wasm32.zip: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-x86_64.zip: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G3b-normal-aarch64-neoverse-v1.zip: OK
+all-seven-native-zip-digest-check-exit=0
+true
+every-report-identity-and-every-cell-correspondence-exit=0
+true
+actual-tested-candidate-identity-exit=0
+?? .stage/

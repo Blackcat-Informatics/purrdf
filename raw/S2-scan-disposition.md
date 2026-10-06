@@ -1,0 +1,2 @@
+Source diff scan: rg exit1, no added-line matches in raw/S2-source.patch.
+Prose scan: one match in stage1-handoff.md line13, the explicit statement that no issue requirement was deferred or cut. This is a negated accounting claim, not deferral; issue boundaries storage/log/depth/atomic publication derive directly from original issue and plan. No scope cuts were authorized or made. Source/plan/commit/PR text have no other matches. .deficiencies directly read: notice and marker only.

@@ -1,0 +1,1 @@
+python3 scripts/check-simd-asm.py --doc --jobs 2 --report target/asm-projection/reports/all-configurations.json

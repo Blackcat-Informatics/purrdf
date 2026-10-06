@@ -1,0 +1,43 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+error: unnecessary qualification
+    --> crates/rdf-core/src/ir/paged/query.rs:1222:26
+     |
+1222 |                         &crate::TermValue::iri("http://example.org/g")).unwrap())
+     |                          ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1222 -                         &crate::TermValue::iri("http://example.org/g")).unwrap())
+1222 +                         &TermValue::iri("http://example.org/g")).unwrap())
+     |
+
+error[E0599]: no method named `intern_value` found for struct `builder::RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/paged/query.rs:1187:25
+     |
+1187 |         let o = builder.intern_value(&crate::term_fixture::triple_chain(1));
+     |                         ^^^^^^^^^^^^
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:370:1
+     |
+ 370 | pub struct RdfDatasetBuilder {
+     | ---------------------------- method `intern_value` not found for this struct
+     |
+    ::: crates/rdf-core/src/backend.rs:30:8
+     |
+  30 |     fn intern_value(&mut self, value: &TermValue) -> TermId;
+     |        ------------ the method is available for `builder::RdfDatasetBuilder` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+1157 +     use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1187 |         let o = builder.intern_iri_value(&crate::term_fixture::triple_chain(1));
+     |                                ++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

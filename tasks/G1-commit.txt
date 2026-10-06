@@ -1,0 +1,6 @@
+core: preserve composite blank identities during checked interning
+
+Share checked literal registration between ordinary and validated ingress so
+cold copies retain embedded blank identities, scopes and insertion order.
+Cover List, Map and recursive triple values with independent cold dictionaries,
+opaque lexical text and idempotent replay; document validated stack inputs.

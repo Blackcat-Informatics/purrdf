@@ -1,0 +1,13 @@
+core: layer sealed paged generations with pinned mutable snapshots
+
+Compose independently sealed dictionaries and pages behind one guarded read
+operation. Ordered value removals, resident batching, RDF 1.2 classification,
+and retained graph declarations produce an isolated effective snapshot without
+materializing lower pages during setup.
+
+Canonical folding rebuilds bounded native pages and compares their actual pack
+bytes with eager typed inputs. Full source descriptors, shared page and byte
+limits, indexed probes, and sticky failures preserve the paging contract.
+
+Validate 82 focused paging/graph tests, 42 mutable tests, 23 global dictionary
+tests, all-target core clippy with warnings denied, and helper hygiene.

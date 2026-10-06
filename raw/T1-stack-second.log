@@ -1,0 +1,54 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 38.19s
+     Running tests/paged_stack.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/e7198b4ae2dd2d13/out/paged_stack-e7198b4ae2dd2d13)
+
+running 15 tests
+test construction_append_and_snapshot_do_not_read_lower_pages ... FAILED
+test drift_of_skipped_or_zero_page_sources_gates_the_entire_head_and_metadata ... ok
+test annotation_only_pages_demote_only_after_last_original_reifier_in_the_graph ... ok
+test chronological_removal_reinsertion_same_head_and_snapshot_isolation ... ok
+test graph_pruning_partial_removals_empty_declarations_and_scoped_head_values_survive ... ok
+test invalid_rows_never_mutate_the_head_and_pending_head_never_reorders ... ok
+test page_count_drift_is_checked_without_materialization_and_is_sticky ... ok
+test summary_drift_is_refused_even_with_equal_local_values_counts_and_charges ... ok
+test head_charges_once_under_global_limits_and_folds_have_no_partial_success ... FAILED
+test new_reifiers_promote_older_primary_rows_only_in_the_matching_graph ... ok
+test typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold ... FAILED
+test sealed_implicit_graph_disappears_when_its_last_effective_row_is_removed ... ok
+test newer_typed_occurrence_wins_before_partition_and_native_primary_typing_is_retained ... ok
+test canonical_fold_matches_independent_eager_typed_surface_and_dictionary_for_two_histories_and_bounds ... ok
+test deterministic_value_set_mutations_match_an_independent_oracle_at_each_snapshot ... ok
+
+failures:
+
+---- construction_append_and_snapshot_do_not_read_lower_pages stdout ----
+
+thread 'construction_append_and_snapshot_do_not_read_lower_pages' (1423874) panicked at crates/rdf-core/tests/paged_stack.rs:160:5:
+assertion `left == right` failed
+  left: [Sealed { layer: 1, page: PageId(0) }, Sealed { layer: 0, page: PageId(0) }]
+ right: [Sealed { layer: 0, page: PageId(0) }, Sealed { layer: 1, page: PageId(0) }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- head_charges_once_under_global_limits_and_folds_have_no_partial_success stdout ----
+
+thread 'head_charges_once_under_global_limits_and_folds_have_no_partial_success' (1423878) panicked at crates/rdf-core/tests/paged_stack.rs:225:5:
+assertion `left == right` failed
+  left: Some(Sealed { layer: 0, page: PageId(0) })
+ right: Some(Head)
+
+---- typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold stdout ----
+
+thread 'typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold' (1423885) panicked at crates/rdf-core/tests/paged_stack.rs:326:9:
+assertion `left == right` failed
+  left: 1
+ right: 0
+
+
+failures:
+    construction_append_and_snapshot_do_not_read_lower_pages
+    head_charges_once_under_global_limits_and_folds_have_no_partial_success
+    typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold
+
+test result: FAILED. 12 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-core --test paged_stack`

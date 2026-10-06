@@ -1,0 +1,24 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 45.76s
+     Running unittests src/lib.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::global::tests::cold_validated_reinterning_preserves_composite_registration ... FAILED
+
+failures:
+
+---- ir::global::tests::cold_validated_reinterning_preserves_composite_registration stdout ----
+
+thread 'ir::global::tests::cold_validated_reinterning_preserves_composite_registration' (1869045) panicked at crates/rdf-core/src/ir/global.rs:1226:21:
+assertion `left == right` failed: cold ingress retains the exact embedded identity Blank { label: "same", scope: BlankScope(0) }
+  left: None
+ right: Some(GlobalTermId(2))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ir::global::tests::cold_validated_reinterning_preserves_composite_registration
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1155 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`

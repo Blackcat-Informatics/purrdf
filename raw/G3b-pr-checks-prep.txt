@@ -1,0 +1,48 @@
+$ stagectl pr-checks 466
+NEUTRAL    CodeQL
+IN_PROGRESS aarch64
+SUCCESS    msrv
+IN_PROGRESS simd-asm-config (wasm32-simd128)
+IN_PROGRESS simd-asm-config (x86_64-v3)
+IN_PROGRESS cross-arch-riscv64 (determinism-more-workers)
+IN_PROGRESS simd-asm-config (wasm32)
+IN_PROGRESS test (lib)
+IN_PROGRESS test (doc)
+IN_PROGRESS test (integration-1)
+IN_PROGRESS test (integration-2)
+IN_PROGRESS test (integration-3)
+IN_PROGRESS test (integration-4)
+IN_PROGRESS projection-oracles
+IN_PROGRESS capi
+SUCCESS    doc
+IN_PROGRESS conformance (python)
+IN_PROGRESS wasm
+IN_PROGRESS conformance (shapes)
+SUCCESS    wasm-exec
+IN_PROGRESS wasm-schema-oracles
+IN_PROGRESS simd-asm-config (x86_64)
+IN_PROGRESS workspace
+IN_PROGRESS simd-asm-config (x86_64-v4)
+IN_PROGRESS conformance (sparql)
+IN_PROGRESS conformance (core)
+IN_PROGRESS miri
+SUCCESS    python-publisher
+IN_PROGRESS pytest
+IN_PROGRESS avx512-sde
+IN_PROGRESS cross-arch
+SUCCESS    windows-mtime
+IN_PROGRESS cross-arch-riscv64 (suites)
+IN_PROGRESS cross-arch-riscv64 (determinism-serial)
+IN_PROGRESS cross-arch-riscv64 (determinism-one-worker)
+IN_PROGRESS simd-asm-config (aarch64)
+SUCCESS    Analyze (actions)
+SUCCESS    Analyze (c-cpp)
+IN_PROGRESS simd-asm-config (aarch64-neoverse-v1)
+IN_PROGRESS wasm-package
+IN_PROGRESS Build The PurRDF Book
+IN_PROGRESS Analyze (rust)
+SUCCESS    Analyze (python)
+SUCCESS    Analyze (javascript-typescript)
+SKIPPED    simd-asm-projection
+PENDING    CodeRabbit
+state: pending

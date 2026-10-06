@@ -1,0 +1,119 @@
+def run(args: argparse.Namespace) -> int:
+    manifest = load_manifest(tomllib.loads(MANIFEST.read_text(encoding="utf-8")))
+    problems: list[str] = []
+    problems += identity_scan(rust_sources())
+    version = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+    label, notes = current_changelog(CHANGELOG.read_text(encoding="utf-8"), version)
+    problems += multiplier_scan(f"CHANGELOG.md [{label}]", notes)
+    if args.doc or args.write_doc or args.merge_reports:
+        require_doc(DOC)
+        problems += doc_checks(DOC.read_text(), manifest, {}, workspace_world(), compare=False)
+    if problems:
+        raise GateError("\n".join(problems))
+    wanted = tuple(c for c in CONFIGS if not args.config or c.name in args.config)
+    if args.write_doc and wanted != CONFIGS:
+        raise GateError("--write-doc requires all seven configurations")
+    if args.report and args.probe:
+        raise GateError("a probe is not gate evidence and cannot write a report")
+    identity = runtime.report_identity(sys.modules[__name__]) if not args.probe else None
+    if args.report:
+        runtime.atomic_json(args.report, dict(identity=identity, status="incomplete", cells={}))
+    if args.merge_reports:
+        cells = runtime.merge_reports(sys.modules[__name__], manifest, args.merge_reports, identity)
+        problems = doc_checks(DOC.read_text(), manifest, cells, workspace_world())
+        if problems:
+            raise GateError("\n".join(problems))
+        print(f"OK: {len(manifest.sites)} sites; seven matching, successful assembly reports")
+        return 0
+
+    if args.probe:
+        wanted = tuple(CONFIG_BY_NAME[c] for c in (args.config or CONFIG_NAMES))
+
+        def probe_hit(f: Function) -> bool:
+            pattern = re.compile(args.probe)
+            hit = (
+                        print(f"{'':24}{inst.mnemonic} {', '.join(inst.operands)}")
+        return 0
+
+    functions = measure_all(manifest, wanted, manifest_keep(manifest))
+    results: list[Result] = []
+    for config in wanted:
+        results += evaluate_config(manifest, config, functions[config.name])
+    for r in results:
+        problems.extend(r.problems)
+    cells = {}
+    for site in manifest.sites:
+        for config in wanted:
+            cells[(site.id, config.name)] = render_cell([r for r in results if r.site == site.id and r.config == config.name])
+
+    width = max(len(s.id) for s in manifest.sites)
+    print(f"\n{'site'.ljust(width)}  " + "  ".join(c.name for c in wanted))
+    for site in manifest.sites:
+        print(f"{site.id.ljust(width)}  " + "  ".join(cells[(site.id, c)].replace("<br>", " / ") for c in (config.name for config in wanted)))
+
+    if problems:
+        raise GateError("\n".join(problems))
+    if identity != runtime.report_identity(sys.modules[__name__]):
+        raise GateError("source/compiler changed during measurement; evidence refused")
+    if args.write_doc:
+        text = DOC.read_text(encoding="utf-8")
+        updated = write_doc(text, cells)
+        if updated != text:
+            DOC.write_text(updated, encoding="utf-8")
+            print(f"wrote the measured cells into {DOC.relative_to(REPO_ROOT)}")
+    if args.doc or args.write_doc:
+        problems += doc_checks(DOC.read_text(encoding="utf-8"), manifest, cells, workspace_world(), configs=tuple(c.name for c in wanted))
+    else:
+        print("document parity and coverage: not requested (`--doc`)")
+
+    if problems:
+        print(f"\nFAIL: {len(problems)} problem(s):", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        return 1
+    if args.report:
+        if identity != runtime.report_identity(sys.modules[__name__]):
+            raise GateError("source/compiler changed during measurement; report refused")
+        runtime.atomic_json(args.report, dict(identity=identity, status="passed",
+            cells={c.name: {site.id: cells[(site.id, c.name)] for site in manifest.sites} for c in wanted},
+            timings=args.timings))
+    coverage = "complete gate" if wanted == CONFIGS else "partial configuration shard"
+    print(f"\nOK: {len(manifest.sites)} site(s) measured on {len(wanted)} configurations ({coverage})")
+    return 0
+def main() -> int:
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
+    parser.add_argument("--self-test", action="store_true", help="exercise every refusal and neighbour on fixtures; builds nothing")
+    parser.add_argument("--doc", action="store_true", help="also check the audit document's parity and coverage")
+    parser.add_argument("--write-doc", action="store_true", help="regenerate the document's measured cells, then check it")
+    parser.add_argument("--probe", metavar="PATH", help="list every emitted function whose demangled path matches the regex PATH (exploration; not a gate)")
+    parser.add_argument("--probe-operands", action="store_true", help="with --probe: match PATH against instruction operands (call targets) instead of function paths")
+    parser.add_argument("--dump", action="store_true", help="with --probe: print every instruction of each match")
+    parser.add_argument("--crate", help="with --probe: only this crate")
+    parser.add_argument("--config", action="append", choices=CONFIG_NAMES, help="measure only these configurations (partial gate evidence)")
+    parser.add_argument("--jobs", type=int, default=2, help="concurrent configurations sharing Cargo's total job budget (default: 2)")
+    parser.add_argument("--fresh", action="store_true", help="use new isolated build contexts and reparse assembly")
+    parser.add_argument("--report", type=Path, help="atomically write this run's checked evidence as JSON")
+    parser.add_argument("--merge-reports", type=Path, help="require seven matching reports and check complete document parity; builds nothing")
+    args = parser.parse_args()
+    if args.jobs < 1:
+        parser.error("--jobs must be positive")
+    if args.write_doc and args.report:
+        parser.error("write the document first, then produce reports for the resulting source identity")
+    if args.merge_reports and (args.config or args.probe or args.write_doc or args.report):
+        parser.error("--merge-reports cannot be combined with measurement/writing options")
+    global RUN_OPTIONS
+    RUN_OPTIONS = args
+    if args.self_test:
+        return self_test()
+    try:
+        return run(args)
+    except GateError as err:
+        print(f"FAIL: {err}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("FAIL: assembly run interrupted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

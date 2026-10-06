@@ -1,0 +1,38 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-results)
+   Compiling rayon v1.12.0
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 53.64s
+     Running tests/paged_stack_query.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-sparql-eval/a55130a9e384f64d/out/paged_stack_query-a55130a9e384f64d)
+
+running 6 tests
+test chronological_layers_match_eager_bags_for_every_consumer_family ... FAILED
+test constants_and_head_queries_check_skipped_and_zero_page_source_descriptors ... ok
+test aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary ... ok
+test source_faults_are_operational_sticky_and_refuse_compacted_artifacts ... ok
+test typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables ... ok
+test generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity ... ok
+
+failures:
+
+---- chronological_layers_match_eager_bags_for_every_consumer_family stdout ----
+
+thread 'chronological_layers_match_eager_bags_for_every_consumer_family' (1627519) panicked at crates/sparql-eval/tests/paged_stack_query.rs:139:5:
+assertion `left != right` failed: colliding local/global ordinal zero names different values
+  left: Iri("http://example.org/alice")
+ right: Iri("http://example.org/alice")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    chronological_layers_match_eager_bags_for_every_consumer_family
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test paged_stack_query`

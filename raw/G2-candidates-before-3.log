@@ -1,0 +1,31 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/457-paged-tier-an-lsm-style-stack-of-sealed/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 48.11s
+     Running unittests src/lib.rs (/opt/.cargo/slots/0ee87c9ba45e5dff/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 3 tests
+sparse pages=test ir::paged::query::tests::debug_is_non_blocking_and_has_no_operational_side_effects ... 3ok named=
+false stream=Base visits=[24, 0, 0]
+plain layers=
+thread 'ir::paged::query::tests::sparse_stream_ranges_and_estimates_visit_only_graph_postings' (1890187) panicked at crates/rdf-core/src/ir/paged/query.rs:1237:21:
+assertion `left == right` failed
+  left: 24
+ right: 8
+1note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ pages=2 rows=2 visits=[2, 4, 2]
+
+thread 'ir::paged::query::tests::plain_rdf_logical_drain_does_not_probe_reifier_page_summaries' (1890186) panicked at crates/rdf-core/src/ir/paged/query.rs:1266:17:
+assertion `left == right` failed
+  left: 4
+ right: 0
+test ir::paged::query::tests::sparse_stream_ranges_and_estimates_visit_only_graph_postings ... FAILED
+test ir::paged::query::tests::plain_rdf_logical_drain_does_not_probe_reifier_page_summaries ... FAILED
+
+failures:
+
+failures:
+    ir::paged::query::tests::plain_rdf_logical_drain_does_not_probe_reifier_page_summaries
+    ir::paged::query::tests::sparse_stream_ranges_and_estimates_visit_only_graph_postings
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 1155 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`

@@ -1,0 +1,4 @@
+python3 scripts/check-build-profiles.py --self-test
+check-build-profiles.py: self-test OK
+python3 scripts/check-build-profiles.py
+check-build-profiles.py: 984 units across 2 gate invocations build at opt-level 3 with debug-assertions and overflow-checks on (42 workspace members)

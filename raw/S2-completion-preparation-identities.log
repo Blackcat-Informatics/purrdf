@@ -1,0 +1,26 @@
+8364b29c9fb70195f123e2bc084160d83f78850a
+cb77b4d6beb3a5b7f17e3979570e651dbebe0564
+b6f7c9b0f6b84ffe496719e39f2d2ba52d5ed3ac
+identity_exit=0
+?? .stage/
+status_exit=0
+base_ancestor_exit=0
+ce1721dae29798cf2657336171b9981a0a1d86eec1ef0682392fc7379081ea29  .stage/paged-tier-an-lsm-style-stack-of-sealed/plan.md
+plan_hash_exit=0
+crates/rdf-core/src/ir/global.rs: OK
+.stage/paged-tier-an-lsm-style-stack-of-sealed/raw/G1-source.patch: OK
+G1_manifest_exit=0
+crates/rdf-core/src/ir/paged/admission.rs: OK
+crates/rdf-core/src/ir/paged/query.rs: OK
+crates/rdf-core/src/ir/paged/stack.rs: OK
+crates/rdf-core/tests/paged_stack.rs: OK
+crates/sparql-eval/tests/paged_stack_query.rs: OK
+crates/rdf-wasm/src/interleaving.rs: OK
+G2_manifest_exit=0
+.github/workflows/ci.yaml: OK
+scripts/simd-asm-manifest.toml: OK
+docs/design/purrdf-simd.md: OK
+G3a_manifest_exit=0
+G2_functional_inputs_unchanged_exit=0
+T1_shared_mutable_inputs_unchanged_exit=0
+diff_whitespace_exit=0

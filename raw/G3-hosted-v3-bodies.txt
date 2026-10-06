@@ -1,0 +1,2929 @@
+{"fma": 0, "graph": 0, "instructions": 37, "path": "<purrdf_core::ir::paged::translation::PageTranslation>::build", "relaxed": 0, "selected": false, "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation5build", "vector_ops": 0, "work_mnemonics": []}
+pushq %rbx
+subq $448, %rsp
+movq %rdi, %rbx
+leaq 48(%rsp), %rdi
+callq _RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build
+cmpq $-1, 48(%rsp)
+je .LBB1331_1
+leaq 48(%rsp), %rsi
+movl $400, %edx
+movq %rbx, %rdi
+callq *memcpy@GOTPCREL(%rip)
+movq %rbx, %rax
+addq $448, %rsp
+popq %rbx
+retq 
+movq 72(%rsp), %rax
+movq %rax, 16(%rsp)
+vmovups 56(%rsp), %xmm0
+vmovaps %xmm0, (%rsp)
+movq %rsp, %rax
+movq %rax, 32(%rsp)
+movq _RNvXNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summaryNtB2_13SummaryDefectNtNtCslK5Drzrx8K4_4core3fmt7Display3fmt@GOTPCREL(%rip), %rax
+movq %rax, 40(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.831(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.832(%rip), %rdx
+leaq 32(%rsp), %rsi
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking9panic_fmt@GOTPCREL(%rip)
+ud2 
+movq %rax, %rbx
+movq (%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1331_6
+movq 8(%rsp), %rdi
+movl $1, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+
+{"fma": 0, "graph": 0, "instructions": 385, "path": "<purrdf_core::ir::paged::translation::PageTranslation>::try_build", "relaxed": 0, "selected": false, "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build", "vector_ops": 0, "work_mnemonics": []}
+pushq %rbp
+pushq %r15
+pushq %r14
+pushq %r13
+pushq %r12
+pushq %rbx
+subq $872, %rsp
+movabsq $9223372036854775800, %r14
+movq 48(%rsi), %rbp
+leaq (,%rbp,8), %rbx
+movq %rbp, %rax
+shrq $61, %rax
+setne %al
+cmpq %r14, %rbx
+seta %cl
+orb %al, %cl
+je .LBB1332_3
+xorl %r15d, %r15d
+movq %r15, %rdi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+movq %rsi, %r13
+movq %rdi, %r12
+movq %rdx, 120(%rsp)
+testq %rbx, %rbx
+je .LBB1332_4
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %r15d
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB1332_2
+movq %rbp, %r15
+jmp .LBB1332_7
+movl $8, %eax
+xorl %r15d, %r15d
+movq %r15, 40(%rsp)
+movq %rax, 48(%rsp)
+movq $0, 56(%rsp)
+movq %rax, %rdx
+movq %rbp, %rbx
+shlq $4, %rbx
+movq %rbp, %rax
+shrq $60, %rax
+setne %al
+cmpq %r14, %rbx
+seta %cl
+orb %al, %cl
+je .LBB1332_10
+xorl %r13d, %r13d
+movq %r13, %rdi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+jmp .LBB1332_19
+movq %rdx, 8(%rsp)
+testq %rbx, %rbx
+je .LBB1332_11
+movq %r13, %r14
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %r13d
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB1332_9
+movq %rbp, %rcx
+movq %r14, %r13
+jmp .LBB1332_14
+movl $8, %eax
+xorl %ecx, %ecx
+movq %rcx, 16(%rsp)
+movq %rax, 24(%rsp)
+movq $0, 32(%rsp)
+testq %rbp, %rbp
+movq %r12, 72(%rsp)
+je .LBB1332_23
+xorl %r12d, %r12d
+leaq 504(%rsp), %rdx
+movq %rbp, 112(%rsp)
+movl %r14d, %eax
+movq %r12, %rcx
+shrq $32, %rcx
+movl %r12d, %r14d
+cmovnel %eax, %r14d
+movabsq $4294967296, %rax
+cmpq %rax, %r12
+je .LBB1332_17
+cmpl $-1, %r14d
+je .LBB1332_60
+leal 1(%r14), %ebp
+movq %rdx, %rdi
+movq %r13, %rsi
+movl %ebp, %edx
+movq %r13, %rcx
+callq _RINvNtNtCskgWIz7JHH9v_11purrdf_core2ir9term_walk13try_fold_termNtNtB4_7dataset10RdfDatasetNtNtB4_4term9TermValueNtNtB6_12dataset_view15TermLookupErrorNCNvYBZ_NtB1O_11DatasetView10term_value0NCB2q_s_0NcNtB1M_4Read0EB6_
+cmpq $-1, 504(%rsp)
+je .LBB1332_63
+movq %r13, %r15
+vmovups 504(%rsp), %ymm0
+vmovups 536(%rsp), %ymm1
+vmovups 552(%rsp), %ymm2
+vmovups %ymm2, 176(%rsp)
+vmovups %ymm1, 160(%rsp)
+vmovups %ymm0, 128(%rsp)
+movq 120(%rsp), %rdi
+leaq 128(%rsp), %rsi
+vzeroupper 
+callq _RNvMs1_NtNtCskgWIz7JHH9v_11purrdf_core2ir6globalNtB5_16GlobalDictionary22try_reintern_validated
+movq %rax, %r13
+testq %rax, %rax
+je .LBB1332_66
+cmpq 40(%rsp), %r12
+movq 8(%rsp), %rax
+jne .LBB1332_73
+leaq 40(%rsp), %rdi
+callq *_RNvMs7_NtCsdf08ABbzq28_5alloc7raw_vecINtB5_6RawVecINtNtB7_5boxed3BoxNtNtCskgWIz7JHH9v_11purrdf_core5model9RdfTripleEE8grow_oneB18_@GOTPCREL(%rip)
+movq 48(%rsp), %rax
+movq %rax, 8(%rsp)
+movq %r13, (%rax,%r12,8)
+incq %r12
+movq %r12, 56(%rsp)
+movq 32(%rsp), %rbx
+cmpq 16(%rsp), %rbx
+jne .LBB1332_75
+leaq 16(%rsp), %rdi
+callq *_RNvMs7_NtCsdf08ABbzq28_5alloc7raw_vecINtB5_6RawVecINtNtNtCskgWIz7JHH9v_11purrdf_core2ir9term_walk8FoldStepNtNtBR_6global12GlobalTermIdEE8grow_oneBT_@GOTPCREL(%rip)
+movq 24(%rsp), %rcx
+movq %rbx, %rax
+shlq $4, %rax
+movq %r13, (%rcx,%rax)
+movq %rcx, 64(%rsp)
+movl %ebp, 8(%rcx,%rax)
+incq %rbx
+movq %rbx, 32(%rsp)
+leaq 128(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir4term9TermValueEBH_
+leaq 504(%rsp), %rdx
+movq %r15, %r13
+movq 112(%rsp), %rbp
+cmpq %r12, %rbp
+jne .LBB1332_16
+cmpq $2, %rbx
+movq 72(%rsp), %r12
+jae .LBB1332_21
+leaq 504(%rsp), %rdi
+movq %r13, %rsi
+callq _RNvMs1_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summaryNtB5_11PageSummary4seal
+vmovups 512(%rsp), %xmm0
+vmovaps %xmm0, 80(%rsp)
+movq 504(%rsp), %rbx
+movq 528(%rsp), %rax
+movq %rax, 96(%rsp)
+cmpq $-1, %rbx
+je .LBB1332_25
+leaq 536(%rsp), %rsi
+leaq 160(%rsp), %rdi
+movl $336, %edx
+callq *memcpy@GOTPCREL(%rip)
+vmovaps 80(%rsp), %xmm0
+vmovups %xmm0, 136(%rsp)
+movq 96(%rsp), %rax
+movq %rax, 152(%rsp)
+movq %rbx, 128(%rsp)
+movq 40(%rsp), %r12
+movq 48(%rsp), %r13
+movq 56(%rsp), %r14
+cmpq %r14, %r12
+jbe .LBB1332_41
+shlq $3, %r12
+testq %r14, %r14
+je .LBB1332_43
+leaq (,%r14,8), %rbx
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+movq %rbx, %rcx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_realloc@GOTPCREL(%rip)
+movq %rax, %r15
+testq %rax, %rax
+jne .LBB1332_44
+movl $8, %edi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+jmp .LBB1332_19
+movq 96(%rsp), %rax
+vmovaps 80(%rsp), %xmm0
+vmovups %xmm0, 8(%r12)
+movq %rax, 24(%r12)
+movq $-1, (%r12)
+movq 16(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1332_27
+movq 24(%rsp), %rdi
+shlq $4, %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 40(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1332_51
+movq 48(%rsp), %rdi
+shlq $3, %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+jmp .LBB1332_51
+movq %r13, %r15
+jmp .LBB1332_44
+movl $8, %r15d
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 16(%rsp), %r12
+movq 24(%rsp), %r13
+movq 32(%rsp), %rbp
+cmpq %rbp, %r12
+movq %r15, 8(%rsp)
+jbe .LBB1332_45
+shlq $4, %r12
+testq %rbp, %rbp
+je .LBB1332_49
+movq %rbp, %r15
+shlq $4, %r15
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+movq %r15, %rcx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_realloc@GOTPCREL(%rip)
+movq %rax, %rbx
+testq %rax, %rax
+jne .LBB1332_50
+movl $8, %edi
+movq %r15, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+jmp .LBB1332_19
+movq %r13, %rbx
+jmp .LBB1332_50
+movl $8, %ebx
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 128(%rsp), %rsi
+movl $368, %edx
+movq 72(%rsp), %r15
+movq %r15, %rdi
+callq *memcpy@GOTPCREL(%rip)
+movq 8(%rsp), %rax
+movq %rax, 368(%r15)
+movq %r14, 376(%r15)
+movq %rbx, 384(%r15)
+movq %rbp, 392(%r15)
+addq $872, %rsp
+popq %rbx
+popq %r12
+popq %r13
+popq %r14
+popq %r15
+popq %rbp
+retq 
+movb $2, 504(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.833(%rip), %r8
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.726(%rip), %rcx
+movl $24, %esi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.317(%rip), %rdi
+jmp .LBB1332_18
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1371(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1372(%rip), %rdx
+movl $41, %esi
+callq *_RNvNtCslK5Drzrx8K4_4core6option13expect_failed@GOTPCREL(%rip)
+jmp .LBB1332_19
+movl $54, %esi
+leaq 7(%rsp), %rdx
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1444(%rip), %r8
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.721(%rip), %rcx
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1443(%rip), %rdi
+callq *_RNvNtCslK5Drzrx8K4_4core6result13unwrap_failed@GOTPCREL(%rip)
+jmp .LBB1332_19
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1019(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.722(%rip), %rcx
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1020(%rip), %r8
+leaq 7(%rsp), %rdx
+movl $49, %esi
+callq *_RNvNtCslK5Drzrx8K4_4core6result13unwrap_failed@GOTPCREL(%rip)
+ud2 
+cmpq $21, %rbx
+jae .LBB1332_22
+shlq $4, %rbx
+movq 64(%rsp), %rdi
+addq %rdi, %rbx
+leaq 16(%rdi), %rdx
+xorl %eax, %eax
+movq 64(%rsp), %r10
+jmp .LBB1332_30
+movq %r10, %r9
+movq %rdx, (%r9)
+movl %esi, 8(%r9)
+leaq 16(%rcx), %rdx
+addq $16, %rax
+movq %rcx, %rdi
+cmpq %rbx, %rdx
+je .LBB1332_23
+movq %rdx, %rcx
+movq 16(%rdi), %rdx
+cmpq (%rdi), %rdx
+jae .LBB1332_36
+movl 24(%rdi), %esi
+vmovups (%rdi), %xmm0
+vmovups %xmm0, (%rcx)
+movq %rax, %r8
+movq %r10, %r9
+cmpq %r10, %rdi
+je .LBB1332_35
+leaq (%r10,%r8), %r9
+cmpq -16(%r10,%r8), %rdx
+jae .LBB1332_35
+leaq (%r10,%r8), %rdi
+addq $-16, %rdi
+vmovups (%rdi), %xmm0
+vmovups %xmm0, (%r9)
+addq $-16, %r8
+jne .LBB1332_32
+jmp .LBB1332_34
+movq 64(%rsp), %rdi
+movq %rbx, %rsi
+callq *_RINvNtNtNtCslK5Drzrx8K4_4core5slice4sort8unstable7ipnsortTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdNtNtBY_4term6TermIdENCINvMB6_SBT_20sort_unstable_by_keyBU_NCINvMNtNtBY_5paged11translationNtB2R_15PageTranslation5remapNCNCNvMs3_B2T_NtB2T_12PagedDataset7compacts0_00Es0_0E0EB10_@GOTPCREL(%rip)
+jmp .LBB1332_23
+movq %rax, %rbx
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+testq %r14, %r14
+je .LBB1332_56
+shlq $3, %r14
+movl $8, %edx
+movq 8(%rsp), %rdi
+movq %r14, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 128(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summary11PageSummaryEBJ_
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+movq %rax, %rbx
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 128(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summary11PageSummaryEBJ_
+xorl %ebp, %ebp
+jmp .LBB1332_78
+jmp .LBB1332_69
+jmp .LBB1332_38
+movq %rax, %rbx
+movb $1, %bpl
+leaq 128(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir4term9TermValueEBH_
+jmp .LBB1332_78
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+movq %rax, %rbx
+movb $1, %bpl
+movq 16(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1332_80
+movq 24(%rsp), %rdi
+shlq $4, %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+testb %bpl, %bpl
+je .LBB1332_57
+movq 40(%rsp), %r15
+jmp .LBB1332_83
+movq %rax, %rbx
+testq %r15, %r15
+jne .LBB1332_84
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+movq 48(%rsp), %rdi
+shlq $3, %r15
+movl $8, %edx
+movq %r15, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+
+{"fma": 0, "graph": 0, "instructions": 944, "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider", "relaxed": 0, "selected": true, "symbol": "_RNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB5_12PagedDataset13from_provider", "vector_ops": 0, "work_mnemonics": []}
+pushq %rbp
+pushq %r15
+pushq %r14
+pushq %r13
+pushq %r12
+pushq %rbx
+subq $1512, %rsp
+movq %rdx, %r15
+movq %rdi, 24(%rsp)
+movq %rsi, 424(%rsp)
+movq %rdx, 432(%rsp)
+movq 16(%rdx), %rax
+movq 32(%rdx), %rbp
+decq %rax
+andq $-16, %rax
+movq %rsi, 176(%rsp)
+leaq (%rsi,%rax), %r12
+addq $16, %r12
+movq %r12, %rdi
+callq *%rbp
+movq %rax, %r14
+movq 24(%r15), %rax
+movq %r12, %rdi
+movq %rax, 416(%rsp)
+callq *%rax
+movq %rax, %r13
+movq $0, 440(%rsp)
+movq $1, 448(%rsp)
+vxorps %xmm0, %xmm0, %xmm0
+vmovups %xmm0, 456(%rsp)
+movq $8, 472(%rsp)
+movq $0, 480(%rsp)
+vmovups .Lanon.63e1a61e7141635ef6e103ddf8cc2986.101(%rip), %ymm0
+vmovups %ymm0, 488(%rsp)
+movl $3, 552(%rsp)
+imulq $448, %rax, %rbx
+movabsq $20587884010836553, %rax
+cmpq %rax, %r13
+jbe .LBB1634_5
+xorl %r14d, %r14d
+movq %r14, %rdi
+movq %rbx, %rsi
+vzeroupper 
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+jmp .LBB1634_138
+movq %r12, 168(%rsp)
+movq %r14, 64(%rsp)
+testq %rbx, %rbx
+je .LBB1634_8
+vzeroupper 
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %r14d
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB1634_4
+movq %rax, %r12
+movq %r13, %rax
+vmovups .Lanon.63e1a61e7141635ef6e103ddf8cc2986.101(%rip), %ymm0
+jmp .LBB1634_9
+movl $8, %r12d
+xorl %eax, %eax
+movq %rbp, 408(%rsp)
+movq %rax, 208(%rsp)
+movq %r12, 216(%rsp)
+vmovups %ymm0, 288(%rsp)
+vmovups %ymm0, 320(%rsp)
+movq $0, 224(%rsp)
+vmovups %ymm0, 352(%rsp)
+movq %r13, 280(%rsp)
+testq %r13, %r13
+movq %r15, 392(%rsp)
+je .LBB1634_70
+movq 48(%r15), %rax
+xorl %ebx, %ebx
+leaq 560(%rsp), %r14
+leaq 440(%rsp), %r15
+xorl %ecx, %ecx
+movq $0, 144(%rsp)
+movq %rax, 384(%rsp)
+movq %rcx, 400(%rsp)
+movq %rbx, 192(%rsp)
+movq %r14, %rdi
+movq 168(%rsp), %rsi
+movq %rbx, %rdx
+vzeroupper 
+callq *%rax
+leaq 568(%rsp), %rcx
+vmovups (%rcx), %xmm0
+vmovaps %xmm0, 1104(%rsp)
+movq 560(%rsp), %rax
+movq 16(%rcx), %rcx
+movq %rcx, 1120(%rsp)
+cmpq $-1, %rax
+jne .LBB1634_115
+movq %rbx, 16(%rsp)
+vmovaps 1104(%rsp), %xmm0
+vmovaps %xmm0, 256(%rsp)
+movq 1120(%rsp), %rax
+movq %rax, 272(%rsp)
+movq 264(%rsp), %rbx
+cmpq 64(%rsp), %rbx
+jne .LBB1634_116
+movq 256(%rsp), %rax
+movq %rax, 88(%rsp)
+movq %rax, 8(%rsp)
+leaq 16(%rax), %rsi
+movq %r14, %rdi
+movq %rsi, 184(%rsp)
+movq %r15, %rdx
+callq _RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build
+movq 560(%rsp), %rbx
+movq 568(%rsp), %r14
+cmpq $-1, %rbx
+je .LBB1634_119
+leaq 568(%rsp), %rcx
+movq 24(%rcx), %rax
+movq %rax, 1056(%rsp)
+vmovups 8(%rcx), %xmm0
+vmovaps %xmm0, 1040(%rsp)
+movq 600(%rsp), %r15
+vmovups 40(%rcx), %xmm0
+leaq 1120(%rsp), %r13
+vmovups %xmm0, 32(%r13)
+movl $336, %edx
+leaq 1168(%rsp), %rdi
+leaq 624(%rsp), %rsi
+callq *memcpy@GOTPCREL(%rip)
+movq 1056(%rsp), %rax
+movq %rax, 1024(%rsp)
+vmovaps 1040(%rsp), %xmm0
+vmovaps %xmm0, 1008(%rsp)
+movq %rax, 16(%r13)
+vmovups %xmm0, (%r13)
+movq %rbx, 1104(%rsp)
+movq %r14, 1112(%rsp)
+movq %r15, 1144(%rsp)
+movq 8(%rsp), %rax
+movzwl 440(%rax), %ecx
+movq %rcx, 80(%rsp)
+movzbl 442(%rax), %ecx
+movl %ecx, 204(%rsp)
+movl 436(%rax), %ecx
+movq %rcx, 160(%rsp)
+movq 80(%rax), %rcx
+movq 1472(%rsp), %r15
+movq 1480(%rsp), %rsi
+movq %rcx, 152(%rsp)
+testq %rcx, %rcx
+movq %r12, 48(%rsp)
+movq %rsi, 32(%rsp)
+je .LBB1634_28
+movq 72(%rax), %rbx
+movq 152(%rsp), %rax
+shlq $4, %rax
+addq %rbx, %rax
+movq %rax, 40(%rsp)
+movl (%rbx), %edi
+decl %edi
+cmpq %rdi, %rsi
+jbe .LBB1634_137
+movl 4(%rbx), %eax
+decl %eax
+cmpq %rax, %rsi
+jbe .LBB1634_128
+movl 8(%rbx), %edx
+decl %edx
+cmpq %rdx, %rsi
+jbe .LBB1634_129
+movl 12(%rbx), %ecx
+movq (%r15,%rdi,8), %r13
+movq (%r15,%rax,8), %rbp
+movq (%r15,%rdx,8), %r12
+testl %ecx, %ecx
+je .LBB1634_24
+decl %ecx
+cmpq %rcx, %rsi
+jbe .LBB1634_136
+movq (%r15,%rcx,8), %r14
+jmp .LBB1634_25
+xorl %r14d, %r14d
+movq %r13, 560(%rsp)
+movq %rbp, 568(%rsp)
+movq %r12, 576(%rsp)
+movq %r14, 584(%rsp)
+leaq 288(%rsp), %rdi
+leaq 560(%rsp), %rsi
+movq 16(%rsp), %rdx
+callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_
+cmpq $1, %rax
+je .LBB1634_78
+addq $16, %rbx
+cmpq 40(%rsp), %rbx
+movq 8(%rsp), %rax
+movq 32(%rsp), %rsi
+jne .LBB1634_18
+cmpq $0, 96(%rax)
+movq 184(%rsp), %rbx
+je .LBB1634_31
+movl $50, %edx
+movq %rbx, %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.229(%rip), %rsi
+callq *_RNvMsb_NtNtCskgWIz7JHH9v_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)
+testl %eax, %eax
+je .LBB1634_125
+movl $50, %edx
+movq %rbx, %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.229(%rip), %rsi
+callq *_RNvMsb_NtNtCskgWIz7JHH9v_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)
+movq 16(%rsp), %rcx
+incq %rcx
+movq %rcx, 72(%rsp)
+movl 204(%rsp), %edx
+shll $16, %edx
+movq 80(%rsp), %rcx
+orl %edx, %ecx
+shlq $32, %rcx
+addq %rcx, 160(%rsp)
+xorl %ebx, %ebx
+movq %rcx, 80(%rsp)
+movq %r15, 40(%rsp)
+testq %rbx, %rbx
+movq 32(%rsp), %rsi
+je .LBB1634_37
+cmpq 184(%rsp), %rbx
+je .LBB1634_37
+movl (%rbx), %edi
+testl %edi, %edi
+je .LBB1634_37
+movl %eax, %r9d
+movq 80(%rsp), %r8
+jmp .LBB1634_41
+testl %eax, %eax
+movq 8(%rsp), %rdx
+je .LBB1634_50
+movq 96(%rdx), %rcx
+testq %rcx, %rcx
+je .LBB1634_50
+movq 88(%rdx), %rbx
+movl (%rbx), %edi
+testl %edi, %edi
+je .LBB1634_50
+leaq (%rcx,%rcx,2), %rcx
+leaq (%rbx,%rcx,4), %rcx
+movq %rcx, 184(%rsp)
+xorl %r9d, %r9d
+movl %eax, %r8d
+decl %edi
+cmpq %rdi, %rsi
+jbe .LBB1634_137
+leal -1(%r8), %ecx
+cmpq %rcx, %rsi
+jbe .LBB1634_136
+movq 4(%rbx), %rax
+movl $4294967295, %edx
+addl %eax, %edx
+cmpq %rdx, %rsi
+jbe .LBB1634_129
+movq (%r15,%rdi,8), %r12
+movq (%r15,%rcx,8), %r13
+movq (%r15,%rdx,8), %rbp
+shrq $32, %rax
+movq %r8, 80(%rsp)
+je .LBB1634_47
+movl $4294967295, %ecx
+addl %ecx, %eax
+cmpq %rax, %rsi
+jbe .LBB1634_128
+movl %r9d, %r15d
+movq 40(%rsp), %rcx
+movq (%rcx,%rax,8), %r14
+jmp .LBB1634_48
+movl %r9d, %r15d
+xorl %r14d, %r14d
+movq %r12, 560(%rsp)
+movq %r13, 568(%rsp)
+movq %rbp, 576(%rsp)
+movq %r14, 584(%rsp)
+leaq 320(%rsp), %rdi
+leaq 560(%rsp), %rsi
+movq 16(%rsp), %rdx
+callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_
+movq %rax, %rcx
+addq $12, %rbx
+movl %r15d, %eax
+cmpq $1, %rcx
+movq 40(%rsp), %r15
+jne .LBB1634_33
+jmp .LBB1634_80
+movq 112(%rdx), %rax
+testq %rax, %rax
+je .LBB1634_62
+movq %rax, %rcx
+movq 8(%rsp), %rax
+movq 104(%rax), %r12
+shlq $4, %rcx
+addq %r12, %rcx
+movq %rcx, 40(%rsp)
+movl (%r12), %edi
+decl %edi
+cmpq %rdi, %rsi
+jbe .LBB1634_137
+movl 4(%r12), %eax
+decl %eax
+cmpq %rax, %rsi
+jbe .LBB1634_128
+movl 8(%r12), %edx
+decl %edx
+cmpq %rdx, %rsi
+jbe .LBB1634_129
+movl 12(%r12), %ecx
+movq (%r15,%rdi,8), %r13
+movq (%r15,%rax,8), %rbp
+movq (%r15,%rdx,8), %rbx
+testl %ecx, %ecx
+je .LBB1634_58
+decl %ecx
+cmpq %rcx, %rsi
+jbe .LBB1634_136
+movq (%r15,%rcx,8), %r14
+jmp .LBB1634_59
+xorl %r14d, %r14d
+movq %r13, 560(%rsp)
+movq %rbp, 568(%rsp)
+movq %rbx, 576(%rsp)
+movq %r14, 584(%rsp)
+leaq 352(%rsp), %rdi
+leaq 560(%rsp), %rsi
+movq 16(%rsp), %rdx
+callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_
+cmpq $1, %rax
+je .LBB1634_81
+addq $16, %r12
+cmpq 40(%rsp), %r12
+movq 32(%rsp), %rsi
+jne .LBB1634_52
+movq 160(%rsp), %rdx
+movq %rdx, %rbp
+movabsq $-281474976710656, %rax
+andq %rax, %rbp
+movq 400(%rsp), %rcx
+btq $48, %rcx
+movabsq $281474976710656, %rax
+cmovbq %rax, %rbp
+movq %rdx, %r14
+movabsq $280375465082880, %rax
+andq %rax, %r14
+btq $40, %rcx
+movabsq $1099511627776, %rax
+cmovbq %rax, %r14
+movq %rdx, %rdi
+movabsq $1095216660480, %rax
+andq %rax, %rdi
+btq $32, %rcx
+movabsq $4294967296, %rax
+cmovbq %rax, %rdi
+movq %rdi, 32(%rsp)
+movl %edx, %r12d
+andl $-16777216, %r12d
+testl $16777216, %ecx
+movl $16777216, %eax
+cmovneq %rax, %r12
+movl %edx, %ebx
+andl $16711680, %ebx
+testl $65536, %ecx
+movl $65536, %eax
+cmovneq %rax, %rbx
+movl %edx, %r13d
+andl $65280, %r13d
+testl $256, %ecx
+movl $256, %eax
+cmovneq %rax, %r13
+testb $1, %cl
+movzbl %dl, %ecx
+movl $1, %eax
+cmovneq %rax, %rcx
+movq %rcx, 40(%rsp)
+movq 152(%rsp), %rax
+addq %rax, 144(%rsp)
+jb .LBB1634_126
+movabsq $9223372036854775793, %rax
+addq $15, %rax
+movq %rax, 560(%rsp)
+leaq 560(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged16PagedFreezeErrorEBH_
+movl $400, %edx
+leaq 560(%rsp), %rdi
+leaq 1104(%rsp), %rsi
+callq *memcpy@GOTPCREL(%rip)
+movq 272(%rsp), %rax
+movq 16(%rsp), %rdx
+movq %rdx, 960(%rsp)
+movl $3, 976(%rsp)
+movq 160(%rsp), %rsi
+movq %rsi, %rcx
+shrq $48, %rcx
+movb %cl, 1006(%rsp)
+movq %rsi, %rcx
+shrq $32, %rcx
+movw %cx, 1004(%rsp)
+movl %esi, 1000(%rsp)
+movq 152(%rsp), %rcx
+movq %rcx, 984(%rsp)
+movq %rax, 992(%rsp)
+cmpq 208(%rsp), %rdx
+jne .LBB1634_67
+leaq 208(%rsp), %rdi
+callq *_RNvMs7_NtCsdf08ABbzq28_5alloc7raw_vecINtB5_6RawVecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotE8grow_oneBS_@GOTPCREL(%rip)
+movq 216(%rsp), %rax
+movq %rax, 48(%rsp)
+imulq $448, 16(%rsp), %rdi
+addq 48(%rsp), %rdi
+movl $448, %edx
+leaq 560(%rsp), %rsi
+callq *memcpy@GOTPCREL(%rip)
+movq 72(%rsp), %rax
+movq %rax, 224(%rsp)
+movq 8(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_69
+leaq 88(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+orq %r14, %rbp
+addq 32(%rsp), %rbp
+orq %r12, %rbp
+orq %rbx, %rbp
+orq %r13, %rbp
+orq 40(%rsp), %rbp
+movq 72(%rsp), %rax
+movq %rax, %rbx
+movq %rbp, %rcx
+cmpq 280(%rsp), %rax
+movq 48(%rsp), %r12
+movq 384(%rsp), %rax
+leaq 560(%rsp), %r14
+leaq 440(%rsp), %r15
+jne .LBB1634_11
+jmp .LBB1634_71
+movq $0, 72(%rsp)
+movq $0, 144(%rsp)
+xorl %ebp, %ebp
+movb $1, %r13b
+movq 168(%rsp), %rdi
+vzeroupper 
+callq *408(%rsp)
+movabsq $9223372036854775793, %rbx
+cmpq 64(%rsp), %rax
+jne .LBB1634_79
+movq 168(%rsp), %rdi
+callq *416(%rsp)
+movq 280(%rsp), %rcx
+cmpq %rcx, %rax
+jne .LBB1634_88
+xorl %r13d, %r13d
+leaq 208(%rsp), %rdi
+callq _RNvMs_NtCsdf08ABbzq28_5alloc3vecINtB4_3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotE16into_boxed_sliceBK_
+movq %rax, %r15
+movq %rdx, %r14
+leaq 560(%rsp), %rdi
+movq %rax, %rsi
+callq _RNvMs_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11graph_indexNtB4_14GraphPageIndex6derive
+vmovups 440(%rsp), %ymm0
+vmovups 472(%rsp), %ymm1
+vmovups 504(%rsp), %ymm2
+vmovups 528(%rsp), %ymm3
+movq 24(%rsp), %rcx
+vmovups %ymm3, 88(%rcx)
+vmovups %ymm2, 64(%rcx)
+vmovups %ymm1, 32(%rcx)
+vmovups %ymm0, (%rcx)
+vmovups 560(%rsp), %ymm0
+vmovups 592(%rsp), %ymm1
+vmovups 624(%rsp), %ymm2
+vmovups 656(%rsp), %ymm3
+vmovups %ymm0, 152(%rcx)
+vmovups %ymm1, 184(%rcx)
+vmovups %ymm2, 216(%rcx)
+vmovups %ymm3, 248(%rcx)
+vmovups 688(%rsp), %ymm0
+vmovups %ymm0, 280(%rcx)
+vmovups 720(%rsp), %ymm0
+vmovups %ymm0, 312(%rcx)
+movq %r15, 120(%rcx)
+movq %r14, 128(%rcx)
+movq 176(%rsp), %rax
+movq %rax, 136(%rcx)
+movq 392(%rsp), %rax
+movq %rax, 144(%rcx)
+movq 64(%rsp), %rax
+movq %rax, 344(%rcx)
+movq 144(%rsp), %rax
+movq %rax, 352(%rcx)
+movq %rbp, %rax
+shrq $48, %rax
+movb %al, 366(%rcx)
+movq %rbp, %rax
+shrq $32, %rax
+movw %ax, 364(%rcx)
+movl %ebp, 360(%rcx)
+movq 352(%rsp), %rdi
+movq 360(%rsp), %rsi
+vzeroupper 
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+movq 320(%rsp), %rdi
+movq 328(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+movq 288(%rsp), %rdi
+movq 296(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+jmp .LBB1634_114
+movq %rdx, %r8
+movq %r13, 96(%rsp)
+movq %rbp, 104(%rsp)
+movq %r12, 112(%rsp)
+movq %r14, 120(%rsp)
+movq %rdx, 128(%rsp)
+movb $0, 136(%rsp)
+leaq 560(%rsp), %rdi
+leaq 192(%rsp), %rsi
+leaq 440(%rsp), %rdx
+leaq 96(%rsp), %rcx
+xorl %r9d, %r9d
+callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+jmp .LBB1634_82
+addq $16, %rbx
+jmp .LBB1634_89
+movq %rdx, %r8
+movq %r12, 96(%rsp)
+movq %r13, 104(%rsp)
+movq %rbp, 112(%rsp)
+movq %r14, 120(%rsp)
+movq %rdx, 128(%rsp)
+movb $1, 136(%rsp)
+leaq 560(%rsp), %rdi
+leaq 192(%rsp), %rsi
+leaq 440(%rsp), %rdx
+leaq 96(%rsp), %rcx
+movl $1, %r9d
+callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+jmp .LBB1634_82
+movq %rdx, %r8
+movq %r13, 96(%rsp)
+movq %rbp, 104(%rsp)
+movq %rbx, 112(%rsp)
+movq %r14, 120(%rsp)
+movq %rdx, 128(%rsp)
+movb $2, 136(%rsp)
+leaq 560(%rsp), %rdi
+leaq 192(%rsp), %rsi
+leaq 440(%rsp), %rdx
+leaq 96(%rsp), %rcx
+movl $2, %r9d
+callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+vmovups 584(%rsp), %ymm0
+movq 24(%rsp), %rax
+vmovups %ymm0, 32(%rax)
+vmovups 560(%rsp), %ymm0
+vmovups %ymm0, 8(%rax)
+movq $-1, (%rax)
+movq 48(%rsp), %r12
+movq 16(%rsp), %rbx
+movq 32(%rsp), %rsi
+shlq $3, %rsi
+movl $8, %edx
+movq %r15, %rdi
+vzeroupper 
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 1496(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_86
+movq 1488(%rsp), %rdi
+shlq $4, %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 1104(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summary11PageSummaryEBJ_
+movq 8(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_90
+leaq 88(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+jmp .LBB1634_90
+addq $17, %rbx
+movq %rcx, 64(%rsp)
+movq 24(%rsp), %rcx
+movq %rbx, 8(%rcx)
+movq 64(%rsp), %rdx
+movq %rdx, 16(%rcx)
+movq %rax, 24(%rcx)
+movq $-1, (%rcx)
+movq 72(%rsp), %rbx
+movq 360(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_93
+leaq (,%rsi,8), %rax
+leaq (%rax,%rax,4), %rax
+andq $-16, %rax
+addq %rax, %rsi
+addq $65, %rsi
+je .LBB1634_93
+movq 352(%rsp), %rdi
+subq %rax, %rdi
+addq $-48, %rdi
+movl $16, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 328(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_96
+leaq (,%rsi,8), %rax
+leaq (%rax,%rax,4), %rax
+andq $-16, %rax
+addq %rax, %rsi
+addq $65, %rsi
+je .LBB1634_96
+movq 320(%rsp), %rdi
+subq %rax, %rdi
+addq $-48, %rdi
+movl $16, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 296(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_99
+leaq (,%rsi,8), %rax
+leaq (%rax,%rax,4), %rax
+andq $-16, %rax
+addq %rax, %rsi
+addq $65, %rsi
+je .LBB1634_99
+movq 288(%rsp), %rdi
+subq %rax, %rdi
+addq $-48, %rdi
+movl $16, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+testq %rbx, %rbx
+je .LBB1634_103
+movl $1, %r15d
+subq %rbx, %r15
+movq %r12, %r14
+movq %r14, %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_
+incq %r15
+addq $448, %r14
+cmpq $1, %r15
+jne .LBB1634_101
+movq 208(%rsp), %rax
+testq %rax, %rax
+je .LBB1634_105
+imulq $448, %rax, %rsi
+movl $8, %edx
+movq %r12, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 440(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_107
+movq 448(%rsp), %rdi
+movl $1, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 464(%rsp), %rax
+testq %rax, %rax
+je .LBB1634_109
+movq 472(%rsp), %rdi
+shlq $3, %rax
+leaq (%rax,%rax,4), %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 496(%rsp), %rax
+testq %rax, %rax
+je .LBB1634_111
+movq 488(%rsp), %rdi
+leaq (,%rax,8), %rcx
+andq $-16, %rcx
+leaq (%rcx,%rax), %rsi
+addq $33, %rsi
+subq %rcx, %rdi
+addq $-16, %rdi
+movl $16, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 520(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtCskEFv3nc5qE4_3std4sync9once_lock8OnceLockINtNtNtNtBI_11collections4hash3map7HashMapyINtNtCsdf08ABbzq28_5alloc3vec3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdENtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEEB2I_
+movq 176(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_114
+leaq 424(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcDNtNtCslK5Drzrx8K4_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCskgWIz7JHH9v_11purrdf_core@GOTPCREL(%rip)
+movq 24(%rsp), %rax
+addq $1512, %rsp
+popq %rbx
+popq %r12
+popq %r13
+popq %r14
+popq %r15
+popq %rbp
+retq 
+movq 608(%rsp), %rcx
+vmovups 592(%rsp), %xmm0
+movq 24(%rsp), %rdx
+vmovups %xmm0, 40(%rdx)
+movq %rcx, 56(%rdx)
+movq 1120(%rsp), %rcx
+movq %rcx, 32(%rdx)
+vmovaps 1104(%rsp), %xmm0
+vmovups %xmm0, 16(%rdx)
+movq %rax, 8(%rdx)
+movq $-1, (%rdx)
+jmp .LBB1634_90
+movq 64(%rsp), %r14
+movq %r14, 232(%rsp)
+movq %rbx, 96(%rsp)
+leaq 96(%rsp), %rax
+movq %rax, 1104(%rsp)
+movq _RNvXs_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8providerNtB4_14PageGenerationNtNtCslK5Drzrx8K4_4core3fmt7Display3fmt@GOTPCREL(%rip), %rax
+movq %rax, 1112(%rsp)
+leaq 232(%rsp), %rcx
+movq %rcx, 1120(%rsp)
+movq %rax, 1128(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1089(%rip), %rsi
+leaq 560(%rsp), %rdi
+leaq 1104(%rsp), %rdx
+callq *_RNvNvNtCsdf08ABbzq28_5alloc3fmt6format12format_inner@GOTPCREL(%rip)
+movq 16(%rsp), %rax
+movq %rax, 608(%rsp)
+movb $1, 584(%rsp)
+movq %r14, 592(%rsp)
+movq %rbx, 600(%rsp)
+movq %rax, %rbx
+movzbl 584(%rsp), %eax
+movq 24(%rsp), %rcx
+movb %al, 32(%rcx)
+movl 585(%rsp), %eax
+movl %eax, 33(%rcx)
+movzwl 589(%rsp), %eax
+movw %ax, 37(%rcx)
+movzbl 591(%rsp), %eax
+movb %al, 39(%rcx)
+movq 592(%rsp), %rax
+movq %rax, 40(%rcx)
+movq 600(%rsp), %rax
+movq %rax, 48(%rcx)
+movq 608(%rsp), %rax
+vmovups 560(%rsp), %xmm0
+vmovups %xmm0, 8(%rcx)
+movq %rax, 56(%rcx)
+movq 576(%rsp), %rax
+movq %rax, 24(%rcx)
+movzbl 584(%rsp), %eax
+movb %al, 32(%rcx)
+movl 585(%rsp), %eax
+movl %eax, 33(%rcx)
+movzwl 589(%rsp), %eax
+movw %ax, 37(%rcx)
+movzbl 591(%rsp), %eax
+movb %al, 39(%rcx)
+movq $-1, (%rcx)
+movq 256(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_90
+movb $1, %r13b
+leaq 256(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+jmp .LBB1634_90
+movq 576(%rsp), %r15
+movq 584(%rsp), %rdx
+movq $0, 232(%rsp)
+movq $1, 240(%rsp)
+movq $0, 248(%rsp)
+movq $1610612768, 112(%rsp)
+leaq 232(%rsp), %rax
+movq %rax, 96(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.642(%rip), %rax
+movq %rax, 104(%rsp)
+leaq 96(%rsp), %rdi
+movq %r15, %rsi
+callq *_RNvMsa_NtCslK5Drzrx8K4_4core3fmtNtB5_9Formatter9write_str@GOTPCREL(%rip)
+testb %al, %al
+movq 16(%rsp), %rbx
+jne .LBB1634_127
+movq 248(%rsp), %rax
+movq %rax, 1088(%rsp)
+vmovups 232(%rsp), %xmm0
+vmovaps %xmm0, 1072(%rsp)
+testq %r14, %r14
+je .LBB1634_123
+movl $1, %edx
+movq %r15, %rdi
+movq %r14, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+vmovaps 1072(%rsp), %xmm0
+vmovaps %xmm0, 1008(%rsp)
+movq 1088(%rsp), %rax
+movq %rax, 1024(%rsp)
+movq 24(%rsp), %rcx
+vmovups %xmm0, 16(%rcx)
+movq %rax, 32(%rcx)
+movabsq $9223372036854775793, %rax
+addq $19, %rax
+movq %rax, 8(%rcx)
+movq %rbx, 40(%rcx)
+movq $-1, (%rcx)
+movq 8(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_90
+leaq 88(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+jmp .LBB1634_90
+movq 8(%rsp), %rax
+movq 96(%rax), %rax
+movq %rax, 96(%rsp)
+leaq 96(%rsp), %rax
+movq %rax, 560(%rsp)
+movq _RNvXsi_NtNtNtCslK5Drzrx8K4_4core3fmt3num3impjNtB9_7Display3fmt@GOTPCREL(%rip), %rax
+movq %rax, 568(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1456(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1457(%rip), %rdx
+leaq 560(%rsp), %rsi
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking9panic_fmt@GOTPCREL(%rip)
+jmp .LBB1634_138
+movabsq $9223372036854775793, %rcx
+addq $15, %rcx
+movq 24(%rsp), %rax
+movq %rcx, 8(%rax)
+movq $-1, (%rax)
+testq %rsi, %rsi
+movq 48(%rsp), %r12
+movq 16(%rsp), %rbx
+jne .LBB1634_83
+jmp .LBB1634_84
+movq %rdx, %rdi
+jmp .LBB1634_137
+movq %rax, %rdi
+jmp .LBB1634_137
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.3728(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.728(%rip), %rcx
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.3730(%rip), %r8
+leaq 63(%rsp), %rdx
+movl $55, %esi
+callq *_RNvNtCslK5Drzrx8K4_4core6result13unwrap_failed@GOTPCREL(%rip)
+jmp .LBB1634_138
+movq %rcx, %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.352(%rip), %rdx
+movq 32(%rsp), %rsi
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking18panic_bounds_check@GOTPCREL(%rip)
+ud2 
+movq %rax, %rbx
+movq 256(%rsp), %rax
+lock decq	(%rax)
+movb $1, %r13b
+jne .LBB1634_171
+leaq 256(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+jmp .LBB1634_171
+movq %rax, %rbx
+movq %r15, %rdi
+movq %r14, %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtCsdf08ABbzq28_5alloc5boxed3BoxSNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEEB1h_
+xorl %r13d, %r13d
+jmp .LBB1634_171
+jmp .LBB1634_150
+movq %rax, %rbx
+leaq 560(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_
+jmp .LBB1634_169
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+jmp .LBB1634_150
+movq %rax, %rbx
+jmp .LBB1634_171
+movq %rax, %rbx
+jmp .LBB1634_169
+movq %rax, %rbx
+movb $1, %r13b
+jmp .LBB1634_171
+jmp .LBB1634_168
+jmp .LBB1634_168
+movq %rax, %rbx
+jmp .LBB1634_175
+jmp .LBB1634_168
+jmp .LBB1634_168
+movq %rax, %rbx
+movq 232(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_158
+movq 240(%rsp), %rdi
+movl $1, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+testq %r14, %r14
+je .LBB1634_169
+movl $1, %edx
+movq %r15, %rdi
+movq %r14, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+jmp .LBB1634_169
+movq %rax, %rbx
+testq %r15, %r15
+je .LBB1634_164
+negq %r15
+addq $448, %r14
+movq %r14, %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_
+addq $448, %r14
+decq %r15
+jne .LBB1634_162
+movq 208(%rsp), %rax
+testq %rax, %rax
+je .LBB1634_174
+imulq $448, %rax, %rsi
+movl $8, %edx
+movq %r12, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+jmp .LBB1634_174
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+movq %rax, %rbx
+leaq 1104(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translation15PageTranslationEBJ_
+movq 8(%rsp), %rax
+lock decq	(%rax)
+movb $1, %r13b
+jne .LBB1634_171
+leaq 88(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+movq 352(%rsp), %rdi
+movq 360(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+movq 320(%rsp), %rdi
+movq 328(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+movq 288(%rsp), %rdi
+movq 296(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+testb %r13b, %r13b
+je .LBB1634_174
+leaq 208(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtCsdf08ABbzq28_5alloc3vec3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEEB1e_
+jmp .LBB1634_174
+movq %rax, %rbx
+leaq 440(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global16GlobalDictionaryEBH_
+movq 176(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_177
+leaq 424(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcDNtNtCslK5Drzrx8K4_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCskgWIz7JHH9v_11purrdf_core@GOTPCREL(%rip)
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+
+{"fma": 0, "graph": 0, "instructions": 91, "path": "<purrdf_core::ir::paged::translation::PageTranslation as core::clone::Clone>::clone", "relaxed": 0, "selected": false, "symbol": "_RNvXs0_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB5_15PageTranslationNtNtCslK5Drzrx8K4_4core5clone5Clone5clone", "vector_ops": 0, "work_mnemonics": []}
+pushq %rbp
+pushq %r15
+pushq %r14
+pushq %r13
+pushq %r12
+pushq %rbx
+subq $392, %rsp
+movq %rsi, %r13
+movq %rdi, %r15
+movq 376(%rsi), %rax
+leaq (,%rax,8), %rbx
+movl $8, %r12d
+movl $8, %r14d
+movq %rax, (%rsp)
+testq %rax, %rax
+je .LBB2568_3
+movq 368(%r13), %rbp
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB2568_16
+movq %rax, %r14
+movq %rax, %rdi
+movq %rbp, %rsi
+movq %rbx, %rdx
+callq *memcpy@GOTPCREL(%rip)
+movq %rbx, 8(%rsp)
+movq 392(%r13), %rbp
+movq %rbp, %rbx
+shlq $4, %rbx
+testq %rbp, %rbp
+je .LBB2568_12
+movq 384(%r13), %rax
+movq %rax, 16(%rsp)
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB2568_5
+movq %rax, %r12
+movq %rax, %rdi
+movq 16(%rsp), %rsi
+movq %rbx, %rdx
+callq *memcpy@GOTPCREL(%rip)
+leaq 24(%rsp), %rdi
+movq %r13, %rsi
+callq _RNvXsh_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summaryNtB5_11PageSummaryNtNtCslK5Drzrx8K4_4core5clone5Clone5clone
+movq %r14, 368(%r15)
+movq (%rsp), %rax
+movq %rax, 376(%r15)
+movq %r12, 384(%r15)
+movq %rbp, 392(%r15)
+leaq 24(%rsp), %rsi
+movl $368, %edx
+movq %r15, %rdi
+callq *memcpy@GOTPCREL(%rip)
+addq $392, %rsp
+popq %rbx
+popq %r12
+popq %r13
+popq %r14
+popq %r15
+popq %rbp
+retq 
+movl $8, %edi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+movl $8, %edi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+ud2 
+movq %rax, %r15
+jmp .LBB2568_8
+movq %rax, %r15
+testq %rbp, %rbp
+je .LBB2568_8
+movl $8, %edx
+movq %r12, %rdi
+movq %rbx, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+cmpq $0, (%rsp)
+je .LBB2568_10
+movl $8, %edx
+movq %r14, %rdi
+movq 8(%rsp), %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq %r15, %rdi
+callq _Unwind_Resume@PLT
+
+{"fma": 0, "graph": 1, "instructions": 37, "path": "<purrdf_core::ir::paged::translation::PageTranslation>::build", "relaxed": 0, "selected": false, "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation5build", "vector_ops": 0, "work_mnemonics": []}
+pushq %rbx
+subq $448, %rsp
+movq %rdi, %rbx
+leaq 48(%rsp), %rdi
+callq _RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build
+cmpq $-1, 48(%rsp)
+je .LBB1331_1
+leaq 48(%rsp), %rsi
+movl $400, %edx
+movq %rbx, %rdi
+callq *memcpy@GOTPCREL(%rip)
+movq %rbx, %rax
+addq $448, %rsp
+popq %rbx
+retq 
+movq 72(%rsp), %rax
+movq %rax, 16(%rsp)
+vmovups 56(%rsp), %xmm0
+vmovaps %xmm0, (%rsp)
+movq %rsp, %rax
+movq %rax, 32(%rsp)
+movq _RNvXNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summaryNtB2_13SummaryDefectNtNtCslK5Drzrx8K4_4core3fmt7Display3fmt@GOTPCREL(%rip), %rax
+movq %rax, 40(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.831(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.832(%rip), %rdx
+leaq 32(%rsp), %rsi
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking9panic_fmt@GOTPCREL(%rip)
+ud2 
+movq %rax, %rbx
+movq (%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1331_6
+movq 8(%rsp), %rdi
+movl $1, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+
+{"fma": 0, "graph": 1, "instructions": 385, "path": "<purrdf_core::ir::paged::translation::PageTranslation>::try_build", "relaxed": 0, "selected": false, "symbol": "_RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build", "vector_ops": 0, "work_mnemonics": []}
+pushq %rbp
+pushq %r15
+pushq %r14
+pushq %r13
+pushq %r12
+pushq %rbx
+subq $872, %rsp
+movabsq $9223372036854775800, %r14
+movq 48(%rsi), %rbp
+leaq (,%rbp,8), %rbx
+movq %rbp, %rax
+shrq $61, %rax
+setne %al
+cmpq %r14, %rbx
+seta %cl
+orb %al, %cl
+je .LBB1332_3
+xorl %r15d, %r15d
+movq %r15, %rdi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+movq %rsi, %r13
+movq %rdi, %r12
+movq %rdx, 120(%rsp)
+testq %rbx, %rbx
+je .LBB1332_4
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %r15d
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB1332_2
+movq %rbp, %r15
+jmp .LBB1332_7
+movl $8, %eax
+xorl %r15d, %r15d
+movq %r15, 40(%rsp)
+movq %rax, 48(%rsp)
+movq $0, 56(%rsp)
+movq %rax, %rdx
+movq %rbp, %rbx
+shlq $4, %rbx
+movq %rbp, %rax
+shrq $60, %rax
+setne %al
+cmpq %r14, %rbx
+seta %cl
+orb %al, %cl
+je .LBB1332_10
+xorl %r13d, %r13d
+movq %r13, %rdi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+jmp .LBB1332_19
+movq %rdx, 8(%rsp)
+testq %rbx, %rbx
+je .LBB1332_11
+movq %r13, %r14
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %r13d
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB1332_9
+movq %rbp, %rcx
+movq %r14, %r13
+jmp .LBB1332_14
+movl $8, %eax
+xorl %ecx, %ecx
+movq %rcx, 16(%rsp)
+movq %rax, 24(%rsp)
+movq $0, 32(%rsp)
+testq %rbp, %rbp
+movq %r12, 72(%rsp)
+je .LBB1332_23
+xorl %r12d, %r12d
+leaq 504(%rsp), %rdx
+movq %rbp, 112(%rsp)
+movl %r14d, %eax
+movq %r12, %rcx
+shrq $32, %rcx
+movl %r12d, %r14d
+cmovnel %eax, %r14d
+movabsq $4294967296, %rax
+cmpq %rax, %r12
+je .LBB1332_17
+cmpl $-1, %r14d
+je .LBB1332_60
+leal 1(%r14), %ebp
+movq %rdx, %rdi
+movq %r13, %rsi
+movl %ebp, %edx
+movq %r13, %rcx
+callq _RINvNtNtCskgWIz7JHH9v_11purrdf_core2ir9term_walk13try_fold_termNtNtB4_7dataset10RdfDatasetNtNtB4_4term9TermValueNtNtB6_12dataset_view15TermLookupErrorNCNvYBZ_NtB1O_11DatasetView10term_value0NCB2q_s_0NcNtB1M_4Read0EB6_
+cmpq $-1, 504(%rsp)
+je .LBB1332_63
+movq %r13, %r15
+vmovups 504(%rsp), %ymm0
+vmovups 536(%rsp), %ymm1
+vmovups 552(%rsp), %ymm2
+vmovups %ymm2, 176(%rsp)
+vmovups %ymm1, 160(%rsp)
+vmovups %ymm0, 128(%rsp)
+movq 120(%rsp), %rdi
+leaq 128(%rsp), %rsi
+vzeroupper 
+callq _RNvMs1_NtNtCskgWIz7JHH9v_11purrdf_core2ir6globalNtB5_16GlobalDictionary22try_reintern_validated
+movq %rax, %r13
+testq %rax, %rax
+je .LBB1332_66
+cmpq 40(%rsp), %r12
+movq 8(%rsp), %rax
+jne .LBB1332_73
+leaq 40(%rsp), %rdi
+callq *_RNvMs7_NtCsdf08ABbzq28_5alloc7raw_vecINtB5_6RawVecINtNtB7_5boxed3BoxNtNtCskgWIz7JHH9v_11purrdf_core5model9RdfTripleEE8grow_oneB18_@GOTPCREL(%rip)
+movq 48(%rsp), %rax
+movq %rax, 8(%rsp)
+movq %r13, (%rax,%r12,8)
+incq %r12
+movq %r12, 56(%rsp)
+movq 32(%rsp), %rbx
+cmpq 16(%rsp), %rbx
+jne .LBB1332_75
+leaq 16(%rsp), %rdi
+callq *_RNvMs7_NtCsdf08ABbzq28_5alloc7raw_vecINtB5_6RawVecINtNtNtCskgWIz7JHH9v_11purrdf_core2ir9term_walk8FoldStepNtNtBR_6global12GlobalTermIdEE8grow_oneBT_@GOTPCREL(%rip)
+movq 24(%rsp), %rcx
+movq %rbx, %rax
+shlq $4, %rax
+movq %r13, (%rcx,%rax)
+movq %rcx, 64(%rsp)
+movl %ebp, 8(%rcx,%rax)
+incq %rbx
+movq %rbx, 32(%rsp)
+leaq 128(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir4term9TermValueEBH_
+leaq 504(%rsp), %rdx
+movq %r15, %r13
+movq 112(%rsp), %rbp
+cmpq %r12, %rbp
+jne .LBB1332_16
+cmpq $2, %rbx
+movq 72(%rsp), %r12
+jae .LBB1332_21
+leaq 504(%rsp), %rdi
+movq %r13, %rsi
+callq _RNvMs1_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summaryNtB5_11PageSummary4seal
+vmovups 512(%rsp), %xmm0
+vmovaps %xmm0, 80(%rsp)
+movq 504(%rsp), %rbx
+movq 528(%rsp), %rax
+movq %rax, 96(%rsp)
+cmpq $-1, %rbx
+je .LBB1332_25
+leaq 536(%rsp), %rsi
+leaq 160(%rsp), %rdi
+movl $336, %edx
+callq *memcpy@GOTPCREL(%rip)
+vmovaps 80(%rsp), %xmm0
+vmovups %xmm0, 136(%rsp)
+movq 96(%rsp), %rax
+movq %rax, 152(%rsp)
+movq %rbx, 128(%rsp)
+movq 40(%rsp), %r12
+movq 48(%rsp), %r13
+movq 56(%rsp), %r14
+cmpq %r14, %r12
+jbe .LBB1332_41
+shlq $3, %r12
+testq %r14, %r14
+je .LBB1332_43
+leaq (,%r14,8), %rbx
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+movq %rbx, %rcx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_realloc@GOTPCREL(%rip)
+movq %rax, %r15
+testq %rax, %rax
+jne .LBB1332_44
+movl $8, %edi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+jmp .LBB1332_19
+movq 96(%rsp), %rax
+vmovaps 80(%rsp), %xmm0
+vmovups %xmm0, 8(%r12)
+movq %rax, 24(%r12)
+movq $-1, (%r12)
+movq 16(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1332_27
+movq 24(%rsp), %rdi
+shlq $4, %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 40(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1332_51
+movq 48(%rsp), %rdi
+shlq $3, %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+jmp .LBB1332_51
+movq %r13, %r15
+jmp .LBB1332_44
+movl $8, %r15d
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 16(%rsp), %r12
+movq 24(%rsp), %r13
+movq 32(%rsp), %rbp
+cmpq %rbp, %r12
+movq %r15, 8(%rsp)
+jbe .LBB1332_45
+shlq $4, %r12
+testq %rbp, %rbp
+je .LBB1332_49
+movq %rbp, %r15
+shlq $4, %r15
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+movq %r15, %rcx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_realloc@GOTPCREL(%rip)
+movq %rax, %rbx
+testq %rax, %rax
+jne .LBB1332_50
+movl $8, %edi
+movq %r15, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+jmp .LBB1332_19
+movq %r13, %rbx
+jmp .LBB1332_50
+movl $8, %ebx
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 128(%rsp), %rsi
+movl $368, %edx
+movq 72(%rsp), %r15
+movq %r15, %rdi
+callq *memcpy@GOTPCREL(%rip)
+movq 8(%rsp), %rax
+movq %rax, 368(%r15)
+movq %r14, 376(%r15)
+movq %rbx, 384(%r15)
+movq %rbp, 392(%r15)
+addq $872, %rsp
+popq %rbx
+popq %r12
+popq %r13
+popq %r14
+popq %r15
+popq %rbp
+retq 
+movb $2, 504(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.833(%rip), %r8
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.726(%rip), %rcx
+movl $24, %esi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.317(%rip), %rdi
+jmp .LBB1332_18
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1371(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1372(%rip), %rdx
+movl $41, %esi
+callq *_RNvNtCslK5Drzrx8K4_4core6option13expect_failed@GOTPCREL(%rip)
+jmp .LBB1332_19
+movl $54, %esi
+leaq 7(%rsp), %rdx
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1444(%rip), %r8
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.721(%rip), %rcx
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1443(%rip), %rdi
+callq *_RNvNtCslK5Drzrx8K4_4core6result13unwrap_failed@GOTPCREL(%rip)
+jmp .LBB1332_19
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1019(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.722(%rip), %rcx
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1020(%rip), %r8
+leaq 7(%rsp), %rdx
+movl $49, %esi
+callq *_RNvNtCslK5Drzrx8K4_4core6result13unwrap_failed@GOTPCREL(%rip)
+ud2 
+cmpq $21, %rbx
+jae .LBB1332_22
+shlq $4, %rbx
+movq 64(%rsp), %rdi
+addq %rdi, %rbx
+leaq 16(%rdi), %rdx
+xorl %eax, %eax
+movq 64(%rsp), %r10
+jmp .LBB1332_30
+movq %r10, %r9
+movq %rdx, (%r9)
+movl %esi, 8(%r9)
+leaq 16(%rcx), %rdx
+addq $16, %rax
+movq %rcx, %rdi
+cmpq %rbx, %rdx
+je .LBB1332_23
+movq %rdx, %rcx
+movq 16(%rdi), %rdx
+cmpq (%rdi), %rdx
+jae .LBB1332_36
+movl 24(%rdi), %esi
+vmovups (%rdi), %xmm0
+vmovups %xmm0, (%rcx)
+movq %rax, %r8
+movq %r10, %r9
+cmpq %r10, %rdi
+je .LBB1332_35
+leaq (%r10,%r8), %r9
+cmpq -16(%r10,%r8), %rdx
+jae .LBB1332_35
+leaq (%r10,%r8), %rdi
+addq $-16, %rdi
+vmovups (%rdi), %xmm0
+vmovups %xmm0, (%r9)
+addq $-16, %r8
+jne .LBB1332_32
+jmp .LBB1332_34
+movq 64(%rsp), %rdi
+movq %rbx, %rsi
+callq *_RINvNtNtNtCslK5Drzrx8K4_4core5slice4sort8unstable7ipnsortTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdNtNtBY_4term6TermIdENCINvMB6_SBT_20sort_unstable_by_keyBU_NCINvMNtNtBY_5paged11translationNtB2R_15PageTranslation5remapNCNCNvMs3_B2T_NtB2T_12PagedDataset7compacts0_00Es0_0E0EB10_@GOTPCREL(%rip)
+jmp .LBB1332_23
+movq %rax, %rbx
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+testq %r14, %r14
+je .LBB1332_56
+shlq $3, %r14
+movl $8, %edx
+movq 8(%rsp), %rdi
+movq %r14, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 128(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summary11PageSummaryEBJ_
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+movq %rax, %rbx
+movl $8, %edx
+movq %r13, %rdi
+movq %r12, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 128(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summary11PageSummaryEBJ_
+xorl %ebp, %ebp
+jmp .LBB1332_78
+jmp .LBB1332_69
+jmp .LBB1332_38
+movq %rax, %rbx
+movb $1, %bpl
+leaq 128(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir4term9TermValueEBH_
+jmp .LBB1332_78
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+movq %rax, %rbx
+movb $1, %bpl
+movq 16(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1332_80
+movq 24(%rsp), %rdi
+shlq $4, %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+testb %bpl, %bpl
+je .LBB1332_57
+movq 40(%rsp), %r15
+jmp .LBB1332_83
+movq %rax, %rbx
+testq %r15, %r15
+jne .LBB1332_84
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+movq 48(%rsp), %rdi
+shlq $3, %r15
+movl $8, %edx
+movq %r15, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+
+{"fma": 0, "graph": 1, "instructions": 944, "path": "<purrdf_core::ir::paged::PagedDataset>::from_provider", "relaxed": 0, "selected": true, "symbol": "_RNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB5_12PagedDataset13from_provider", "vector_ops": 0, "work_mnemonics": []}
+pushq %rbp
+pushq %r15
+pushq %r14
+pushq %r13
+pushq %r12
+pushq %rbx
+subq $1512, %rsp
+movq %rdx, %r15
+movq %rdi, 24(%rsp)
+movq %rsi, 424(%rsp)
+movq %rdx, 432(%rsp)
+movq 16(%rdx), %rax
+movq 32(%rdx), %rbp
+decq %rax
+andq $-16, %rax
+movq %rsi, 176(%rsp)
+leaq (%rsi,%rax), %r12
+addq $16, %r12
+movq %r12, %rdi
+callq *%rbp
+movq %rax, %r14
+movq 24(%r15), %rax
+movq %r12, %rdi
+movq %rax, 416(%rsp)
+callq *%rax
+movq %rax, %r13
+movq $0, 440(%rsp)
+movq $1, 448(%rsp)
+vxorps %xmm0, %xmm0, %xmm0
+vmovups %xmm0, 456(%rsp)
+movq $8, 472(%rsp)
+movq $0, 480(%rsp)
+vmovups .Lanon.63e1a61e7141635ef6e103ddf8cc2986.101(%rip), %ymm0
+vmovups %ymm0, 488(%rsp)
+movl $3, 552(%rsp)
+imulq $448, %rax, %rbx
+movabsq $20587884010836553, %rax
+cmpq %rax, %r13
+jbe .LBB1634_5
+xorl %r14d, %r14d
+movq %r14, %rdi
+movq %rbx, %rsi
+vzeroupper 
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+jmp .LBB1634_138
+movq %r12, 168(%rsp)
+movq %r14, 64(%rsp)
+testq %rbx, %rbx
+je .LBB1634_8
+vzeroupper 
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %r14d
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB1634_4
+movq %rax, %r12
+movq %r13, %rax
+vmovups .Lanon.63e1a61e7141635ef6e103ddf8cc2986.101(%rip), %ymm0
+jmp .LBB1634_9
+movl $8, %r12d
+xorl %eax, %eax
+movq %rbp, 408(%rsp)
+movq %rax, 208(%rsp)
+movq %r12, 216(%rsp)
+vmovups %ymm0, 288(%rsp)
+vmovups %ymm0, 320(%rsp)
+movq $0, 224(%rsp)
+vmovups %ymm0, 352(%rsp)
+movq %r13, 280(%rsp)
+testq %r13, %r13
+movq %r15, 392(%rsp)
+je .LBB1634_70
+movq 48(%r15), %rax
+xorl %ebx, %ebx
+leaq 560(%rsp), %r14
+leaq 440(%rsp), %r15
+xorl %ecx, %ecx
+movq $0, 144(%rsp)
+movq %rax, 384(%rsp)
+movq %rcx, 400(%rsp)
+movq %rbx, 192(%rsp)
+movq %r14, %rdi
+movq 168(%rsp), %rsi
+movq %rbx, %rdx
+vzeroupper 
+callq *%rax
+leaq 568(%rsp), %rcx
+vmovups (%rcx), %xmm0
+vmovaps %xmm0, 1104(%rsp)
+movq 560(%rsp), %rax
+movq 16(%rcx), %rcx
+movq %rcx, 1120(%rsp)
+cmpq $-1, %rax
+jne .LBB1634_115
+movq %rbx, 16(%rsp)
+vmovaps 1104(%rsp), %xmm0
+vmovaps %xmm0, 256(%rsp)
+movq 1120(%rsp), %rax
+movq %rax, 272(%rsp)
+movq 264(%rsp), %rbx
+cmpq 64(%rsp), %rbx
+jne .LBB1634_116
+movq 256(%rsp), %rax
+movq %rax, 88(%rsp)
+movq %rax, 8(%rsp)
+leaq 16(%rax), %rsi
+movq %r14, %rdi
+movq %rsi, 184(%rsp)
+movq %r15, %rdx
+callq _RNvMNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build
+movq 560(%rsp), %rbx
+movq 568(%rsp), %r14
+cmpq $-1, %rbx
+je .LBB1634_119
+leaq 568(%rsp), %rcx
+movq 24(%rcx), %rax
+movq %rax, 1056(%rsp)
+vmovups 8(%rcx), %xmm0
+vmovaps %xmm0, 1040(%rsp)
+movq 600(%rsp), %r15
+vmovups 40(%rcx), %xmm0
+leaq 1120(%rsp), %r13
+vmovups %xmm0, 32(%r13)
+movl $336, %edx
+leaq 1168(%rsp), %rdi
+leaq 624(%rsp), %rsi
+callq *memcpy@GOTPCREL(%rip)
+movq 1056(%rsp), %rax
+movq %rax, 1024(%rsp)
+vmovaps 1040(%rsp), %xmm0
+vmovaps %xmm0, 1008(%rsp)
+movq %rax, 16(%r13)
+vmovups %xmm0, (%r13)
+movq %rbx, 1104(%rsp)
+movq %r14, 1112(%rsp)
+movq %r15, 1144(%rsp)
+movq 8(%rsp), %rax
+movzwl 440(%rax), %ecx
+movq %rcx, 80(%rsp)
+movzbl 442(%rax), %ecx
+movl %ecx, 204(%rsp)
+movl 436(%rax), %ecx
+movq %rcx, 160(%rsp)
+movq 80(%rax), %rcx
+movq 1472(%rsp), %r15
+movq 1480(%rsp), %rsi
+movq %rcx, 152(%rsp)
+testq %rcx, %rcx
+movq %r12, 48(%rsp)
+movq %rsi, 32(%rsp)
+je .LBB1634_28
+movq 72(%rax), %rbx
+movq 152(%rsp), %rax
+shlq $4, %rax
+addq %rbx, %rax
+movq %rax, 40(%rsp)
+movl (%rbx), %edi
+decl %edi
+cmpq %rdi, %rsi
+jbe .LBB1634_137
+movl 4(%rbx), %eax
+decl %eax
+cmpq %rax, %rsi
+jbe .LBB1634_128
+movl 8(%rbx), %edx
+decl %edx
+cmpq %rdx, %rsi
+jbe .LBB1634_129
+movl 12(%rbx), %ecx
+movq (%r15,%rdi,8), %r13
+movq (%r15,%rax,8), %rbp
+movq (%r15,%rdx,8), %r12
+testl %ecx, %ecx
+je .LBB1634_24
+decl %ecx
+cmpq %rcx, %rsi
+jbe .LBB1634_136
+movq (%r15,%rcx,8), %r14
+jmp .LBB1634_25
+xorl %r14d, %r14d
+movq %r13, 560(%rsp)
+movq %rbp, 568(%rsp)
+movq %r12, 576(%rsp)
+movq %r14, 584(%rsp)
+leaq 288(%rsp), %rdi
+leaq 560(%rsp), %rsi
+movq 16(%rsp), %rdx
+callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_
+cmpq $1, %rax
+je .LBB1634_78
+addq $16, %rbx
+cmpq 40(%rsp), %rbx
+movq 8(%rsp), %rax
+movq 32(%rsp), %rsi
+jne .LBB1634_18
+cmpq $0, 96(%rax)
+movq 184(%rsp), %rbx
+je .LBB1634_31
+movl $50, %edx
+movq %rbx, %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.229(%rip), %rsi
+callq *_RNvMsb_NtNtCskgWIz7JHH9v_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)
+testl %eax, %eax
+je .LBB1634_125
+movl $50, %edx
+movq %rbx, %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.229(%rip), %rsi
+callq *_RNvMsb_NtNtCskgWIz7JHH9v_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)
+movq 16(%rsp), %rcx
+incq %rcx
+movq %rcx, 72(%rsp)
+movl 204(%rsp), %edx
+shll $16, %edx
+movq 80(%rsp), %rcx
+orl %edx, %ecx
+shlq $32, %rcx
+addq %rcx, 160(%rsp)
+xorl %ebx, %ebx
+movq %rcx, 80(%rsp)
+movq %r15, 40(%rsp)
+testq %rbx, %rbx
+movq 32(%rsp), %rsi
+je .LBB1634_37
+cmpq 184(%rsp), %rbx
+je .LBB1634_37
+movl (%rbx), %edi
+testl %edi, %edi
+je .LBB1634_37
+movl %eax, %r9d
+movq 80(%rsp), %r8
+jmp .LBB1634_41
+testl %eax, %eax
+movq 8(%rsp), %rdx
+je .LBB1634_50
+movq 96(%rdx), %rcx
+testq %rcx, %rcx
+je .LBB1634_50
+movq 88(%rdx), %rbx
+movl (%rbx), %edi
+testl %edi, %edi
+je .LBB1634_50
+leaq (%rcx,%rcx,2), %rcx
+leaq (%rbx,%rcx,4), %rcx
+movq %rcx, 184(%rsp)
+xorl %r9d, %r9d
+movl %eax, %r8d
+decl %edi
+cmpq %rdi, %rsi
+jbe .LBB1634_137
+leal -1(%r8), %ecx
+cmpq %rcx, %rsi
+jbe .LBB1634_136
+movq 4(%rbx), %rax
+movl $4294967295, %edx
+addl %eax, %edx
+cmpq %rdx, %rsi
+jbe .LBB1634_129
+movq (%r15,%rdi,8), %r12
+movq (%r15,%rcx,8), %r13
+movq (%r15,%rdx,8), %rbp
+shrq $32, %rax
+movq %r8, 80(%rsp)
+je .LBB1634_47
+movl $4294967295, %ecx
+addl %ecx, %eax
+cmpq %rax, %rsi
+jbe .LBB1634_128
+movl %r9d, %r15d
+movq 40(%rsp), %rcx
+movq (%rcx,%rax,8), %r14
+jmp .LBB1634_48
+movl %r9d, %r15d
+xorl %r14d, %r14d
+movq %r12, 560(%rsp)
+movq %r13, 568(%rsp)
+movq %rbp, 576(%rsp)
+movq %r14, 584(%rsp)
+leaq 320(%rsp), %rdi
+leaq 560(%rsp), %rsi
+movq 16(%rsp), %rdx
+callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_
+movq %rax, %rcx
+addq $12, %rbx
+movl %r15d, %eax
+cmpq $1, %rcx
+movq 40(%rsp), %r15
+jne .LBB1634_33
+jmp .LBB1634_80
+movq 112(%rdx), %rax
+testq %rax, %rax
+je .LBB1634_62
+movq %rax, %rcx
+movq 8(%rsp), %rax
+movq 104(%rax), %r12
+shlq $4, %rcx
+addq %r12, %rcx
+movq %rcx, 40(%rsp)
+movl (%r12), %edi
+decl %edi
+cmpq %rdi, %rsi
+jbe .LBB1634_137
+movl 4(%r12), %eax
+decl %eax
+cmpq %rax, %rsi
+jbe .LBB1634_128
+movl 8(%r12), %edx
+decl %edx
+cmpq %rdx, %rsi
+jbe .LBB1634_129
+movl 12(%r12), %ecx
+movq (%r15,%rdi,8), %r13
+movq (%r15,%rax,8), %rbp
+movq (%r15,%rdx,8), %rbx
+testl %ecx, %ecx
+je .LBB1634_58
+decl %ecx
+cmpq %rcx, %rsi
+jbe .LBB1634_136
+movq (%r15,%rcx,8), %r14
+jmp .LBB1634_59
+xorl %r14d, %r14d
+movq %r13, 560(%rsp)
+movq %rbp, 568(%rsp)
+movq %rbx, 576(%rsp)
+movq %r14, 584(%rsp)
+leaq 352(%rsp), %rdi
+leaq 560(%rsp), %rsi
+movq 16(%rsp), %rdx
+callq _RNvMs1_NtCskjtayK3PjuD_9hashbrown3mapINtB5_7HashMapTNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCslK5Drzrx8K4_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateE6insertBU_
+cmpq $1, %rax
+je .LBB1634_81
+addq $16, %r12
+cmpq 40(%rsp), %r12
+movq 32(%rsp), %rsi
+jne .LBB1634_52
+movq 160(%rsp), %rdx
+movq %rdx, %rbp
+movabsq $-281474976710656, %rax
+andq %rax, %rbp
+movq 400(%rsp), %rcx
+btq $48, %rcx
+movabsq $281474976710656, %rax
+cmovbq %rax, %rbp
+movq %rdx, %r14
+movabsq $280375465082880, %rax
+andq %rax, %r14
+btq $40, %rcx
+movabsq $1099511627776, %rax
+cmovbq %rax, %r14
+movq %rdx, %rdi
+movabsq $1095216660480, %rax
+andq %rax, %rdi
+btq $32, %rcx
+movabsq $4294967296, %rax
+cmovbq %rax, %rdi
+movq %rdi, 32(%rsp)
+movl %edx, %r12d
+andl $-16777216, %r12d
+testl $16777216, %ecx
+movl $16777216, %eax
+cmovneq %rax, %r12
+movl %edx, %ebx
+andl $16711680, %ebx
+testl $65536, %ecx
+movl $65536, %eax
+cmovneq %rax, %rbx
+movl %edx, %r13d
+andl $65280, %r13d
+testl $256, %ecx
+movl $256, %eax
+cmovneq %rax, %r13
+testb $1, %cl
+movzbl %dl, %ecx
+movl $1, %eax
+cmovneq %rax, %rcx
+movq %rcx, 40(%rsp)
+movq 152(%rsp), %rax
+addq %rax, 144(%rsp)
+jb .LBB1634_126
+movabsq $9223372036854775793, %rax
+addq $15, %rax
+movq %rax, 560(%rsp)
+leaq 560(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged16PagedFreezeErrorEBH_
+movl $400, %edx
+leaq 560(%rsp), %rdi
+leaq 1104(%rsp), %rsi
+callq *memcpy@GOTPCREL(%rip)
+movq 272(%rsp), %rax
+movq 16(%rsp), %rdx
+movq %rdx, 960(%rsp)
+movl $3, 976(%rsp)
+movq 160(%rsp), %rsi
+movq %rsi, %rcx
+shrq $48, %rcx
+movb %cl, 1006(%rsp)
+movq %rsi, %rcx
+shrq $32, %rcx
+movw %cx, 1004(%rsp)
+movl %esi, 1000(%rsp)
+movq 152(%rsp), %rcx
+movq %rcx, 984(%rsp)
+movq %rax, 992(%rsp)
+cmpq 208(%rsp), %rdx
+jne .LBB1634_67
+leaq 208(%rsp), %rdi
+callq *_RNvMs7_NtCsdf08ABbzq28_5alloc7raw_vecINtB5_6RawVecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotE8grow_oneBS_@GOTPCREL(%rip)
+movq 216(%rsp), %rax
+movq %rax, 48(%rsp)
+imulq $448, 16(%rsp), %rdi
+addq 48(%rsp), %rdi
+movl $448, %edx
+leaq 560(%rsp), %rsi
+callq *memcpy@GOTPCREL(%rip)
+movq 72(%rsp), %rax
+movq %rax, 224(%rsp)
+movq 8(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_69
+leaq 88(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+orq %r14, %rbp
+addq 32(%rsp), %rbp
+orq %r12, %rbp
+orq %rbx, %rbp
+orq %r13, %rbp
+orq 40(%rsp), %rbp
+movq 72(%rsp), %rax
+movq %rax, %rbx
+movq %rbp, %rcx
+cmpq 280(%rsp), %rax
+movq 48(%rsp), %r12
+movq 384(%rsp), %rax
+leaq 560(%rsp), %r14
+leaq 440(%rsp), %r15
+jne .LBB1634_11
+jmp .LBB1634_71
+movq $0, 72(%rsp)
+movq $0, 144(%rsp)
+xorl %ebp, %ebp
+movb $1, %r13b
+movq 168(%rsp), %rdi
+vzeroupper 
+callq *408(%rsp)
+movabsq $9223372036854775793, %rbx
+cmpq 64(%rsp), %rax
+jne .LBB1634_79
+movq 168(%rsp), %rdi
+callq *416(%rsp)
+movq 280(%rsp), %rcx
+cmpq %rcx, %rax
+jne .LBB1634_88
+xorl %r13d, %r13d
+leaq 208(%rsp), %rdi
+callq _RNvMs_NtCsdf08ABbzq28_5alloc3vecINtB4_3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotE16into_boxed_sliceBK_
+movq %rax, %r15
+movq %rdx, %r14
+leaq 560(%rsp), %rdi
+movq %rax, %rsi
+callq _RNvMs_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11graph_indexNtB4_14GraphPageIndex6derive
+vmovups 440(%rsp), %ymm0
+vmovups 472(%rsp), %ymm1
+vmovups 504(%rsp), %ymm2
+vmovups 528(%rsp), %ymm3
+movq 24(%rsp), %rcx
+vmovups %ymm3, 88(%rcx)
+vmovups %ymm2, 64(%rcx)
+vmovups %ymm1, 32(%rcx)
+vmovups %ymm0, (%rcx)
+vmovups 560(%rsp), %ymm0
+vmovups 592(%rsp), %ymm1
+vmovups 624(%rsp), %ymm2
+vmovups 656(%rsp), %ymm3
+vmovups %ymm0, 152(%rcx)
+vmovups %ymm1, 184(%rcx)
+vmovups %ymm2, 216(%rcx)
+vmovups %ymm3, 248(%rcx)
+vmovups 688(%rsp), %ymm0
+vmovups %ymm0, 280(%rcx)
+vmovups 720(%rsp), %ymm0
+vmovups %ymm0, 312(%rcx)
+movq %r15, 120(%rcx)
+movq %r14, 128(%rcx)
+movq 176(%rsp), %rax
+movq %rax, 136(%rcx)
+movq 392(%rsp), %rax
+movq %rax, 144(%rcx)
+movq 64(%rsp), %rax
+movq %rax, 344(%rcx)
+movq 144(%rsp), %rax
+movq %rax, 352(%rcx)
+movq %rbp, %rax
+shrq $48, %rax
+movb %al, 366(%rcx)
+movq %rbp, %rax
+shrq $32, %rax
+movw %ax, 364(%rcx)
+movl %ebp, 360(%rcx)
+movq 352(%rsp), %rdi
+movq 360(%rsp), %rsi
+vzeroupper 
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+movq 320(%rsp), %rdi
+movq 328(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+movq 288(%rsp), %rdi
+movq 296(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+jmp .LBB1634_114
+movq %rdx, %r8
+movq %r13, 96(%rsp)
+movq %rbp, 104(%rsp)
+movq %r12, 112(%rsp)
+movq %r14, 120(%rsp)
+movq %rdx, 128(%rsp)
+movb $0, 136(%rsp)
+leaq 560(%rsp), %rdi
+leaq 192(%rsp), %rsi
+leaq 440(%rsp), %rdx
+leaq 96(%rsp), %rcx
+xorl %r9d, %r9d
+callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+jmp .LBB1634_82
+addq $16, %rbx
+jmp .LBB1634_89
+movq %rdx, %r8
+movq %r12, 96(%rsp)
+movq %r13, 104(%rsp)
+movq %rbp, 112(%rsp)
+movq %r14, 120(%rsp)
+movq %rdx, 128(%rsp)
+movb $1, 136(%rsp)
+leaq 560(%rsp), %rdi
+leaq 192(%rsp), %rsi
+leaq 440(%rsp), %rdx
+leaq 96(%rsp), %rcx
+movl $1, %r9d
+callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+jmp .LBB1634_82
+movq %rdx, %r8
+movq %r13, 96(%rsp)
+movq %rbp, 104(%rsp)
+movq %rbx, 112(%rsp)
+movq %r14, 120(%rsp)
+movq %rdx, 128(%rsp)
+movb $2, 136(%rsp)
+leaq 560(%rsp), %rdi
+leaq 192(%rsp), %rsi
+leaq 440(%rsp), %rdx
+leaq 96(%rsp), %rcx
+movl $2, %r9d
+callq _RNCNvMs3_NtNtCskgWIz7JHH9v_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+vmovups 584(%rsp), %ymm0
+movq 24(%rsp), %rax
+vmovups %ymm0, 32(%rax)
+vmovups 560(%rsp), %ymm0
+vmovups %ymm0, 8(%rax)
+movq $-1, (%rax)
+movq 48(%rsp), %r12
+movq 16(%rsp), %rbx
+movq 32(%rsp), %rsi
+shlq $3, %rsi
+movl $8, %edx
+movq %r15, %rdi
+vzeroupper 
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 1496(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_86
+movq 1488(%rsp), %rdi
+shlq $4, %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 1104(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summary11PageSummaryEBJ_
+movq 8(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_90
+leaq 88(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+jmp .LBB1634_90
+addq $17, %rbx
+movq %rcx, 64(%rsp)
+movq 24(%rsp), %rcx
+movq %rbx, 8(%rcx)
+movq 64(%rsp), %rdx
+movq %rdx, 16(%rcx)
+movq %rax, 24(%rcx)
+movq $-1, (%rcx)
+movq 72(%rsp), %rbx
+movq 360(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_93
+leaq (,%rsi,8), %rax
+leaq (%rax,%rax,4), %rax
+andq $-16, %rax
+addq %rax, %rsi
+addq $65, %rsi
+je .LBB1634_93
+movq 352(%rsp), %rdi
+subq %rax, %rdi
+addq $-48, %rdi
+movl $16, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 328(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_96
+leaq (,%rsi,8), %rax
+leaq (%rax,%rax,4), %rax
+andq $-16, %rax
+addq %rax, %rsi
+addq $65, %rsi
+je .LBB1634_96
+movq 320(%rsp), %rdi
+subq %rax, %rdi
+addq $-48, %rdi
+movl $16, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 296(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_99
+leaq (,%rsi,8), %rax
+leaq (%rax,%rax,4), %rax
+andq $-16, %rax
+addq %rax, %rsi
+addq $65, %rsi
+je .LBB1634_99
+movq 288(%rsp), %rdi
+subq %rax, %rdi
+addq $-48, %rdi
+movl $16, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+testq %rbx, %rbx
+je .LBB1634_103
+movl $1, %r15d
+subq %rbx, %r15
+movq %r12, %r14
+movq %r14, %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_
+incq %r15
+addq $448, %r14
+cmpq $1, %r15
+jne .LBB1634_101
+movq 208(%rsp), %rax
+testq %rax, %rax
+je .LBB1634_105
+imulq $448, %rax, %rsi
+movl $8, %edx
+movq %r12, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 440(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_107
+movq 448(%rsp), %rdi
+movl $1, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 464(%rsp), %rax
+testq %rax, %rax
+je .LBB1634_109
+movq 472(%rsp), %rdi
+shlq $3, %rax
+leaq (%rax,%rax,4), %rsi
+movl $8, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq 496(%rsp), %rax
+testq %rax, %rax
+je .LBB1634_111
+movq 488(%rsp), %rdi
+leaq (,%rax,8), %rcx
+andq $-16, %rcx
+leaq (%rcx,%rax), %rsi
+addq $33, %rsi
+subq %rcx, %rdi
+addq $-16, %rdi
+movl $16, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+leaq 520(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtCskEFv3nc5qE4_3std4sync9once_lock8OnceLockINtNtNtNtBI_11collections4hash3map7HashMapyINtNtCsdf08ABbzq28_5alloc3vec3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global12GlobalTermIdENtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEEB2I_
+movq 176(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_114
+leaq 424(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcDNtNtCslK5Drzrx8K4_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCskgWIz7JHH9v_11purrdf_core@GOTPCREL(%rip)
+movq 24(%rsp), %rax
+addq $1512, %rsp
+popq %rbx
+popq %r12
+popq %r13
+popq %r14
+popq %r15
+popq %rbp
+retq 
+movq 608(%rsp), %rcx
+vmovups 592(%rsp), %xmm0
+movq 24(%rsp), %rdx
+vmovups %xmm0, 40(%rdx)
+movq %rcx, 56(%rdx)
+movq 1120(%rsp), %rcx
+movq %rcx, 32(%rdx)
+vmovaps 1104(%rsp), %xmm0
+vmovups %xmm0, 16(%rdx)
+movq %rax, 8(%rdx)
+movq $-1, (%rdx)
+jmp .LBB1634_90
+movq 64(%rsp), %r14
+movq %r14, 232(%rsp)
+movq %rbx, 96(%rsp)
+leaq 96(%rsp), %rax
+movq %rax, 1104(%rsp)
+movq _RNvXs_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8providerNtB4_14PageGenerationNtNtCslK5Drzrx8K4_4core3fmt7Display3fmt@GOTPCREL(%rip), %rax
+movq %rax, 1112(%rsp)
+leaq 232(%rsp), %rcx
+movq %rcx, 1120(%rsp)
+movq %rax, 1128(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1089(%rip), %rsi
+leaq 560(%rsp), %rdi
+leaq 1104(%rsp), %rdx
+callq *_RNvNvNtCsdf08ABbzq28_5alloc3fmt6format12format_inner@GOTPCREL(%rip)
+movq 16(%rsp), %rax
+movq %rax, 608(%rsp)
+movb $1, 584(%rsp)
+movq %r14, 592(%rsp)
+movq %rbx, 600(%rsp)
+movq %rax, %rbx
+movzbl 584(%rsp), %eax
+movq 24(%rsp), %rcx
+movb %al, 32(%rcx)
+movl 585(%rsp), %eax
+movl %eax, 33(%rcx)
+movzwl 589(%rsp), %eax
+movw %ax, 37(%rcx)
+movzbl 591(%rsp), %eax
+movb %al, 39(%rcx)
+movq 592(%rsp), %rax
+movq %rax, 40(%rcx)
+movq 600(%rsp), %rax
+movq %rax, 48(%rcx)
+movq 608(%rsp), %rax
+vmovups 560(%rsp), %xmm0
+vmovups %xmm0, 8(%rcx)
+movq %rax, 56(%rcx)
+movq 576(%rsp), %rax
+movq %rax, 24(%rcx)
+movzbl 584(%rsp), %eax
+movb %al, 32(%rcx)
+movl 585(%rsp), %eax
+movl %eax, 33(%rcx)
+movzwl 589(%rsp), %eax
+movw %ax, 37(%rcx)
+movzbl 591(%rsp), %eax
+movb %al, 39(%rcx)
+movq $-1, (%rcx)
+movq 256(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_90
+movb $1, %r13b
+leaq 256(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+jmp .LBB1634_90
+movq 576(%rsp), %r15
+movq 584(%rsp), %rdx
+movq $0, 232(%rsp)
+movq $1, 240(%rsp)
+movq $0, 248(%rsp)
+movq $1610612768, 112(%rsp)
+leaq 232(%rsp), %rax
+movq %rax, 96(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.642(%rip), %rax
+movq %rax, 104(%rsp)
+leaq 96(%rsp), %rdi
+movq %r15, %rsi
+callq *_RNvMsa_NtCslK5Drzrx8K4_4core3fmtNtB5_9Formatter9write_str@GOTPCREL(%rip)
+testb %al, %al
+movq 16(%rsp), %rbx
+jne .LBB1634_127
+movq 248(%rsp), %rax
+movq %rax, 1088(%rsp)
+vmovups 232(%rsp), %xmm0
+vmovaps %xmm0, 1072(%rsp)
+testq %r14, %r14
+je .LBB1634_123
+movl $1, %edx
+movq %r15, %rdi
+movq %r14, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+vmovaps 1072(%rsp), %xmm0
+vmovaps %xmm0, 1008(%rsp)
+movq 1088(%rsp), %rax
+movq %rax, 1024(%rsp)
+movq 24(%rsp), %rcx
+vmovups %xmm0, 16(%rcx)
+movq %rax, 32(%rcx)
+movabsq $9223372036854775793, %rax
+addq $19, %rax
+movq %rax, 8(%rcx)
+movq %rbx, 40(%rcx)
+movq $-1, (%rcx)
+movq 8(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_90
+leaq 88(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+jmp .LBB1634_90
+movq 8(%rsp), %rax
+movq 96(%rax), %rax
+movq %rax, 96(%rsp)
+leaq 96(%rsp), %rax
+movq %rax, 560(%rsp)
+movq _RNvXsi_NtNtNtCslK5Drzrx8K4_4core3fmt3num3impjNtB9_7Display3fmt@GOTPCREL(%rip), %rax
+movq %rax, 568(%rsp)
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1456(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.1457(%rip), %rdx
+leaq 560(%rsp), %rsi
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking9panic_fmt@GOTPCREL(%rip)
+jmp .LBB1634_138
+movabsq $9223372036854775793, %rcx
+addq $15, %rcx
+movq 24(%rsp), %rax
+movq %rcx, 8(%rax)
+movq $-1, (%rax)
+testq %rsi, %rsi
+movq 48(%rsp), %r12
+movq 16(%rsp), %rbx
+jne .LBB1634_83
+jmp .LBB1634_84
+movq %rdx, %rdi
+jmp .LBB1634_137
+movq %rax, %rdi
+jmp .LBB1634_137
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.3728(%rip), %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.728(%rip), %rcx
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.3730(%rip), %r8
+leaq 63(%rsp), %rdx
+movl $55, %esi
+callq *_RNvNtCslK5Drzrx8K4_4core6result13unwrap_failed@GOTPCREL(%rip)
+jmp .LBB1634_138
+movq %rcx, %rdi
+leaq .Lanon.63e1a61e7141635ef6e103ddf8cc2986.352(%rip), %rdx
+movq 32(%rsp), %rsi
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking18panic_bounds_check@GOTPCREL(%rip)
+ud2 
+movq %rax, %rbx
+movq 256(%rsp), %rax
+lock decq	(%rax)
+movb $1, %r13b
+jne .LBB1634_171
+leaq 256(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+jmp .LBB1634_171
+movq %rax, %rbx
+movq %r15, %rdi
+movq %r14, %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtCsdf08ABbzq28_5alloc5boxed3BoxSNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEEB1h_
+xorl %r13d, %r13d
+jmp .LBB1634_171
+jmp .LBB1634_150
+movq %rax, %rbx
+leaq 560(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_
+jmp .LBB1634_169
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+jmp .LBB1634_150
+movq %rax, %rbx
+jmp .LBB1634_171
+movq %rax, %rbx
+jmp .LBB1634_169
+movq %rax, %rbx
+movb $1, %r13b
+jmp .LBB1634_171
+jmp .LBB1634_168
+jmp .LBB1634_168
+movq %rax, %rbx
+jmp .LBB1634_175
+jmp .LBB1634_168
+jmp .LBB1634_168
+movq %rax, %rbx
+movq 232(%rsp), %rsi
+testq %rsi, %rsi
+je .LBB1634_158
+movq 240(%rsp), %rdi
+movl $1, %edx
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+testq %r14, %r14
+je .LBB1634_169
+movl $1, %edx
+movq %r15, %rdi
+movq %r14, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+jmp .LBB1634_169
+movq %rax, %rbx
+testq %r15, %r15
+je .LBB1634_164
+negq %r15
+addq $448, %r14
+movq %r14, %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEBH_
+addq $448, %r14
+decq %r15
+jne .LBB1634_162
+movq 208(%rsp), %rax
+testq %rax, %rax
+je .LBB1634_174
+imulq $448, %rax, %rsi
+movl $8, %edx
+movq %r12, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+jmp .LBB1634_174
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+movq %rax, %rbx
+leaq 1104(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translation15PageTranslationEBJ_
+movq 8(%rsp), %rax
+lock decq	(%rax)
+movb $1, %r13b
+jne .LBB1634_171
+leaq 88(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+movq 352(%rsp), %rdi
+movq 360(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+movq 320(%rsp), %rdi
+movq 328(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+movq 288(%rsp), %rdi
+movq 296(%rsp), %rsi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtNtNtCskEFv3nc5qE4_3std11collections4hash3map7HashMapNtNtNtCskgWIz7JHH9v_11purrdf_core2ir7mutable7QuadKeyyNtNtCsbnavtP7nVTc_11purrdf_hash5fixed10FixedStateEEB1C_
+testb %r13b, %r13b
+je .LBB1634_174
+leaq 208(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueINtNtCsdf08ABbzq28_5alloc3vec3VecNtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged8PageSlotEEB1e_
+jmp .LBB1634_174
+movq %rax, %rbx
+leaq 440(%rsp), %rdi
+callq _RINvNtCslK5Drzrx8K4_4core3ptr9drop_glueNtNtNtCskgWIz7JHH9v_11purrdf_core2ir6global16GlobalDictionaryEBH_
+movq 176(%rsp), %rax
+lock decq	(%rax)
+jne .LBB1634_177
+leaq 424(%rsp), %rdi
+callq *_RNvMsn_NtNtCsdf08ABbzq28_5alloc3rcs3arcINtB5_3ArcDNtNtCslK5Drzrx8K4_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCskgWIz7JHH9v_11purrdf_core@GOTPCREL(%rip)
+movq %rbx, %rdi
+callq _Unwind_Resume@PLT
+callq *_RNvNtCslK5Drzrx8K4_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+
+{"fma": 0, "graph": 1, "instructions": 91, "path": "<purrdf_core::ir::paged::translation::PageTranslation as core::clone::Clone>::clone", "relaxed": 0, "selected": false, "symbol": "_RNvXs0_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged11translationNtB5_15PageTranslationNtNtCslK5Drzrx8K4_4core5clone5Clone5clone", "vector_ops": 0, "work_mnemonics": []}
+pushq %rbp
+pushq %r15
+pushq %r14
+pushq %r13
+pushq %r12
+pushq %rbx
+subq $392, %rsp
+movq %rsi, %r13
+movq %rdi, %r15
+movq 376(%rsi), %rax
+leaq (,%rax,8), %rbx
+movl $8, %r12d
+movl $8, %r14d
+movq %rax, (%rsp)
+testq %rax, %rax
+je .LBB2568_3
+movq 368(%r13), %rbp
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB2568_16
+movq %rax, %r14
+movq %rax, %rdi
+movq %rbp, %rsi
+movq %rbx, %rdx
+callq *memcpy@GOTPCREL(%rip)
+movq %rbx, 8(%rsp)
+movq 392(%r13), %rbp
+movq %rbp, %rbx
+shlq $4, %rbx
+testq %rbp, %rbp
+je .LBB2568_12
+movq 384(%r13), %rax
+movq %rax, 16(%rsp)
+callq *_RNvCsjMmYDGKcCRn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+movl $8, %esi
+movq %rbx, %rdi
+callq *_RNvCsjMmYDGKcCRn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+testq %rax, %rax
+je .LBB2568_5
+movq %rax, %r12
+movq %rax, %rdi
+movq 16(%rsp), %rsi
+movq %rbx, %rdx
+callq *memcpy@GOTPCREL(%rip)
+leaq 24(%rsp), %rdi
+movq %r13, %rsi
+callq _RNvXsh_NtNtNtCskgWIz7JHH9v_11purrdf_core2ir5paged7summaryNtB5_11PageSummaryNtNtCslK5Drzrx8K4_4core5clone5Clone5clone
+movq %r14, 368(%r15)
+movq (%rsp), %rax
+movq %rax, 376(%r15)
+movq %r12, 384(%r15)
+movq %rbp, 392(%r15)
+leaq 24(%rsp), %rsi
+movl $368, %edx
+movq %r15, %rdi
+callq *memcpy@GOTPCREL(%rip)
+addq $392, %rsp
+popq %rbx
+popq %r12
+popq %r13
+popq %r14
+popq %r15
+popq %rbp
+retq 
+movl $8, %edi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+movl $8, %edi
+movq %rbx, %rsi
+callq *_RNvNtCsdf08ABbzq28_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+ud2 
+movq %rax, %r15
+jmp .LBB2568_8
+movq %rax, %r15
+testq %rbp, %rbp
+je .LBB2568_8
+movl $8, %edx
+movq %r12, %rdi
+movq %rbx, %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+cmpq $0, (%rsp)
+je .LBB2568_10
+movl $8, %edx
+movq %r14, %rdi
+movq 8(%rsp), %rsi
+callq *_RNvCsjMmYDGKcCRn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+movq %r15, %rdi
+callq _Unwind_Resume@PLT
