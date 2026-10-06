@@ -1484,3 +1484,103 @@ fn a_backreference_blowup_pattern_shape_still_refuses_beside_a_conforming_neighb
         assert!(report.conforms && report.results.is_empty(), "{profile:?}");
     }
 }
+
+#[test]
+fn counted_pattern_shapes_validate_at_the_production_defaults_like_the_compatibility_engine() {
+    // Each shape was refused by the native matcher at these sizes: a counted
+    // group repeated from every start kept one thread per distinct count.
+    let pairs = "ab".repeat(1 << 19);
+    let mixed = "abbaab".repeat((4 << 20) / 6);
+    let prose = purrdf_testkit::text::word_prose(8 << 20);
+    let values = [
+        ("pairs_128k", &pairs[..128 << 10], "c"),
+        ("pairs", pairs.as_str(), "c"),
+        ("quads", &"abcd".repeat(1 << 18), "e"),
+        ("mixed_400k", &mixed[..400 << 10], "c"),
+        ("mixed_800k", &mixed[..800 << 10], "c"),
+        ("mixed", mixed.as_str(), "c"),
+        (
+            "prose_4m",
+            &prose[..prose[..4 << 20].rfind(' ').unwrap()],
+            " zzz",
+        ),
+        ("prose", prose.as_str(), " zzz"),
+    ];
+    let mut body = String::from("ex:empty ex:p \"\" .\n");
+    for (subject, value, suffix) in &values {
+        writeln!(body, "ex:{subject} ex:p \"{value}\" .").unwrap();
+        writeln!(body, "ex:{subject}_completed ex:p \"{value}{suffix}\" .").unwrap();
+    }
+    let data = turtle::data(PREFIXES, &body);
+    // The native pattern, the compatibility pattern with the same matches, and
+    // the plain subject whose completed neighbour conforms.
+    let cases = [
+        ("(ab){1,1000}c", "(ab){1,1000}c", "pairs_128k"),
+        ("(ab){2,50}c", "(ab){2,50}c", "pairs"),
+        ("(ab){1,100}c", "(ab){1,100}c", "pairs"),
+        ("(ab|cd){1,20}e", "(ab|cd){1,20}e", "quads"),
+        ("((a|b){3}){5,9}c", "((a|b){3}){5,9}c", "mixed_400k"),
+        ("((a|b){2}){2,5}c", "((a|b){2}){2,5}c", "mixed_800k"),
+        ("(a|b){1,30}c", "(a|b){1,30}c", "mixed"),
+        ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
+        (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", "prose_4m"),
+        ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+        ("(ab){1,100000}c", "abc", "pairs_128k"),
+    ];
+    let graph = |native: bool| {
+        let mut shapes = String::new();
+        for (index, (pattern, compatible, subject)) in cases.iter().enumerate() {
+            let pattern = if native { pattern } else { compatible };
+            for (suffix, focus) in [("", *subject), ("c", &format!("{subject}_completed"))] {
+                writeln!(
+                    shapes,
+                    "ex:S{index}{suffix} a sh:NodeShape; sh:targetNode ex:{focus}; \
+                     sh:property ex:P{index}{suffix} .
+                    ex:P{index}{suffix} sh:path ex:p; sh:pattern \"{}\" .",
+                    pattern.replace('\\', "\\\\")
+                )
+                .unwrap();
+            }
+        }
+        if native {
+            writeln!(
+                shapes,
+                "ex:Empty a sh:NodeShape; sh:targetNode ex:empty, ex:pairs; \
+                 sh:property ex:PEmpty .
+                ex:PEmpty sh:path ex:p; sh:pattern \"^(a?){{18446744073709551616}}$\" ."
+            )
+            .unwrap();
+        }
+        Arc::new(turtle::loads(PREFIXES, &shapes))
+    };
+    // Every plain subject fails its pattern, every completed one conforms, and
+    // the nullable whole fails only the non-empty subject.
+    let mut expected: Vec<String> = (0..cases.len())
+        .map(|index| format!("{:?}", ex(&format!("P{index}"))))
+        .collect();
+    expected.sort();
+    let compatibility = PreparedShapes::new(graph(false))
+        .bind_shared_dataset(Arc::clone(&data))
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert_eq!(
+        failing_pattern_shapes(&compatibility),
+        expected,
+        "compatibility"
+    );
+    expected.push(format!("{:?}", ex("PEmpty")));
+    expected.sort();
+    for profile in Profile::ALL {
+        let native = validate_dataset(&data, graph(true), profile, Limits::new())
+            .unwrap_or_else(|error| panic!("{profile:?}: {error}"));
+        assert_eq!(failing_pattern_shapes(&native), expected, "{profile:?}");
+        let empty = native
+            .results
+            .iter()
+            .filter(|result| format!("{:?}", result.source_shape) == format!("{:?}", ex("PEmpty")))
+            .map(|result| format!("{:?}", result.focus_node))
+            .collect::<Vec<_>>();
+        assert_eq!(empty, [format!("{:?}", ex("pairs"))], "{profile:?}");
+    }
+}

@@ -478,3 +478,87 @@ fn a_backreference_blowup_pattern_still_refuses_beside_a_conformant_neighbour() 
         );
     }
 }
+
+#[test]
+fn counted_repetition_patterns_conform_at_the_production_defaults_like_the_compatibility_engine() {
+    // Each shape was refused by the native matcher at these sizes: a counted
+    // group repeated from every start kept one thread per distinct count.
+    let data = empty_dataset();
+    let options = ValidationOptions::default();
+    let pairs = "ab".repeat(1 << 19);
+    let mixed = "abbaab".repeat((4 << 20) / 6);
+    let prose = purrdf_testkit::text::word_prose(8 << 20);
+    let prose_4m = &prose[..prose[..4 << 20].rfind(' ').unwrap()];
+    let quads = "abcd".repeat(1 << 18);
+    // A count the compatibility engine refuses to build is compared through the
+    // pattern with the same matches.
+    for (pattern, compatible, value, suffix) in [
+        ("(ab){1,1000}c", "(ab){1,1000}c", &pairs[..128 << 10], "c"),
+        ("(ab){2,50}c", "(ab){2,50}c", pairs.as_str(), "c"),
+        ("(ab){1,100}c", "(ab){1,100}c", pairs.as_str(), "c"),
+        ("(ab|cd){1,20}e", "(ab|cd){1,20}e", quads.as_str(), "e"),
+        (
+            "((a|b){3}){5,9}c",
+            "((a|b){3}){5,9}c",
+            &mixed[..400 << 10],
+            "c",
+        ),
+        (
+            "((a|b){2}){2,5}c",
+            "((a|b){2}){2,5}c",
+            &mixed[..800 << 10],
+            "c",
+        ),
+        ("(a|b){1,30}c", "(a|b){1,30}c", mixed.as_str(), "c"),
+        ("(a|b){3,9}c", "(a|b){3,9}c", mixed.as_str(), "c"),
+        (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", prose_4m, " zzz"),
+        (
+            "node.*graph.*zzz",
+            "node.*graph.*zzz",
+            prose.as_str(),
+            " zzz",
+        ),
+        ("(ab){1,100000}c", "abc", &pairs[..128 << 10], "c"),
+        ("^(a?){18446744073709551616}$", "^a*$", "b", ""),
+    ] {
+        let completed = format!("{value}{suffix}");
+        for (text, expected) in [(value, false), (completed.as_str(), !suffix.is_empty())] {
+            let map = [association(text)];
+            assert_eq!(
+                validate(&schema(&node(compatible, "")), &data, &map).all_conformant(),
+                expected,
+                "compatibility {compatible} over {}",
+                text.len()
+            );
+            let parsed = schema(&node(pattern, ""));
+            for profile in Profile::ALL {
+                let result =
+                    validate_with_xpath(&parsed, &data, &map, &options, profile, Limits::new())
+                        .unwrap_or_else(|error| panic!("{profile:?} {pattern}: {error}"));
+                assert_eq!(
+                    result.all_conformant(),
+                    expected,
+                    "{profile:?} {pattern} over {}",
+                    text.len()
+                );
+            }
+        }
+    }
+    // A nullable body required more than u64 times conforms on the empty string.
+    let parsed = schema(&node("^(a?){18446744073709551616}$", ""));
+    for profile in Profile::ALL {
+        assert!(
+            validate_with_xpath(
+                &parsed,
+                &data,
+                &[association("")],
+                &options,
+                profile,
+                Limits::new()
+            )
+            .unwrap()
+            .all_conformant(),
+            "{profile:?}"
+        );
+    }
+}

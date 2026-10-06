@@ -642,3 +642,113 @@ def test_exact_profile_name_beside_the_refused_ones_is_accepted(door: str) -> No
     REFUSING_DOORS[door](XPATH31)
     REFUSING_DOORS[door](XPATH20)
     REFUSING_DOORS[door](None)
+
+
+# ── Counted repetitions answer at the production defaults ─────────────────────
+
+PROSE_WORDS = (
+    "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+)
+
+
+@pytest.fixture(scope="module")
+def counted_values() -> dict[str, str]:
+    """The inputs each counted shape was refused over, by name, and their completions.
+
+    Deterministic lowercase prose joins words by single spaces; ``mixed`` is a run of
+    ``a`` and ``b`` that is not a repetition of ``ab``.
+    """
+    words: list[str] = []
+    length = 0
+    while length < 8 << 20:
+        index = len(words)
+        words.append(PROSE_WORDS[(index * 7 + index // 3) % len(PROSE_WORDS)])
+        length += len(words[-1]) + 1
+    prose = " ".join(words)
+    pairs = "ab" * (1 << 19)
+    mixed = "abbaab" * ((4 << 20) // 6)
+    plain = {
+        "pairs_128k": (pairs[: 128 << 10], "c"),
+        "pairs": (pairs, "c"),
+        "quads": ("abcd" * (1 << 18), "e"),
+        "mixed_400k": (mixed[: 400 << 10], "c"),
+        "mixed_800k": (mixed[: 800 << 10], "c"),
+        "mixed": (mixed, "c"),
+        "prose_4m": (prose[: prose[: 4 << 20].rfind(" ")], " zzz"),
+        "prose": (prose, " zzz"),
+    }
+    values = {"empty": ""}
+    for name, (value, suffix) in plain.items():
+        values[name] = value
+        values[f"{name}_completed"] = value + suffix
+    return values
+
+
+#: (native pattern, compatibility pattern with the same matches, plain subject).
+#: Each was refused by the native matcher at its subject's size: a counted group
+#: repeated from every start kept one thread per distinct count. A count the
+#: compatibility law refuses to build is compared through its equivalent.
+COUNTED = (
+    ("(ab){1,1000}c", "(ab){1,1000}c", "pairs_128k"),
+    ("(ab){2,50}c", "(ab){2,50}c", "pairs"),
+    ("(ab){1,100}c", "(ab){1,100}c", "pairs"),
+    ("(ab|cd){1,20}e", "(ab|cd){1,20}e", "quads"),
+    ("((a|b){3}){5,9}c", "((a|b){3}){5,9}c", "mixed_400k"),
+    ("((a|b){2}){2,5}c", "((a|b){2}){2,5}c", "mixed_800k"),
+    ("(a|b){1,30}c", "(a|b){1,30}c", "mixed"),
+    ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
+    ("(\\w+\\s){3,5}zzz", "(\\w+\\s){3,5}zzz", "prose_4m"),
+    ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+    ("(ab){1,100000}c", "abc", "pairs_128k"),
+)
+
+
+def counted_answers(values: dict[str, str], law: str | None) -> list[str]:
+    """Each counted pattern decided on its plain and completed subjects, in one query."""
+    store = purrdf.Store()
+    store.load(
+        "".join(
+            f"<{EX}{name}> {P} {json.dumps(value)} .\n" for name, value in values.items()
+        ).encode(),
+        purrdf.RdfFormat.N_TRIPLES,
+    )
+    rows = []
+    for index, (pattern, compatible, subject) in enumerate(COUNTED):
+        literal = sparql_string(pattern if law else compatible)
+        rows += [f"({index} <{EX}{subject}{tail}> {literal})" for tail in ("", "_completed")]
+    nullable = "^(a?){18446744073709551616}$" if law else "^a*$"
+    rows += [f"({len(COUNTED)} <{EX}{name}> {sparql_string(nullable)})" for name in ("empty", "pairs")]
+    text = (
+        f"SELECT ?r WHERE {{ VALUES (?i ?s ?p) {{ {' '.join(rows)} }} "
+        f"?s {P} ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i ?s"
+    )
+    result = store.query(text, xpath_regex=law)
+    assert isinstance(result, purrdf.QuerySolutions)
+    return [lexical(row["r"]) for row in result]
+
+
+@pytest.mark.parametrize("law", LAWS)
+def test_counted_repetitions_answer_like_the_compatibility_law(
+    counted_values: dict[str, str], law: str
+) -> None:
+    # Plain subjects fail, completed ones match, and the empty string meets a
+    # nullable whole required more than u64 times.
+    expected = ["false", "true"] * len(COUNTED) + ["true", "false"]
+    assert counted_answers(counted_values, None) == expected
+    assert counted_answers(counted_values, law) == expected
+
+
+@pytest.mark.parametrize("law", LAWS)
+@pytest.mark.parametrize(
+    ("pattern", "compatible", "subject"),
+    [COUNTED[0], COUNTED[4], COUNTED[6], COUNTED[8], COUNTED[10]],
+)
+def test_counted_repetitions_validate_like_the_compatibility_law(
+    counted_values: dict[str, str], law: str, pattern: str, compatible: str, subject: str
+) -> None:
+    for name, conforms in ((subject, False), (f"{subject}_completed", True)):
+        value = counted_values[name]
+        assert shacl_validate(compatible, value, None)[0] is conforms
+        assert shacl_validate(pattern, value, law)[0] is conforms, name
+        assert shex_conformant(compatible, value, None) is conforms
+        assert shex_conformant(pattern, value, law) is conforms, name

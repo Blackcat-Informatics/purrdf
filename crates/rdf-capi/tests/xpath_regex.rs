@@ -1385,3 +1385,110 @@ fn a_native_resource_refusal_is_an_error_status_never_an_empty_tool_answer() {
         }
     }
 }
+
+#[test]
+fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_engine() {
+    use std::fmt::Write as _;
+    // Each shape was refused by the native matcher at these sizes: a counted group
+    // repeated from every start kept one thread per distinct count.
+    let pairs = "ab".repeat(1 << 19);
+    let mixed = "abbaab".repeat((4 << 20) / 6);
+    let prose = purrdf_testkit::text::word_prose(8 << 20);
+    let plain = [
+        ("pairs_128k", &pairs[..128 << 10], "c"),
+        ("pairs", pairs.as_str(), "c"),
+        ("quads", &"abcd".repeat(1 << 18), "e"),
+        ("mixed_400k", &mixed[..400 << 10], "c"),
+        ("mixed_800k", &mixed[..800 << 10], "c"),
+        ("mixed", mixed.as_str(), "c"),
+        (
+            "prose_4m",
+            &prose[..prose[..4 << 20].rfind(' ').unwrap()],
+            " zzz",
+        ),
+        ("prose", prose.as_str(), " zzz"),
+    ];
+    let mut nt = String::from("<http://example.org/empty> <http://example.org/p> \"\" .\n");
+    for (subject, value, suffix) in &plain {
+        write!(
+            nt,
+            "<http://example.org/{subject}> <http://example.org/p> \"{value}\" .\n\
+             <http://example.org/{subject}_completed> <http://example.org/p> \"{value}{suffix}\" .\n"
+        )
+        .unwrap();
+    }
+    let data = dataset(&nt);
+    // A count the compatibility engine refuses to build is compared through the
+    // pattern with the same matches.
+    let cases = [
+        ("(ab){1,1000}c", "(ab){1,1000}c", "pairs_128k"),
+        ("(ab){2,50}c", "(ab){2,50}c", "pairs"),
+        ("(ab){1,100}c", "(ab){1,100}c", "pairs"),
+        ("(ab|cd){1,20}e", "(ab|cd){1,20}e", "quads"),
+        ("((a|b){3}){5,9}c", "((a|b){3}){5,9}c", "mixed_400k"),
+        ("((a|b){2}){2,5}c", "((a|b){2}){2,5}c", "mixed_800k"),
+        ("(a|b){1,30}c", "(a|b){1,30}c", "mixed"),
+        ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
+        (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", "prose_4m"),
+        ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+        ("(ab){1,100000}c", "abc", "pairs_128k"),
+    ];
+    // Each pattern decides its plain and completed subjects, in one SRJ answer.
+    let answers = |regex: Option<&str>, native: bool| -> Vec<String> {
+        let mut rows = String::new();
+        for (index, (pattern, compatible, subject)) in cases.iter().enumerate() {
+            let pattern =
+                purrdf_testkit::text::sparql_string(if native { pattern } else { compatible });
+            for focus in [(*subject).to_owned(), format!("{subject}_completed")] {
+                write!(rows, " ({index} <http://example.org/{focus}> {pattern})").unwrap();
+            }
+        }
+        write!(
+            rows,
+            " ({} <http://example.org/empty> {})",
+            cases.len(),
+            purrdf_testkit::text::sparql_string(if native {
+                "^(a?){18446744073709551616}$"
+            } else {
+                "^a*$"
+            })
+        )
+        .unwrap();
+        let query = CString::new(format!(
+            "SELECT ?r WHERE {{ VALUES (?i ?s ?p) {{{rows} }} \
+             ?s <http://example.org/p> ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i ?s"
+        ))
+        .expect("query");
+        let (_owned, regex) = profile_arg(regex);
+        let mut buffer = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_json_xpath_regex(
+                data,
+                query.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                regex,
+                &raw mut buffer,
+                &raw mut error,
+            )
+        };
+        assert!(status == PurrdfStatus::Ok as i32, "{:?}", unsafe {
+            take_failure(status, error)
+        });
+        json_first_column(&unsafe { take_buffer(buffer) })
+    };
+    // Plain subjects fail, completed subjects match, and the empty string meets a
+    // nullable whole required more than u64 times.
+    let expected: Vec<String> = (0..cases.len())
+        .flat_map(|_| ["false", "true"])
+        .chain(["true"])
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(answers(None, false), expected, "compatibility");
+    for law in [XPATH_20, XPATH_31] {
+        assert_eq!(answers(Some(law), true), expected, "{law}");
+    }
+    unsafe { purrdf_dataset_free(data) };
+}

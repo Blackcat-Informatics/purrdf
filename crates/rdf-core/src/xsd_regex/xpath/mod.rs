@@ -17,6 +17,7 @@ mod dated_names;
 mod r#match;
 mod pike;
 mod replace;
+mod sets;
 mod unicode_tables;
 
 pub use cache::PatternCache;
@@ -80,11 +81,13 @@ pub enum Resource {
     /// and program transitions.
     MatchSteps,
     /// Simultaneously pending alternative states: the backtracking machine's
-    /// pending alternatives, or the thread machine's distinct control states
-    /// at one input position.
+    /// pending alternatives, the thread machine's distinct control states at
+    /// one input position, or the set machine's entries at one input position.
     MatchStates,
     /// Cells in all live states, captures and continuations, including the
-    /// thread machine's thread lists, control-state table and work list.
+    /// thread machine's thread lists, control-state table and work list, and
+    /// the set machine's count sets, work list, state cache and match-start
+    /// marks.
     MatchSlots,
     /// UTF-8 bytes of replacement output.
     OutputBytes,
@@ -142,25 +145,50 @@ impl Limits {
     /// the matchers walk the program with. An oversized pattern is refused by
     /// its source bytes, before any parsing.
     ///
-    /// Matching first runs the backtracking machine: a literal or
-    /// first-character search spends about one step per scanned character, and
-    /// a greedy single-character run of any admitted length keeps one pending
-    /// state. A program without a backreference whose attempt spends more
-    /// than 16 steps per search start it has passed, 8 per input byte it has
-    /// examined and 16 per program node, or exceeds a live-storage bound,
-    /// continues on the linear-time thread machine, which spends about
-    /// 10 to 50 steps per byte whatever its repetition structure, and keeps a
-    /// few states and a few hundred cells for ordinary patterns independent of
-    /// the input length; the state and storage bounds therefore admit any
-    /// ordinary input. Only stored repetition counts multiply states: a
-    /// counted group repeated from many unanchored starts keeps one thread per
-    /// distinct count, and is refused by the state bound.
+    /// Matching first runs the backtracking machine. A program without a
+    /// backreference whose attempt spends more than 16 steps per search start
+    /// it has passed, 8 per input byte it has examined and 16 per program
+    /// node, or exceeds a live-storage bound, continues on the linear-time
+    /// machines; a program with a backreference stays on the backtracking
+    /// machine. Measured with the `native_xpath_large` bench group
+    /// (`crates/rdf-core/benches/xsd_regex.rs`, release build, one pinned
+    /// core), per input byte at these bounds:
     ///
-    /// The step bound is calibrated against the thread machine, at about 3 to
-    /// 6 ns per step: it admits such searches over 5 to 25 MB within a second
-    /// or two. A backtracking step costs about 10 to 13 ns, so exponential
-    /// backtracking, which only a backreference can still reach, is refused
-    /// within about three seconds of work.
+    /// * the backtracking machine spends 1.4 steps on a literal search
+    ///   through 1 MiB of filler and 2.0 on a greedy single-character run;
+    /// * the set machine spends 1.00 to 1.02 steps on every counted
+    ///   repetition the thread machine alone refused (`(ab){1,1000}c`,
+    ///   `(ab){2,50}c`, `(ab|cd){1,20}e`, `((a|b){3}){5,9}c`,
+    ///   `((a|b){2}){2,5}c`, `(a|b){1,30}c`, `(a|b){3,9}c`,
+    ///   `(\w+\s){3,5}zzz` over 128 KiB to 4 MiB) and on searches with
+    ///   several unbounded runs, as each position's state was seen before,
+    ///   whatever the number of live counts; `(a|b){100000}c`, whose live
+    ///   counts never repeat over 1 MiB, averages 10 steps, about 95 for each
+    ///   position whose state is new;
+    /// * the thread machine then runs the one start a match begins at, 10 to
+    ///   27 steps per byte of the match (`^(?:ab)*$` to `^(\w+\s)*\w+$`);
+    /// * an abandoned attempt has already spent up to 8: `node.*graph.*zzz`
+    ///   over 8 MiB of prose costs 9.0 steps per byte in all.
+    ///
+    /// They keep a few states and a few hundred cells for ordinary patterns
+    /// independent of the input length, beside one cell per 64 input bytes
+    /// marking match starts, so the state and storage bounds admit any
+    /// ordinary input. Within the one start, the thread machine still keeps
+    /// one thread per distinct count of a repetition whose iterations can end
+    /// at different positions (`(a|aa){1,1000}b` spends 20 million steps on
+    /// the 2,001-byte match closing 100,000 `a`), and one per count it
+    /// explores below a minimum above the
+    /// state bound when the body prefers the empty string
+    /// (`(|a){18446744073709551616}`), which the state bound refuses; whether
+    /// such a match exists is the set machine's answer either way.
+    ///
+    /// A step costs 3.2 to 11.2 ns in the thread machine, 5.4 to 11.4 ns in
+    /// the set machine (a cached position is one hash probe) and 6.2 to
+    /// 10.9 ns in the backtracking machine. The step bound therefore admits
+    /// the linear-time machines' searches over tens of MiB of input in a few
+    /// seconds at most, and refuses the exponential exploration that only a
+    /// backreference can still reach, `^(a|aa)*c\1$` over forty `a`, after
+    /// 2.7 s of work.
     #[must_use]
     pub const fn new() -> Self {
         Self {
