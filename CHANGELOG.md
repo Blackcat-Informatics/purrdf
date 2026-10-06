@@ -156,13 +156,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   witness that a nominal axiom (`D ⊑ {n}`, `D ⊑ {n, l}`) would absorb no longer
   mints a chain of witnesses of its own under a universal over a transitive
   role. At a tree node still to be identified with a nominal, a witness that
-  would itself await an identification waits until hyperresolution reaches a
+  could itself come to await an identification waits until hyperresolution reaches a
   fixpoint, and, when the identification is a choice, until that choice is
   made. Those ontologies used to answer `unknown` under `completeness
   budget-exhausted`; they now answer `true`. Nothing else waits, so a search
   in which no such chain can start takes the same rounds, nodes and branches
-  as before. Across 15,000 generated ontologies, every one that decided before
-  still decides, and 43 that ran out of budget now decide.
+  as it would without the wait. Across 15,000 generated ontologies, every one
+  that decided before still decides, and 43 that ran out of budget now decide.
+- **OWL-Direct certificate counters move; verdicts do not.** The decision core
+  saturates by delta: a round re-matches only what a change can reach, reads
+  cached transitive closures, and keeps blocking and the open-disjunction index
+  current incrementally rather than rescanning the graph. It derives in a
+  different order, so the certificate's `steps`, `peak-nodes` and
+  `disjunctions` change on some knowledge bases. Of 14,920 generated ontologies
+  that both 3.0.1 and this release decide, 642 report different figures: 516
+  in `steps` (339 higher, 177 lower), 379 in `peak-nodes` and 192 in
+  `disjunctions`. That count includes the witness wait above. No verdict
+  differs except the 27 that the transitive sub-role fix under Fixed corrects.
 - **The OWL-Direct work meter bills what a search reads.** A neighbourhood step
   is charged the edges indexed under its node plus one, not the whole graph's
   edge count. A choice beside a large saturated ABox therefore costs what it
