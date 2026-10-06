@@ -138,16 +138,11 @@ fn profile_arg(regex: Option<&str>) -> (Option<CString>, *const std::os::raw::c_
     (owned, ptr)
 }
 
-/// A SPARQL string literal spelling `pattern`.
-fn sparql_literal(pattern: &str) -> String {
-    format!("\"{}\"", pattern.replace('\\', "\\\\"))
-}
-
 /// The objects whose `REGEX` against `pattern` holds.
 fn filter_query(pattern: &str) -> String {
     format!(
         "SELECT ?o WHERE {{ ?s <http://example.org/p> ?o FILTER(REGEX(?o, {})) }} ORDER BY ?o",
-        sparql_literal(pattern)
+        purrdf_testkit::text::sparql_string(pattern)
     )
 }
 
@@ -402,7 +397,7 @@ fn each_selected_law_decides_sparql_regex_on_every_select_entry_point() {
 fn each_selected_law_decides_sparql_replace() {
     let query = format!(
         "SELECT ?r WHERE {{ BIND(REPLACE(\"aa\", {}, \"x\") AS ?r) }}",
-        sparql_literal(BACK_REFERENCE)
+        purrdf_testkit::text::sparql_string(BACK_REFERENCE)
     );
     for law in [XPATH_20, XPATH_31] {
         assert_eq!(rows(Select::Plain, Some(law), &query), ["x"], "{law}");
@@ -410,7 +405,7 @@ fn each_selected_law_decides_sparql_replace() {
     assert_eq!(rows(Select::Plain, None, &query), ["UNBOUND"]);
     let query = format!(
         "SELECT ?r WHERE {{ BIND(REPLACE(\"ab\", {}, \"x\") AS ?r) }}",
-        sparql_literal(NON_CAPTURING)
+        purrdf_testkit::text::sparql_string(NON_CAPTURING)
     );
     assert_eq!(rows(Select::Plain, Some(XPATH_31), &query), ["x"]);
     assert_eq!(rows(Select::Plain, Some(XPATH_20), &query), ["UNBOUND"]);
@@ -487,7 +482,7 @@ fn update_marks(regex: Option<&str>, pattern: &str) -> Result<Vec<String>, Failu
     let request = CString::new(format!(
         "INSERT {{ ?s <http://example.org/matched> true }} WHERE {{ \
          ?s <http://example.org/p> ?o FILTER(REGEX(?o, {})) }}",
-        sparql_literal(pattern)
+        purrdf_testkit::text::sparql_string(pattern)
     ))
     .expect("request");
     let (_owned, regex) = profile_arg(regex);
@@ -1067,7 +1062,7 @@ fn rule_shapes(pattern: &str) -> String {
     let construct = format!(
         "CONSTRUCT {{ $this <http://example.org/hit> ?v }} \
          WHERE {{ $this <http://example.org/p> ?v FILTER(REGEX(?v, {})) }}",
-        sparql_literal(pattern)
+        purrdf_testkit::text::sparql_string(pattern)
     );
     format!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
@@ -1083,7 +1078,7 @@ fn rule_set(pattern: &str) -> String {
     format!(
         "PREFIX : <http://example.org/>\n\
          RULE {{ ?s :hit ?v }} WHERE {{ ?s :p ?v FILTER(REGEX(?v, {})) }}\n",
-        sparql_literal(pattern)
+        purrdf_testkit::text::sparql_string(pattern)
     )
 }
 

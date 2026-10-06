@@ -295,24 +295,6 @@ fn bench_native_xpath_execute(c: &mut Bench) {
     group.finish();
 }
 
-/// Deterministic prose of at least `bytes` bytes: ten lowercase words, among
-/// them `node`, `graph` and `alpha`, joined by single spaces.
-fn prose(bytes: usize) -> String {
-    const WORDS: [&str; 10] = [
-        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
-    ];
-    let mut text = String::with_capacity(bytes + 16);
-    let mut index = 0_usize;
-    while text.len() < bytes {
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
-        index += 1;
-    }
-    text
-}
-
 /// Ordinary large inputs at the production default limits.
 ///
 /// `run/*` and `general/*` match the same 32 KiB run of letters: `[a-z]+`
@@ -369,7 +351,7 @@ fn bench_native_xpath_large(c: &mut Bench) {
             bencher.iter(|| black_box(program.is_match(black_box(&haystack), limits).unwrap()));
         });
     }
-    let text = prose(1024 * 1024);
+    let text = purrdf_testkit::text::word_prose(1024 * 1024);
     let words = text.trim_end();
     let pairs = "ab".repeat(512 * 1024);
     let nested = format!("{}b", "a".repeat(40));

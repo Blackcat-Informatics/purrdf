@@ -568,29 +568,6 @@ fn explain_evaluates_under_the_requests_dated_law() {
     }
 }
 
-/// Deterministic prose of at least `bytes` bytes: lowercase words, among them
-/// `node`, `graph` and `alpha`, joined by single spaces.
-fn prose(bytes: usize) -> String {
-    const WORDS: [&str; 10] = [
-        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
-    ];
-    let mut text = String::with_capacity(bytes + 16);
-    let mut index = 0_usize;
-    while text.len() < bytes {
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
-        index += 1;
-    }
-    text
-}
-
-/// The SPARQL string literal spelling `pattern`, whose backslashes are escaped.
-fn sparql_string(pattern: &str) -> String {
-    format!("\"{}\"", pattern.replace('\\', "\\\\"))
-}
-
 /// `ex:{subject} ex:v "{text}"` for each named text.
 fn texts(values: &[(&str, &str)]) -> Arc<purrdf_core::RdfDataset> {
     let mut builder = purrdf_core::RdfDatasetBuilder::new();
@@ -631,7 +608,7 @@ fn adversary_shapes_answer_at_the_production_defaults_like_the_compatibility_eng
     // Each shape was refused by the native matcher at a fraction of these sizes:
     // multiple unbounded runs at 8 KB, group repetition from 44 KB, a word
     // repetition at 159 KB, and the nested nullable repetition at 41 bytes.
-    let text = prose(1 << 20);
+    let text = purrdf_testkit::text::word_prose(1 << 20);
     let pairs = "ab".repeat(1 << 19);
     let forty = "a".repeat(40);
     let [zzz, bang, spaced, pairs_c, pairs_a, forty_b, forty_c] = [
@@ -675,7 +652,10 @@ fn adversary_shapes_answer_at_the_production_defaults_like_the_compatibility_eng
         ("^(a|aa)*$|^(a*)*b$", "forty_b", "true"),
         ("^(a|aa)*$|^(a*)*b$", "forty_c", "false"),
     ] {
-        let call = format!("REGEX(?t, {})", sparql_string(pattern));
+        let call = format!(
+            "REGEX(?t, {})",
+            purrdf_testkit::text::sparql_string(pattern)
+        );
         assert_eq!(
             bound(&compatibility, &data, subject, &call).unwrap(),
             expected,
@@ -707,7 +687,10 @@ fn backreference_blowups_still_refuse_beside_an_answered_neighbour() {
     let forty = "a".repeat(40);
     let neighbour = format!("{forty}ca");
     let data = texts(&[("refused", &forty), ("neighbour", &neighbour)]);
-    let call = format!("REGEX(?t, {})", sparql_string(r"^(a|aa)*c\1$"));
+    let call = format!(
+        "REGEX(?t, {})",
+        purrdf_testkit::text::sparql_string(r"^(a|aa)*c\1$")
+    );
     for profile in [Profile::Xpath20, Profile::Xpath31] {
         let engine = NativeSparqlEngine::new().with_xpath_regex(profile, Limits::new());
         let refusal = bound(&engine, &data, "refused", &call).unwrap_err();

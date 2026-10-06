@@ -919,30 +919,12 @@ fn every_covered_subcommand_documents_the_flag_and_its_names() {
 
 // --- production-default scale ----------------------------------------------------------
 
-/// Deterministic prose of at least `bytes` bytes: lowercase words, among them `node`,
-/// `graph` and `alpha`, joined by single spaces.
-fn prose(bytes: usize) -> String {
-    const WORDS: [&str; 10] = [
-        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
-    ];
-    let mut text = String::with_capacity(bytes + 16);
-    let mut index = 0_usize;
-    while text.len() < bytes {
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
-        index += 1;
-    }
-    text
-}
-
 #[test]
 fn query_answers_the_adversary_shapes_at_the_production_defaults_like_the_compatibility_engine() {
     // Each shape was refused by the native matcher at a fraction of these sizes:
     // multiple unbounded runs at 8 KB, group repetition from 44 KB, a word repetition
     // at 159 KB, and the nested nullable repetition at 41 bytes.
-    let text = prose(1 << 20);
+    let text = purrdf_testkit::text::word_prose(1 << 20);
     let pairs = "ab".repeat(1 << 19);
     let forty = "a".repeat(40);
     let values = [

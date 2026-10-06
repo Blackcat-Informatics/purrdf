@@ -392,30 +392,12 @@ fn interned_labeled_verdicts_do_not_survive_into_a_request_with_less_fuel() {
     );
 }
 
-/// Deterministic prose of at least `bytes` bytes: lowercase words, among them
-/// `node`, `graph` and `alpha`, joined by single spaces.
-fn prose(bytes: usize) -> String {
-    const WORDS: [&str; 10] = [
-        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
-    ];
-    let mut text = String::with_capacity(bytes + 16);
-    let mut index = 0_usize;
-    while text.len() < bytes {
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
-        index += 1;
-    }
-    text
-}
-
 #[test]
 fn adversary_patterns_conform_at_the_production_defaults_like_the_compatibility_engine() {
     // Each shape was refused by the native matcher at a fraction of these sizes.
     let data = empty_dataset();
     let options = ValidationOptions::default();
-    let text = prose(1 << 20);
+    let text = purrdf_testkit::text::word_prose(1 << 20);
     let pairs = "ab".repeat(1 << 19);
     let forty = "a".repeat(40);
     for (pattern, value, expected) in [

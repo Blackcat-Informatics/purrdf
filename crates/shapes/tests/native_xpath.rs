@@ -1360,24 +1360,6 @@ fn text_graphs_validate_under_each_selected_law() {
     assert!(matches!(refused, Err(XPathValidationError::Shapes(_))));
 }
 
-/// Deterministic prose of at least `bytes` bytes: lowercase words, among them
-/// `node`, `graph` and `alpha`, joined by single spaces.
-fn prose(bytes: usize) -> String {
-    const WORDS: [&str; 10] = [
-        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
-    ];
-    let mut text = String::with_capacity(bytes + 16);
-    let mut index = 0_usize;
-    while text.len() < bytes {
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
-        index += 1;
-    }
-    text
-}
-
 /// The property shapes that fail, in order: one `sh:pattern` shape `ex:P{i}` per case.
 fn failing_pattern_shapes(report: &purrdf_shapes::report::ValidationReport) -> Vec<String> {
     let mut failing: Vec<String> = report
@@ -1393,7 +1375,7 @@ fn failing_pattern_shapes(report: &purrdf_shapes::report::ValidationReport) -> V
 #[test]
 fn adversary_pattern_shapes_validate_at_the_production_defaults_like_the_compatibility_engine() {
     // Each shape was refused by the native matcher at a fraction of these sizes.
-    let text = prose(1 << 20);
+    let text = purrdf_testkit::text::word_prose(1 << 20);
     let pairs = "ab".repeat(1 << 19);
     let forty = "a".repeat(40);
     let values = [
