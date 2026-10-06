@@ -37,11 +37,10 @@ Translated units are:
   non-empty, not fuzzy, not obsolete (a fuzzy or obsolete entry renders as English, so a
   rejected rendering in it is not published and is not refused) — paired with its
   ``msgid``;
-* every line of every tracked Markdown file with ``zh-Hans`` in its path (a
-  ``README.zh-Hans.md`` sibling, a paragraph-aligned draft under ``docs/book/po/zh-Hans/``
-  awaiting its pour into the catalogue), enumerated by ``git ls-files`` like the other
-  prose gates — the glossary itself excepted. A file has no ``msgid``, so it is checked
-  against the GLOBAL rows only; the pour is where the table is fully enforced.
+* every line of every tracked Markdown file (``git ls-files``, the glossary excepted)
+  whose non-space text is at least :data:`CJK_SHARE` Han or CJK punctuation — chosen by
+  content, not name, so a renamed translation (``README.zh-Hans.md`` became
+  ``README_zh.md``) cannot leave the gate. A file has no ``msgid``: GLOBAL rows only.
 
     python3 scripts/check-i18n-glossary.py               # verify (exit 1 on a hit)
     python3 scripts/check-i18n-glossary.py --self-test   # prove every rule bites both ways
@@ -73,7 +72,8 @@ import po_catalog  # noqa: E402 — the sibling module, found via the line above
 _REPO = Path(__file__).resolve().parent.parent
 PO_PATH = _REPO / "docs" / "book" / "po" / "zh-Hans.po"
 GLOSSARY_PATH = _REPO / "docs" / "book" / "po" / "glossary-zh-Hans.md"
-TRANSLATED_PATH_MARK = "zh-Hans"
+CJK_SHARE = 0.15  # every tracked translation measures above 0.19, every English page below 0.07
+_CJK = re.compile(r"[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]")
 
 _HEADER_CELLS = ("#", "Term", "Anchor", "Rendering", "Basis", "Rejected", "Note")
 _NONE_MARKERS = {"", "—", "-", "–"}
@@ -388,6 +388,10 @@ def po_units(po_path: Path) -> list[tuple[str, str | None, str]]:
     ]
 
 
+def is_translation(text: str) -> bool:
+    return len(_CJK.findall(text)) >= CJK_SHARE * len("".join(text.split()))
+
+
 def tracked_translated_files() -> list[Path]:
     out = subprocess.run(
         ["git", "-C", str(_REPO), "ls-files", "-z"],
@@ -397,12 +401,10 @@ def tracked_translated_files() -> list[Path]:
     ).stdout
     paths = []
     for rel in sorted(p for p in out.split("\0") if p):
-        if not (rel.endswith(".md") and TRANSLATED_PATH_MARK in rel):
-            continue
         path = _REPO / rel
-        if path == GLOSSARY_PATH or not path.is_file():
-            continue
-        paths.append(path)
+        if rel.endswith(".md") and path != GLOSSARY_PATH and path.is_file():
+            if is_translation(path.read_text(encoding="utf-8")):
+                paths.append(path)
     return paths
 
 
@@ -634,16 +636,9 @@ def self_test(rows: list[Row], report: bool) -> list[str]:
         ("the gloss with half-width parentheses and a space", "Research Object projections", "研究对象 (Research Object) 投影"),
         # A keep-English token inside another word neither anchors nor satisfies.
         ("RDFLib in the msgid does not demand a standalone RDF", "RDFLib compatibility.", "RDFLib 兼容层。"),
-        (
-            "a faithful sentence keeping every invariant",
-            "PurRDF is an RDF 1.2 toolkit in Rust with Python and WebAssembly bindings.",
-            "PurRDF 是一个用 Rust 编写的 RDF 1.2 工具包，提供 Python 与 WebAssembly 绑定。",
-        ),
-        (
-            "the gloss form with the acronym",
-            "Research Object projections",
-            "研究对象（Research Object，RO）投影",
-        ),
+        ("a faithful sentence keeping every invariant", "PurRDF is an RDF 1.2 toolkit in Rust with Python and WebAssembly bindings.",
+         "PurRDF 是一个用 Rust 编写的 RDF 1.2 工具包，提供 Python 与 WebAssembly 绑定。"),
+        ("the gloss form with the acronym", "Research Object projections", "研究对象（Research Object，RO）投影"),
     ):
         verdict(what, _po_text(msgid, msgstr), False)
     for what, msgid, msgstr in (
@@ -654,6 +649,9 @@ def self_test(rows: list[Row], report: bool) -> list[str]:
         ("IRI translated in running text", "Every IRI is absolute.", "每个国际化资源标识符都是绝对的。"),
     ):
         verdict(what, _po_text(msgid, msgstr), True)
+    for text, translated in (("PurRDF 是用 Rust 编写的 RDF 1.2 工具包。", True), ("We render entailment as 蕴涵.", False)):
+        if is_translation(text) is not translated:
+            problems.append(f"FILE SELECTION: {text!r} {'missed' if translated else 'taken'} as a translation")
     return problems
 
 
@@ -708,7 +706,7 @@ def main(argv: list[str]) -> int:
     print(
         f"OK: {len(rules)} rejected rendering(s) and {len(tokens)} keep-English token(s) from "
         f"{len(rows)} glossary row(s) respected by {len(units)} translated unit(s) ({po_label} "
-        f"plus {len(files)} tracked {TRANSLATED_PATH_MARK} Markdown file(s), global rows only)."
+        f"plus {len(files)} tracked translated Markdown file(s), global rows only)."
     )
     return 0
 
