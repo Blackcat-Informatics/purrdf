@@ -468,8 +468,11 @@ impl PreparedExecution {
         use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
         let mut mentioned = vec![false; self.parameters.len()];
         self.prepared.query().for_each_variable(|variable| {
+            // A sub-`SELECT`'s own copy of the name, renamed apart when it was
+            // prepared, is still where the query text names it.
+            let source = crate::substitute::localized_source(variable);
             for (seen, parameter) in mentioned.iter_mut().zip(&self.parameters) {
-                *seen |= parameter == variable;
+                *seen |= parameter == variable || source == Some(parameter.as_str());
             }
         });
         let unmentioned: Vec<String> = self

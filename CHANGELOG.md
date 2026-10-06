@@ -13,16 +13,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **SPARQL pre-binding:** every lane that binds a variable before evaluation —
   `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
   node expression's scope and `sh:expression`'s `value` — now takes the one
-  pre-binding rewrite SHACL pre-binding used, so they answer every query
-  alike. On the prepared-parameter and request-substitution lanes the bound
+  pre-binding rewrite SHACL pre-binding used. They still differ where SHACL's
+  Appendix A refuses a construct, as set out below. On the prepared-parameter and request-substitution lanes the bound
   value now reaches the right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s
   and `EXISTS`, which the ordinary-substitution rewrite those lanes used before
   did not reach, and it is carried past every `GROUP BY` at any depth as a
   constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a sub-`SELECT`, answers
   the bound node, an implicit group over no rows answers `COUNT` 0 with the
-  bound node, and `HAVING` and `ORDER BY` read it. The engine lanes refuse
-  only the reassignment and answer `VALUES` and `MINUS` over a pre-bound name
-  by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
+  bound node, and `HAVING` and `ORDER BY` read it. On the engine lanes an
+  assignment of a pre-bound name follows SPARQL scoping: a sub-`SELECT` that
+  assigns it without projecting it binds a variable of its own, and any other
+  assignment where the name is not in scope binds it for the rows it produces,
+  which join with the bound value. The engine lanes answer `VALUES` and
+  `MINUS` over a pre-bound name by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
   with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse
   `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
   lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
@@ -44,8 +47,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   sub-`SELECT` or `EXISTS` now sees the bound value there; before, the
   variable matched freely in those positions. To keep the old answer, rename
   the variable to a fresh one inside that position: `OPTIONAL { ?s2 ex:p ?y }`
-  in place of `OPTIONAL { ?s ex:p ?y }`. A query that assigns a pre-bound variable at any depth (`BIND(… AS ?s)` or
-  `(… AS ?s)`) is refused; rename the assignment. `VALUES` and `MINUS` over a
+  in place of `OPTIONAL { ?s ex:p ?y }`. `VALUES` and `MINUS` over a
   pre-bound name answer by join semantics, so a `VALUES ?s { … }` that lists
   other terms than the bound one now answers no row.
 
@@ -568,8 +570,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   assign `?value`. A node expression never binds `$currentShape` or
   `$shapesGraph`, so reading either — like any other variable — is refused when
   the shapes graph is loaded or packed, even in an expression no focus node
-  reaches. Assigning a pre-bound name, by `BIND(… AS ?x)` or `(… AS ?x)` at any
-  depth, is refused on every lane. A SHACL-SPARQL query declares
+  reaches. Assigning a name a SHACL lane pre-binds, by `BIND(… AS ?x)` or
+  `(… AS ?x)` at any depth, is refused there, as Appendix A requires. A
+  SHACL-SPARQL query declares
   `$shapesGraph` and `$currentShape` pre-bound whether or not the validation
   gives them a value, so a `sh:sparql` constraint reading `$shapesGraph` above
   its `GROUP BY` validates, unbound, when the shapes graph has no IRI instead

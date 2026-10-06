@@ -1710,7 +1710,18 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 
 /// [`apply_shacl_probes`] without its seed-only fast path: the seed, then the
 /// expression walk that writes each value where the seed does not reach.
-pub(crate) fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+pub(crate) fn walk_shacl_probes(mut query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+    // A plan prepared for these names was localized when it was prepared; one reached
+    // through a door that prepared it without them (`SparqlEngine::query`, a
+    // `query_prepared*` call with substitutions) is localized here, before the walk can
+    // read a sub-`SELECT`'s own copy of a name as the bound one. Over an
+    // already-localized plan this renames nothing. The seed-only path above has no
+    // sub-`SELECT` to localize.
+    let names: Vec<&str> = probes
+        .iter()
+        .map(|(variable, _)| variable.as_str())
+        .collect();
+    localize_unprojected_assignments(&mut query, &names);
     let expr_subs = ExprSubs(probes.clone());
 
     let mut query = apply_probes(query, probes);
@@ -5853,5 +5864,238 @@ mod walk_tests {
             }
         }
         assert_eq!(levels, 2_000);
+    }
+}
+
+/// Give each sub-`SELECT` that assigns a pre-bound name without projecting it a
+/// variable of its own under that name.
+///
+/// SPARQL scoping (§18.2.1) ends a variable at a sub-`SELECT`'s projection, so a name
+/// the sub-`SELECT` binds and does not project is not the outer query's variable of
+/// the same spelling: `{ SELECT ?o WHERE { ?x :p ?o BIND(:z AS ?this) } }` assigns a
+/// local `?this`, and the caller's binding of the outer `?this` is not reassigned by
+/// it. The pre-binding rewrite reaches every depth (a sub-`SELECT` reading `?this`
+/// sees the bound value), so without this an assigned local would be rewritten as
+/// a read of the bound one. Each such sub-`SELECT`'s inner pattern has the name
+/// renamed to a fresh variable, which nothing outside it can see; every other
+/// sub-`SELECT`, and the query's own scope, is left alone.
+///
+/// Run once, when the plan is prepared, for the names it pre-binds.
+pub(crate) fn localize_unprojected_assignments(query: &mut Query, names: &[&str]) {
+    if names.is_empty() {
+        return;
+    }
+    let pattern = match query {
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. } => pattern,
+    };
+    let mut fresh = 0_usize;
+    // (pattern, whether a `Project` above it in this walk is the query's own).
+    let mut pending: Vec<(&mut GraphPattern, bool)> = vec![(pattern, true)];
+    while let Some((node, top)) = pending.pop() {
+        if let GraphPattern::Project { inner, variables } = node {
+            if !top {
+                for name in names {
+                    if variables.iter().any(|v| v.as_str() == *name) || !assigns(inner, name) {
+                        continue;
+                    }
+                    fresh += 1;
+                    let from = Variable::new(*name);
+                    let to = Variable::new(format!("{LOCAL_PREFIX}{fresh}_{name}"));
+                    rename_in_pattern(inner, &from, &to);
+                }
+            }
+            pending.push((&mut **inner, false));
+            continue;
+        }
+        // Until the query's own projection is met, a wrapper is still the query's own
+        // scope; every pattern beneath a non-wrapper is nested.
+        let wrapper = matches!(
+            node,
+            GraphPattern::Distinct { .. }
+                | GraphPattern::Reduced { .. }
+                | GraphPattern::Slice { .. }
+                | GraphPattern::OrderBy { .. }
+        );
+        let below = top && wrapper;
+        for_each_child_pattern_mut(node, &mut |child| pending.push((child, below)));
+    }
+}
+
+/// The prefix of the variable [`localize_unprojected_assignments`] renames a
+/// sub-`SELECT`'s own copy of a pre-bound name to: `{LOCAL_PREFIX}{n}_{name}`.
+const LOCAL_PREFIX: &str = "__purrdf_local_";
+
+/// The pre-bound name `variable` is a sub-`SELECT`'s local copy of, when it is one.
+///
+/// The query text still names the parameter there, so a check of which parameters a
+/// query mentions counts the copy as a mention of it.
+pub(crate) fn localized_source(variable: &Variable) -> Option<&str> {
+    let rest = variable.as_str().strip_prefix(LOCAL_PREFIX)?;
+    let (counter, name) = rest.split_once('_')?;
+    counter.bytes().all(|b| b.is_ascii_digit()).then_some(name)
+}
+
+/// Whether `pattern` binds `name` by an assignment: `BIND`, a `SELECT` expression
+/// (`(… AS ?name)`), an aggregate target or `UNFOLD`, at any depth.
+fn assigns(pattern: &GraphPattern, name: &str) -> bool {
+    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, walk_pre_post};
+    let mut found = false;
+    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+        if visit == Visit::Exit {
+            return Flow::Descend;
+        }
+        found = match node {
+            NodeRef::Pattern(GraphPattern::Extend { variable, .. }) => variable.as_str() == name,
+            NodeRef::Pattern(GraphPattern::Group { aggregates, .. }) => aggregates
+                .iter()
+                .any(|(variable, _)| variable.as_str() == name),
+            NodeRef::Pattern(GraphPattern::Unfold {
+                element, companion, ..
+            }) => {
+                element.as_str() == name || companion.as_ref().is_some_and(|c| c.as_str() == name)
+            }
+            _ => false,
+        };
+        if found { Flow::Stop } else { Flow::Descend }
+    });
+    found
+}
+
+/// Hand each pattern `node` holds directly — not its expressions' `EXISTS` bodies — to
+/// `visit`.
+fn for_each_child_pattern_mut<'p>(
+    node: &'p mut GraphPattern,
+    visit: &mut dyn FnMut(&'p mut GraphPattern),
+) {
+    match node {
+        GraphPattern::Join { left, right }
+        | GraphPattern::LeftJoin { left, right, .. }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::Minus { left, right } => {
+            visit(left);
+            visit(right);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms.iter_mut() {
+                visit(arm);
+            }
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::Group { inner, .. } => visit(inner),
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::PropertyFunction(_) => {}
+    }
+}
+
+/// Rename every occurrence of `from` in `root` — every position a pattern or an
+/// expression names a variable in, `EXISTS` bodies and nested sub-`SELECT`s included
+/// — to `to`.
+fn rename_in_pattern(root: &mut GraphPattern, from: &Variable, to: &Variable) {
+    let rename = |variable: &mut Variable| {
+        if variable == from {
+            *variable = to.clone();
+        }
+    };
+    let rename_named = |name: &mut NamedNodePattern| {
+        if let NamedNodePattern::Variable(variable) = name {
+            rename(variable);
+        }
+    };
+    let rename_term = |term: &mut TermPattern| {
+        let mut terms: Vec<&mut TermPattern> = vec![term];
+        while let Some(term) = terms.pop() {
+            match term {
+                TermPattern::Variable(variable) => rename(variable),
+                TermPattern::Triple(triple) => {
+                    let triple = &mut **triple;
+                    if let NamedNodePattern::Variable(variable) = &mut triple.predicate {
+                        rename(variable);
+                    }
+                    terms.push(&mut triple.subject);
+                    terms.push(&mut triple.object);
+                }
+                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                }
+            }
+        }
+    };
+    let mut pending: Vec<&mut GraphPattern> = vec![root];
+    while let Some(node) = pending.pop() {
+        for_each_node_expression_mut(node, &mut |expr| {
+            for_each_expression_mut([expr], |expr| match expr {
+                Expression::Variable(variable) | Expression::Bound(variable) => rename(variable),
+                // An `EXISTS` body is renamed in a pass of its own: it is a pattern
+                // held inside an expression, which this work list of patterns cannot
+                // borrow while the expression is walked. One call per `EXISTS` level,
+                // which the parser's nesting limit bounds.
+                Expression::Exists(body) => rename_in_pattern(body, from, to),
+                _ => {}
+            });
+        });
+        match node {
+            GraphPattern::Bgp { patterns } => {
+                for triple in patterns {
+                    rename_term(&mut triple.subject);
+                    rename_named(&mut triple.predicate);
+                    rename_term(&mut triple.object);
+                }
+            }
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                rename_term(subject);
+                rename_term(object);
+            }
+            GraphPattern::Graph { name, .. } | GraphPattern::Service { name, .. } => {
+                rename_named(name);
+            }
+            GraphPattern::Extend { variable, .. } => rename(variable),
+            GraphPattern::Unfold {
+                element, companion, ..
+            } => {
+                rename(element);
+                if let Some(companion) = companion {
+                    rename(companion);
+                }
+            }
+            GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                variables.iter_mut().for_each(rename);
+            }
+            GraphPattern::Group {
+                variables,
+                aggregates,
+                ..
+            } => {
+                variables.iter_mut().for_each(rename);
+                for (variable, _) in aggregates.iter_mut() {
+                    rename(variable);
+                }
+            }
+            GraphPattern::PropertyFunction(call) => {
+                for term in call
+                    .subject_args
+                    .iter_mut()
+                    .chain(call.object_args.iter_mut())
+                {
+                    rename_term(term);
+                }
+            }
+            _ => {}
+        }
+        for_each_child_pattern_mut(node, &mut |child| pending.push(child));
     }
 }

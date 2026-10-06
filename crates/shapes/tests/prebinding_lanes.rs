@@ -25,8 +25,8 @@
 //! One rule is split by surface. The SHACL lanes refuse what SHACL 1.2 SPARQL
 //! Extensions, Appendix A forbids in a query with pre-bound variables — a `MINUS`, a
 //! `VALUES` over a pre-bound name, an `AS` over one — for every name they pre-bind.
-//! The engine lanes refuse only the reassignment, and answer `VALUES` and `MINUS` by
-//! join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }` with
+//! The engine lanes refuse none of them: an assignment binds the name where SPARQL
+//! scoping puts it, and `VALUES` and `MINUS` answer by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }` with
 //! `$this` bound to `ex:a` answers no row. A row whose SHACL answer differs carries it.
 //!
 //! A refusal is compared by its kind, not merely by having happened: a reassigned
@@ -271,8 +271,11 @@ const ROWS: &[Row] = &[
                 $this <http://example.org/p> ?value }",
         engine_binds: &[],
         node_scope: &[],
-        expected: || Answer::Refused(Refusal::Reassigns),
-        shacl: None,
+        // The engine lanes evaluate it: the name is not in scope where it is assigned
+        // (§18.2.1), so the assignment binds it and joins with the bound value. SHACL
+        // forbids an `AS` over a pre-bound name (Appendix A).
+        expected: || values(Vec::new()),
+        shacl: Some(|| Answer::Refused(Refusal::Reassigns)),
         sh_sparql: None,
         unprovided: &[],
     },
@@ -293,8 +296,11 @@ const ROWS: &[Row] = &[
                 BIND(<http://example.org/b> AS $this) }",
         engine_binds: &[],
         node_scope: &[],
-        expected: || Answer::Refused(Refusal::Reassigns),
-        shacl: None,
+        // The engine lanes evaluate it: the name is not in scope where it is assigned
+        // (§18.2.1), so the assignment binds it and joins with the bound value. SHACL
+        // forbids an `AS` over a pre-bound name (Appendix A).
+        expected: || values([integer(3)]),
+        shacl: Some(|| Answer::Refused(Refusal::Reassigns)),
         sh_sparql: None,
         unprovided: &[],
     },
@@ -304,8 +310,11 @@ const ROWS: &[Row] = &[
                 $this <http://example.org/p> ?value }",
         engine_binds: &[],
         node_scope: &[],
-        expected: || Answer::Refused(Refusal::Reassigns),
-        shacl: None,
+        // The engine lanes evaluate it: the name is not in scope where it is assigned
+        // (§18.2.1), so the assignment binds it and joins with the bound value. SHACL
+        // forbids an `AS` over a pre-bound name (Appendix A).
+        expected: || values(Vec::new()),
+        shacl: Some(|| Answer::Refused(Refusal::Reassigns)),
         sh_sparql: None,
         unprovided: &[],
     },
