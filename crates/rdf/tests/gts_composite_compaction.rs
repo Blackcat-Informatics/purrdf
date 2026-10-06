@@ -609,10 +609,10 @@ fn compaction_terms(timestamp: &str, literal_class: bool) -> [Term; 14] {
 }
 
 fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
-    let cases = [(false, true, 7), (true, true, 7)]
+    let cases = [(false, Some(0), 7), (true, Some(0), 7), (false, Some(4), 7)]
         .into_iter()
-        .chain((0..7).map(|fields| (false, false, fields)));
-    for (literal_class, foreign_predicate, fields) in cases {
+        .chain((0..7).map(|fields| (false, None, fields)));
+    for (literal_class, foreign_position, fields) in cases {
         let terms = compaction_terms(TIME, literal_class);
         let mut quads = vec![(0, 5, 6, None)];
         for (field, predicate, object) in [(1, 7, 11), (2, 8, 12), (4, 9, 13)] {
@@ -620,8 +620,8 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
                 quads.push((0, predicate, object, None));
             }
         }
-        if foreign_predicate {
-            quads.insert(0, (0, 3, 4, None));
+        if let Some(position) = foreign_position {
+            quads.insert(position, (0, 3, 4, None));
         }
         let input = signed_graph(&terms, &quads);
         let folded = read(&input, true, None);
@@ -646,6 +646,67 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
         );
         assert!(
             verify_compaction(&input, &packed, &keys())
+                .unwrap()
+                .all_ok()
+        );
+        let repacked = ed_pack(&packed);
+        assert_eq!(
+            compact::detached_signature_pairs(&read(&repacked, true, None)).unwrap(),
+            pairs
+        );
+        assert!(
+            verify_compaction(&packed, &repacked, &keys())
+                .unwrap()
+                .all_ok()
+        );
+    }
+}
+
+fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
+    let input = source();
+    let pack = ed_pack(&input);
+    let packed_graph = read(&pack, true, None);
+    let mut writer = Writer::with_layout("purrdf.gts", None);
+    writer.add_terms(&compaction_terms(TIME, false));
+    writer.add_quads(&[
+        (0, 5, 6, None),
+        (0, 7, 11, None),
+        (0, 8, 12, None),
+        (0, 9, 13, None),
+    ]);
+    writer.sign_with(fixed_key(73), "ed-pack");
+    writer.add_index();
+    let ordinary = writer.into_bytes();
+    let ordinary_graph = read(&ordinary, true, None);
+    assert_eq!(ordinary_graph.diagnostics, []);
+    assert_eq!(ordinary_graph.signatures.len(), 1);
+    assert!(!ordinary_graph.signatures[0].packaging);
+    // Materialized provenance uses the same complete shape regardless of layout.
+    assert_eq!(
+        purrdf_rdf::gts_certify::content_projection(&ordinary_graph).quads,
+        []
+    );
+    let mut pairs = compact::detached_signature_pairs(&packed_graph).unwrap();
+    pairs.extend(compact::detached_signature_pairs(&ordinary_graph).unwrap());
+    pairs.sort();
+    for (first, second) in [(&pack, &ordinary), (&ordinary, &pack)] {
+        let combined = [first.as_slice(), second.as_slice()].concat();
+        let folded = read(&combined, true, None);
+        assert_eq!(folded.diagnostics, []);
+        assert_eq!(folded.segment_heads.len(), 2);
+        assert_eq!(folded.signatures.iter().filter(|s| s.packaging).count(), 1);
+        assert_eq!(compact::detached_signature_pairs(&folded).unwrap(), pairs);
+        let mut observations = Observations::default();
+        let streamed = purrdf_gts::reader::read_to_sink(&combined, true, None, &mut observations);
+        assert_eq!(streamed.diagnostics, []);
+        assert_eq!(observations.0, folded.signatures);
+        let packed = composite_pack(&combined);
+        assert_eq!(
+            compact::detached_signature_pairs(&read(&packed, true, None)).unwrap(),
+            pairs
+        );
+        assert!(
+            verify_compaction(&combined, &packed, &keys())
                 .unwrap()
                 .all_ok()
         );
@@ -899,6 +960,7 @@ purrdf_testkit::harness_main!(
     malformed_and_ambiguous_carried_nodes_are_never_silently_dropped,
     literal_class_names_remain_content_and_do_not_fabricate_provenance,
     ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers,
+    packaging_capability_resets_between_streamable_and_ordinary_segments,
     rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc,
     rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes,
     root_commitments_require_current_subject_literal_identity_and_cardinality,
