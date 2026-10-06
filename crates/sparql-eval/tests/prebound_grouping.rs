@@ -440,15 +440,16 @@ fn a_prepared_execution_honours_its_declared_pre_bound_names() {
     );
 }
 
-fn iri(local: &str) -> TermValue {
-    TermValue::Iri(format!("{EX}{local}"))
-}
-
 /// The three `ex:p` rows as `(?x, ?o)`.
 fn every_p_row() -> Vec<Row> {
     [("a", "o1"), ("a", "o2"), ("b", "o3")]
         .into_iter()
-        .map(|(x, o)| vec![cell("x", iri(x)), cell("o", iri(o))])
+        .map(|(x, o)| {
+            vec![
+                cell("x", TermValue::Iri(format!("{EX}{x}"))),
+                cell("o", TermValue::Iri(format!("{EX}{o}"))),
+            ]
+        })
         .collect()
 }
 
@@ -569,7 +570,12 @@ fn an_unprojected_sub_select_inside_exists_binds_its_own_variable() {
 #[test]
 fn a_where_of_a_lone_sub_select_carries_the_bound_column() {
     let sub = format!("{{ SELECT ?x WHERE {{ <{EX}b> <{EX}p> ?x }} }}");
-    let row = || vec![cell("this", a()), cell("x", iri("o3"))];
+    let row = || {
+        vec![
+            cell("this", a()),
+            cell("x", TermValue::Iri(format!("{EX}o3"))),
+        ]
+    };
     assert_every_lane(&format!("SELECT ?this ?x WHERE {{ {sub} }}"), &[row()]);
     assert_every_lane(
         &format!("SELECT ?this ?x WHERE {{ ?s <{EX}q> ?q {sub} }}"),
