@@ -1061,8 +1061,8 @@ impl SchemaSurface {
         }
         // Bounded by the coverage-cell ceiling checked before assembly. The
         // range expressions and provenance records per cell are bounded by the
-        // ontology's own axioms, not by a separate ceiling: main accepts any
-        // number of them within the cell ceiling, and so does this.
+        // ontology's own axioms, not by a separate ceiling: an IRI-only ontology
+        // with any number of them within the cell ceiling compiles.
         debug_assert!(emitted <= MAX_SCHEMA_RELATIONS);
         // Never silently dropped: every anonymous class axiom carries at least
         // one component, on a class or on the axiom itself.
@@ -2320,10 +2320,10 @@ pub(crate) fn build(
         }
     }
 
-    // The datatypes main knew: declared ones. An object property ranging over
-    // a datatype only these name is refused, as main refuses it; one ranging
-    // over a defined or newly recognised datatype is accepted, as main
-    // accepts it.
+    // The datatypes known before any definition is read: the declared ones.
+    // An object property ranging over a datatype only these name is refused,
+    // as it always was; one ranging over a defined or newly recognised
+    // datatype is accepted, as it always was.
     let declared_datatypes = datatypes.clone();
     let mut datatype_definitions: BTreeMap<String, OntologyExpression> = BTreeMap::new();
     let mut datatype_axioms: Vec<AxiomLevel> = Vec::new();
@@ -6001,13 +6001,13 @@ mod tests {
              ex:rational a owl:DatatypeProperty ; rdfs:range owl:rational .",
         )
         .expect("the OWL 2 datatype map and the RDF 1.2 datatypes are datatypes");
-        // What main refused stays refused; what main accepted stays accepted.
+        // What was refused before stays refused; what was accepted stays accepted.
         complete(
             "ex:Text owl:equivalentClass rdf:PlainLiteral .
              ex:text a owl:ObjectProperty ; rdfs:range ex:Text .
              ex:json a owl:ObjectProperty ; rdfs:range rdf:JSON .",
         )
-        .expect("main accepts an object property ranging over these names, so this does too");
+        .expect("an object property ranging over these names was always accepted");
         for (invalid, needle) in [
             (
                 "ex:Text a rdfs:Datatype .
@@ -6081,11 +6081,11 @@ mod tests {
                 .iter()
                 .any(|axiom| axiom.provenance.object == format!("<{EXS}B>"))
         );
-        // A malformed anonymous member is reported, not refused: main accepted
-        // (ignored) the axiom, and nothing main accepts is refused.
+        // A malformed anonymous member is reported, not refused: the axiom was
+        // always accepted (ignored), and nothing once accepted is refused.
         let malformed =
             complete("ex:A owl:disjointWith [ a owl:Restriction ; owl:someValuesFrom ex:B ] .")
-                .expect("an axiom main ignored is reported, never refused");
+                .expect("an axiom once ignored is reported, never refused");
         assert_eq!(
             manifest_outcomes(&malformed, None, ANONYMOUS_INDIVIDUAL)
                 .iter()
@@ -6094,10 +6094,10 @@ mod tests {
             vec![SchemaExpressionOutcome::Unrepresented]
         );
         // The neighbour: the same malformed restriction as the object of
-        // rdfs:subClassOf, which main refused too, is still refused.
+        // rdfs:subClassOf, which was always refused, is still refused.
         let error =
             complete("ex:A rdfs:subClassOf [ a owl:Restriction ; owl:someValuesFrom ex:B ] .")
-                .expect_err("main refused this, and so does this");
+                .expect_err("this was always refused");
         assert!(matches!(error, SchemaCompileError::InvalidOntology { .. }));
     }
 
@@ -6276,7 +6276,7 @@ mod tests {
              ex:x a [ a owl:Restriction ; owl:onProperty ex:p ] .
              ex:R a owl:Restriction ; owl:someValuesFrom ex:B .",
         )
-        .expect("main accepted every one of these axioms");
+        .expect("every one of these axioms was always accepted");
         let malformed = surface
             .class_expressions
             .axioms
@@ -6376,7 +6376,7 @@ mod tests {
     fn dense_iri_only_ranges_that_main_accepts_are_not_refused() {
         use std::fmt::Write as _;
         // 25,000 classes × 9 domainless properties × 5 ranges is over a
-        // million range expressions in 225,045 coverage cells, under main's
+        // million range expressions in 225,045 coverage cells, under the
         // one-million-cell ceiling.
         let mut ontology = String::new();
         for range in 0..5 {
@@ -6409,7 +6409,7 @@ mod tests {
             SchemaSurfaceMode::OntologyComplete,
         )
         .coverage_report()
-        .expect("main accepts this, so this does too");
+        .expect("an IRI-only ontology within the cell ceiling compiles");
         assert_eq!(report.properties.len(), 9);
     }
 }
