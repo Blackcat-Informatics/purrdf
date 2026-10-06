@@ -401,6 +401,16 @@ fn choices_ontology(abox: usize, choices: usize) -> Arc<RdfDataset> {
 /// decision core's test `a_choice_touches_the_same_beside_a_small_and_a_large_abox` pins the
 /// deterministic side of that: the nodes a choice touches and the work it spends are
 /// IDENTICAL beside 1,000 and 16,000 nodes.
+///
+/// The clock is not flat, and the measured growth is stated rather than smoothed. Counted with
+/// `perf stat` over 512 choices (user space, per decision, construction subtracted): about 97
+/// thousand instructions a choice beside 1,000 nodes, 185 thousand beside 16,000 and 175
+/// thousand beside 64,000 — doubling once, as the persistent vectors' radix trees grow a level
+/// past sixteen thousand elements, then holding — and 28 / 56 / 92 thousand cycles. The cycles
+/// grow faster than the instructions because the same few dozen nodes a choice touches sit in
+/// a larger, colder working set; the wall clock grows further still, as copy-on-write leaves
+/// take fresh pages. On a busy host the 16,000-node row reads four to six times the
+/// 1,000-node one per choice.
 fn bench_choices(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_choices");
     for &abox in &[1_000usize, 4_000, 16_000] {
