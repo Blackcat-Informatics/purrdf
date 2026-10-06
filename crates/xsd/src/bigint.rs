@@ -281,11 +281,8 @@ impl BigInt {
     /// algorithm exactly (an integer-valued result has no decimal point; a
     /// fractional one keeps its fractional part with trailing zeros trimmed).
     ///
-    /// Used only by [`crate::numeric::bigint_avg_decimal_lexical`] — `AVG`'s
-    /// finish once the scale-18 quotient mantissa has ALSO escaped `i128` (not
-    /// just the running sum that produced it) — the identical TEXT-rendering
-    /// bypass this module's own [`Self::to_decimal_string`] already gives
-    /// `SUM`'s finish for a pure-integer running total that exceeds `i128`.
+    /// The text [`crate::numeric::bigint_avg_decimal_lexical`] renders; it reads
+    /// back through [`crate::parse`] as the same value, of any size.
     #[must_use]
     pub fn to_decimal_lexical(&self, scale: u32) -> String {
         let digits = magnitude_decimal_digits(&self.limbs);

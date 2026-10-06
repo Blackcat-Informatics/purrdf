@@ -73,7 +73,8 @@
 //! hard-fail doctrine every other expression-evaluation seam already follows
 //! (a raised type error is a defect to surface, never a solution to silently
 //! vanish). `SUM`/`AVG` layer a THIRD, aggregate-specific error on top: a
-//! non-numeric or overflowing running total *poisons the fold* — represented
+//! non-numeric value (or a duration total no duration can hold) *poisons the
+//! fold* — represented
 //! as [`NumericFold`]'s chain going to `None` inside [`fold_numeric`] (see its
 //! docs) — rather than raising `Err` — the SPARQL 1.1/1.2
 //! aggregate algebra has no notion of a "poisoned" set-function result, but an
@@ -2238,14 +2239,12 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
 /// [`BigInt`] — arbitrary precision, so it never overflows regardless of how
 /// large the true total gets; only a genuinely non-numeric value poisons it.
 /// The moment a `decimal`/`float`/`double` value joins the group, the fold
-/// promotes to [`Self::Ok`] and continues through `numeric_add`'s ordinary
-/// (bounded, spec-defined) promotion tower exactly as before — see
-/// [`int_sum_promote_base`] for the promotion step and why it is exact for
-/// `decimal` whenever `decimal`'s own `i128`-bounded mantissa could hold the
-/// value at all, and lossy-but-never-poisoning for `float`/`double` (IEEE,
-/// never exact anyway). [`Self::Ok`]'s own arithmetic is untouched by this
-/// module: `xsd:decimal` keeps its documented `i128`-mantissa bound and
-/// `xsd:float`/`xsd:double` keep IEEE semantics, inf/NaN included.
+/// promotes to [`Self::Ok`] and continues through `numeric_add`'s spec-defined
+/// promotion tower — see [`int_sum_promote_base`] for the promotion step, exact
+/// for `decimal` at any size and correctly rounded for `float`/`double`.
+/// [`Self::Ok`]'s own arithmetic is `numeric_add`'s: `xsd:decimal` exact at every
+/// size (on the arbitrary-precision tower once it leaves the machine words) and
+/// `xsd:float`/`xsd:double` IEEE, inf/NaN included.
 ///
 /// ## `SUM`/`AVG` over `xsd:duration` — a PurRDF extension
 ///
@@ -2531,27 +2530,17 @@ impl NumericFold {
     }
 
     /// `AVG`'s finish: empty group → `0^^xsd:integer`; otherwise the running
-    /// total divided by the folded count.
+    /// total divided by the folded count, through
+    /// [`purrdf_xsd::numeric::numeric_div_with_policy`] under the query's
+    /// `division` — the one quotient `/` computes, so `AVG(?x)` and
+    /// `SUM(?x) / COUNT(?x)` are the same value on every group, at every size.
     ///
-    /// A pure-integer running total that still fits `i128` divides exactly as
-    /// before (unchanged `numeric_div` call, unchanged truncated-decimal
-    /// result). One that no longer fits `i128` divides through
-    /// [`purrdf_xsd::bigint_avg_decimal`] instead — an exact `BigInt`-scaled
-    /// division by the (always-small) folded row count, truncated to 18
-    /// fractional digits. That helper itself answers `None` when the resulting
-    /// MANTISSA does not fit `i128` — `xsd:decimal`'s `Decimal` representation
-    /// is deliberately `i128`-mantissa-bounded (this crate's documented design,
-    /// unmoved by this fold) — but THIS finish does not stop there: it falls
-    /// back to [`purrdf_xsd::bigint_avg_decimal_lexical`], which renders the
-    /// identical exact scale-18 quotient as raw lexical TEXT with no magnitude
-    /// bound at all, the same bypass [`Self::finish_sum`]'s `int_sum_value`
-    /// already uses for a pure-integer total that exceeds `i128`. So a `SUM`
-    /// that escaped `i128` never has to poison `AVG`, full stop — not only when
-    /// the quotient happens to still fit `i128` after scaling, but always. This
-    /// makes the `Self::Int` arm infallible; unlike [`Self::finish_sum`] this
-    /// function stays `Option`-returning only because [`Self::Ok`]'s
-    /// `numeric_div` call fails when the quotient's integer part exceeds the
-    /// `i128` mantissa (see `purrdf_xsd::numeric::decimal_div_raw`).
+    /// The quotient is always a value of `xsd:decimal`'s unbounded value space,
+    /// on the arbitrary-precision tower when it leaves the machine words. It is
+    /// `Err(EvalError::Numeric)` only where the policy refuses it (a
+    /// non-terminating mean under
+    /// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)), and
+    /// unbound only for a duration mean no duration can hold.
     fn finish_avg(self, division: DivisionPolicy) -> Result<Option<TermValue>, EvalError> {
         // `AVG` is `SUM ÷ COUNT` under the query's division policy, through the one
         // quotient `/` computes, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` agree.
@@ -2629,9 +2618,10 @@ impl NumericFold {
     /// Sum(S2..n))` of single additions, and adding two partial sums is a
     /// different expression tree: over `xsd:float`/`xsd:double` it rounds
     /// differently (over `{−3, −2^53, −1, −0.7}` every chain gives
-    /// `−9007199254740996`, the tree `(a+b)+(c+d)` gives `−9007199254740998`),
-    /// and over `xsd:decimal` it can miss an `i128`-mantissa overflow a chain
-    /// prefix hits. The only caller,
+    /// `−9007199254740996`, the tree `(a+b)+(c+d)` gives `−9007199254740998`).
+    /// Over `xsd:decimal` every order of exact additions is the chain, but a
+    /// merge is only cheap while both partials stay in the machine words. The
+    /// only caller,
     /// [`NumericSummary::append`], therefore calls this solely where the
     /// merge provably equals the chain: `b` holds no `float`/`double` operand
     /// (the summary stops its exact fold at the first one), and either both
@@ -2639,9 +2629,11 @@ impl NumericFold {
     /// overflow, so every order of it is the chain) or the
     /// [`MagnitudeBound`] over every operand either side absorbed shows no
     /// chain prefix, operand alignment or total can leave the `i128`
-    /// mantissa, in which case every decimal addition on the way was exact and
-    /// the merged value — mantissa AND scale, since `decimal_add`'s result
-    /// scale is the maximum of its operands' — is the chain's.
+    /// mantissa, in which case every decimal addition on the way stayed in
+    /// machine words and the merged value — mantissa AND scale, since
+    /// `decimal_add`'s result scale is the maximum of its operands' — is the
+    /// chain's. A group the bound cannot prove small replays in order instead,
+    /// on the tower, to the same exact value.
     ///
     /// [`Self::Dur`]'s raw-component representation (see its own doc) sums
     /// the free abelian group `ℤ × Decimal`, so the same two conditions make
@@ -2770,19 +2762,15 @@ fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
 /// once a `decimal`/`float`/`double` value `joining` the fold promotes it out
 /// of [`NumericFold::Int`].
 ///
-/// Exact (`XsdValue::Integer`) whenever the running sum still fits `i128` —
-/// the overwhelmingly common case, and identical to what the fold already did
-/// before it could exceed `i128` at all. Beyond that: `decimal`'s own mantissa
-/// is `i128`-bounded too (see `crates/xsd`'s module docs), so a `joining`
-/// decimal cannot be represented as a `Decimal` either — `None` (the caller
-/// poisons), exactly as today's overflow behavior already would have, just
-/// reached later. A `joining` float/double, however, is IEEE and never exact
-/// regardless of magnitude, so the sum is converted — correctly rounded, straight
-/// to the joining type ([`BigInt::to_f64`] for `double`, [`BigInt::to_f32`] for
-/// `float`, never `double` then narrowed, which would round twice), exactly as
-/// the `i128 → f64`/`f32` casts in `purrdf_xsd::numeric` round an in-range
-/// integer — with no representability question at all: this is the one case
-/// where a running total that has escaped `i128` still avoids poisoning.
+/// Exact (`XsdValue::Integer`) whenever the running sum still fits `i128` — the
+/// overwhelmingly common case — and exact past it too: a joining
+/// `decimal` (or a big integer) meets the sum as `XsdValue::BigInteger`, which
+/// `numeric_add` adds on the tower at any size. A `joining` float/double is IEEE,
+/// so the sum is converted — correctly rounded, straight to the joining type
+/// ([`BigInt::to_f64`] for `double`, [`BigInt::to_f32`] for `float`, never
+/// `double` then narrowed, which would round twice), exactly as the
+/// `i128 → f64`/`f32` casts in `purrdf_xsd::numeric` round an in-range integer.
+/// `None` only for a joining value outside the numeric tower.
 fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
     if let Some(value) = sum.to_i128() {
         return Some(XsdValue::Integer {

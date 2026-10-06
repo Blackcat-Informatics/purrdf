@@ -1731,12 +1731,18 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// ceiling, and a query squaring a value a few times (`BIND(?x * ?x AS ?y)` chained)
 /// could run until memory ran out.
 ///
-/// Each such `+`, `-`, `*` and `/` now also charges `row-expression-evaluation` once
-/// per unit of its own cost estimate — the base-`1e9` limb operations
-/// [`purrdf_xsd::numeric::numeric_cost`] computes from the operand sizes alone —
-/// before the operation runs. Machine-word operands charge nothing extra, so a query
-/// whose numbers all fit machine words buys exactly the execution under v12 that it
-/// bought under v11.
+/// Every operation on the tower — arithmetic, comparison, the unary functions, a
+/// cast, the rendering of a result (a value of one-digit coefficient can have a
+/// million-digit text), a `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY` or statistical fold over
+/// such values, and any division under a non-default policy — now charges
+/// `row-expression-evaluation` once per unit of its own cost estimate (the base-`1e9`
+/// limb operations [`purrdf_xsd::numeric::numeric_cost`] and its siblings compute
+/// from the operand sizes alone) and admits its working bytes against the
+/// scratch-byte ceiling, before it runs. The admission is refused when the bytes
+/// would not fit beside everything the query has already minted, and is not added to
+/// the running total. Machine-word operands charge nothing extra, so a query whose
+/// numbers all fit machine words buys exactly the execution under v12 that it bought
+/// under v11.
 pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 
 /// The charge schedule, as data rather than as scattered literals.

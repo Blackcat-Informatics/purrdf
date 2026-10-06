@@ -101,6 +101,33 @@
 //! with correctly rounded conversions to and from `f64`/`f32` and fallible
 //! narrowing to the machine-word types.
 //!
+//! # Numeric limits (the conformance contract)
+//!
+//! XSD 1.1 Part 2 §5.4 lets a processor limit the `xsd:integer` and `xsd:decimal`
+//! value spaces, provided it supports at least sixteen decimal digits and documents
+//! its limits. This crate implements both value spaces without a limit on the number
+//! of digits; the one bound is a decimal scale of at most `u32::MAX` fractional
+//! digits ([`exact::ExactError::ScaleOverflow`], `err:FOAR0002`), past what any
+//! memory holds. The derived integer types keep their XSD facets (`xsd:byte` is
+//! `−128..=127`; [`XsdDatatype::admits_integer`]).
+//!
+//! Every operation is exact, except the roundings XPath and XQuery Functions and
+//! Operators 3.1 permits:
+//!
+//! * a quotient of integers or decimals keeps the precision of a caller-chosen
+//!   [`exact::DivisionPolicy`] (F&O §4.2 leaves it to the implementation): by
+//!   default eighteen fractional digits, truncated toward zero, at every magnitude;
+//! * a conversion to `xsd:float`/`xsd:double` rounds once, to nearest with ties to
+//!   even, from the exact value at any size (F&O §19.1.2.2);
+//! * a conversion from `xsd:float`/`xsd:double` to `xsd:decimal` is exact, which is
+//!   the closest decimal F&O §19.1.2.3 asks for.
+//!
+//! Every refusal is a typed [`XsdError`] that names its F&O code ([`XsdError::code`],
+//! [`ErrorCode`]), never a silently wrapped, rounded or saturated value. Every
+//! operation of the tower can be priced before it runs from its operands' sizes
+//! ([`numeric::numeric_cost`] and [`exact::cost`]), so a governor bounds its work and
+//! memory.
+//!
 //! # Datatype-range satisfiability
 //!
 //! [`range`] answers a question the value spaces alone do not: **is this datatype range

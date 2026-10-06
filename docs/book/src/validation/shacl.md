@@ -36,6 +36,14 @@ rules first.
   constraint. The severities include `sh:Debug` and `sh:Trace`, and
   conformance follows the request's `sh:conformanceDisallows` set. Every
   `sh:message` is reported with its language tag and direction.
+- **Exact numeric ranges** — `sh:minInclusive`, `sh:maxInclusive`,
+  `sh:minExclusive`, `sh:maxExclusive`, `sh:lessThan` and
+  `sh:lessThanOrEquals` compare numbers with the SPARQL operators, as SHACL
+  defines them. An `xsd:integer` or `xsd:decimal` literal of any size is
+  compared exactly, never through a double, so `9007199254740992` is below a
+  bound of `9007199254740993`. A literal whose lexical form its datatype rejects,
+  such as `"1.5"^^xsd:integer`, cannot be compared and violates the constraint.
+  See [Numeric limits](../sparql/querying.md#numeric-limits).
 - **SHACL 1.2 SPARQL Extensions** — SPARQL-based constraints and targets,
   custom constraint components with pre-binding semantics, user-defined
   `sh:SPARQLFunction` calls, `sh:SPARQLTargetType`, `sh:sparqlExpr`, and

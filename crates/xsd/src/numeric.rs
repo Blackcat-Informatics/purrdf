@@ -1557,31 +1557,14 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
     })
 }
 
-/// `op:numeric-divide` for an integer `SUM` fold's running total (`dividend`)
-/// once it has grown past `i128` (see [`crate::bigint::BigInt`]'s module docs
-/// for why that can happen), divided by the folded row `count`. This is
-/// `AVG`'s finish for exactly that case — `decimal_div_raw`'s
-/// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape (same target scale, same
-/// truncate-toward-zero) computed over an arbitrary-precision dividend instead
-/// of an `i128` one, without `decimal_div_raw`'s descent to a coarser scale.
+/// `dividend ÷ count` at eighteen fractional digits, truncated toward zero, as a
+/// bounded [`Decimal`] — `None` when that quotient's mantissa does not fit `i128`.
 ///
-/// `None` when the resulting MANTISSA does not fit `i128` — `xsd:decimal`'s
-/// [`Decimal`] representation is deliberately `i128`-mantissa-bounded (this
-/// crate's documented design, unchanged by this function). Scaling to `MAX_DECIMAL_SCALE` (18) fractional
-/// digits BEFORE dividing multiplies the required headroom by 18 decimal
-/// digits, so this fails far more readily than the bare integer quotient
-/// would: an escaped-`i128` `dividend` needs a `count` on the order of
-/// `10^18` or larger before the scaled quotient's mantissa fits back inside
-/// `i128` (see `bigint_avg_answers_when_the_dividend_exceeds_i128_but_the_quotient_does_not`
-/// in this module's tests for a worked case) — a plausible `GROUP BY` row
-/// count for some workloads, but not for a small one. In particular, an
-/// ordinary-looking quotient like `(i128::MAX + i128::MAX) / 2` — mathematically
-/// exactly `i128::MAX`, an entirely ordinary integer — still returns `None`
-/// here purely because of the forced scale-18 representation: at scale 18,
-/// `i128::MAX`'s mantissa alone needs roughly 56 decimal digits, far past
-/// `i128`'s ~38-digit ceiling. Callers that must answer even then use
-/// [`bigint_avg_decimal_lexical`], which has no such bound (see its doc for
-/// why bypassing [`Decimal`] entirely is safe there).
+/// A 3.0 helper, kept for its callers: the evaluator's `AVG` now divides through
+/// [`numeric_div_with_policy`] like `/`, which answers every quotient exactly at
+/// eighteen digits whatever its size (in [`XsdValue::BigDecimal`] past the bounded
+/// variant). `numeric_div_with_policy(&XsdValue::from_exact_integer(..), &count,
+/// DivisionPolicy::default())` is the same quotient with no `None` case.
 ///
 /// `count` must be nonzero; `AVG`'s one caller only reaches this with a folded
 /// row count, which is never zero for a non-empty group.
@@ -1606,22 +1589,13 @@ pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Optio
     )))
 }
 
-/// `AVG`'s finish for an escaped-`i128` running total whose scale-`MAX_DECIMAL_SCALE`
-/// quotient mantissa has ALSO escaped `i128` — the case [`bigint_avg_decimal`]
-/// answers `None` for. Computes the IDENTICAL exact scale-18 quotient
-/// [`bigint_avg_decimal`] does (same scale-then-divide, same truncate-toward-zero),
-/// but renders it as raw canonical `xsd:decimal` lexical TEXT via
-/// [`crate::bigint::BigInt::to_decimal_lexical`] instead of constructing an
-/// in-memory [`Decimal`] — bypassing `xsd:decimal`'s `i128`-mantissa bound
-/// entirely rather than moving it. This is safe for the same reason the crate
-/// already accepts the analogous asymmetry for `SUM`: a fold's FINISH is allowed
-/// to emit a wider literal than any single parsed `xsd:decimal`/`xsd:integer`
-/// INPUT could ever produce (see [`crate::bigint::BigInt::to_decimal_string`]'s
-/// doc and its `SUM`-side caller, `purrdf-sparql-eval`'s `int_sum_value`, which
-/// makes the identical choice for a pure-integer running total that exceeds
-/// `i128`). No representation this function produces is ever fed back through
-/// [`Decimal`]'s arithmetic — the IEEE (`float`/`double`) families and the rest
-/// of the numeric promotion tower are untouched by this function's existence.
+/// [`bigint_avg_decimal`]'s quotient as canonical `xsd:decimal` lexical text, at any
+/// size: the exact eighteen-digit quotient, truncated toward zero, rendered through
+/// [`crate::bigint::BigInt::to_decimal_lexical`]. The text always reads back
+/// through [`crate::parse`] as the same value — in [`XsdValue::BigDecimal`] when it
+/// needs more than the bounded variant — so it is a value of the decimal value
+/// space, like every result of [`numeric_div_with_policy`], which computes the same
+/// quotient as a value.
 ///
 /// Always succeeds: `BigInt` has no magnitude bound beyond available memory, so
 /// unlike [`bigint_avg_decimal`] this has no `None` case at all.

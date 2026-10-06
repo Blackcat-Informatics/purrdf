@@ -28,9 +28,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   carrying its XPath F&O error code (`FOCA0003`, `FOCA0001`, `FOAR0002`); it
   never wraps or rounds. Division by zero is `FOAR0001`, and `NaN` or an
   infinity is `FOCA0002`. Each operation has a cost method (`add_cost`,
-  `mul_cost`, `div_cost`, `pow_cost`, …) that returns an `exact::Cost` from
+  `mul_cost`, `div_cost`, `cmp_cost`, `render_cost`, `to_float_cost`,
+  `pow_cost`, …) that returns an `exact::Cost` of work and working bytes from
   the operand sizes in constant time, so a governor can refuse an operation
-  before it allocates.
+  before it allocates. `exact::cost::Shape` reads a value's size from the value
+  or from its lexical form without parsing it, and `sum_chain` and
+  `compare_chain` price a whole `SUM` or sort before it runs.
+  `Decimal::cmp_f64` and `Integer::cmp_f64` compare an exact value with a
+  double exactly, in time linear in the value.
 - **Exact numerics are the default:** `XsdValue` gains `BigInteger { value:
   exact::Integer, datatype }` and `BigDecimal(exact::Decimal)` for the
   integer-family and decimal values the bounded `Integer` (`i128`) and
@@ -43,24 +48,42 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `floor`, `round`, `numeric_cmp`, `numeric_total_cmp`, `value_cmp`,
   `value_total_cmp`) compute on the bounded path and continue on the tower
   where it would overflow. Conversion to `xsd:float`/`xsd:double` rounds
-  once, to nearest. `numeric_cost` gives the `exact::Cost` of an operation.
+  once, to nearest. `numeric_cost`, `numeric_unary_cost`,
+  `numeric_to_float_cost` and `numeric_render_cost` give the `exact::Cost` of
+  an operation on a value past machine words, and zero otherwise.
   The SPARQL evaluator (tree and VM), SHACL (`sh:minInclusive` and the other
   range constraints, `sh:in`, `sh:hasValue`, SHACL-SPARQL), OWL 2 DL/RL value
   identity and data ranges, CDT `=`/`<`, CSVW cell facets and every binding's
   canonical lexical form use these values.
 - **`DivisionPolicy` for SPARQL decimal division:** `QueryOptions::with_division`
-  and `EvalCtx::with_division_policy` select the scale and rounding of
-  `xsd:decimal` division, or the exact quotient. The default, eighteen digits
-  truncated toward zero, is the quotient PurRDF has always returned. Under
-  `DivisionPolicy::Exact` a non-terminating quotient is the hard error
-  `EvalError::Numeric` (`native-sparql-numeric`, F&O `FOAR0002`). `SUM`,
-  `AVG` and `/` share the policy. The CLI's `purrdf query --division POLICY`
-  takes `exact`, a scale `N`, or `N:ROUNDING`.
-- **ShEx exact facet bounds:** `purrdf_shex::exact_facets` adds
-  `parse_shexc_exact`, `parse_shexj_exact`, `validate_exact`,
-  `validate_shape_map_exact` and `ExactFacets`, which keep the exact value of
-  an `INTEGER`/`DECIMAL` facet bound the `i64`/`f64` `NumericLiteral` loses.
-  `purrdf shex` uses them. The existing parsers and AST are unchanged.
+  and `EvalCtx::with_division_policy` select the scale and rounding of an
+  `xsd:integer`/`xsd:decimal` quotient, or the exact quotient. The default
+  keeps eighteen fractional digits, truncated toward zero, at every magnitude.
+  Under `DivisionPolicy::Exact` a non-terminating quotient is the hard error
+  `EvalError::Numeric` (`native-sparql-numeric`, F&O `FOAR0002`). `AVG` and `/`
+  share the policy, so `AVG(?x)` and `SUM(?x) / COUNT(?x)` always agree, and
+  `fold_values_with_division` gives a value-level fold the same policy.
+  `DivisionPolicy` has one text form (`FromStr`/`Display`): `exact`, a scale
+  `N`, or `N:ROUNDING` such as `5:half-even`. The CLI's
+  `purrdf query --division POLICY`, the C ABI, the WebAssembly package and the
+  Python binding take it.
+- **Typed F&O error codes:** `XsdError::code()` and `ExactError::code()` return
+  the XPath F&O 3.1 error of a numeric refusal as `purrdf_xsd::ErrorCode`
+  (`FOAR0001` division by zero, `FOAR0002` a quotient the division policy
+  cannot express, `FORG0001` a malformed lexical form or a derived type past
+  its facets, `FOCA0002` `NaN` or an infinity cast to an exact type,
+  `FOCA0001`/`FOCA0003`/`FOCA0006` the bounded narrowings, `XPTY0004` a type
+  error). `XsdError::presentation()` gives the failure as a typed
+  `DiagnosticPresentation` with the code as an argument.
+  `GovernorEvidence::expression_errors` counts, per code, every numeric error a
+  governed query absorbed into an unbound value, as SPARQL requires for an
+  expression error; the C, WebAssembly and Python evidence carry the counts.
+- **ShEx exact facet bounds:** `purrdf_shex::ExactSchema` (`parse_shexc`,
+  `parse_shexj`, `from_schema`, `resolve_imports`, `to_shexj`) keeps every
+  numeric facet bound as written, per node constraint, and `validate_exact` /
+  `validate_shape_map_exact` compare against it in the XSD value space.
+  `purrdf shex` and the Python binding use it. The existing parsers and AST
+  are unchanged.
 - **`BigInt` arithmetic:** `purrdf_xsd::bigint::BigInt` gains truncating
   division with a quotient (`div_rem`, `div_rem_pow10`), `pow`, `gcd`, `abs`,
   `signum`, `pow10`, `decimal_digits`, `trailing_decimal_zeros`, `limb_len`,
@@ -172,18 +195,36 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   used to return `OutOfRange` (integer overflow) or a rounded decimal product.
   In SPARQL, an overflowing integer or decimal operation and a cast of a large
   `xsd:double` to `xsd:integer`/`xsd:decimal` now return the exact value where
-  they used to be an error (unbound). *Migration:* a `match` on `XsdValue`
+  they used to be an error (unbound). A float or double cast to `xsd:decimal`
+  is its exact binary value: `xsd:decimal("0.1"^^xsd:double)` is
+  `0.1000000000000000055511151231257827021181583404541015625`, where 3.0.1
+  gave `0.100000000000000006`. The negation, absolute value and rounding
+  functions of a derived integer type return `xsd:integer`, so `-5` is never
+  minted as an `xsd:unsignedByte`. `XsdError`'s `Display` ends with the F&O
+  code in parentheses, for example `(err:FORG0001)`. *Migration:* a `match` on `XsdValue`
   needs arms for the two new variants (the enum is `#[non_exhaustive]`, so
   existing wildcard arms compile); code that relied on `OutOfRange` to reject
   large values must check the variant or the magnitude itself.
-- **Governor profile version 12:** the charge schedule is unchanged, and
-  `row-expression-evaluation` is now also charged once per unit of
-  `exact::Cost` work before an arithmetic operation on a value past machine
-  words, so a fuel ceiling refuses a run of repeated squaring before it
-  allocates. Operations on in-range values charge nothing new.
+- **Governor profile version 12:** the charge schedule is unchanged. Every
+  operation on a value past machine words — arithmetic, comparison, the
+  unary functions, casts, the rendering of a result, `SUM`, `AVG`, `MIN`,
+  `MAX`, `ORDER BY` and the statistical aggregates — and every division under
+  a non-default policy now also charges `row-expression-evaluation` once per
+  unit of `exact::Cost` work, and admits its working bytes against the
+  scratch-byte ceiling, before it runs. A fuel or scratch ceiling therefore
+  refuses a run of repeated squaring before it computes or allocates, however
+  short its coefficients stay. Operations on machine-word values charge
+  nothing new. `CustomAggregate::exact_numeric_cost` (default zero) lets a
+  custom aggregate price its own arithmetic.
   `GOVERNOR_PROFILE_VERSION` is 12 and `GOVERNOR_PROFILE_DIGEST` is
   `a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a`;
   consumers that pin either must re-pin.
+- **OWL 2 RL value identity with doubles is exact:** `dt-eq` and `dt-diff`
+  compare an `xsd:integer`/`xsd:decimal` literal with an
+  `xsd:float`/`xsd:double` one exactly, instead of rounding the exact value to
+  binary first. `"1"^^xsd:integer` is still the same value as
+  `"1.0E0"^^xsd:double`, but two different integers past the double's
+  precision are no longer both equal to the double nearest them.
 
 ### Fixed
 
@@ -316,23 +357,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   between the largest float and 2^128 now gives `INF`:
   `xsd:float("3.4028235677973366e38"^^xsd:double)` was `3.4028235E38`.
   `xsd:float("1e-40"^^xsd:double)` gives the nearest subnormal, `1.0E-40`.
-  A float or double cast to `xsd:decimal` gives the decimal closest to its
-  binary value, with ties rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
-  `0.100000001490116119` instead of `0.1`. Casts from strings still parse the
-  string.
+  A float or double cast to `xsd:decimal` gives its exact binary value, so
+  `xsd:decimal("0.1"^^xsd:float)` is `0.100000001490116119384765625` instead
+  of `0.1`, and a cast to an integer type keeps the exact integer part at any
+  magnitude. Casts from strings still parse the string.
+- **SPARQL `AVG` and `SUM`:** a decimal `AVG` whose running `SUM` passed the
+  128-bit mantissa was unbound although its mean exists; it now answers the
+  exact mean, as the same values do as integers. An integer `AVG` emitted
+  `"170141183460469231731687303715884105726.5"^^xsd:decimal` for
+  {`i128::MAX`, `i128::MAX - 1`}, a literal 3.0.1 could not read back, while
+  `SUM(?v) / COUNT(?v)` over the same group was unbound. `AVG` is now `SUM`
+  divided by `COUNT` through the one quotient `/` computes, on every group,
+  and every `SUM` and `AVG` result is a value that reads back as itself.
 - **XSD decimal division:** dividing decimals or integers no longer fails
-  when an intermediate value overflows but the result fits. Previously any
-  dividend of about 10^21 or more was refused:
-  `"1000000000000000000000"^^xsd:decimal / 2` is now `500000000000000000000`
-  instead of an error, and the smallest and largest 128-bit decimals can be
-  halved. The result is exact when it fits in 18 fractional digits and a
-  128-bit mantissa. Otherwise it is truncated toward zero at the finest scale
-  that fits, so `1 / 3` is still `0.333333333333333333`. Division is refused
-  only when the integer part of the result is too large, as with
-  `i128::MAX / 0.1`. Dividing two `xsd:dayTimeDuration`s follows the same
-  rule, so one day divided by one attosecond is now `86400000000000000000000`
-  instead of an error. Negating the smallest decimal, or taking its absolute
-  value, is still refused: the result is 2^127, which does not fit.
+  when an intermediate value overflows, and keeps eighteen fractional digits
+  at every magnitude. Previously any dividend of about 10^21 or more was
+  refused: `"1000000000000000000000"^^xsd:decimal / 2` is now
+  `500000000000000000000` instead of an error. A quotient is exact when it
+  ends within 18 fractional digits and is truncated toward zero there
+  otherwise, so `1 / 3` is still `0.333333333333333333` and
+  `"170141183460469231731687303715884105727"^^xsd:integer / 2` is
+  `85070591730234615865843651857942052863.5`. `i128::MAX / 0.1`, negating the
+  smallest 128-bit decimal and taking its absolute value answer their exact
+  values. Dividing two `xsd:dayTimeDuration`s follows the same rule, so one
+  day divided by one attosecond is now `86400000000000000000000` instead of
+  an error.
 - **XSD decimals:** the decimal lexical form of the smallest 128-bit integer,
   `-170141183460469231731687303715884105728` (also with up to 18 fractional
   digits), now parses. It was refused as out of range although its value is
