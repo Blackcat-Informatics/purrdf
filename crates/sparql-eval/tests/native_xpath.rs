@@ -541,3 +541,29 @@ fn on_demand_row_filters_use_the_same_law_and_typed_refusal() {
         }
     }
 }
+
+#[test]
+fn explain_evaluates_under_the_requests_dated_law() {
+    let data = Arc::new(empty_dataset());
+    let engine = NativeSparqlEngine::new();
+    let query = r#"SELECT (REGEX("aa", "^(a)\\1$") AS ?m) WHERE {}"#;
+    let withheld = QueryOptions::new().with_xpath_regex(
+        Profile::Xpath31,
+        Limits::new().with(Resource::MatchSteps, 0),
+    );
+    // The request's law runs the pattern, so its exhausted bound is the
+    // explanation's operational failure rather than a compatibility verdict.
+    let error = engine
+        .explain_query_with_options(&data, query, None, withheld)
+        .unwrap_err();
+    assert_eq!(error.code, Resource::MatchSteps.code());
+    for options in [
+        QueryOptions::new().with_xpath_regex(Profile::Xpath20, Limits::new()),
+        QueryOptions::new().with_xpath_regex(Profile::Xpath31, Limits::new()),
+        QueryOptions::EMPTY,
+    ] {
+        engine
+            .explain_query_with_options(&data, query, None, options)
+            .unwrap();
+    }
+}
