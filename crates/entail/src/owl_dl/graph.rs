@@ -145,6 +145,14 @@ impl State {
         }
     }
 
+    /// Forward the root `discard` to the root `keep` — the one place a node stops being a
+    /// root — and fold its indexed edges into the keeper's, so [`State::class_edges`] of the
+    /// surviving root still lists exactly the edges the full scan would keep for it.
+    fn forward(&mut self, keep: usize, discard: usize) {
+        self.nodes[discard].merged = Some(keep);
+        self.merge_adjacency(keep, discard);
+    }
+
     /// Fold `discard`'s indexed edges into `keep`'s, keeping the list ascending and unique.
     fn merge_adjacency(&mut self, keep: usize, discard: usize) {
         let Some(folded) = self.adjacency.get_mut(discard).map(std::mem::take) else {
@@ -1173,8 +1181,7 @@ impl<'a> Graph<'a> {
                 st.nodes[keep].label.remove(concept);
             }
         }
-        st.nodes[discard].merged = Some(keep);
-        st.merge_adjacency(keep, discard);
+        st.forward(keep, discard);
     }
 
     /// Whether a filler concept can only be satisfied by an element of the DATA domain.
@@ -1885,5 +1892,85 @@ mod tests {
         );
         assert!(!ample.work().exhausted());
         assert!(ample.achiever_cache.borrow().contains_key(&role));
+    }
+
+    // --- The per-node edge index agrees with the full edge scan ----------------------------
+
+    /// What [`Graph::step`] once read off the whole edge vector for the root `x`: the indices
+    /// of every edge with an endpoint resolving to `x`, in ascending order.
+    fn full_scan(st: &State, x: usize) -> Vec<usize> {
+        (0..st.edges.len())
+            .filter(|&e| {
+                let (from, to, _) = st.edges[e];
+                find(st, from) == x || find(st, to) == x
+            })
+            .collect()
+    }
+
+    /// Every root's indexed edge list equals the full-scan filter, and every forwarded node's
+    /// list is empty, after random interleavings of node creation, edge pushes (from forwarded
+    /// endpoints too, and self-loops) and merges in either direction.
+    ///
+    /// [`Graph::step`] walks [`State::class_edges`] instead of the edge vector, so the two
+    /// agreeing on every root at every point of a search is exactly what keeps every
+    /// neighbourhood, verdict and proof unchanged. Each step is checked, not only the end, so
+    /// a merge that lost, duplicated or reordered an edge is caught at the merge that did it.
+    #[test]
+    fn the_adjacency_index_equals_the_full_edge_scan_under_random_pushes_and_merges() {
+        use purrdf_testkit::rng::SplitMix64;
+        let mut merges = 0usize;
+        let mut shared = 0usize;
+        for seed in 0..400u64 {
+            let mut rng = SplitMix64::new(0x0442_ad1a_c000 ^ seed);
+            let mut st = two_node_state_with_edges(0, 0);
+            for _ in 0..rng.below_usize(4) {
+                st.nodes.push(bare_node(false));
+            }
+            for _ in 0..60 {
+                match rng.below(5) {
+                    0 => st.nodes.push(bare_node(false)),
+                    1 | 2 => {
+                        let from = rng.below_usize(st.nodes.len());
+                        let to = rng.below_usize(st.nodes.len());
+                        let prop = u32::try_from(rng.below(3)).expect("below 3");
+                        st.push_edge(from, to, prop);
+                    }
+                    _ => {
+                        let a = find(&st, rng.below_usize(st.nodes.len()));
+                        let b = find(&st, rng.below_usize(st.nodes.len()));
+                        if a != b {
+                            // An edge between the two classes is listed under both roots, so
+                            // the fold must keep it once.
+                            shared += full_scan(&st, a)
+                                .iter()
+                                .filter(|e| full_scan(&st, b).contains(e))
+                                .count();
+                            st.forward(a, b);
+                            merges += 1;
+                        }
+                    }
+                }
+                for x in 0..st.nodes.len() {
+                    if st.nodes[x].merged.is_some() {
+                        assert!(
+                            st.class_edges(x).is_empty(),
+                            "seed {seed}: forwarded node {x} still lists edges"
+                        );
+                    } else {
+                        assert_eq!(
+                            st.class_edges(x),
+                            full_scan(&st, x).as_slice(),
+                            "seed {seed}: root {x}'s indexed edges differ from the full scan"
+                        );
+                    }
+                }
+            }
+        }
+        // The corpus actually exercised what it exists to check.
+        assert!(merges > 4_000, "only {merges} merges were generated");
+        assert!(
+            shared > 1_000,
+            "only {shared} edges were shared across a merge"
+        );
     }
 }
