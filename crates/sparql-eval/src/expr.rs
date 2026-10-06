@@ -51,7 +51,7 @@ use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trai
 
 use crate::DetHashSet;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated};
+use crate::eval::{EvalCtx, LanguageStringEquality, eval_evaluated};
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -553,6 +553,39 @@ fn term_is_literal<D: DatasetView + Sync>(
     })
 }
 
+/// A well-formed language literal has a known RDF value even though it has no
+/// XSD value. Check borrowed views without materializing the lexical form.
+fn term_has_language_value<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Result<bool, EvalError> {
+    match term {
+        SolutionTerm::Existing(id) => ctx
+            .dataset
+            .with_term(id, |term| match term {
+                TermRef::Literal {
+                    datatype,
+                    language: Some(_),
+                    direction,
+                    ..
+                } => ctx.dataset.with_term(datatype, |term| {
+                    matches!(term, TermRef::Iri(iri)
+                        if iri == purrdf_iri::vocab::language_datatype_iri(direction.is_some()))
+                }),
+                _ => Ok(false),
+            })
+            .map_err(EvalError::source_read)?
+            .map_err(EvalError::source_read),
+        SolutionTerm::Computed(sid) => Ok(has_language_value(ctx.scratch.computed_value(sid))),
+    }
+}
+
+fn has_language_value(value: &TermValue) -> bool {
+    matches!(value, TermValue::Literal {
+        datatype, language: Some(_), direction, ..
+    } if datatype == purrdf_iri::vocab::language_datatype_iri(direction.is_some()))
+}
+
 /// Whether a solution term is a triple term, checked on the borrowed view (no
 /// materialization) — mirrors [`term_is_literal`].
 fn term_is_triple<D: DatasetView + Sync>(
@@ -651,9 +684,14 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     if is_cdt_pair(ctx, ta, tb)? {
         return cdt_compare(ctx, relation, ta, tb);
     }
-    // sameTerm short-circuit: identical terms are equal regardless of value space.
+    // sameTerm short-circuit: identical terms are equal regardless of value space —
+    // except NaN, the one value that is not equal to itself under the numeric
+    // operators. `<=`/`>=` map to `logical-or(op:numeric-less-than,
+    // op:numeric-equal)` (and the `greater-than` twin), every one of which is false
+    // for a NaN operand (XPath F&O §4.3), so `NaN <= NaN` is false, not `true`.
     if ta == tb {
-        return Ok(Some(intern_boolean(ctx, keep(Ordering::Equal))?));
+        let kept = keep(Ordering::Equal) && !term_holds_nan(ctx, ta)?;
+        return Ok(Some(intern_boolean(ctx, kept)?));
     }
     // Value-space comparison over borrowed term views (no owned TermValue
     // clones). Distinct non-value terms (IRIs/blanks) or incomparable value
@@ -663,6 +701,14 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     let ax = xsd_of_term(ctx, ta)?;
     let bx = xsd_of_term(ctx, tb)?;
     let ord = match (ax, bx) {
+        // A numeric pair with a NaN operand is unordered, and every numeric
+        // comparison operator answers `false` for it (op:numeric-less-than and
+        // op:numeric-greater-than are false when either operand is NaN, and so is
+        // the op:numeric-equal half of `<=`/`>=`) — a definite answer, not the
+        // type error `value_cmp`'s `None` would otherwise read as.
+        (Some(ax), Some(bx)) if is_numeric_nan_pair(&ax, &bx) => {
+            return Ok(Some(intern_boolean(ctx, false)?));
+        }
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
         _ => None,
     };
@@ -673,10 +719,11 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
 /// `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1" — same
 /// question, current name): both operands resolve to a term, identical terms
 /// are equal, value-comparable literals compare in the XSD value space
-/// ([`sparql_value_eq`], including the `sameValue`-only cross-type NaN
-/// carve-out its docs explain), distinct terms where at least one is a
-/// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error), and two
-/// incomparable literals are a type error (`None`). This is the equality companion to
+/// ([`sparql_value_eq`], under which a numeric NaN equals nothing, itself
+/// included), distinct terms where at least one is a
+/// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error). Distinct known
+/// language values are unequal; an unknown or ill-typed literal comparison is a
+/// type error (`None`). This is the equality companion to
 /// the ordering [`compare_terms`]; using it for `=` would wrongly turn a distinct
 /// IRI pair into an error. Note that `sameValue` "cannot be used directly in
 /// expressions" (its own spec text) — it names the semantics `=` embeds, not a
@@ -701,9 +748,14 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     if is_cdt_pair(ctx, ta, tb)? {
         return cdt_compare(ctx, crate::cdt_fn::CdtRelation::Equal, ta, tb);
     }
-    // sameTerm short-circuit: identical terms are equal regardless of value space.
+    // sameTerm short-circuit: identical terms are equal regardless of value space —
+    // except NaN: `=` on numerics is `op:numeric-equal`, which is false for a NaN
+    // operand even where `sameTerm` is true (SPARQL 1.2 §17.4.2.2). A triple term
+    // compares componentwise under this same `=`, so one holding a NaN at any depth
+    // is unequal to itself too, as two distinct spellings of it are.
     if ta == tb {
-        return Ok(Some(intern_boolean(ctx, true)?));
+        let equal = !term_holds_nan(ctx, ta)?;
+        return Ok(Some(intern_boolean(ctx, equal)?));
     }
     // Distinct `SolutionTerm`s are distinct RDF terms BY CONSTRUCTION: the dataset
     // builder interns terms by value (one id per value, table kept as-is at
@@ -718,18 +770,26 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     if term_is_triple(ctx, ta)? && term_is_triple(ctx, tb)? {
         let av = value_of(ctx, ta)?;
         let bv = value_of(ctx, tb)?;
-        return rdf_equal(&av, &bv)
+        return rdf_equal_in(&av, &bv, ctx.language_strings)
             .map(|eq| intern_boolean(ctx, eq))
             .transpose();
     }
     let ax = xsd_of_term(ctx, ta)?;
     let bx = xsd_of_term(ctx, tb)?;
-    let eq = match (ax, bx) {
-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
+    let eq = match (ax.as_ref(), bx.as_ref()) {
+        (Some(ax), Some(bx)) => sparql_value_eq(ax, bx),
         _ => {
             if term_is_literal(ctx, ta)? && term_is_literal(ctx, tb)? {
-                // Two different literals neither side could value-compare.
-                None
+                // sameValue distinguishes known unequal language values from
+                // unknown datatypes and ill-typed XSD literals, which still error;
+                // the language-string extension answers a language value against
+                // either of them as unequal.
+                let a_language = term_has_language_value(ctx, ta)?;
+                let b_language = term_has_language_value(ctx, tb)?;
+                let known = (ax.is_some() || a_language) && (bx.is_some() || b_language);
+                let extended = ctx.language_strings == LanguageStringEquality::Disjoint
+                    && (a_language || b_language);
+                (known || extended).then_some(false)
             } else {
                 // Distinct terms of (at least one) non-literal kind: known unequal.
                 Some(false)
@@ -750,11 +810,13 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
     target_value: &TermValue,
     candidate: SolutionTerm<D::Id>,
 ) -> Result<Option<bool>, EvalError> {
+    // An identical candidate is equal — unless it is NaN, or a triple term holding
+    // one, which `=` never equals.
     if target == candidate {
-        return Ok(Some(true));
+        return Ok(Some(!value_holds_nan(target_value)));
     }
     let cv = value_of(ctx, candidate)?;
-    Ok(rdf_equal(target_value, &cv))
+    Ok(rdf_equal_in(target_value, &cv, ctx.language_strings))
 }
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
@@ -768,7 +830,21 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
 /// (`None`); otherwise the terms are equal. The pairs are walked over a work list,
 /// subject, predicate then object at every level, so a term nested to any depth costs
 /// no machine stack.
+///
+/// The core `sameValue` answer: [`rdf_equal_in`] without the disjoint-value-space
+/// extension.
+#[cfg(test)]
 fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+    rdf_equal_in(a, b, LanguageStringEquality::Core)
+}
+
+/// [`rdf_equal`], with `language_strings` choosing whether the operator
+/// extension [`crate::QueryOptions::disjoint_language_strings`] describes applies.
+fn rdf_equal_in(
+    a: &TermValue,
+    b: &TermValue,
+    language_strings: LanguageStringEquality,
+) -> Option<bool> {
     let mut pending: Vec<(&TermValue, &TermValue)> = vec![(a, b)];
     let mut errored = false;
     while let Some((a, b)) = pending.pop() {
@@ -793,7 +869,7 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
             pending.extend([(&**o1, &**o2), (&**p1, &**p2), (&**s1, &**s2)]);
             continue;
         }
-        match leaf_equal(a, b) {
+        match leaf_equal(a, b, language_strings) {
             Some(false) => return Some(false),
             None => errored = true,
             Some(true) => {}
@@ -802,8 +878,12 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
     if errored { None } else { Some(true) }
 }
 
-/// [`rdf_equal`] for a pair of which at most one is a triple term.
-fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+/// [`rdf_equal_in`] for a pair of which at most one is a triple term.
+fn leaf_equal(
+    a: &TermValue,
+    b: &TermValue,
+    language_strings: LanguageStringEquality,
+) -> Option<bool> {
     // SEP-0009 composite equality, for the value-space paths that reach this
     // function rather than [`equal_terms`]: `IN` (§17.4.1.9) and the componentwise
     // triple-term comparison. The same diversion, on the same rule, so a
@@ -811,14 +891,20 @@ fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
     if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
         return crate::cdt_fn::compare(crate::cdt_fn::CdtRelation::Equal, a, b);
     }
-    match (xsd_of(a), xsd_of(b)) {
-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
+    let ax = xsd_of(a);
+    let bx = xsd_of(b);
+    match (ax.as_ref(), bx.as_ref()) {
+        (Some(ax), Some(bx)) => sparql_value_eq(ax, bx),
         _ => {
             if a == b {
                 Some(true)
             } else if is_literal(a) && is_literal(b) {
-                // Two different literals neither side could value-compare.
-                None
+                let a_language = has_language_value(a);
+                let b_language = has_language_value(b);
+                let known = (ax.is_some() || a_language) && (bx.is_some() || b_language);
+                let extended = language_strings == LanguageStringEquality::Disjoint
+                    && (a_language || b_language);
+                (known || extended).then_some(false)
             } else {
                 // Distinct terms of (at least one) non-literal kind: known unequal.
                 Some(false)
@@ -832,27 +918,84 @@ fn is_xsd_nan(x: &XsdValue) -> bool {
     matches!(x, XsdValue::Double(d) if d.is_nan()) || matches!(x, XsdValue::Float(f) if f.is_nan())
 }
 
-/// `=` / `sameValue` equality between two already-typed XSD values (SPARQL 1.2
-/// §17.4.2.2 `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1"):
-/// [`value_cmp`]'s value-space comparison, EXCEPT for one carve-out `sameValue`
-/// states explicitly and `value_cmp` cannot: *"`NaN`^^xsd:double and
-/// `NaN`^^xsd:float are considered to represent the same value. If term1 and
-/// term2 are both `NaN` for either xsd:double or xsd:float, then return TRUE."*
-/// This fires even ACROSS the two types — `"NaN"^^xsd:double = "NaN"^^xsd:float`
-/// is `true` — which the ordinary numeric-tower promotion in [`value_cmp`]
-/// cannot answer on its own, since `f64::partial_cmp` (and its `f32` sibling)
-/// treats NaN as unordered by IEEE 754 design, exactly as `value_cmp` should
-/// keep doing for `<`/`>`/`ORDER BY`: the carve-out is `sameValue`'s alone, so
-/// it lives here rather than in `value_cmp` itself. `same-type` NaN pairs
-/// (`double`/`double` or `float`/`float`) already answer `true` one level up,
-/// via [`equal_terms`]'s/[`rdf_equal`]'s identical-RDF-term short-circuit — NaN's
-/// canonical lexical form is always `"NaN"`, so two same-typed NaN literals ARE
-/// the same RDF term before this function is ever reached (`sameValue` step 1)
-/// — this function is what the CROSS-type pair needs, since two literals with
-/// different datatype IRIs are never the same RDF term regardless of value.
+/// Whether `term` is a NaN of `xsd:double` or `xsd:float`.
+///
+/// Out of line on purpose. Its caller is reached from the expression evaluator, which
+/// recurses once per nested `EXISTS`; an inlined copy would carry an `XsdValue`
+/// temporary in every level's frame, for a question the identical-term shortcut asks
+/// once.
+#[inline(never)]
+fn term_is_nan<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Result<bool, EvalError> {
+    Ok(xsd_of_term(ctx, term)?.as_ref().is_some_and(is_xsd_nan))
+}
+
+/// Whether `term` is a NaN, or a triple term with a NaN component at any depth: the
+/// terms `=` answers `false` against themselves, because a triple term compares
+/// componentwise under `op:numeric-equal` ([`rdf_equal`]).
+///
+/// Out of line for the reason [`term_is_nan`] is; the triple-term walk materializes
+/// the term only when it IS a triple term.
+#[inline(never)]
+fn term_holds_nan<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Result<bool, EvalError> {
+    if term_is_triple(ctx, term)? {
+        return Ok(value_holds_nan(&value_of(ctx, term)?));
+    }
+    term_is_nan(ctx, term)
+}
+
+/// [`term_holds_nan`] over a materialized value, walking nested triple terms over a
+/// work list so a deep term costs no machine stack.
+fn value_holds_nan(value: &TermValue) -> bool {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            TermValue::Triple { s, p, o } => pending.extend([&**s, &**p, &**o]),
+            leaf => {
+                if xsd_of(leaf).as_ref().is_some_and(is_xsd_nan) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Whether `ax`/`bx` is a numeric pair with at least one NaN operand: the pair every
+/// numeric comparison operator answers `false` for (XPath F&O §4.3,
+/// `op:numeric-equal`, `op:numeric-less-than`, `op:numeric-greater-than`), which the
+/// SPARQL operator mapping (§17.3) applies to `=`, `<`, `>`, `<=`, `>=` and — through
+/// `fn:not(op:numeric-equal)` — makes `!=` `true`.
+fn is_numeric_nan_pair(ax: &XsdValue, bx: &XsdValue) -> bool {
+    ax.is_numeric() && bx.is_numeric() && (is_xsd_nan(ax) || is_xsd_nan(bx))
+}
+
+/// `=` equality between two already-typed XSD values: [`value_equal`]'s
+/// value-space comparison, plus the answers `value_cmp` cannot give for NaN and for
+/// the disjoint dateTime/date primitive value spaces. On a
+/// numeric pair `=` is `op:numeric-equal`, which is `false` whenever either operand
+/// is NaN — NaN against another number, and NaN against NaN, of either or both of
+/// `xsd:float`/`xsd:double` (SPARQL 1.2 §17.4.2.2: "The Operator Mapping for "="
+/// is the function op:numeric-equal which is defined to return false when
+/// comparing arguments involving NaN. However, sameTerm(...NaN, ...NaN) is true.").
+/// The pair is unordered, but the answer is a definite `false` (so `!=`, its
+/// `fn:not`, is `true`), never the type error an unordered comparison would read as.
 pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
-    if is_xsd_nan(ax) && is_xsd_nan(bx) {
-        return Some(true);
+    if is_numeric_nan_pair(ax, bx) {
+        return Some(false);
+    }
+    // XSD 1.1 §2.2.2: these primitive value spaces are disjoint. Their
+    // partial ordering is undefined, but sameValue knows they are unequal.
+    if matches!(
+        (ax, bx),
+        (XsdValue::DateTime(_), XsdValue::Date(_)) | (XsdValue::Date(_), XsdValue::DateTime(_))
+    ) {
+        return Some(false);
     }
     value_equal(ax, bx)
 }
@@ -4340,12 +4483,18 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     let Some(source) = source else {
         return Ok(None);
     };
-    let (lexical, source_datatype) = match source {
+    // The source-datatype gate: a literal whose datatype has no casting-table row
+    // (a non-XSD datatype, a language-tagged string), or a pair the table marks `N`,
+    // never reaches a by-value or lexical cast below.
+    if !cast_source_admitted(source, target) {
+        return Ok(None);
+    }
+    let (lexical, datatype_iri, source_datatype) = match source {
         TermValue::Literal {
             lexical_form,
             datatype,
             ..
-        } => (lexical_form, XsdDatatype::from_iri(datatype)),
+        } => (lexical_form, datatype, XsdDatatype::from_iri(datatype)),
         TermValue::Iri(iri) if target == XsdDatatype::String => {
             return Ok(Some(string_term(ctx, iri)?));
         }
@@ -4369,28 +4518,41 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // Calendar constructors cast a parsed source value, never its spelling.
     // Parsing the declared source first also refuses ill-typed calendar literals.
     if target.is_calendar() {
-        let Some(source_datatype) = source_datatype else {
-            return Ok(None);
-        };
-        if source_datatype.is_calendar() {
-            let Some(value) = parse_xsd10(lexical, source_datatype)
-                .ok()
-                .and_then(|value| {
-                    purrdf_xsd::temporal::cast_calendar(&value, target)
-                        .ok()
-                        .flatten()
-                })
-            else {
-                return Ok(None);
-            };
-            return Ok(Some(xsd_to_term(ctx, &value)?));
-        }
-        // Numeric, boolean, duration and binary values cannot become calendar
-        // values just because their lexical form also spells a calendar value.
-        if source_datatype != XsdDatatype::String {
-            return Ok(None);
+        match calendar_cast_source(lexical, datatype_iri, source_datatype) {
+            CalendarSource::Value(source_datatype) => {
+                let Some(value) = parse_xsd10(lexical, source_datatype)
+                    .ok()
+                    .and_then(|value| {
+                        purrdf_xsd::temporal::cast_calendar(&value, target)
+                            .ok()
+                            .flatten()
+                    })
+                else {
+                    return Ok(None);
+                };
+                return Ok(Some(xsd_to_term(ctx, &value)?));
+            }
+            // A string's spelling is what it casts by: the lexical path below.
+            CalendarSource::Lexical => {}
+            // Numeric, boolean, duration and binary values cannot become calendar
+            // values just because their lexical form also spells a calendar value.
+            CalendarSource::Refused => return Ok(None),
         }
     }
+    if let ValueCast::Cast(cast) = cast_duration_or_binary(source, target) {
+        return cast.map(|value| xsd_to_term(ctx, &value)).transpose();
+    }
+    // A string cast to any other type is first normalized by the target's
+    // `whiteSpace` facet (XPath F&O 3.1 §19.2): `collapse` for every non-string
+    // target here, so `xsd:integer(" 12 ")` is 12. A non-string source's lexical
+    // form is its own and is read as written.
+    let collapsed;
+    let lexical = if target != XsdDatatype::String && is_string_row(datatype_iri) {
+        collapsed = collapse_whitespace(lexical);
+        collapsed.as_str()
+    } else {
+        lexical.as_str()
+    };
     // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
     match parse_xsd10(lexical, target) {
         Ok(value) => Ok(Some(xsd_to_term(ctx, &value)?)),
@@ -4409,6 +4571,260 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
             | XsdValue::Double(_)
             | XsdValue::Boolean(_)
     )
+}
+
+/// Whether a literal of datatype IRI `datatype` is in the casting table's `str` row:
+/// `xsd:string` or a built-in type derived from it.
+fn is_string_row(datatype: &str) -> bool {
+    datatype == XSD_STRING
+        || datatype
+            .strip_prefix(purrdf_xsd::datatype::XSD_NS)
+            .is_some_and(|local| matches!(xsd_builtin_cast_row(local), Some(CastRow::Str)))
+}
+
+/// XML Schema's `whiteSpace="collapse"`: each run of space, tab, carriage return and
+/// line feed becomes one space, and leading and trailing runs are removed.
+fn collapse_whitespace(lexical: &str) -> String {
+    lexical
+        .split([' ', '\t', '\r', '\n'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// How a literal of datatype `datatype` casts to a calendar target (XPath F&O 3.1
+/// §19.1, the `dT`/`d`/`t`/`g*` columns).
+enum CalendarSource {
+    /// By the VALUE it holds under this calendar datatype.
+    Value(XsdDatatype),
+    /// By its lexical form, parsed under the target: the `str` row.
+    Lexical,
+    /// The table marks the pair `N`.
+    Refused,
+}
+
+/// [`CalendarSource`] for a literal spelled `lexical` with datatype IRI `datatype`
+/// (`modelled` is its [`XsdDatatype`], when PurRDF models one).
+///
+/// * A modelled calendar datatype casts by value, and `xsd:string` by its spelling.
+/// * The XSD 1.1 built-ins derived from `xsd:string` (`xsd:token`, `xsd:NCName`, …)
+///   are the `str` row exactly as a simple literal is, so they cast by spelling too.
+/// * `xsd:dateTimeStamp` is `xsd:dateTime` with a REQUIRED timezone (XML Schema 1.1
+///   Part 2 §3.4.28): it casts by value as the `dT` row does, and a spelling that
+///   lacks the timezone is not a `xsd:dateTimeStamp` value, so it has none to cast.
+/// * Everything else — numbers, booleans, durations, binaries, `xsd:anyURI` — the
+///   table marks `N`.
+fn calendar_cast_source(
+    lexical: &str,
+    datatype: &str,
+    modelled: Option<XsdDatatype>,
+) -> CalendarSource {
+    match modelled {
+        Some(from) if from.is_calendar() => CalendarSource::Value(from),
+        Some(XsdDatatype::String) => CalendarSource::Lexical,
+        Some(_) => CalendarSource::Refused,
+        None => match datatype.strip_prefix(purrdf_xsd::datatype::XSD_NS) {
+            Some("dateTimeStamp") if has_timezone(lexical) => {
+                CalendarSource::Value(XsdDatatype::DateTime)
+            }
+            Some(local) if matches!(xsd_builtin_cast_row(local), Some(CastRow::Str)) => {
+                CalendarSource::Lexical
+            }
+            _ => CalendarSource::Refused,
+        },
+    }
+}
+
+/// Whether a calendar spelling ends in a timezone: `Z`, or `+hh:mm` / `-hh:mm`.
+fn has_timezone(lexical: &str) -> bool {
+    let bytes = lexical.trim().as_bytes();
+    if bytes.last() == Some(&b'Z') {
+        return true;
+    }
+    match bytes.len().checked_sub(6).map(|at| &bytes[at..]) {
+        Some([sign, h1, h2, b':', m1, m2]) => {
+            matches!(sign, b'+' | b'-')
+                && [h1, h2, m1, m2].iter().all(|digit| digit.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
+/// What [`cast_duration_or_binary`] decided.
+enum ValueCast {
+    /// The source is not a calendar, duration or binary literal.
+    NotApplicable,
+    /// The cast's value, or `None` for a cast error.
+    Cast(Option<XsdValue>),
+}
+
+/// The cast of a calendar, duration or binary literal to a target other than a
+/// calendar type or `xsd:string`, by VALUE (XPath F&O 3.1 §19.1–§19.3), or
+/// [`ValueCast::NotApplicable`] when `source` is not one — the caller's lexical and
+/// numeric paths then decide. Calendar targets are
+/// [`purrdf_xsd::temporal::cast_calendar`]'s, decided before this runs.
+///
+/// Such a source is never re-parsed by its lexical form under the target: the value
+/// spaces share spellings that mean different values (`"abcd"` is both
+/// base64Binary and hexBinary, for three bytes and two) or that the table forbids
+/// (`"2020"^^xsd:gYear` is not hexBinary). Instead, `Cast(Some(v))` is the target
+/// value the table allows, and `Cast(None)` is a cast error: an ill-typed source,
+/// or a pair the table marks `N`.
+///
+/// * `xsd:duration` and its two subtypes cast among themselves, a subtype keeping
+///   only its own component (months, or seconds).
+/// * `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes.
+/// * A value casts to its own datatype unchanged; every other pair is refused.
+#[inline(never)] // Out of the evaluator's frame; see `term_is_nan`.
+fn cast_duration_or_binary(source: &TermValue, target: XsdDatatype) -> ValueCast {
+    value_cast(source, target).map_or(ValueCast::NotApplicable, ValueCast::Cast)
+}
+
+/// [`cast_duration_or_binary`] with `None` for a source it does not apply to.
+#[allow(
+    clippy::option_option,
+    reason = "the outer layer is \"not this family\", the inner one the cast error; the \
+              public face is `ValueCast`"
+)]
+fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue>> {
+    use XsdDatatype as T;
+    let TermValue::Literal {
+        datatype,
+        language: None,
+        ..
+    } = source
+    else {
+        return None;
+    };
+    let from = XsdDatatype::from_iri(datatype)?;
+    let in_family = from.is_calendar()
+        || matches!(
+            from,
+            T::Duration
+                | T::DayTimeDuration
+                | T::YearMonthDuration
+                | T::HexBinary
+                | T::Base64Binary
+        );
+    if !in_family || target == T::String || target.is_calendar() {
+        return None;
+    }
+    let Some(value) = xsd_of(source) else {
+        return Some(None);
+    };
+    if from == target {
+        return Some(Some(value));
+    }
+    Some(match &value {
+        XsdValue::Duration(dur) => {
+            let zero = || match purrdf_xsd::parse("0", T::Decimal) {
+                Ok(XsdValue::Decimal(zero)) => Some(zero),
+                _ => None,
+            };
+            let (months, seconds) = match target {
+                T::Duration => (dur.months(), dur.seconds()),
+                T::YearMonthDuration => (dur.months(), zero()?),
+                T::DayTimeDuration => (0, dur.seconds()),
+                _ => return Some(None),
+            };
+            purrdf_xsd::temporal::Duration::new(months, seconds, target)
+                .ok()
+                .map(XsdValue::Duration)
+        }
+        XsdValue::Binary { bytes, .. } if matches!(target, T::HexBinary | T::Base64Binary) => {
+            Some(XsdValue::Binary {
+                bytes: bytes.clone(),
+                datatype: target,
+            })
+        }
+        _ => None,
+    })
+}
+
+/// Whether the casting table (SPARQL §17.5, over XPath F&O §19.1 "Casting from
+/// primitive types to primitive types") admits a cast of `source` to a target other
+/// than `xsd:string` — the source-datatype gate that runs BEFORE any lexical
+/// re-parse, so a literal's lexical form is never reinterpreted under a datatype the
+/// table gives no row for.
+///
+/// * A simple literal (`xsd:string`) is the table's `str` row — `M` for every
+///   target, decided by the lexical form.
+/// * A numeric or `xsd:boolean` source casts only to a numeric or `xsd:boolean`
+///   target (`Y`/`M`); to `xsd:dateTime` and every other non-numeric target the
+///   table says `N` (`xsd:gYear(2020)` is an error, not `"2020"^^xsd:gYear`).
+/// * Any other XSD datatype PurRDF models (`xsd:dateTime`, `xsd:date`, the
+///   durations, the Gregorian and binary types) casts to no numeric or boolean
+///   target (`N`); its casts to the other XSD targets are left to the lexical path.
+/// * An XSD 1.1 built-in datatype outside the modelled set is classed by the
+///   primitive XPath derives it from: the types derived from `xsd:string`
+///   (`xsd:token`, `xsd:NCName`, …) take the `str` row like a simple literal;
+///   `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION` cast to `xsd:string` alone (their
+///   rows are `N` for every other target, so `xsd:date("2024-01-01"^^xsd:anyURI)` is
+///   an error); and the rest (`xsd:dateTimeStamp`, the list types) cast to no
+///   numeric or boolean target, exactly like a modelled non-numeric source.
+/// * Every other literal — a language-tagged string, or a datatype that is not an
+///   XSD built-in — has no row in the table, so the cast is an error rather than a
+///   re-parse of its lexical form (`xsd:double("1.5"^^ex:custom)` is unbound).
+///
+/// `xsd:string` targets are always admitted (the table's `str` column is `Y` for
+/// every row, and the caller copies the lexical form of a source it has no XPath
+/// string form for). An IRI source is admitted here and refused by the caller's
+/// literal match for every other target (the table's `IRI` row).
+#[inline(never)] // Out of the evaluator's frame; see `term_is_nan`.
+fn cast_source_admitted(source: &TermValue, target: XsdDatatype) -> bool {
+    let TermValue::Literal {
+        datatype, language, ..
+    } = source
+    else {
+        return true;
+    };
+    if target == XsdDatatype::String || datatype == XSD_STRING {
+        return true;
+    }
+    if language.is_some() {
+        return false;
+    }
+    let numeric_target = target.is_numeric() || target == XsdDatatype::Boolean;
+    if let Some(from) = XsdDatatype::from_iri(datatype) {
+        return (from.is_numeric() || from == XsdDatatype::Boolean) == numeric_target;
+    }
+    match datatype
+        .strip_prefix(purrdf_xsd::datatype::XSD_NS)
+        .map(xsd_builtin_cast_row)
+    {
+        Some(Some(CastRow::Str)) => true,
+        Some(Some(CastRow::StringOnly)) => false,
+        Some(Some(CastRow::NonNumeric)) => !numeric_target,
+        Some(None) | None => false,
+    }
+}
+
+/// The casting-table row an XSD 1.1 built-in datatype PurRDF does not model as an
+/// [`XsdDatatype`] falls under, by the primitive XPath derives it from.
+#[derive(Clone, Copy)]
+enum CastRow {
+    /// Derived from `xsd:string`: the `str` row.
+    Str,
+    /// `xsd:anyURI`, `xsd:QName`, `xsd:NOTATION`: rows that cast to `xsd:string` (and
+    /// their own type, which no XSD constructor function PurRDF evaluates names) and
+    /// to nothing else.
+    StringOnly,
+    /// Derived from a non-numeric, non-string primitive (or a list type): casts to
+    /// no numeric or boolean target.
+    NonNumeric,
+}
+
+/// [`CastRow`] for the XSD namespace local name `local`, or `None` when `local`
+/// names no XSD 1.1 built-in datatype outside the modelled [`XsdDatatype`] set
+/// (XML Schema 1.1 Part 2 §3.3–§3.4).
+fn xsd_builtin_cast_row(local: &str) -> Option<CastRow> {
+    match local {
+        "normalizedString" | "token" | "language" | "Name" | "NCName" | "NMTOKEN" | "ID"
+        | "IDREF" | "ENTITY" => Some(CastRow::Str),
+        "anyURI" | "QName" | "NOTATION" => Some(CastRow::StringOnly),
+        "dateTimeStamp" | "NMTOKENS" | "IDREFS" | "ENTITIES" => Some(CastRow::NonNumeric),
+        _ => None,
+    }
 }
 
 /// Cast a numeric-or-boolean [`XsdValue`] to a numeric-or-`xsd:boolean` `target`
@@ -5912,38 +6328,202 @@ mod tests {
     }
 
     #[test]
-    fn equal_treats_cross_type_nan_as_same_value() {
-        // SPARQL 1.2 §17.4.2.2 `sameValue` (which defines `=`), step 5, verbatim:
-        // "NaN"^^xsd:double and "NaN"^^xsd:float are considered to represent the
-        // SAME value, even though they are not the same RDF term (different
-        // datatype IRIs) and `value_cmp`'s ordinary numeric-tower promotion
-        // treats NaN as unordered (`f64`/`f32` `partial_cmp`, correctly, for
-        // `<`/`>`/`ORDER BY`). Regression guard for the gap `sparql_value_eq`
-        // closes: this used to evaluate to a type error (unbound), not `true`.
+    fn equal_is_false_for_every_nan_pair_while_same_term_is_true() {
+        // SPARQL 1.2 §17.4.2.2: "The Operator Mapping for "=" is the function
+        // op:numeric-equal which is defined to return false when comparing
+        // arguments involving NaN. However, sameTerm(...NaN, ...NaN) is true."
         use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         use purrdf_xsd::datatype::XSD_FLOAT as XFLOAT;
         let ds = empty_ds();
-        let eq = Expression::Equal(
-            Child::new(typed_lit("NaN", XDOUBLE)),
-            Child::new(typed_lit("NaN", XFLOAT)),
-        );
-        assert_eq!(ebv(&ds, &eq), Some(true));
-        // Same-type NaN pairs already resolve via the identical-RDF-term
-        // short-circuit (NaN's canonical lexical form is always "NaN"); prove
-        // that path stays `true` too, not just the cross-type one this test
-        // targets.
-        let eq_same_type = Expression::Equal(
-            Child::new(typed_lit("NaN", XDOUBLE)),
-            Child::new(typed_lit("NaN", XDOUBLE)),
-        );
-        assert_eq!(ebv(&ds, &eq_same_type), Some(true));
-        // A NaN is still UNORDERED under `<`: the carve-out is `sameValue`'s
-        // alone and must not leak into the ordering operators.
+        let nan_pairs = [(XDOUBLE, XFLOAT), (XDOUBLE, XDOUBLE), (XFLOAT, XFLOAT)];
+        for (a, b) in nan_pairs {
+            let eq = Expression::Equal(
+                Child::new(typed_lit("NaN", a)),
+                Child::new(typed_lit("NaN", b)),
+            );
+            assert_eq!(ebv(&ds, &eq), Some(false), "{a} = {b}");
+            let ne = Expression::Not(Child::new(eq));
+            assert_eq!(ebv(&ds, &ne), Some(true), "{a} != {b}");
+            let same = Expression::SameTerm(
+                Child::new(typed_lit("NaN", a)),
+                Child::new(typed_lit("NaN", b)),
+            );
+            assert_eq!(ebv(&ds, &same), Some(a == b), "sameTerm({a}, {b})");
+        }
+        // NaN is unordered under `<`/`<=` too: false, never `true` and never an error.
         let lt = Expression::Less(
             Child::new(typed_lit("NaN", XDOUBLE)),
             Child::new(typed_lit("NaN", XFLOAT)),
         );
-        assert_eq!(ebv(&ds, &lt), None);
+        assert_eq!(ebv(&ds, &lt), Some(false));
+        let le = Expression::LessOrEqual(
+            Child::new(typed_lit("NaN", XDOUBLE)),
+            Child::new(typed_lit("NaN", XDOUBLE)),
+        );
+        assert_eq!(ebv(&ds, &le), Some(false));
+    }
+
+    /// The same literal pair through borrowed dataset terms, computed terms,
+    /// their mixed pairs, IN's owned comparison and a triple-term component.
+    fn assert_literal_equality_paths(a: &TermValue, b: &TermValue, expected: Option<bool>) {
+        assert_literal_equality_paths_under(a, b, expected, LanguageStringEquality::Core);
+    }
+
+    /// [`assert_literal_equality_paths`] under the chosen language-string rule.
+    fn assert_literal_equality_paths_under(
+        a: &TermValue,
+        b: &TermValue,
+        expected: Option<bool>,
+        language_strings: LanguageStringEquality,
+    ) {
+        let extended = language_strings == LanguageStringEquality::Disjoint;
+        for (a, b) in [(a, b), (b, a)] {
+            assert_eq!(
+                rdf_equal_in(a, b, language_strings),
+                expected,
+                "owned {a:?} = {b:?}"
+            );
+            let triple = |object: &TermValue| TermValue::Triple {
+                s: TermBox::new(TermValue::iri("https://example.org/s")),
+                p: TermBox::new(TermValue::iri("https://example.org/p")),
+                o: TermBox::new(object.clone()),
+            };
+            assert_eq!(
+                rdf_equal_in(&triple(a), &triple(b), language_strings),
+                expected
+            );
+            for existing in [[false, false], [true, false], [false, true], [true, true]] {
+                let mut builder = RdfDatasetBuilder::new();
+                for (value, existing) in [(a, existing[0]), (b, existing[1])] {
+                    if existing {
+                        let TermValue::Literal {
+                            lexical_form,
+                            datatype,
+                            language,
+                            direction,
+                        } = value
+                        else {
+                            panic!("literal fixture");
+                        };
+                        builder.intern_literal(RdfLiteral {
+                            lexical_form: lexical_form.clone(),
+                            datatype: Some(datatype.clone()),
+                            language: language.clone(),
+                            direction: *direction,
+                        });
+                    }
+                }
+                let ds = builder.freeze().unwrap();
+                let mut ctx = EvalCtx::new(&ds).with_disjoint_language_strings(extended);
+                let ta = intern_leaf(&mut ctx, a.clone()).unwrap().unwrap();
+                let tb = intern_leaf(&mut ctx, b.clone()).unwrap().unwrap();
+                let answer = equal_terms(&mut ctx, Some(ta), Some(tb)).unwrap();
+                assert_eq!(
+                    answer.and_then(|term| ebv_term(&mut ctx, term).unwrap()),
+                    expected,
+                    "storage {existing:?}: {a:?} = {b:?}"
+                );
+                assert_eq!(in_candidate(&ctx, ta, a, tb).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn language_value_inequality_preserves_unknown_and_ill_typed_errors() {
+        let a = TermValue::lang_literal("xyz", "en");
+        for b in [
+            TermValue::lang_literal("abc", "en"),
+            TermValue::lang_literal("xyz", "fr"),
+            TermValue::simple_literal("xyz"),
+            TermValue::typed_literal("7", XINT),
+            TermValue::typed_literal("true", XSD_BOOLEAN),
+        ] {
+            assert_literal_equality_paths(&a, &b, Some(false));
+        }
+        assert_literal_equality_paths(&a, &TermValue::lang_literal("xyz", "EN"), Some(true));
+        for b in [
+            TermValue::typed_literal("xyz", XINT),
+            TermValue::typed_literal("xyz", "https://example.org/unknown"),
+        ] {
+            assert_literal_equality_paths(&a, &b, None);
+            assert_literal_equality_paths(&b, &b, Some(true));
+        }
+        // A language datatype without a tag has no value; the dataset admission
+        // gate refuses this shape, so it is not a dataset/computed-pair fixture.
+        assert_eq!(
+            rdf_equal(&a, &TermValue::typed_literal("xyz", RDF_LANG_STRING)),
+            None
+        );
+        let directional = |direction| TermValue::Literal {
+            lexical_form: "xyz".to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(direction),
+        };
+        let ltr = directional(RdfTextDirection::Ltr);
+        let rtl = directional(RdfTextDirection::Rtl);
+        assert_literal_equality_paths(&ltr, &rtl, Some(false));
+        assert_literal_equality_paths(&ltr, &a, Some(false));
+        assert_literal_equality_paths(&ltr, &ltr, Some(true));
+    }
+
+    /// The language-string extension turns exactly one class of error into
+    /// `false`: a language-tagged string against an ill-typed literal or one of an
+    /// unrecognized datatype. Each neighbouring comparison keeps its core answer,
+    /// and without the extension the same pairs are still errors.
+    #[test]
+    fn the_language_string_extension_replaces_only_its_own_errors() {
+        use LanguageStringEquality::{Core, Disjoint};
+        let language = TermValue::lang_literal("xyz", "en");
+        let directional = TermValue::Literal {
+            lexical_form: "xyz".to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let ill_typed = TermValue::typed_literal("xyz", XINT);
+        let unknown = TermValue::typed_literal("xyz", "https://example.org/unknown");
+        for tagged in [&language, &directional] {
+            for other in [&ill_typed, &unknown] {
+                assert_literal_equality_paths_under(tagged, other, None, Core);
+                assert_literal_equality_paths_under(tagged, other, Some(false), Disjoint);
+            }
+        }
+        let other_unknown = TermValue::typed_literal("abc", "https://example.org/unknown");
+        let other_ill_typed = TermValue::typed_literal("abc", XINT);
+        for (a, b, expected) in [
+            (&TermValue::simple_literal("xyz"), &ill_typed, None),
+            (&TermValue::simple_literal("xyz"), &unknown, None),
+            (&ill_typed, &unknown, None),
+            (&ill_typed, &other_ill_typed, None),
+            (&unknown, &other_unknown, None),
+            (&language, &TermValue::simple_literal("xyz"), Some(false)),
+            (&language, &TermValue::lang_literal("xyz", "EN"), Some(true)),
+            (&language, &directional, Some(false)),
+            (&unknown, &unknown, Some(true)),
+        ] {
+            assert_literal_equality_paths_under(a, b, expected, Core);
+            assert_literal_equality_paths_under(a, b, expected, Disjoint);
+        }
+    }
+
+    #[test]
+    fn date_and_datetime_equality_is_false_without_giving_them_an_order() {
+        use purrdf_xsd::datatype::{XSD_DATE, XSD_DATE_TIME};
+        let datetime = TermValue::typed_literal("2006-08-23T09:00:00+01:00", XSD_DATE_TIME);
+        let date = TermValue::typed_literal("2006-08-23", XSD_DATE);
+        assert_literal_equality_paths(&datetime, &date, Some(false));
+        assert_eq!(
+            value_cmp(&xsd_of(&datetime).unwrap(), &xsd_of(&date).unwrap()),
+            None
+        );
+        // One primitive type's timezone uncertainty remains a type error.
+        let unzoned = TermValue::typed_literal("2006-08-23T08:00:00", XSD_DATE_TIME);
+        assert_literal_equality_paths(&datetime, &unzoned, None);
+        let equal = TermValue::typed_literal("2006-08-23T08:00:00Z", XSD_DATE_TIME);
+        assert_literal_equality_paths(&datetime, &equal, Some(true));
+        let invalid = TermValue::typed_literal("not-a-date", XSD_DATE_TIME);
+        assert_literal_equality_paths(&invalid, &date, None);
     }
 
     #[test]

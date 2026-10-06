@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #![forbid(unsafe_code)]
 
-//! Native W3C SPARQL 1.1 conformance harness.
+//! Native W3C SPARQL 1.0/1.1/1.2 conformance harness.
 //!
 //! Discovers `mf:` test manifests, runs each case against the native
 //! [`purrdf_sparql_eval`] engine, and diffs the result
-//! against the expected SPARQL Results (SRX/SRJ) or canonical N-Quads. The
+//! against the expected SPARQL Results, Turtle/RDFXML result sets or canonical
+//! N-Quads. The
 //! `harness = false` test target `tests/sparql_conformance.rs` runs one case per
-//! `manifest.ttl` that [`paths::suite_manifests`] discovers under `suite/`; each
-//! loops its entries via [`run_manifest`].
+//! group manifest that [`discover`] finds under `suite/`; each loops its entries
+//! via [`run_manifest`]. An index manifest (one that only includes others) is
+//! checked for coverage and never run through its members.
 //!
 //! Expected failures are recorded in [`xfail`] — never skipped — and the
 //! per-manifest [`Summary`] prints a tally (`passed / xfail / unexpected-pass /
@@ -46,9 +48,10 @@ pub mod run;
 pub mod service;
 pub mod xfail;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use manifest::SparqlTestCase;
+use paths::SuiteManifest;
 use xfail::XfailReason;
 
 /// Per-manifest run summary.
@@ -120,13 +123,75 @@ enum Verdict {
     Unmodeled,
 }
 
+/// The manifests [`paths::suite_manifests`] finds under a root, sorted by role.
+#[derive(Debug)]
+pub struct Discovery {
+    /// Every group manifest: each runs as its own case.
+    pub groups: Vec<SuiteManifest>,
+    /// Every index (see [`manifest::load`]) with its members. An index is never
+    /// run through its members, which are discovered and run on their own.
+    pub indexes: Vec<(SuiteManifest, Vec<PathBuf>)>,
+}
+
+/// Discover the manifests under `root` and sort them into groups and indexes.
+///
+/// # Errors
+///
+/// Returns a message when discovery fails, a manifest cannot be read, or an
+/// index names a member that is not itself among the discovered manifests: the
+/// runner never runs an index's members through it, so such a member would be
+/// dropped without trace.
+pub fn discover(root: &Path) -> Result<Discovery, String> {
+    let found = paths::suite_manifests(root)
+        .map_err(|e| format!("discovering manifests under {}: {e}", root.display()))?;
+    let mut discovered = std::collections::BTreeSet::new();
+    let mut groups = Vec::new();
+    let mut indexes = Vec::new();
+    for manifest in found {
+        discovered.insert(
+            manifest
+                .path
+                .canonicalize()
+                .map_err(|e| format!("resolve {}: {e}", manifest.path.display()))?,
+        );
+        match manifest::index_members(&manifest.path)? {
+            Some(members) => indexes.push((manifest, members)),
+            None => groups.push(manifest),
+        }
+    }
+    for (index, members) in &indexes {
+        for member in members {
+            let canonical = member
+                .canonicalize()
+                .map_err(|e| format!("resolve {}: {e}", member.display()))?;
+            if !discovered.contains(&canonical) {
+                return Err(format!(
+                    "{}: the index includes {}, which discovery under {} did not find",
+                    index.path.display(),
+                    member.display(),
+                    root.display()
+                ));
+            }
+        }
+    }
+    Ok(Discovery { groups, indexes })
+}
+
 /// Run every case declared by `manifest_path`, honoring the [`xfail`] registry.
 ///
 /// # Errors
 ///
-/// Returns a message if the manifest itself cannot be loaded/parsed, or if a case
-/// IRI is matched by more than one [`xfail`] registry entry.
+/// Returns a message if the manifest itself cannot be loaded/parsed, if it is an
+/// index (whose members run as their own cases, so running it would run them
+/// twice), or if a case IRI is matched by more than one [`xfail`] registry entry.
 pub fn run_manifest(manifest_path: &Path) -> Result<Summary, String> {
+    if manifest::index_members(manifest_path)?.is_some() {
+        return Err(format!(
+            "{} is an index: its members run as their own cases, and running it would run \
+             every one of them twice",
+            manifest_path.display()
+        ));
+    }
     let cases = manifest::load(manifest_path)?;
     let mut summary = Summary::default();
     for case in &cases {

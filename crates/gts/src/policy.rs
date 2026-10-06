@@ -15,7 +15,7 @@ use crate::FastSet;
 
 use purrdf_lex::cbor::Value;
 
-use crate::model::{Graph, Signature, TermKind};
+use crate::model::{Graph, Signature, Term, TermKind};
 use crate::stream::{SEALED_SOURCE, STREAM_NS};
 use crate::wire::map_get;
 
@@ -386,7 +386,7 @@ fn has_sealed_source(graph: &Graph) -> bool {
     graph
         .quads
         .iter()
-        .any(|&(_s, p, _o, _g)| term_iri_value(graph, p) == Some(SEALED_SOURCE))
+        .any(|&(_s, p, _o, _g)| graph.terms.get(p).and_then(Term::iri_value) == Some(SEALED_SOURCE))
 }
 
 fn opaque_recipient_findings(
@@ -426,16 +426,6 @@ fn opaque_recipient_findings(
         }
     }
     findings
-}
-
-fn term_iri_value(graph: &Graph, tid: usize) -> Option<&str> {
-    graph
-        .terms
-        .get(tid)
-        .and_then(|term| match (term.kind, term.value.as_deref()) {
-            (TermKind::Iri, Some(value)) => Some(value),
-            _ => None,
-        })
 }
 
 fn used_vocabs(graph: &Graph) -> FastSet<&'static str> {

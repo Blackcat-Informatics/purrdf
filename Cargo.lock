@@ -567,6 +567,7 @@ name = "purrdf-entail"
 version = "3.0.1"
 dependencies = [
  "hashbrown",
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-datalog",
  "purrdf-hash",
@@ -630,6 +631,7 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
+ "sha2",
  "structured-zstd",
  "visual-hashing",
 ]

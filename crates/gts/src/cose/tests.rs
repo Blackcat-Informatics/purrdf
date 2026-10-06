@@ -412,6 +412,7 @@ fn verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid() {
         kid: None,
         status: String::new(),
         cose: Some(cose),
+        packaging: false,
     };
     let mut signatures = vec![
         observation(sign_id(b"frame", &signer, "real")),

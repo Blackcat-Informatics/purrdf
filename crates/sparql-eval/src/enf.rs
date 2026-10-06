@@ -96,7 +96,7 @@
 //!      rebind a variable the filtered row already carries. What differs is only
 //!      which calls each walk reaches, per divergences 1 and 2.
 //!
-//!   Where the two walks also AGREE is at a `Bgp`/`Path` leaf. `apply_substitutions`
+//!   Where the two walks also AGREE is at a `Bgp`/`Path` leaf. `apply_probes`
 //!   pushes a pre-bound constant into the leaf's term positions so the bound
 //!   position is an index probe rather than a scan the seed join filters afterwards,
 //!   and it restores the column the rewrite consumed with exactly this module's

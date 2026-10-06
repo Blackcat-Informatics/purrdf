@@ -332,15 +332,17 @@ names = []
 
 [[job]]
 id = "sha3"
-summary = "SHA3-224/256/384/512 and the Keccak-f[1600] permutation"
+summary = "SHA3-224/256/384/512, SHAKE128/256 and the Keccak-f[1600] permutation"
 home = "purrdf_hash::sha3::Sha3"
-entry_points = ["purrdf_hash::sha3::keccak_f1600"]
+entry_points = ["purrdf_hash::sha3::keccak_f1600", "purrdf_hash::sha3::Shake", "purrdf_hash::sha3::ShakeReader"]
 spec = "FIPS 202"
 vectors = [
     "crates/hash-conformance/tests/vectors/sha3_224_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/sha3_256_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/sha3_384_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/sha3_512_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/shake_nist_vectors.txt",
+    "crates/hash-conformance/tests/vectors/shake_boundary_vectors.txt",
 ]
 bench = ["purrdf-hash-conformance:digests"]
 sites = []
@@ -1301,6 +1303,74 @@ vectors = ["crates/ed25519/tests/vectors/signing_vectors.txt", "crates/ed25519/t
 bench = []
 sites = []
 replaces_external = ["ed25519-dalek", "curve25519-dalek", "curve25519-dalek-derive", "fiat-crypto", "ed25519", "signature", "subtle", "zeroize"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "mldsa65"
+summary = "Native ML-DSA-65 keys, pure-message signing and strict verification"
+home = "purrdf_gts::mldsa65::SigningKey"
+entry_points = ["purrdf_gts::mldsa65::VerifyingKey", "purrdf_gts::mldsa65::Signature"]
+spec = "FIPS 204 ML-DSA-65: Algorithms 6–8 and 16–43; pure-message external context; deterministic or caller-supplied hedged signing; canonical encodings and verified expanded-key invariants"
+vectors = ["crates/gts/tests/mldsa65/keyGen.txt", "crates/gts/tests/mldsa65/sigGen.txt", "crates/gts/tests/mldsa65/sigVer.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = ["8380417"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "cose-composite-mldsa65-ed25519"
+summary = "Pinned ML-DSA-65/Ed25519 composite representative, keys and both-component authentication"
+home = "purrdf_gts::cose::composite::SigningKey"
+entry_points = ["purrdf_gts::cose::composite::VerifyingKey", "purrdf_gts::cose::composite::Signature", "purrdf_gts::cose::composite::representative"]
+spec = "draft-ietf-lamps-pq-composite-sigs-19 and draft-ietf-jose-pq-composite-sigs-04: empty COSE context, SHA-512 representative, fixed ML-DSA label context, ML-DSA-first encodings and mandatory conjunction"
+vectors = ["crates/gts/tests/composite/ietf-cose-example.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "secret-clearing"
+summary = "Safe-Rust overwrite of caller-owned secret storage"
+home = "purrdf_hash::wipe_secret"
+entry_points = []
+spec = "Default-value overwrite observed by black_box and compiler fence; does not guarantee clearing compiler copies, registers or spills"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "constant-time-byte-comparison"
+summary = "Full-scan equality of equal-length bytes, refusing different public lengths"
+home = "purrdf_ed25519::constant_time_eq"
+entry_points = []
+spec = "Fold every XOR into one difference before deciding, with black_box observation; public unequal lengths immediately refuse"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
 enforced = true
 
 [job.forbidden]

@@ -177,9 +177,12 @@ pub use agg_fn::{
     AggDescriptor, AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate,
     ScalarvalKind, ScalarvalSpec,
 };
+// Re-exported for compatibility; deprecated at its definition.
+#[allow(deprecated)]
+pub use engine::ShaclPrebinding;
 pub use engine::{
     FallibleGraphBuildResult, GraphBuildError, GraphBuildStats, NativeSparqlEngine, PlanCache,
-    PreparedQuery, QueryOptions, ShaclPrebinding,
+    PreparedQuery, QueryOptions,
 };
 pub use error::{EvalError, UnsupportedKind};
 pub use eval::{

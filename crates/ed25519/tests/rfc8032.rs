@@ -106,7 +106,6 @@ const VECTORS: &[Vector] = &[
     },
 ];
 
-#[test]
 fn every_section_7_1_vector_reproduces_and_verifies() {
     for v in VECTORS {
         let key = SigningKey::from_bytes(&hex(v.secret));
@@ -138,7 +137,6 @@ fn every_section_7_1_vector_reproduces_and_verifies() {
     }
 }
 
-#[test]
 fn every_section_7_1_signature_is_refused_over_a_changed_message() {
     for v in VECTORS {
         let public = VerifyingKey::from_bytes(&hex(v.public)).expect("vector key decodes");
@@ -157,3 +155,25 @@ fn every_section_7_1_signature_is_refused_over_a_changed_message() {
         );
     }
 }
+
+fn shared_clearing_preserves_live_array_and_ed25519_api() {
+    let mut bytes = [0xa5u8; 64];
+    purrdf_ed25519::wipe_secret(&mut bytes);
+    assert_eq!(bytes, [0; 64]);
+    let mut words = [-3i32; 256];
+    purrdf_ed25519::wipe_secret(&mut words);
+    assert_eq!(words, [0; 256]);
+    let mut owner = purrdf_hash::SecretArray::new([u64::MAX; 25]);
+    let mut clone = owner.clone();
+    owner.clear();
+    assert_eq!(*owner, [0; 25]);
+    assert_eq!(*clone, [u64::MAX; 25]);
+    clone.clear();
+    assert_eq!(*clone, [0; 25]);
+}
+
+purrdf_testkit::harness_main!(
+    every_section_7_1_vector_reproduces_and_verifies,
+    every_section_7_1_signature_is_refused_over_a_changed_message,
+    shared_clearing_preserves_live_array_and_ed25519_api,
+);
