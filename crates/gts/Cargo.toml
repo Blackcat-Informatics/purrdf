@@ -75,6 +75,8 @@ purrdf-hash = { workspace = true }
 # pure-Rust AES-256-GCM (COSE_Encrypt0, §9.3). Callers provide the nonce/IV
 # through the portable core API, so this crate does not need an OS RNG.
 aes-gcm = { workspace = true }
+# SHA-512 in the pinned composite representative; the workspace's one SHA-2.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread
@@ -107,4 +109,9 @@ harness = false
 [[test]]
 # The same public primitive known answers execute natively and in wasm/Node.
 name = "mldsa65"
+harness = false
+
+[[test]]
+# Public composite/Sign1 known answers and refusals run natively and in wasm.
+name = "cose_composite"
 harness = false

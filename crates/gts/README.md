@@ -46,6 +46,39 @@ frozen, language-neutral conformance vectors, byte-exact. The format is
 specified in
 [`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md).
 
+`cose::composite` supports the ML-DSA-65 + Ed25519 pairing pinned to
+`draft-ietf-lamps-pq-composite-sigs-19` and
+`draft-ietf-jose-pq-composite-sigs-04`. It uses the draft's requested COSE
+algorithm `-58`, a provisional identifier whose final registration can change.
+Both signature components are mandatory under one detached Sign1. The existing
+Ed25519 contract retains its exact frozen bytes. Composite primary-source
+known answers are independent IETF fixtures under `tests/composite/`; shared
+cross-engine GTS composite vectors are not published in the captured corpus,
+so no composite shared-engine interoperability claim follows from those tests.
+
+Public COSE callers use `sign_id_hedged` with `SigningKeyRef::Composite`, a
+dedicated composite key and fresh caller-provided 32-byte cryptographic
+randomness for every signature. `sign_id_deterministic` is explicitly the
+fixture variant. Component seeds must be fresh, independent and dedicated to
+the composite; imports cannot detect reuse outside this crate. Private seed
+encoding is ML-DSA seed followed by Ed25519 seed (64 bytes), public encoding
+is 1984 bytes and signature encoding 3373 bytes. These portable APIs obtain
+no ambient entropy and never silently replace failed signing with an output.
+
+`parse_sign1` is the one strict signing-envelope parser. It authenticates exact
+received protected bytes, requires a supported protected alg and detached null
+payload, and rejects wrong/nested tags, trailing items, duplicate or ambiguous
+headers and unsupported critical instructions. Only alg and kid are processed
+as critical headers in this GTS signing contract; counter-signature headers
+are unsupported. Unknown noncritical metadata remains allowed. Typed keys and
+`verify_sig_with_key` dispatch the algorithm and require both composite halves.
+Kids are optional opaque byte strings per RFC 9052; typed APIs preserve absence
+distinctly from an explicit empty identifier, without an implicit encoding
+fallback. Supplied-key verification requires no kid. Existing String
+conveniences remain text-only and absent IDs never enter empty-ID lookup.
+Malformed/unsupported envelopes are invalid before lookup; supported envelopes
+without a resolved key remain unverified.
+
 ### A note on `vectors/manifest*.json`'s `generated_by` field
 
 The four vector manifests at the corpus root (`vectors/manifest.json`,

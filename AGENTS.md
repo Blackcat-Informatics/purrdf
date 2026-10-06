@@ -139,6 +139,7 @@ order, with the home each names. Call the home; never write a second body.
 | `query-host-plumbing` | `purrdf_validate::governors::from_parts` |
 | `ed25519` | `purrdf_ed25519::SigningKey` |
 | `mldsa65` | `purrdf_gts::mldsa65::SigningKey` |
+| `cose-composite-mldsa65-ed25519` | `purrdf_gts::cose::composite::SigningKey` |
 | `secret-clearing` | `purrdf_ed25519::wipe_secret` |
 | `constant-time-byte-comparison` | `purrdf_ed25519::constant_time_eq` |
 | `prefixed-name` | `purrdf_iri::contract_where` |

@@ -521,6 +521,8 @@ source on every run.
 
 | Domain bytes | Constant | Defined in |
 |---|---|---|
+| `b"COMPSIG-MLDSA65-Ed25519-SHA512"` | `LABEL` | `crates/gts/src/cose/composite.rs` |
+| `b"CompositeAlgorithmSignatures2025"` | `PREFIX` | `crates/gts/src/cose/composite.rs` |
 | `b"assertion"` | `ASSERTION_KIND` | `crates/gts/src/examples/agent_memory.rs` |
 | `b"citation"` | `CITATION_KIND` | `crates/markdown/src/identity.rs` |
 | `b"five-full-baselines-minimum-collision-cost-v1"` | `BASELINE_LAW` | `crates/text/src/profile.rs` |

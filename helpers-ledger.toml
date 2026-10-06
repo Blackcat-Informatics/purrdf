@@ -1328,6 +1328,23 @@ fingerprints = []
 names = []
 
 [[job]]
+id = "cose-composite-mldsa65-ed25519"
+summary = "Pinned ML-DSA-65/Ed25519 composite representative, keys and both-component authentication"
+home = "purrdf_gts::cose::composite::SigningKey"
+entry_points = ["purrdf_gts::cose::composite::VerifyingKey", "purrdf_gts::cose::composite::Signature", "purrdf_gts::cose::composite::representative"]
+spec = "draft-ietf-lamps-pq-composite-sigs-19 and draft-ietf-jose-pq-composite-sigs-04: empty COSE context, SHA-512 representative, fixed ML-DSA label context, ML-DSA-first encodings and mandatory conjunction"
+vectors = ["crates/gts/tests/composite/ietf-cose-example.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
 id = "secret-clearing"
 summary = "Safe-Rust overwrite of caller-owned secret storage"
 home = "purrdf_ed25519::wipe_secret"
